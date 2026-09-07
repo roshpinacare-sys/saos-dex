@@ -522,17 +522,17 @@ function SystemHealthPanel({ st, mempool, relay }: { st?: StateView; mempool: nu
               );
             })}
           </div>
-          <div className="text-[10px] text-zinc-500" dir="ltr">trips {relay ? fmtInt(relay.metrics.breakerTrips) : "—"} · econ-waits {relay ? fmtInt(relay.metrics.economicWaits) : "—"}</div>
+          <div className="text-[10px] text-zinc-500" dir="ltr">trips {relay?.metrics ? fmtInt(relay.metrics.breakerTrips) : "—"} · econ-waits {relay?.metrics ? fmtInt(relay.metrics.economicWaits) : "—"}</div>
         </div>
         {/* אימות-על-שרשרת */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2">
           <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">On-Chain Verify</div>
           <div className="mt-1 flex items-center gap-3 font-mono text-sm font-bold" dir="ltr">
-            <span className="text-emerald-300">{relay ? fmtInt(relay.metrics.verified) : "—"}<span className="text-[10px] text-zinc-500"> ok</span></span>
-            <span className={(relay?.metrics.mismatches ?? 0) > 0 ? "text-rose-300" : "text-zinc-100"}>{relay ? fmtInt(relay.metrics.mismatches) : "—"}<span className="text-[10px] text-zinc-500"> mismatch</span></span>
+            <span className="text-emerald-300">{relay?.metrics ? fmtInt(relay.metrics.verified) : "—"}<span className="text-[10px] text-zinc-500"> ok</span></span>
+            <span className={(relay?.metrics?.mismatches ?? 0) > 0 ? "text-rose-300" : "text-zinc-100"}>{relay?.metrics ? fmtInt(relay.metrics.mismatches) : "—"}<span className="text-[10px] text-zinc-500"> mismatch</span></span>
           </div>
           <div className="text-[10px] text-zinc-500" dir="ltr">
-            latency {relay?.metrics.lastVerifyLatencyMs !== null && relay?.metrics.lastVerifyLatencyMs !== undefined ? `${fmtInt(relay.metrics.lastVerifyLatencyMs)}ms` : "—"}
+            latency {(relay?.metrics?.lastVerifyLatencyMs ?? null) !== null ? `${fmtInt(relay?.metrics?.lastVerifyLatencyMs ?? 0)}ms` : "—"}
           </div>
         </div>
       </div>
