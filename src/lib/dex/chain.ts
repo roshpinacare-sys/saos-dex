@@ -73,7 +73,7 @@ function pushReceipt(rt: ChainRT, kind: string, payload: unknown): ReceiptInfo {
   rt.lastReceiptDigest = digest;
   void db.evidenceReceipt.create({
     data: { kind, digest, prevDigest: rec.digest === digest ? null : rt.receipts[1]?.digest ?? null, payload: canon(payload).slice(0, 4000) },
-  }).catch(() => { rt.dbOk = false; });
+  }).then(() => { rt.dbOk = true; }).catch(() => { rt.dbOk = false; });
   return rec;
 }
 
@@ -147,6 +147,7 @@ async function seal(rt: ChainRT): Promise<void> {
     await db.sealRecord.create({
       data: { fromHeight: info.fromHeight, toHeight: info.toHeight, root: info.root, stateRoot: info.stateRoot, leavesCount: info.leaves, note: "SAOS-DEX checkpoint" },
     });
+    rt.dbOk = true; // הצלחה מאשרת מחדש — הדגל לא נשאר דומם-לשלילה
   } catch { rt.dbOk = false; }
   // ── RELAY: הדלת לשרשראות-הציבוריות — לא-חוסם, לא-זורק (anchor חי ל-Steem/Hive/TRON) ──
   try {
@@ -202,6 +203,7 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     await db.blockHeader.create({
       data: { height: st.height, hash: bh, stateRoot: stateRoot(st), opsCount: applied, gasUsed: st.gasUsed, buildMs },
     });
+    rt.dbOk = true; // הצלחה מאשרת מחדש — הדגל לא נשאר דומם-לשלילה
   } catch { rt.dbOk = false; }
 
   if (st.height % SEAL_EVERY === 0) await seal(rt);
