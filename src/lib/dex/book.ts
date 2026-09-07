@@ -11,7 +11,8 @@
  *  · market-טייקר: אין-נעילה מראש; בדיקת-היתרה לפני-כל-מילוי
  */
 import type { DexState, Op, OpResult, TradeEvent } from "./kernel";
-import { addBal, addLock, avail, notional } from "./kernel";
+import { addBal, addLock, avail, bal, lockedOf, notional } from "./kernel";
+import { invariant } from "./invariant";
 
 export interface BookOrder {
   seq: number; id: number; owner: string;
@@ -124,6 +125,12 @@ export function matchBook(
     const qMu = notional(maker.price, qty);
     if (qMu <= 0) continue;
 
+    /* ── Formal Assertions (Fail-Fast) — חוקי-הברזל לפני-כל-רגל-מילוי ──
+     * הפרה כאן = עדות לשחיתות-היגיון-הספר — המערכת זורקת ומתה, לא ממשיכה. */
+    // (1) מילוי לעולם לא מתבצע במחיר-גרוע מה-limit של ה-taker (מניעת-בזבוז-כספים)
+    invariant(crosses(maker.price), "fill-worse-than-limit");
+    // (2) maker לעולם לא ממולא מעבר-לגודלו (אין-הנפקת-נזילות מאוויר)
+    invariant(remaining(maker) >= qty, "maker-overfill");
     if (side === "buy") {
       if (isLimit) {
         // שחרור-הערבות של הכמות-הזאת (במחיר-הגבול) + תשלום-בפועל במחיר-המייקר
@@ -138,6 +145,11 @@ export function matchBook(
       addBal(st, maker.owner, base, -qty);
       addLock(st, maker.owner, base, -qty);
       addBal(st, maker.owner, quote, qMu);
+      // (3) חוקי-אי-התחייבות-חריגה: אף-חיוב לא יורד מתחת-לאפס — לא יתרה ולא נעילה
+      invariant(lockedOf(st, op.issuer, quote) >= 0, "escrow-underflow:taker-quote");
+      invariant(bal(st, op.issuer, quote) >= 0, "negative-balance:taker-quote");
+      invariant(lockedOf(st, maker.owner, base) >= 0, "escrow-underflow:maker-base");
+      invariant(bal(st, maker.owner, base) >= 0, "negative-balance:maker-base");
     } else {
       if (isLimit) {
         addLock(st, op.issuer, base, -qty);
@@ -151,6 +163,11 @@ export function matchBook(
       addBal(st, maker.owner, quote, -qMu);
       addLock(st, maker.owner, quote, -qMu);
       addBal(st, maker.owner, base, qty);
+      // (3) סימטריית-מכירה: אותם-חוקי אי-התחייבות-חריגה
+      invariant(lockedOf(st, op.issuer, base) >= 0, "escrow-underflow:taker-base");
+      invariant(bal(st, op.issuer, base) >= 0, "negative-balance:taker-base");
+      invariant(lockedOf(st, maker.owner, quote) >= 0, "escrow-underflow:maker-quote");
+      invariant(bal(st, maker.owner, quote) >= 0, "negative-balance:maker-quote");
     }
 
     maker.filled += qty;

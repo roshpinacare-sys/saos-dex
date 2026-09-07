@@ -16,6 +16,7 @@ import {
   GAS_TABLE, notional, poolKey,
 } from "./kernel";
 import { merkleRoot, sha256, canon } from "./canonical";
+import { invariant, InvariantViolation } from "./invariant";
 import { arenaTick, fairPrice, DEFAULT_PARAMS, type ArenaParams, type SoldierRT, MARKETS } from "./mm";
 import { poolMid, getPool, quoteOut, LP_ASSET_PREFIX } from "./amm";
 import { sortBook } from "./book";
@@ -51,6 +52,7 @@ interface ChainRT {
   lastBlockAt: number;
   faucetAt: Record<string, number>;
   dbOk: boolean;
+  halted: boolean; // fail-fast: הפרת-אינווריאנטה מעלה-את-השרשרת (לא בונה בלוקים נוספים)
   version: number;
 }
 
@@ -117,6 +119,19 @@ async function seal(rt: ChainRT): Promise<void> {
     digest: "",
   };
   info.digest = sha256(canon(info));
+  /* ── Formal Assertions (Fail-Fast) — חוקי-הברזל לפני-פרסום-החותם ──
+   * החותם הוא העדות-הקריפטוגרפית היוצאת-מהמערכת; אי-עקביות בין החלון,
+   * שורש-המרקל וה-stateRoot = עדות-שקרית בפוטנציה. הבדיקות מתבצעות לפני
+   * כל-פרסום (מדדים/DB/Relay) — ומפרסמות fail-closed: אם אחת-מהן נופלת,
+   * שום-דבר לא יוצא, חלון-הבלוקים נשמר, והחותם-הבא ינסה-שוב (ריפוי-עצמי). */
+  // (1) החלון מכסה בדיוק את טווח-הגבהים הרציף שהחותם מצהיר עליו
+  invariant(info.toHeight - info.fromHeight + 1 === rt.blockHashes.length, "seal-window-contiguity");
+  // (2) שורש-המרקל אכן נגזר מhashי-הבלוקים שבחלון (עדות-מחייבת את הבלוקים עצמם)
+  invariant(merkleRoot(rt.blockHashes) === root, "seal-merkle-root");
+  // (3) ה-stateRoot הקנוני מחייב את מצב-העולם הנוכחי במלואו
+  invariant(info.stateRoot === stateRoot(st), "seal-state-root");
+  // (4) ה-digest אכן ההאש של תוכן-החותם עצמו (אימות-עצמי לפני-יציאה)
+  invariant(sha256(canon(info)) === info.digest, "seal-digest");
   rt.seals.unshift(info);
   rt.seals = rt.seals.slice(0, 24);
   pushReceipt(rt, "seal", info);
@@ -194,7 +209,7 @@ async function buildBlock(rt: ChainRT): Promise<void> {
 }
 
 async function tick(rt: ChainRT): Promise<void> {
-  if (rt.busy) return;
+  if (rt.busy || rt.halted) return;
   rt.busy = true;
   try {
     rt.tickCount++;
@@ -205,6 +220,15 @@ async function tick(rt: ChainRT): Promise<void> {
     await buildBlock(rt);
     if (rt.tickCount % SNAPSHOT_EVERY === 0) flushSnapshot(rt);
   } catch (e) {
+    if (e instanceof InvariantViolation) {
+      /* ── Fail-Fast מוסדי: הפרת-אינווריאנטה = מצב-עולם לא-מוגדר.
+       * השרשרת מעלה-את-עצמה (HALT) — נשארת-חיה לקריאה/תצפית, אך מסרבת
+       * לבנות בלוקים נוספים ממצב-חשוד. הזנקת-ALERT קשה לתצפית-תפעולית. */
+      rt.halted = true;
+      if (rt.timer) { clearInterval(rt.timer); rt.timer = null; }
+      console.error(`[saos-dex][ALERT] INVARIANT VIOLATION — chain HALTED (fail-fast, refuses undefined state): ${e.message}`);
+      return;
+    }
     console.error("[saos-dex] tick error:", e instanceof Error ? e.message : e);
   } finally {
     rt.busy = false;
@@ -219,7 +243,7 @@ export function ensureChain(): ChainRT {
     tape: [], blockHashes: [], seals: [], receipts: [],
     lastReceiptDigest: null, tickCount: 0, timer: null, busy: false,
     buildMsRolling: 0, opsPerSecRolling: 0, startedAt: Date.now(), lastBlockAt: 0,
-    faucetAt: {}, dbOk: true, version: 1,
+    faucetAt: {}, dbOk: true, halted: false, version: 1,
   };
   g.__saosDexChain = rt;
   // אתחול-אסינכרוני: תמונת-מצב → אחרת ג'נזיס; אחר-כך טיימר
@@ -443,6 +467,7 @@ export function getState() {
     uptimeSec: Math.floor((Date.now() - rt.startedAt) / 1000),
     lastBlockAgoMs: rt.lastBlockAt ? Date.now() - rt.lastBlockAt : null,
     dbOk: rt.dbOk,
+    halted: rt.halted === true, // חשיפה-תפעולית: מצב-fail-fast נראה-ב-System Health
     tickMs: TICK_MS,
     sealEvery: SEAL_EVERY,
     nextSealIn: SEAL_EVERY - (st.height % SEAL_EVERY),
