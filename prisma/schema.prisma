@@ -1,0 +1,66 @@
+// SAOS-DEX — סכימת נתונים: חותמים, בלוקים, קבלות-ראיות, יומן-ארנה
+// מצב-השוק החי = מצב-תושב בזיכרון (מורשת grid98) + תמונת-מצב תקופתית ל-db/
+// ה-DB מחזיק את הראיות הציבוריות: בלוקים, צ'קפוינטים, קבלות, יומן-ארנה.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── שרשרת-הפעימה (מיקרו-בלוקים) ────────────────────────────────────────────
+
+model BlockHeader {
+  id        String   @id @default(cuid())
+  height    Int      @unique
+  hash      String // sha256(canonical(block))
+  stateRoot String // sha256(canonical(state)) אחרי-הבלוק
+  opsCount  Int
+  gasUsed   Int
+  buildMs   Int
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// ─── חותמים (checkpoint כל-12 בלוקים — CHAIN_SPEC) ──────────────────────────
+
+model SealRecord {
+  id          String   @id @default(cuid())
+  fromHeight  Int
+  toHeight    Int
+  root        String @unique // merkle root של hashי הבלוקים בחלון
+  stateRoot   String
+  leavesCount Int
+  note        String?
+  createdAt   DateTime @default(now())
+}
+
+// ─── קבלות-ראיות משורשרות-האש (honesty ledger) ─────────────────────────────
+
+model EvidenceReceipt {
+  id         String   @id @default(cuid())
+  kind       String // seal | ladder | arena | bench | door
+  digest     String @unique
+  prevDigest String?
+  payload    String // canonical JSON
+  createdAt  DateTime @default(now())
+}
+
+// ─── יומן-הארנה (grid-journal: רווח-מדוד לכל-פעולה) ─────────────────────────
+
+model ArenaJournal {
+  id        String   @id @default(cuid())
+  soldier   String
+  action    String // quote | take | harvest | ladder_lift | bench
+  edgeBps   Int? // השוליים המדודים לפני-הוצאה
+  profitMu  Int? // רווח במיקרו-יחידות
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([soldier])
+  @@index([createdAt])
+}
