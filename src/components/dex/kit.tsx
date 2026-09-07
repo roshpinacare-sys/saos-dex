@@ -1,6 +1,9 @@
 /**
  * kit.tsx — רכיבי-בסיס של הטרמינל הריבוני (זהות מוסדית: zinc-950 · גבולות-דקים ·
- * monospace לנתונים-מספריים · ירוק/אדום = מסחר · סגול-עמוק = סטטוס-מערכת · אפס אימוג'ים)
+ * monospace לנתונים-מספריים · ירוק/אדום = מסחר · סגול = סטטוס-מערכת · אפס אימוג'ים)
+ *
+ * Zero-Tolerance Visual Overhaul: טונים מילוליים green/red (bg-green-600 / bg-red-600)
+ * כדרישת-המפעיל — הצבעים נבדקים ישירות ב-DOM.
  */
 "use client";
 
@@ -25,12 +28,12 @@ export function Panel({ title, icon, children, className, action }: {
 }
 
 export function Pill({ tone = "zinc", children, pulse }: {
-  tone?: "gold" | "emerald" | "rose" | "zinc" | "amber" | "violet"; children: ReactNode; pulse?: boolean;
+  tone?: "gold" | "green" | "red" | "zinc" | "amber" | "violet"; children: ReactNode; pulse?: boolean;
 }) {
   const tones: Record<string, string> = {
     gold: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-    emerald: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
-    rose: "border-rose-500/40 bg-rose-500/10 text-rose-300",
+    green: "border-green-500/40 bg-green-500/10 text-green-300",
+    red: "border-red-500/40 bg-red-500/10 text-red-300",
     amber: "border-amber-600/40 bg-amber-600/10 text-amber-200",
     zinc: "border-zinc-700 bg-zinc-800/60 text-zinc-300",
     violet: "border-violet-500/40 bg-violet-500/10 text-violet-300",
@@ -42,11 +45,11 @@ export function Pill({ tone = "zinc", children, pulse }: {
   );
 }
 
-/** נורית-סטטוס (מחליף סימני-טקסט — זהות-מוסדית ללא אימוג'ים) */
-export function StatusDot({ tone = "zinc", pulse }: { tone?: "emerald" | "rose" | "amber" | "zinc" | "violet"; pulse?: boolean }) {
+/** נורית-סטטוס (מחליפת סימני-טקסט — זהות-מוסדית ללא אימוג'ים) */
+export function StatusDot({ tone = "zinc", pulse }: { tone?: "green" | "red" | "amber" | "zinc" | "violet"; pulse?: boolean }) {
   const tones: Record<string, string> = {
-    emerald: "bg-emerald-400",
-    rose: "bg-rose-400",
+    green: "bg-green-400",
+    red: "bg-red-400",
     amber: "bg-amber-400",
     zinc: "bg-zinc-600",
     violet: "bg-violet-400",
@@ -54,14 +57,14 @@ export function StatusDot({ tone = "zinc", pulse }: { tone?: "emerald" | "rose" 
   return <span aria-hidden className={clsx("inline-block h-1.5 w-1.5 shrink-0 rounded-full", tones[tone], pulse && "animate-pulse-gold")} />;
 }
 
-export function GoldButton({ children, onClick, disabled, tone = "gold", className, type }: {
+export function GoldButton({ children, onClick, disabled, tone = "gold", className, type, testid }: {
   children: ReactNode; onClick?: () => void; disabled?: boolean;
-  tone?: "gold" | "emerald" | "rose" | "ghost"; className?: string; type?: "button" | "submit";
+  tone?: "gold" | "green" | "red" | "ghost"; className?: string; type?: "button" | "submit"; testid?: string;
 }) {
   const tones: Record<string, string> = {
     gold: "bg-amber-500 text-zinc-950 hover:bg-amber-400 disabled:bg-zinc-700 disabled:text-zinc-400",
-    emerald: "bg-emerald-600 text-white hover:bg-emerald-500 disabled:bg-zinc-700 disabled:text-zinc-400",
-    rose: "bg-rose-600 text-white hover:bg-rose-500 disabled:bg-zinc-700 disabled:text-zinc-400",
+    green: "bg-green-600 text-white hover:bg-green-500 disabled:bg-zinc-700 disabled:text-zinc-400",
+    red: "bg-red-600 text-white hover:bg-red-500 disabled:bg-zinc-700 disabled:text-zinc-400",
     ghost: "border border-zinc-700 text-zinc-300 hover:border-amber-500/60 hover:text-amber-300 disabled:opacity-40",
   };
   return (
@@ -69,6 +72,7 @@ export function GoldButton({ children, onClick, disabled, tone = "gold", classNa
       type={type ?? "button"}
       onClick={onClick}
       disabled={disabled}
+      data-testid={testid}
       className={clsx(
         "rounded-lg px-3 py-2 text-sm font-bold transition-colors disabled:cursor-not-allowed",
         tones[tone], className

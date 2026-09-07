@@ -1,28 +1,33 @@
 "use client";
 
 /**
- * page.tsx — SAOS-DEX Sovereign Terminal · מהדורת UI Nuclear Override.
+ * page.tsx — SAOS-DEX Sovereign Terminal · מהדורת Zero-Tolerance Visual Overhaul.
  *
  * ארכיטקטורת-תצוגה (מאומתת-DOM, אפס-אימוג'ים, zinc-950 מוסדי):
- *  · Header: לוגו טקסטואלי · מחיר-חי גדול (monospace) · נורת-מערכת ירוקה/אדומה
- *  · גרף lightweight-charts — 60% מרוחב-השטח הראשי, testid=lightweight-charts-container
- *  · ספר-הזמנות ויזואלי: צבעי-עומק (bids ירוק / asks אדום) + פסי-נזילות, testid=orderbook-row
- *  · System Health & Relay: TPS חי · מצב-breakers · עיגונים-מאומתים, testid=system-health-panel
- *  · טופס-מסחר: Buy/Sell · אימות-קלט · Slippage Guard ויזואלי, testid=trading-form
+ *  · Header: לוגו טקסטואלי · מחיר-חי גדל (monospace) · נורת-מערכת ירוקה/אדומה
+ *  · 3-טורי מחייב: שמאל 20% Watchlist · מרכז 50% גרף+ספר · ימין 30% מסחר+בריאות
+ *  · גרף lightweight-charts — canvas חי, testid=lightweight-charts-container,
+ *    כשל-רינדור = "CHART FAILED TO RENDER" אדום בולט + console.error
+ *  · ספר-הזמנות: פסי-עומק מילוליים bg-green-500/10 (bids) / bg-red-500/10 (asks),
+ *    testid=orderbook-row לכל-שורה
+ *  · System Health: TPS · breakers ירוקים "CLOSED" · Verified Anchors ב-text-purple-400,
+ *    testid=system-health-panel
+ *  · טופס-מסחר: BUY/SELL על bg-green-600/bg-red-600 · אימות-קלט · Slippage Guard ויזואלי
  *
- * הערה-רשת: כל-הקריאות נושאות את קידומת-/saos-dex (basePath) — הטרמינל חי
- * תחת-origin-אחד חשוף; השרת-האם מגשר לפורט-3010 (rewrite).
+ * הערה-רשת: כל-קריאות-ה-API עוברות דרך קידומת-/saos-dex — השרת-האם מגשר לדמון-3010
+ * (rewrite). כל-הנכסים (JS/CSS) נטענים מהאפליקציה-הראשית עצמה — 200 מובטח, אין-תלות
+ * ב-basePath לטעינת-נכסים.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Layers, Landmark,
+  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Layers, Landmark, List,
   RefreshCcw, ShieldCheck, Wallet, Zap, Waves, GaugeCircle,
 } from "lucide-react";
 import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
 import { PriceChart } from "@/components/dex/chart";
 
-/** קידומת-ה-basePath — כל-קריאת-רשת עוברת דרכה (origin-אחד חשוף) */
+/** קידומת-הגשר — כל-קריאת-רשת עוברת דרכה אל דמון-3010 */
 const BASE = "/saos-dex";
 const api = (p: string): string => `${BASE}${p}`;
 
@@ -179,12 +184,58 @@ function walkSlippage(
   return { avgPx, slipBps, covered: need <= 0 };
 }
 
-/** צבע-מד-החלקה: ירוק<50bps · ענבר<150bps · אדום≥150bps */
-const slipTone = (bps: number): "emerald" | "amber" | "rose" => (bps < 50 ? "emerald" : bps < 150 ? "amber" : "rose");
-const slipColor = (tone: "emerald" | "amber" | "rose"): string =>
-  tone === "emerald" ? "bg-emerald-500" : tone === "amber" ? "bg-amber-500" : "bg-rose-500";
+/** צבע-מד-החלקה: ירוק<50bps · ענבר<150bps · אדום≥150bps (טונים מילוליים) */
+const slipTone = (bps: number): "green" | "amber" | "red" => (bps < 50 ? "green" : bps < 150 ? "amber" : "red");
+const slipColor = (tone: "green" | "amber" | "red"): string =>
+  tone === "green" ? "bg-green-500" : tone === "amber" ? "bg-amber-500" : "bg-red-500";
 
-// ─── פאנל: System Health & Relay (testid=system-health-panel) ───────────────
+/** שינוי-אחוזי מול מחיר-ייחוס — ירוק/אדום מילולי */
+function changePct(fair: number, ref: number): number {
+  if (!(ref > 0) || !(fair > 0)) return 0;
+  return ((fair - ref) / ref) * 100;
+}
+
+// ─── טור-שמאל 20%: רשימת-שווקים (Watchlist) ─────────────────────────────────
+function Watchlist({ markets, selected, onSelect }: {
+  markets: MarketView[]; selected: string | undefined; onSelect: (key: string) => void;
+}) {
+  return (
+    <div className="space-y-2" data-testid="watchlist-panel">
+      {markets.map((m) => {
+        const chg = changePct(m.fair, m.refPrice);
+        const up = chg >= 0;
+        const active = m.key === selected;
+        return (
+          <button
+            key={m.key} type="button" onClick={() => onSelect(m.key)}
+            className={`block w-full rounded-lg border px-3 py-2 text-right transition-colors ${active ? "border-amber-500/60 bg-zinc-800/70" : "border-zinc-800 bg-zinc-900/40 hover:border-zinc-700"}`}
+          >
+            <div className="flex items-center justify-between gap-2" dir="ltr">
+              <span className="font-mono text-xs font-black text-zinc-100">{m.key}</span>
+              <span className={`font-mono text-xs font-bold ${up ? "text-green-400" : "text-red-400"}`} data-testid="watchlist-change">
+                {up ? "+" : ""}{chg.toFixed(2)}%
+              </span>
+            </div>
+            <div className="mt-0.5 flex items-center justify-between gap-2" dir="ltr">
+              <span className="font-mono text-sm font-bold text-amber-400">{m.fair > 0 ? fmt(m.fair, 2) : "—"}</span>
+              <span className={`font-mono text-[10px] ${m.spreadBps > 0 ? "text-zinc-500" : "text-red-400"}`}>
+                spread {m.spreadBps}bps
+              </span>
+            </div>
+          </button>
+        );
+      })}
+      {markets.length === 0 && (
+        <p className="py-4 text-center font-mono text-[11px] text-zinc-600">מתחבר למנוע…</p>
+      )}
+      <p className="px-1 pt-1 text-[10px] leading-snug text-zinc-600">
+        שינוי% מחושב מול מחיר-הייחוס של סולם-הערך. הזמנה = לחיצה על שוק.
+      </p>
+    </div>
+  );
+}
+
+// ─── פאנל: System Health & Relay (testid=system-health-panel) — טור-ימין ────
 function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; relay: RelayView | null; mempool: number }) {
   const breakers = relay ? (["steem", "hive", "tron"] as const).map((c) => relay.chains[c].breaker.state) : [];
   const breakerOpen = breakers.includes("open");
@@ -192,14 +243,15 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
   const mismatched = (relay?.metrics.mismatches ?? 0) > 0;
   const halted = st?.halted === true;
 
-  // נורת-מערכת: ירוק = טוב · ענבר = ירידה-מבוקרת · אדום = זעקה
-  const sysTone: "emerald" | "amber" | "rose" =
-    halted || breakerOpen || mismatched ? "rose" : (st?.dbOk === false || breakerHalf) ? "amber" : "emerald";
+  // נורת-מערכת: ירוק = תקין · ענבר = ירידה-מבוקרת · אדום = זעקה
+  const sysTone: "green" | "amber" | "red" =
+    halted || breakerOpen || mismatched ? "red" : (st?.dbOk === false || breakerHalf) ? "amber" : "green";
   const sysText = halted ? "CHAIN HALTED" : breakerOpen ? "BREAKER OPEN" : mismatched ? "VERIFY ALERT" : (st?.dbOk === false || breakerHalf) ? "DEGRADED" : "NOMINAL";
 
-  const chainDot = (status: string): "emerald" | "amber" | "zinc" =>
-    status === "anchored" ? "emerald" : status === "failed" ? "amber" : status === "pending" ? "amber" : "zinc";
-  const breakerTone = (s: string): "emerald" | "amber" | "rose" => (s === "closed" ? "emerald" : s === "half-open" ? "amber" : "rose");
+  const chainDot = (status: string): "green" | "amber" | "zinc" =>
+    status === "anchored" ? "green" : status === "failed" ? "amber" : status === "pending" ? "amber" : "zinc";
+  const breakerChip = (s: string): string =>
+    s === "closed" ? "border-green-500/40 bg-green-500/10 text-green-300" : s === "half-open" ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-red-500/40 bg-red-500/10 text-red-300";
 
   return (
     <section
@@ -207,43 +259,47 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
       data-sys={sysText.toLowerCase()}
       className="rounded-xl border border-violet-500/30 bg-violet-500/[0.04] p-4"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-sm font-bold tracking-wide text-violet-200">
           <GaugeCircle className="h-4 w-4 text-violet-300" />
-          SYSTEM HEALTH &amp; RELAY
+          SYSTEM HEALTH
         </h2>
         <div className="flex items-center gap-2">
-          <StatusDot tone={sysTone} pulse={sysTone !== "emerald"} />
-          <span className={`font-mono text-xs font-black tracking-widest ${sysTone === "emerald" ? "text-emerald-300" : sysTone === "amber" ? "text-amber-300" : "text-rose-300"}`}>
+          <StatusDot tone={sysTone} pulse={sysTone !== "green"} />
+          <span className={`font-mono text-xs font-black tracking-widest ${sysTone === "green" ? "text-green-300" : sysTone === "amber" ? "text-amber-300" : "text-red-300"}`}>
             {sysText}
           </span>
         </div>
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="TPS (חי)" value={st ? fmtInt(st.tps) : "…"} sub={`build ${st?.buildMs ?? "…"}ms · mempool ${fmtInt(mempool)}`} tone="text-violet-200" />
-        <Stat label="גובה-שרשרת" value={st ? fmtInt(st.height) : "…"} sub={halted ? "HALTED — fail-fast" : `פעימה כל ${st ? st.tickMs / 1000 : 3} שנ׳`} tone={halted ? "text-rose-300" : "text-zinc-100"} />
-        <Stat label="עיגונים מאומתים" value={relay ? fmtInt(relay.metrics.verified) : "…"} sub={`שודרו ${fmtInt(relay?.metrics.broadcasts ?? 0)}`} tone="text-emerald-300" />
-        <Stat label="מיסמאצ'ים" value={relay ? fmtInt(relay.metrics.mismatches) : "…"} sub={mismatched ? "דורש-בדיקה מיידית" : "אפס — עקביות-מלאה"} tone={mismatched ? "text-rose-300" : "text-emerald-300"} />
-        <Stat label="Breaker Trips" value={relay ? fmtInt(relay.metrics.breakerTrips) : "…"} sub={`המתנות-כלכליות ${fmtInt(relay?.metrics.economicWaits ?? 0)}`} />
-        <Stat label="ראיות-DB" value={st ? (st.dbOk ? "OK" : "OFF") : "…"} sub={`שורש ${st ? shortHash(st.stateRoot, 8) : "…"}`} tone={st?.dbOk ? "text-emerald-300" : "text-amber-300"} />
+      {halted && (
+        <div className="mt-2 rounded-lg border border-red-500/50 bg-red-500/10 px-3 py-2 font-mono text-xs font-black text-red-300" role="alert">
+          INVARIANT VIOLATION — CHAIN HALTED (fail-fast). אף-פעולה לא תתקבל עד-חקירה.
+        </div>
+      )}
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <Stat label="TPS (LIVE)" value={st ? fmtInt(st.tps) : "…"} sub={`build ${st?.buildMs ?? "…"}ms · mempool ${fmtInt(mempool)}`} tone="text-violet-200" />
+        <Stat label="BLOCK HEIGHT" value={st ? fmtInt(st.height) : "…"} sub={halted ? "HALTED" : `tick ${st ? st.tickMs / 1000 : 3}s`} tone={halted ? "text-red-300" : "text-zinc-100"} />
+        <Stat label="VERIFIED ANCHORS" value={relay ? fmtInt(relay.metrics.verified) : "…"} sub={`broadcasts ${fmtInt(relay?.metrics.broadcasts ?? 0)}`} tone="text-purple-400" />
+        <Stat label="MISMATCHES" value={relay ? fmtInt(relay.metrics.mismatches) : "…"} sub={mismatched ? "דורש-בדיקה מיידית" : "אפס — עקביות-מלאה"} tone={mismatched ? "text-red-300" : "text-green-300"} />
       </div>
 
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3" dir="ltr">
+      <div className="mt-2 space-y-1.5" dir="ltr">
         {relay ? (["steem", "hive", "tron"] as const).map((c) => {
           const ch = relay.chains[c];
           const last = relay.records.find((r) => r.chain === c && r.txid);
           return (
-            <div key={c} className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2">
+            <div key={c} className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-2.5 py-1.5">
               <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 font-mono text-xs font-black uppercase tracking-wider text-zinc-200">
+                <span className="flex items-center gap-1.5 font-mono text-[11px] font-black uppercase tracking-wider text-zinc-200">
                   <StatusDot tone={chainDot(ch.status)} pulse={ch.status === "pending"} /> {c}
                 </span>
-                <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-bold ${breakerTone(ch.breaker.state) === "emerald" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : breakerTone(ch.breaker.state) === "amber" ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-rose-500/40 bg-rose-500/10 text-rose-300"}`}>
+                <span className={`rounded-full border px-2 py-0.5 font-mono text-[9px] font-bold uppercase ${breakerChip(ch.breaker.state)}`}>
                   breaker: {ch.breaker.state}
                 </span>
               </div>
-              <div className="mt-1.5 flex items-center justify-between gap-2 font-mono text-[11px] text-zinc-400">
+              <div className="mt-1 flex items-center justify-between gap-2 font-mono text-[10px] text-zinc-500">
                 <span>{ch.anchored} anchored · {ch.verified} verified</span>
                 {last?.txid && (
                   <a
@@ -251,21 +307,26 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
                     target="_blank" rel="noreferrer"
                     className="text-amber-400 underline-offset-2 hover:underline"
                   >
-                    {shortHash(last.txid, 10)}
+                    {shortHash(last.txid, 8)}
                   </a>
                 )}
               </div>
             </div>
           );
         }) : (
-          <div className="col-span-3 py-2 text-center font-mono text-[11px] text-zinc-600">relay telemetry connecting…</div>
+          <div className="py-2 text-center font-mono text-[11px] text-zinc-600">relay telemetry connecting…</div>
         )}
       </div>
+
+      <p className="mt-2 font-mono text-[10px] text-zinc-600" dir="ltr">
+        breaker trips {relay ? fmtInt(relay.metrics.breakerTrips) : "…"} · econ waits {relay ? fmtInt(relay.metrics.economicWaits) : "…"} · queue {relay ? fmtInt(relay.queue) : "…"}
+      </p>
     </section>
   );
 }
 
 // ─── פאנל: ספר-הזמנות ויזואלי (testid=orderbook-row לכל-שורה) ───────────────
+// דרישה-מילולית: bids עם bg-green-500/10 · asks עם bg-red-500/10 + פסי-עומק
 function OrderBook({ market }: { market: MarketView | undefined }) {
   const asks = useMemo(() => [...(market?.asks ?? [])].sort((a, b) => b.price - a.price), [market]);
   const bids = useMemo(() => [...(market?.bids ?? [])].sort((a, b) => b.price - a.price), [market]);
@@ -276,22 +337,22 @@ function OrderBook({ market }: { market: MarketView | undefined }) {
 
   const Row = ({ px, total, orders, side }: { px: number; total: number; orders: number; side: "bid" | "ask" }) => (
     <tr data-testid="orderbook-row" data-side={side} className="relative border-b border-zinc-800/40 last:border-0">
-      <td className="relative z-0 w-full py-1.5" colSpan={3}>
+      <td className={`relative z-0 w-full py-1.5 ${side === "bid" ? "bg-green-500/10" : "bg-red-500/10"}`} colSpan={3}>
         {/* פס-עומק — ממחיש את הנזילות ברמה-הזאת */}
         <span
           aria-hidden
-          className={`absolute inset-y-0 right-0 rounded-sm ${side === "bid" ? "bg-emerald-500/[0.13]" : "bg-rose-500/[0.13]"}`}
+          className={`absolute inset-y-0 right-0 rounded-sm ${side === "bid" ? "bg-green-500/10" : "bg-red-500/10"}`}
           style={{ width: `${Math.max(4, Math.round((total / maxTotal) * 100))}%` }}
         />
         <span
           aria-hidden
-          className={`absolute inset-y-0 right-0 rounded-sm opacity-60 ${side === "bid" ? "border-r-2 border-emerald-400/50" : "border-r-2 border-rose-400/50"}`}
+          className={`absolute inset-y-0 right-0 rounded-sm ${side === "bid" ? "border-r-2 border-green-400/60" : "border-r-2 border-red-400/60"}`}
           style={{ width: `${Math.max(4, Math.round((total / maxTotal) * 100))}%` }}
         />
         <div className="relative z-10 flex items-center justify-between gap-2 px-2 font-mono text-[11px]">
-          <span className={side === "bid" ? "font-bold text-emerald-300" : "font-bold text-rose-300"}>{fmtInt(px)}</span>
-          <span className="text-zinc-300">{fmt(total, 0)}</span>
-          <span className="w-8 text-left text-zinc-600">{orders}</span>
+          <span className={side === "bid" ? "font-bold text-green-300" : "font-bold text-red-300"}>{fmtInt(px)}</span>
+          <span className="text-zinc-200">{fmt(total, 0)}</span>
+          <span className="w-8 text-left text-zinc-500">{orders}</span>
         </div>
       </td>
     </tr>
@@ -302,7 +363,7 @@ function OrderBook({ market }: { market: MarketView | undefined }) {
       <div className="flex items-center justify-between px-2 pb-1 font-mono text-[10px] uppercase tracking-wider text-zinc-600">
         <span>price</span><span>total (base)</span><span>orders</span>
       </div>
-      <div className="scroll-slim max-h-72 overflow-y-auto" dir="ltr">
+      <div className="scroll-slim max-h-64 overflow-y-auto" dir="ltr">
         <table className="w-full border-separate border-spacing-0">
           <tbody>
             {asks.map((a) => <Row key={`a-${a.price}`} px={a.price} total={a.total} orders={a.orders} side="ask" />)}
@@ -312,11 +373,11 @@ function OrderBook({ market }: { market: MarketView | undefined }) {
       {/* שורת-הפרש-מרכזית */}
       <div className="my-1.5 flex items-center justify-between rounded-md border border-zinc-800 bg-zinc-900/80 px-3 py-1.5 font-mono text-xs" dir="ltr">
         <span className="text-zinc-500">spread</span>
-        <span className={`font-bold ${(market?.spreadBps ?? 0) > 0 ? "text-amber-300" : "text-rose-400"}`}>
+        <span className={`font-bold ${(market?.spreadBps ?? 0) > 0 ? "text-amber-300" : "text-red-400"}`}>
           {market ? `${market.spreadBps} bps` : "—"}
         </span>
       </div>
-      <div className="scroll-slim max-h-72 overflow-y-auto" dir="ltr">
+      <div className="scroll-slim max-h-64 overflow-y-auto" dir="ltr">
         <table className="w-full border-separate border-spacing-0">
           <tbody>
             {bids.map((b) => <Row key={`b-${b.price}`} px={b.price} total={b.total} orders={b.orders} side="bid" />)}
@@ -379,7 +440,7 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
     return { avgPx: px, slipBps: Math.max(0, bps), covered: true };
   }, [market, marketOrder, side, px, amtMu]);
 
-  const guardTone = walk ? slipTone(walk.slipBps) : "emerald";
+  const guardTone = walk ? slipTone(walk.slipBps) : "green";
   const guardPct = Math.min(100, Math.round((walk?.slipBps ?? 0) / 2)); // סקאלה 0–200bps
 
   const submit = async () => {
@@ -396,17 +457,17 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
 
   return (
     <div data-testid="trading-form" data-side={side} data-ordertype={marketOrder ? "market" : "limit"}>
-      {/* מתגי-side */}
+      {/* מתגי-side — ירוק/אדום מילוליים */}
       <div className="grid grid-cols-2 gap-2">
         <button
           type="button" onClick={() => setSide("buy")}
-          className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-black transition-colors ${side === "buy" ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-300" : "border-zinc-800 bg-zinc-900/60 text-zinc-500 hover:border-emerald-500/30"}`}
+          className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-black transition-colors ${side === "buy" ? "border-green-500/60 bg-green-500/15 text-green-300" : "border-zinc-800 bg-zinc-900/60 text-zinc-500 hover:border-green-500/30"}`}
         >
           <ArrowUpRight className="h-4 w-4" /> BUY
         </button>
         <button
           type="button" onClick={() => setSide("sell")}
-          className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-black transition-colors ${side === "sell" ? "border-rose-500/60 bg-rose-500/15 text-rose-300" : "border-zinc-800 bg-zinc-900/60 text-zinc-500 hover:border-rose-500/30"}`}
+          className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-black transition-colors ${side === "sell" ? "border-red-500/60 bg-red-500/15 text-red-300" : "border-zinc-800 bg-zinc-900/60 text-zinc-500 hover:border-red-500/30"}`}
         >
           <ArrowDownRight className="h-4 w-4" /> SELL
         </button>
@@ -454,7 +515,7 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
         </div>
         <div className="rounded-md border border-zinc-800 bg-zinc-900/70 px-2.5 py-1.5">
           <div className="text-[9px] uppercase tracking-wider text-zinc-600">avail {payAsset}</div>
-          <div className={obligationMu > availMu ? "text-rose-400" : "text-zinc-200"}>{fmt(Math.max(0, availMu), 0)}</div>
+          <div className={obligationMu > availMu ? "text-red-400" : "text-zinc-200"}>{fmt(Math.max(0, availMu), 0)}</div>
         </div>
       </div>
 
@@ -464,7 +525,7 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
           <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-zinc-400">
             <ShieldCheck className="h-3.5 w-3.5 text-amber-400" /> Slippage Guard
           </span>
-          <span className={`font-mono text-xs font-black ${guardTone === "emerald" ? "text-emerald-300" : guardTone === "amber" ? "text-amber-300" : "text-rose-300"}`}>
+          <span className={`font-mono text-xs font-black ${guardTone === "green" ? "text-green-300" : guardTone === "amber" ? "text-amber-300" : "text-red-300"}`}>
             {walk ? `${walk.slipBps} bps` : "—"}
           </span>
         </div>
@@ -481,15 +542,17 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
       {/* שגיאות-אימות */}
       {errors.length > 0 && (
         <ul className="mt-2 space-y-0.5" data-testid="form-errors">
-          {errors.map((e) => <li key={e} className="font-mono text-[10px] text-rose-400">— {e}</li>)}
+          {errors.map((e) => <li key={e} className="font-mono text-[10px] text-red-400">— {e}</li>)}
         </ul>
       )}
 
+      {/* כפתור-ביצוע גדול: bg-green-600 / bg-red-600 מילוליים */}
       <GoldButton
-        tone={side === "buy" ? "emerald" : "rose"}
+        tone={side === "buy" ? "green" : "red"}
         disabled={!valid || busy}
         onClick={() => void submit()}
-        className="mt-3 w-full"
+        className="mt-3 w-full py-3 text-base"
+        testid="trade-submit"
       >
         {side === "buy" ? "BUY" : "SELL"} {market ? `${market.base}` : ""} {marketOrder ? "· MARKET" : `· LIMIT ${fmtInt(px)}`}
       </GoldButton>
@@ -508,13 +571,13 @@ function MyOrders({ orders, busy, post, onDone }: {
         <tbody>
           {orders.map((o) => (
             <tr key={o.id} className="border-b border-zinc-800/50">
-              <td className={`py-1.5 font-bold ${o.side === "buy" ? "text-emerald-300" : "text-rose-300"}`}>{o.side.toUpperCase()}</td>
+              <td className={`py-1.5 font-bold ${o.side === "buy" ? "text-green-300" : "text-red-300"}`}>{o.side.toUpperCase()}</td>
               <td className="py-1.5 text-zinc-300">{fmtInt(o.price)}</td>
               <td className="py-1.5 text-zinc-400">{fmt(o.amount - o.filled, 0)} / {fmt(o.amount, 0)}</td>
               <td className="py-1.5 text-left">
                 <button
                   disabled={busy} onClick={() => { void post(api("/api/dex/cancel"), { orderId: o.id }).then(onDone); }}
-                  className="inline-flex items-center gap-1 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-rose-500/50 hover:text-rose-300"
+                  className="inline-flex items-center gap-1 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:border-red-500/50 hover:text-red-300"
                 >
                   <Ban className="h-3 w-3" /> cancel
                 </button>
@@ -584,7 +647,7 @@ function SwapPanel({ pools, busy, post }: { pools: PoolView[]; busy: boolean; po
       </button>
       {shownQuote && (
         <div className="mt-2 rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-2 font-mono text-[11px]" dir="ltr">
-          <div className="text-zinc-400">out ≈ <span className="font-bold text-emerald-300">{fmt(shownQuote.out, 2)}</span> {assetOut}</div>
+          <div className="text-zinc-400">out ≈ <span className="font-bold text-green-300">{fmt(shownQuote.out, 2)}</span> {assetOut}</div>
           <div className="mt-0.5 text-zinc-500">minOut guard (1%): {fmtInt(shownQuote.minOut0)}</div>
         </div>
       )}
@@ -611,7 +674,7 @@ function SwapPanel({ pools, busy, post }: { pools: PoolView[]; busy: boolean; po
 // ─── פאנל: סליל-מסחר ────────────────────────────────────────────────────────
 function Tape({ tape }: { tape: TapeEv[] }) {
   return (
-    <div className="scroll-slim max-h-64 overflow-y-auto" dir="ltr">
+    <div className="scroll-slim max-h-56 overflow-y-auto" dir="ltr">
       <table className="w-full text-left font-mono text-[11px]">
         <tbody>
           {tape.map((e, i) => (
@@ -675,9 +738,9 @@ export default function DexTerminal() {
 
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950">
-      {/* ─── Header מוסדי: לוגו · מחיר-חי גדול · נורת-מערכת ─── */}
+      {/* ─── Header מוסדי: לוגו טקסטואלי · מחיר-חי גדול · נורת-מערכת ─── */}
       <header className="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur" data-testid="terminal-header">
-        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3">
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-amber-500/40 bg-amber-500/10">
               <Coins className="h-5 w-5 text-amber-400" />
@@ -690,12 +753,12 @@ export default function DexTerminal() {
             </div>
           </div>
 
-          {/* מחיר-חי גדול וברור */}
+          {/* מחיר-חי גדול וברור (monospace) */}
           <div className="flex items-baseline gap-3" dir="ltr" data-testid="header-price" data-px={px}>
             <span className="font-mono text-3xl font-black tracking-tight text-amber-400">{px ? fmt(px, 2) : "—"}</span>
             <span className="font-mono text-xs text-zinc-500">{market ? `${market.base}/${market.quote}` : ""}</span>
             {refPx > 0 && px > 0 && (
-              <span className={`flex items-center gap-0.5 font-mono text-xs font-bold ${up ? "text-emerald-400" : "text-rose-400"}`}>
+              <span className={`flex items-center gap-0.5 font-mono text-xs font-bold ${up ? "text-green-400" : "text-red-400"}`}>
                 {up ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
                 {Math.abs(Math.floor(((px - refPx) / refPx) * 10_000))} bps
               </span>
@@ -704,8 +767,8 @@ export default function DexTerminal() {
 
           <div className="flex flex-wrap items-center gap-2">
             {/* נורת-מערכת ירוקה/אדומה — בלי אימוג'ים */}
-            <Pill tone={st?.halted ? "rose" : "emerald"} pulse={st?.halted === true}>
-              <StatusDot tone={st?.halted ? "rose" : "emerald"} pulse={st?.halted === true} />
+            <Pill tone={st?.halted ? "red" : "green"} pulse={st?.halted === true}>
+              <StatusDot tone={st?.halted ? "red" : "green"} pulse={st?.halted === true} />
               {st?.halted ? "HALTED" : "LIVE"} · h{st ? fmtInt(st.height) : "…"}
             </Pill>
             <Pill tone="violet">TPS {st ? fmtInt(st.tps) : "…"}</Pill>
@@ -716,39 +779,34 @@ export default function DexTerminal() {
       </header>
 
       {msg && (
-        <div className="mx-auto mt-3 w-full max-w-[1400px] px-4">
-          <div className={`rounded-lg border px-4 py-2 text-sm font-semibold ${msg.tone === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-rose-500/40 bg-rose-500/10 text-rose-300"}`} role="status">
+        <div className="mx-auto mt-3 w-full max-w-[1600px] px-4">
+          <div className={`rounded-lg border px-4 py-2 text-sm font-semibold ${msg.tone === "ok" ? "border-green-500/40 bg-green-500/10 text-green-300" : "border-red-500/40 bg-red-500/10 text-red-300"}`} role="status" data-testid="flash-message">
             {msg.text}
           </div>
         </div>
       )}
 
-      <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-4">
-        {/* מדדי-על */}
-        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-          <Stat label="גובה-שרשרת" value={st ? fmtInt(st.height) : "…"} sub={`חותם הבא בעוד ${st ? st.nextSealIn : "…"} בלוקים`} />
-          <Stat label="סה״כ-פעולות" value={st ? fmtInt(st.opsTotal) : "…"} sub={`fills ${fmtInt(st?.fills ?? 0)} · swaps ${fmtInt(st?.swaps ?? 0)}`} />
-          <Stat label="מחיר-ייחוס" value={st ? `${fmt(st.ladder.refPrice, 3)}` : "…"} sub={`הרמות-רצפה ${fmtInt(st?.ladders ?? 0)}`} tone="text-amber-300" />
-          <Stat label="רווח-אוצר (נמדד)" value={st ? fmt(st.treasuryProfit, 1) : "…"} sub={`מד-עמלות ${fmt(st?.feeMeter ?? 0, 1)}`} tone="text-emerald-300" />
-          <Stat label="הזמנות-חיות" value={fmtInt(st?.liveOrders ?? 0)} sub={`uptime ${st ? fmtInt(st.uptimeSec) : "…"}s`} />
-          <Stat label="גיבוי 1:1 (עטופים)" value={st ? fmt(Object.values(st.backing ?? {}).reduce((a, b) => a + b, 0), 0) : "…"} sub={Object.entries(st?.backing ?? {}).map(([k, v]) => `${k}:${fmt(v, 0)}`).join(" · ") || "—"} tone="text-emerald-300" />
-        </div>
+      <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4">
+        {/* ═════ מבנה 3-טורי מחייב: 20% Watchlist · 50% גרף+ספר · 30% מסחר+בריאות ═════ */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-10">
+          {/* ─── טור-שמאל (20%): רשימת-שווקים ─── */}
+          <div className="order-3 lg:order-1 lg:col-span-2">
+            <Panel title="MARKETS" icon={<List className="h-4 w-4 text-amber-400" />}
+              action={<span className="font-mono text-[10px] text-zinc-500">{world?.markets.length ?? 0} live</span>}>
+              <Watchlist markets={world?.markets ?? []} selected={market?.key} onSelect={setMarketKey} />
+            </Panel>
+          </div>
 
-        {/* System Health & Relay — פאנל בולט */}
-        <SystemHealthPanel st={st} relay={relay} mempool={world?.arena.mempool ?? 0} />
-
-        {/* ─── שטח-ראשי: גרף (60%) + ספר/טופס (40%) ─── */}
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-5">
-          {/* גרף — 3/5 מהרוחב = 60% */}
-          <div className="lg:col-span-3">
+          {/* ─── טור-מרכזי (50%): גרף למעלה · ספר-הזמנות למטה ─── */}
+          <div className="order-1 flex flex-col gap-4 lg:order-2 lg:col-span-5">
             <Panel
               title={market ? `${market.base}/${market.quote} · גרף-חי` : "גרף-חי"}
               icon={<Activity className="h-4 w-4 text-amber-400" />}
               action={
                 <div className="flex items-center gap-2" dir="ltr">
                   <span className="hidden items-center gap-1 font-mono text-[10px] text-zinc-500 sm:flex">
-                    <span className="text-emerald-400">bid {market ? fmtInt(market.bestBid) : "—"}</span>
-                    <span className="text-rose-400">ask {market ? fmtInt(market.bestAsk) : "—"}</span>
+                    <span className="text-green-400">bid {market ? fmtInt(market.bestBid) : "—"}</span>
+                    <span className="text-red-400">ask {market ? fmtInt(market.bestAsk) : "—"}</span>
                   </span>
                   <select
                     value={market?.key ?? ""} onChange={(e) => setMarketKey(e.target.value)}
@@ -759,30 +817,23 @@ export default function DexTerminal() {
                 </div>
               }
             >
-              <PriceChart data={market?.chart ?? []} height={340} />
+              <PriceChart data={market?.chart ?? []} height={420} />
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] text-zinc-600" dir="ltr">
                 <span>lightweight-charts (TradingView standard) · event-driven stream</span>
                 <span>{market?.chart.length ?? 0} live points</span>
               </div>
             </Panel>
 
-            {/* סליל-מסחר */}
-            <div className="mt-4">
-              <Panel title="סליל-מסחר (Tape)" icon={<Zap className="h-4 w-4 text-emerald-400" />}>
-                <Tape tape={world?.tape ?? []} />
-              </Panel>
-            </div>
-          </div>
-
-          {/* ספר + טופס — 2/5 מהרוחב */}
-          <div className="flex flex-col gap-4 lg:col-span-2">
             <Panel
               title="ספר-הזמנות" icon={<Layers className="h-4 w-4 text-amber-400" />}
-              action={<span className="font-mono text-[10px] text-zinc-500" dir="ltr">depth</span>}
+              action={<span className="font-mono text-[10px] text-zinc-500" dir="ltr">depth bars · green bids / red asks</span>}
             >
               <OrderBook market={market} />
             </Panel>
+          </div>
 
+          {/* ─── טור-ימין (30%): טופס-מסחר למעלה · System Health למטה ─── */}
+          <div className="order-2 flex flex-col gap-4 lg:order-3 lg:col-span-3">
             <Panel title="טופס-מסחר" icon={<Landmark className="h-4 w-4 text-amber-400" />}>
               <TradeForm market={market} opWallet={opWallet} busy={busy} post={post} onDone={() => void load()} />
               <div className="mt-3 border-t border-zinc-800 pt-3">
@@ -792,11 +843,17 @@ export default function DexTerminal() {
                 <MyOrders orders={myOrders} busy={busy} post={post} onDone={() => void load()} />
               </div>
             </Panel>
+
+            <SystemHealthPanel st={st} relay={relay} mempool={world?.arena.mempool ?? 0} />
           </div>
         </div>
 
-        {/* ─── שורה-תחתונה: SWAP + הוכחות ─── */}
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* ─── שורה-תחתונה: סליל · SWAP · הוכחות-מרקל ─── */}
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Panel title="סליל-מסחר (Tape)" icon={<Zap className="h-4 w-4 text-amber-400" />}>
+            <Tape tape={world?.tape ?? []} />
+          </Panel>
+
           <Panel title="SWAP — בריכות 30bps" icon={<Waves className="h-4 w-4 text-violet-300" />}>
             <SwapPanel pools={world?.pools ?? []} busy={busy} post={post} />
           </Panel>
@@ -817,7 +874,7 @@ export default function DexTerminal() {
                 <div className="space-y-2 font-mono text-[11px]" dir="ltr">
                   <div className="flex items-center justify-between rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-2">
                     <span className="text-zinc-500">seal h{seal.fromHeight}→h{seal.toHeight} ({seal.leaves} blocks)</span>
-                    <span className="flex items-center gap-1 text-emerald-300"><ShieldCheck className="h-3.5 w-3.5" /> {shortHash(seal.digest, 10)}</span>
+                    <span className="flex items-center gap-1 text-green-300"><ShieldCheck className="h-3.5 w-3.5" /> {shortHash(seal.digest, 10)}</span>
                   </div>
                   <div className="flex items-center justify-between rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-2">
                     <span className="text-zinc-500">stateRoot</span>
@@ -825,7 +882,7 @@ export default function DexTerminal() {
                   </div>
                   <p className="text-[10px] leading-snug text-zinc-500">
                     קח את hashי-הבלוקים מה-API, בנה-מרקל בעצמך (odd-fold), והשווה ל-root — בלי לסמוך עלינו.
-                    העיגון-הציבורי מאומת בקריאה-חוזרת מ-RPC עצמאי (System Health → verified).
+                    העיגון-הציבורי מאומת בקריאה-חוזרת מ-RPC עצמאי (System Health → VERIFIED ANCHORS).
                   </p>
                 </div>
               );
@@ -836,7 +893,7 @@ export default function DexTerminal() {
 
       {/* ─── Footer דביק (mt-auto) — כנות-כלכלית ─── */}
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950">
-        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-[10px] text-zinc-600" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-[10px] text-zinc-600" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
           <span className="flex items-center gap-1.5">
             <Bot className="h-3.5 w-3.5" /> סימולציה-ריבונית — ספר-מקומי, אין כסף-אמת, אין הבטחות-תשואה
           </span>

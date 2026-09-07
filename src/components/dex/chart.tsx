@@ -109,12 +109,12 @@ export function PriceChart({ data, height = 320 }: { data: { t: number; p: numbe
       <div
         data-testid="lightweight-charts-container"
         data-chart-status="failed"
-        className="flex w-full items-center justify-center rounded-lg border border-dashed border-rose-500/40 bg-rose-500/5"
+        className="flex w-full items-center justify-center rounded-lg border border-dashed border-red-500/40 bg-red-500/5"
         style={{ height }}
         dir="ltr"
       >
         <div className="text-center">
-          <div className="font-mono text-xs font-bold text-rose-300">CHART ENGINE UNAVAILABLE</div>
+          <div className="font-mono text-sm font-black text-red-400">CHART FAILED TO RENDER</div>
           <div className="mt-1 text-[10px] text-zinc-500">lightweight-charts failed to initialize — see console for the error</div>
         </div>
       </div>
