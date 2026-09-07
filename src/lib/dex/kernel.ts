@@ -220,6 +220,9 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // פקודת-לימיט מוסדית (סטנדרט-בורסות): חפיפה-מיידית כ-taker במחיר-המייקר,
       // ושארית נחה בספר. אין-חפיפה כלל → מנוחה-מלאה. נעילה-מראש על מלוא-הכמות;
       // matchBook משחרר-במדויק לכל-רגל — הנעילה נשארת מדויקת-בסוף (מורשת saos-dex).
+      // FIX(escrow): בנתיב-אין-חפיפה הפקודה נחה עם-הנעילה-שלה — שחרור-הנעילה
+      // לפני-המנוחה יצר פקודה בלתי-מגובה (uncollateralized) שמילויה-כמייקר
+      // משחרר נעילות-פנטום (נתפס-ע"י invariant: escrow-underflow — HALT).
       const px = op.price ?? 0, amt = op.amount ?? 0;
       const lockAsset = (op.side === "sell" ? op.base : op.quote) as string;
       const lockMu = op.side === "sell" ? amt : notional(px, amt);
@@ -228,12 +231,33 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         return { ok: false, err: "order-cap", gas: 0 };
       if (avail(st, op.issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
       addLock(st, op.issuer, lockAsset, lockMu);
+      const lockBefore = lockedOf(st, op.issuer, lockAsset);
       const cross = matchBook(st, op, nowMs, consume);
-      if (cross.ok) return cross; // שארית (אם-נותרה) כבר נחה בספר — הנעילה מדויקת
-      addLock(st, op.issuer, lockAsset, -lockMu); // כשל-שאינו-חפיפה → שחרור-מלא
-      if (cross.err !== "no-cross") return cross;
-      // אין-חפיפה: הפקודה נחה בספר (matchBook לא-צרך כשאין-אירועים)
-      const c2 = consume(); if (c2) return c2;
+      if (cross.ok) {
+        // שחרור-אבק-רצפה: floor לא-אדיטיבי עלול להשאיר נעילה-עודפת בלי-פקודה
+        // מאחוריה — מכוונים את הנעילה בדיוק לשארית (או-אפס אם-מולאה-כולה).
+        const filledMu = amt - (cross.events ? cross.events.reduce((a, e) => a + e.amountMu, 0) : 0);
+        const expectedLock = filledMu > 0 ? notional(px, filledMu) : 0;
+        const released = lockBefore - lockedOf(st, op.issuer, lockAsset);
+        const dust = lockMu - released - expectedLock;
+        if (dust > 0) addLock(st, op.issuer, lockAsset, -dust);
+        return cross;
+      }
+      if (cross.err !== "no-cross") {
+        // כשל-קשה שאינו-אין-חפיפה → שחרור-שארית-הנעילה בלבד: matchBook עשוי
+        // להיות שחרר-חלק בטרם-הכשל — משחררים רק-את-מה-שנותר מהנעילה שלנו
+        // (שחרור-מלא-עיוור כאן היה מייצר נעילה שלילית — אותו-חור שה-invariant תפס).
+        const residual = lockedOf(st, op.issuer, lockAsset) - (lockBefore - lockMu);
+        if (residual > 0) addLock(st, op.issuer, lockAsset, -residual);
+        return cross;
+      }
+      // אין-חפיפה: הפקודה נחה בספר — עם-הנעילה-המלאה שלה (מגובה-מלא, לעולם לא משוחררת כאן)
+      const c2 = consume();
+      if (c2) {
+        // כשל-gas/דדופ אחרי-הנעילה — משחררים-הכול (fail-closed)
+        addLock(st, op.issuer, lockAsset, -lockMu);
+        return c2;
+      }
       const seq = st.nextSeq++;
       st.orders.push({
         seq, id: seq, owner: op.issuer, base: op.base as string, quote: op.quote as string, side: op.side as "buy" | "sell",

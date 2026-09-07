@@ -73,6 +73,8 @@ export function cancelOrder(st: DexState, op: Op, consume: () => OpResult | null
   const remQuote = notional(o.price, remBase);
   if (o.side === "sell") addLock(st, o.owner, o.base, -remBase);
   else addLock(st, o.owner, o.quote, -remQuote);
+  // Formal Assertion: ביטול משחרר רק-נעילה שקיימת — נעילה שלילית = שחיתות-מצב
+  invariant(lockedOf(st, o.owner, o.side === "sell" ? o.base : o.quote) >= 0, "escrow-underflow:cancel");
   o.live = false;
   return { ok: true, gas: 0 };
 }
@@ -82,11 +84,14 @@ export function cancelOrder(st: DexState, op: Op, consume: () => OpResult | null
  * קריטיות-כאן ברמת-הברזל:
  *  · נעילת-מראה על מלוא-הערבות (limit) או בדיקת-יתרה לפני-כל-מילוי (market) —
  *    אין-שלב שבו-taker יכול לחייב יותר-ממה שנעול/זמין אצלו (fail-closed).
+ *  · gas לפני-מוטציה: consume() נקרא אך-ורק אחרי-אימות-חפיפה-אמת ולפני-כל-שינוי-מצב —
+ *    כשל-gas = דחייה-נקייה לחלוטין (סוגר-חור-ריפליי שבו-מילויים-בוצעו בלי-חיוב-nonce).
  *  · מילוי תמיד במחיר-המייקר המדויק: אין-משטח-ריצה-קדימה, אין-סליפ' מלאכותי —
  *    הסליפ' של הספר הוא העלות-האמת, והמערכת אינה רשאית להשמיט אותו.
  *  · איסור-מילוי-עצמי (maker.owner === op.issuer) — מניעת-מניפולציה של ספר-עצמי.
- *  · חוסר-חפיפה → no-cross ולא-שקר: ה-op נכשל לפני-כל-תנועת-ספר (consume אחרי-הבדיקות).
- *  · שארית-limit נחה עם-הנעילה-המדויקת שכבר-נחשבה — אפס-רווח בין נעול למחויב.
+ *  · חוסר-חפיפה → no-cross ולא-שקר: אפס-חיוב, אפס-תנועת-ספר.
+ *  · Formal Assertions: מילוי-לעולם לא-גרוע-מה-limit · maker לא-נחפש-מעבר-לגודלו ·
+ *    אף-יתרה/נעילה לא יורדת מתחת-לאפס — הפרה = InvariantViolation = HALT (fail-fast).
  *  · דטרמיניזם: applyOp מריץ את matchBook באופן-דטרמיניסטי — ריפליי מייצר את אותו-הספר בדיוק.
  */
 export function matchBook(
@@ -112,6 +117,15 @@ export function matchBook(
   const opp = sortBook(st, base, quote, side === "buy" ? "sell" : "buy");
   const crosses = (makerPx: number): boolean =>
     op.market ? true : (side === "buy" ? makerPx <= limitPx! : makerPx >= limitPx!);
+
+  // שער-כנות לפני-חיוב: קיימת חפיפה-אמת (לא-עצמית, לא-אבק) שתמומש?
+  const firstCross = opp.find((m) =>
+    crosses(m.price) && m.owner !== op.issuer && remaining(m) > 0 &&
+    notional(m.price, Math.min(amount, remaining(m))) > 0
+  );
+  if (!firstCross) return { ok: false, err: "no-cross", gas: 0 };
+  // gas לפני-כל-מוטציה — כשל כאן = דחייה-נקייה, אפס-שינוי-מצב, ה-nonce נשרף (אנטי-ריפליי)
+  const c = consume(); if (c) return c;
 
   const events: TradeEvent[] = [];
   let takerRem = amount;
@@ -180,10 +194,7 @@ export function matchBook(
     });
   }
 
-  if (events.length === 0) return { ok: false, err: "no-cross", gas: 0 };
-  const c = consume(); if (c) return c;
-
-  // שארית-לימיט נחה בספר — הנעילה-כבר-מדויקת (לא-נוגעים)
+  // שארית-לימיט נחה בספר — הנעילה-כבר-מדויקת (לא-נוגעים; ה-gas כבר-נחייב למעלה)
   if (isLimit && takerRem > 0) {
     const seq = st.nextSeq++;
     st.orders.push({

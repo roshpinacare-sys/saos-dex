@@ -130,8 +130,11 @@ async function seal(rt: ChainRT): Promise<void> {
   invariant(merkleRoot(rt.blockHashes) === root, "seal-merkle-root");
   // (3) ה-stateRoot הקנוני מחייב את מצב-העולם הנוכחי במלואו
   invariant(info.stateRoot === stateRoot(st), "seal-state-root");
-  // (4) ה-digest אכן ההאש של תוכן-החותם עצמו (אימות-עצמי לפני-יציאה)
-  invariant(sha256(canon(info)) === info.digest, "seal-digest");
+  // (4) ה-digest אכן ההאש של תוכן-החותם עצמו (אימות-עצמי לפני-יציאה).
+  // ה-digest חושב על canon(info) כאשר info.digest עוד היה "" — הבדיקה בונה
+  // מחדש את אותה-צורה (בלי-ה-digest) ומשווה; הכללה-עצמית של ההאש בתוך עצמו
+  // היא מתמטית-בלתי-אפשרית (נתפס-בהרצה-הראשונה — עדות-לעבודת-ה assertions).
+  invariant(sha256(canon({ ...info, digest: "" })) === info.digest, "seal-digest");
   rt.seals.unshift(info);
   rt.seals = rt.seals.slice(0, 24);
   pushReceipt(rt, "seal", info);
