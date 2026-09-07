@@ -1,5 +1,6 @@
 /**
- * kit.tsx — רכיבי-בסיס של הקונסולה הריבונית (זהות: zinc-950 + זהב)
+ * kit.tsx — רכיבי-בסיס של הטרמינל הריבוני (זהות מוסדית: zinc-950 · גבולות-דקים ·
+ * monospace לנתונים-מספריים · ירוק/אדום = מסחר · סגול-עמוק = סטטוס-מערכת · אפס אימוג'ים)
  */
 "use client";
 
@@ -24,7 +25,7 @@ export function Panel({ title, icon, children, className, action }: {
 }
 
 export function Pill({ tone = "zinc", children, pulse }: {
-  tone?: "gold" | "emerald" | "rose" | "zinc" | "amber"; children: ReactNode; pulse?: boolean;
+  tone?: "gold" | "emerald" | "rose" | "zinc" | "amber" | "violet"; children: ReactNode; pulse?: boolean;
 }) {
   const tones: Record<string, string> = {
     gold: "border-amber-500/40 bg-amber-500/10 text-amber-300",
@@ -32,12 +33,25 @@ export function Pill({ tone = "zinc", children, pulse }: {
     rose: "border-rose-500/40 bg-rose-500/10 text-rose-300",
     amber: "border-amber-600/40 bg-amber-600/10 text-amber-200",
     zinc: "border-zinc-700 bg-zinc-800/60 text-zinc-300",
+    violet: "border-violet-500/40 bg-violet-500/10 text-violet-300",
   };
   return (
     <span className={clsx("inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold", tones[tone], pulse && "animate-pulse-gold")}>
       {children}
     </span>
   );
+}
+
+/** נורית-סטטוס (מחליף סימני-טקסט — זהות-מוסדית ללא אימוג'ים) */
+export function StatusDot({ tone = "zinc", pulse }: { tone?: "emerald" | "rose" | "amber" | "zinc" | "violet"; pulse?: boolean }) {
+  const tones: Record<string, string> = {
+    emerald: "bg-emerald-400",
+    rose: "bg-rose-400",
+    amber: "bg-amber-400",
+    zinc: "bg-zinc-600",
+    violet: "bg-violet-400",
+  };
+  return <span aria-hidden className={clsx("inline-block h-1.5 w-1.5 shrink-0 rounded-full", tones[tone], pulse && "animate-pulse-gold")} />;
 }
 
 export function GoldButton({ children, onClick, disabled, tone = "gold", className, type }: {
@@ -75,14 +89,14 @@ export function Stat({ label, value, sub, tone }: { label: string; value: ReactN
   );
 }
 
-/** µ → יחידות-קריאות (1,000µ = 1 יחידה) */
+/** µ → יחידות-קריאות (1,000µ = 1 יחידה) — פלט-stable למנוע-המסחר (לא-locale) */
 export function fmt(mu: number, digits = 2): string {
   const v = mu / 1000;
-  return v.toLocaleString("he-IL", { maximumFractionDigits: digits, minimumFractionDigits: 0 });
+  return v.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: 0 });
 }
 
 export function fmtInt(n: number): string {
-  return n.toLocaleString("he-IL");
+  return n.toLocaleString("en-US");
 }
 
 export function shortHash(h: string, n = 10): string {

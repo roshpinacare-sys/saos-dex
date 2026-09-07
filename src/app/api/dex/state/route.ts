@@ -1,14 +1,30 @@
 import { NextResponse } from "next/server";
-import { ensureChain, getState, getMarkets, getPools, getWallets, getArena, getProofs, getTape } from "@/lib/dex/chain";
+import { ensureChain, chainVersion, getState, getMarkets, getPools, getWallets, getArena, getProofs, getTape } from "@/lib/dex/chain";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
-/** מצב-עולם מלא לקונסולה (poll אחת ל-2 שנ׳) */
-export async function GET() {
+const WAIT_MAX_MS = 12_000;   // חלון-long-poll — הלקוח מיד מנפיש בקשה-חדשה
+const WAIT_STEP_MS = 250;
+
+/**
+ * GET /api/dex/state?v=<version> — מצב-עולם מלא.
+ * בלי v: תשובה מידית. עם v: long-poll מבוסס-אירוע — מחזיר רק כשהשרשרת התקדמה
+ * מעבר לגרסה-המבוקשת (או keepalive כל-12ש׳). אפס-השהיה מלאכותית בצד-הלקוח.
+ */
+export async function GET(req: Request) {
   const rt = ensureChain();
+  const since = Number(new URL(req.url).searchParams.get("v") || 0);
+  if (Number.isFinite(since) && since > 0) {
+    const deadline = Date.now() + WAIT_MAX_MS;
+    while (chainVersion() === since && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, WAIT_STEP_MS));
+    }
+  }
   const proofs = getProofs();
   return NextResponse.json({
     ok: true,
+    version: chainVersion(),
     state: getState(),
     markets: getMarkets(),
     pools: getPools(),

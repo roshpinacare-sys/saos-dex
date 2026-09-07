@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Anchor, BarChart3, Bot, Coins, Droplets, FlaskConical,
-  GitBranch, Landmark, RefreshCcw, ShieldCheck, Wallet, Zap, Layers,
+  Activity, Anchor, ArrowLeftRight, BarChart3, Bot, Check, Coins, Cpu, Droplets, FlaskConical,
+  GitBranch, Landmark, RefreshCcw, ShieldCheck, Wallet, X, Zap, Layers,
 } from "lucide-react";
-import { AreaChart, Area, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
-import { GoldButton, Panel, Pill, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
+import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
+import { PriceChart } from "@/components/dex/chart";
 
 // ─── טיפוסים (מראה-API) ─────────────────────────────────────────────────────
 interface MarketView {
@@ -23,7 +23,7 @@ interface SoldierView { name: string; saos: number; usds: number; equity: number
 interface TapeEv { kind: string; base: string; quote: string; price: number; amountMu: number; taker: string; maker?: string; at: number; h: number }
 interface SealInfo { fromHeight: number; toHeight: number; root: string; stateRoot: string; leaves: number; at: number; digest: string }
 interface StateView {
-  height: number; stateRoot: string; gasUsed: number; opsTotal: number; fills: number; swaps: number;
+  height: number; tps: number; stateRoot: string; gasUsed: number; opsTotal: number; fills: number; swaps: number;
   ladders: number; treasuryProfit: number; feeMeter: number;
   ladder: { refPrice: number; lifts: number; lastLiftHeight: number; spentMu: number; stepCostMu: number };
   liveOrders: number; buildMs: number; uptimeSec: number; lastBlockAgoMs: number | null;
@@ -33,6 +33,7 @@ interface StateView {
 interface ArenaParams { enabled: boolean; noise: boolean; spreadBps: number; stepBps: number; levels: number; sizeMu: number; maxInventoryMu: number; minEdgeBps: number; requoteBps: number }
 interface WorldResp {
   ok: boolean;
+  version: number;
   state: StateView;
   markets: MarketView[];
   pools: PoolView[];
@@ -44,32 +45,98 @@ interface WorldResp {
 
 const ASSETS = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE"];
 
-export default function DexConsole() {
+/* ══ מנוע-זרימה: long-polling מבוסס-אירוע עם AbortController ══════════════════
+ * הלקוח תולה בקשה עם הגרסה-המקומית; השרת משיב רק כשהשרשרת התקדמה (או keepalive
+ * כל-12ש׳). אפס-השהיה מלאכותית — עדכון עם כל-בלוק, בלי סקר-תקופתי. */
+function useWorldStream(): { world: WorldResp | null; load: () => Promise<void> } {
   const [world, setWorld] = useState<WorldResp | null>(null);
-  const [marketKey, setMarketKey] = useState("SAOS/USDS");
+  const versionRef = useRef(0);
+  const ctrlRef = useRef<AbortController | null>(null);
+  const [gen, setGen] = useState(0);
+
+  // רענון-מיידי (אחרי-פעולת-משתמש): נתק את ה-long-poll, קבל תמונה עכשיו, החזר את הלולאה
+  const load = useCallback(async () => {
+    ctrlRef.current?.abort();
+    try {
+      const r = await fetch("/api/dex/state", { cache: "no-store" });
+      const j = (await r.json()) as WorldResp;
+      if (j.ok) {
+        versionRef.current = j.version;
+        setWorld(j);
+      }
+    } catch { /* השרת עוד קם */ }
+    setGen((x) => x + 1);
+  }, []);
+
+  useEffect(() => {
+    let stopped = false;
+    const ctrl = new AbortController();
+    ctrlRef.current = ctrl;
+    const loop = async () => {
+      while (!stopped) {
+        try {
+          const r = await fetch(`/api/dex/state?v=${versionRef.current}`, { cache: "no-store", signal: ctrl.signal });
+          const j = (await r.json()) as WorldResp;
+          if (!stopped && j.ok && j.version !== versionRef.current) {
+            versionRef.current = j.version;
+            setWorld(j);
+          }
+        } catch {
+          if (stopped || ctrl.signal.aborted) return;
+          await new Promise((res) => setTimeout(res, 1500)); // backoff — השרת עוד קם
+        }
+      }
+    };
+    void loop();
+    return () => { stopped = true; ctrl.abort(); };
+  }, [gen]);
+
+  return { world, load };
+}
+
+/* ══ זרם-Relay: נשלף עם כל-גרסת-עולם (מנוע-אירוע, בלי סקר-עצמאי) ════════════ */
+interface RelayRecord { chain: "steem" | "hive" | "tron"; height: number; status: string; txid: string | null; at: string; attempt: number; verified: boolean | null; verifiedAt: string | null; error?: string }
+interface RelayView {
+  enabled: boolean; account: string | null; anchorId: string; queue: number; tronIdentity: string | null;
+  metrics: { broadcasts: number; verified: number; mismatches: number; breakerTrips: number; economicWaits: number; lastVerifyLatencyMs: number | null };
+  chains: Record<"steem" | "hive" | "tron", {
+    enabled: boolean; status: string; lastTxid: string | null; lastHeight: number | null; lastAt: string | null;
+    lastError: string | null; lastVerifyError: string | null; anchored: number; verified: number; mismatches: number;
+    breaker: { state: "closed" | "open" | "half-open"; failures: number; openedAt: number | null; trips: number };
+  }>;
+  records: RelayRecord[];
+}
+
+function useRelayStream(version: number | undefined): RelayView | null {
+  const [relay, setRelay] = useState<RelayView | null>(null);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const r = await fetch("/api/dex/relay", { cache: "no-store", signal: ctrl.signal });
+        const j = (await r.json()) as { ok: boolean; relay: RelayView };
+        if (j.ok) setRelay(j.relay);
+      } catch { /* aborted / idle */ }
+    })();
+    return () => ctrl.abort();
+  }, [version]);
+  return relay;
+}
+
+export default function DexConsole() {
+  const { world, load } = useWorldStream();
+  const [marketKey, setMarketKey] = useState<string>(""); // "" = נגזר מהזרימה (הזוג העשיר-ביותר בגרף)
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [proofPack, setProofPack] = useState<{ verified: boolean; recomputedRoot: string; leaves: string[]; seal: SealInfo } | null>(null);
   const [benchRes, setBenchRes] = useState<{ opsPerSec: number; perDay: number; verdict: string } | null>(null);
 
+  const relay = useRelayStream(world?.version);
+
   const flash = useCallback((tone: "ok" | "err", text: string) => {
     setMsg({ tone, text });
     setTimeout(() => setMsg(null), 4000);
   }, []);
-
-  const load = useCallback(async () => {
-    try {
-      const r = await fetch("/api/dex/state", { cache: "no-store" });
-      const j = (await r.json()) as WorldResp;
-      if (j.ok) setWorld(j);
-    } catch { /* השרת עוד קם */ }
-  }, []);
-
-  useEffect(() => {
-    void load();
-    const t = setInterval(() => void load(), 2000);
-    return () => clearInterval(t);
-  }, [load]);
 
   const post = useCallback(async (url: string, body?: unknown) => {
     setBusy(true);
@@ -89,10 +156,13 @@ export default function DexConsole() {
     }
   }, [flash, load]);
 
-  const market = useMemo(
-    () => world?.markets.find((m) => m.key === marketKey) ?? world?.markets[0],
-    [world, marketKey]
-  );
+  const market = useMemo(() => {
+    if (!world) return undefined;
+    const picked = world.markets.find((m) => m.key === marketKey);
+    if (picked) return picked;
+    // ברירת-מחדל מוסדית: הזוג עם הזרימה החיה העשירה ביותר (הכי-הרבה נקודות-גרף)
+    return [...world.markets].sort((a, b) => b.chart.length - a.chart.length)[0] ?? world.markets[0];
+  }, [world, marketKey]);
   const opWallet = world?.wallets.find((w) => w.name === "operator");
   const st = world?.state;
 
@@ -107,16 +177,16 @@ export default function DexConsole() {
             </div>
             <div>
               <h1 className="text-base font-black tracking-tight text-zinc-50">
-                SAOS-DEX <span className="text-amber-400">· הבורסה הריבונית</span>
+                SAOS-DEX <span className="text-amber-400">· טרמינל ריבוני</span>
               </h1>
-              <p className="text-[10px] text-zinc-500">ספר-הזמנות דטרמיניסטי · בריכות 30bps · ארנה אוטונומית · מורשת saos-dex + grid98</p>
+              <p className="text-[10px] text-zinc-500">ספר-הזמנות דטרמיניסטי · בריכות 30bps · ארנה אוטונומית · עיגון חי Steem/Hive/TRON</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Pill tone="amber" pulse>● פעימה חיה · גובה {st ? fmtInt(st.height) : "…"}</Pill>
+            <Pill tone="amber" pulse><StatusDot tone="amber" pulse /> פעימה חיה · גובה {st ? fmtInt(st.height) : "…"}</Pill>
             <Pill tone="zinc">root {st ? shortHash(st.stateRoot, 10) : "…"}</Pill>
             <Pill tone="emerald">חותם הבא בעוד {st ? st.nextSealIn : "…"} בלוקים</Pill>
-            <Pill tone={st?.dbOk ? "emerald" : "rose"}>{st?.dbOk ? "ראיות-DB ✓" : "ראיות-DB כבויות"}</Pill>
+            <Pill tone={st?.dbOk ? "emerald" : "rose"}>{st?.dbOk ? "ראיות-DB אומתו" : "ראיות-DB כבויות"}</Pill>
             <Pill tone="gold">SIM — ספר-ריבוני, אין כסף אמת</Pill>
           </div>
         </div>
@@ -141,13 +211,16 @@ export default function DexConsole() {
           <Stat label="ממפול" value={fmtInt(world?.arena.mempool ?? 0)} sub={`זמן-קומה ${st ? fmtInt(st.uptimeSec) + "s" : "…"}`} />
         </div>
 
+        {/* ─── System Health — סרגל-סטטוס מוסדי ─── */}
+        <SystemHealthPanel st={st} mempool={world?.arena.mempool ?? 0} relay={relay} />
+
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
           {/* ─── טור ימין: ספר + סליל ─── */}
           <div className="flex flex-col gap-4">
             <Panel title="ספר-הזמנות" icon={<Layers className="h-4 w-4 text-amber-400" />}
               action={
                 <select
-                  value={marketKey}
+                  value={market?.key ?? ""}
                   onChange={(e) => setMarketKey(e.target.value)}
                   className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs font-bold text-amber-300 outline-none"
                 >
@@ -156,7 +229,7 @@ export default function DexConsole() {
               }
             >
               <BookLadder market={market} />
-              <BookTrade market={market} opWallet={opWallet} busy={busy} post={post} />
+              <BookTrade market={market} opWallet={opWallet} busy={busy} post={post} version={world?.version} />
             </Panel>
 
             <Panel title="סליל-מסחר (tape)" icon={<Activity className="h-4 w-4 text-emerald-400" />}>
@@ -184,29 +257,11 @@ export default function DexConsole() {
 
           {/* ─── טור מרכז: גרף + סוואג' + בריכות ─── */}
           <div className="flex flex-col gap-4">
-            <Panel title={`גרף-מחיר · ${marketKey}`} icon={<BarChart3 className="h-4 w-4 text-amber-400" />}
+            <Panel title={`גרף-מחיר · ${market?.key ?? "…"}`} icon={<BarChart3 className="h-4 w-4 text-amber-400" />}
               action={<Pill tone="zinc">fair {market ? fmt(market.fair, 4) : "—"}</Pill>}>
               <div className="h-52" dir="ltr">
                 {market && market.chart.length > 1 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={market.chart.map((c, i) => ({ i, p: c.p / 1000 }))}>
-                      <defs>
-                        <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#f5b841" stopOpacity={0.5} />
-                          <stop offset="100%" stopColor="#f5b841" stopOpacity={0.02} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid stroke="#27272a" strokeDasharray="3 3" />
-                      <XAxis dataKey="i" hide />
-                      <YAxis domain={["auto", "auto"]} tick={{ fill: "#71717a", fontSize: 10 }} width={54} />
-                      <Tooltip
-                        contentStyle={{ background: "#18181b", border: "1px solid #3f3f46", borderRadius: 8, fontSize: 12 }}
-                        labelStyle={{ color: "#a1a1aa" }}
-                        formatter={(v: number) => [v.toFixed(5), "מחיר"]}
-                      />
-                      <Area type="monotone" dataKey="p" stroke="#f5b841" strokeWidth={2} fill="url(#gold)" isAnimationActive={false} />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                  <PriceChart data={market.chart} height={208} />
                 ) : (
                   <div className="flex h-full items-center justify-center text-sm text-zinc-600">הגרף נבנה מהזרימה הראשונה…</div>
                 )}
@@ -231,12 +286,12 @@ export default function DexConsole() {
               </div>
             </Panel>
 
-            <SwapPanel market={market} pools={world?.pools ?? []} opWallet={opWallet} busy={busy} post={post} flash={flash} />
+            <SwapPanel market={market} pools={world?.pools ?? []} opWallet={opWallet} busy={busy} post={post} version={world?.version} />
 
             <PoolsPanel pools={world?.pools ?? []} opWallet={opWallet} busy={busy} post={post} flash={flash} />
           </div>
 
-          {/* ─── טור שמאל: ארנה + סולם + הוכחות + ביצועים ─── */}
+          {/* ─── טור שמאל: ארנה + סולם + הוכחות + עיגון ─── */}
           <div className="flex flex-col gap-4">
             <ArenaPanel world={world} busy={busy} post={post} />
 
@@ -275,7 +330,7 @@ export default function DexConsole() {
                       if (j.empty) flash("err", "אין-חותם עדיין — הראשון בגובה 12");
                       else if (j.verified !== undefined) {
                         setProofPack({ verified: j.verified, recomputedRoot: j.recomputedRoot!, leaves: j.leaves!, seal: j.seal! });
-                        flash(j.verified ? "ok" : "err", j.verified ? `מרקל אומת מחדש ✓ ${j.recomputedRoot?.slice(0, 10)}…` : "אי-התאמה!");
+                        flash(j.verified ? "ok" : "err", j.verified ? `מרקל אומת מחדש — ${j.recomputedRoot?.slice(0, 10)}…` : "אי-התאמה!");
                       }
                     } finally { setBusy(false); }
                   }}>
@@ -322,7 +377,7 @@ export default function DexConsole() {
               </div>
             </Panel>
 
-            <RelayPanel />
+            <RelayPanel relay={relay} />
 
             <Panel title="גיבוי-נכסים עטופים (1:1)" icon={<Anchor className="h-4 w-4 text-zinc-400" />}>
               <div className="space-y-1.5 text-xs">
@@ -376,12 +431,18 @@ export default function DexConsole() {
                     <td className="py-1.5 font-mono text-[11px] text-amber-300/80" dir="ltr">
                       {Object.entries(w.locked).filter(([, v]) => v !== 0).map(([a, v]) => `${a}:${fmtInt(v)}`).join(" · ") || "—"}
                     </td>
-                    <td className="py-1.5 font-mono text-[11px] text-zinc-400" dir="ltr">{fmtInt(w.credits)}</td>
+                    <td className="py-1.5 font-mono text-[11px] text-zinc-500">{fmtInt(w.credits)}</td>
                   </tr>
                 ))}
+                {(world?.wallets ?? []).length === 0 && (
+                  <tr><td colSpan={4} className="py-4 text-center text-zinc-600">אין-ארנקים — הפעל את הברז</td></tr>
+                )}
               </tbody>
             </table>
           </div>
+          <p className="mt-2 text-[10px] text-zinc-600">
+            נכסי-העטיפה המוצגים: {Object.keys(st?.backing ?? {}).map((a) => `${a} (${fmtInt(st?.backing[a] ?? 0)})`).join(" · ") || "—"} · מלאי-הנכסים: {ASSETS.join(" · ")}
+          </p>
         </Panel>
       </main>
 
@@ -390,15 +451,97 @@ export default function DexConsole() {
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-4 py-3 text-[11px] text-zinc-500">
           <div className="flex items-center gap-2">
             <Landmark className="h-3.5 w-3.5 text-amber-500/60" />
-            <span>SAOS-DEX v1.0 · ספר-ריבוני מקומי — <strong className="text-zinc-400">אין כסף אמת, אין הבטחות תשואה, אין עסקאות-חוץ</strong></span>
+            <span>SAOS-DEX v1.1 · ספר-מדומה (SIM) — <strong className="text-zinc-400">אין כסף אמת, אין הבטחות תשואה</strong> · עיגון-חותמות חי על Steem/Hive (custom_json) ו-TRON מותנה-מימון</span>
           </div>
           <div className="flex items-center gap-3">
-            <span>עיגון-שרשרת-ציבורית דורש מפתחות-מפעיל (לא קיימים כאן — בכוונה)</span>
+            <span>אימות-צד-שלישי בסיירים הציבוריים</span>
             <span className="font-mono">port 3010</span>
           </div>
         </div>
       </footer>
     </div>
+  );
+}
+
+// ─── System Health — סרגל-סטטוס מוסדי (סגול-עמוק = סטטוס-מערכת) ────────────
+function SystemHealthPanel({ st, mempool, relay }: { st?: StateView; mempool: number; relay: RelayView | null }) {
+  const engineLive = st ? (st.lastBlockAgoMs === null || st.lastBlockAgoMs < st.tickMs * 2.5) : false;
+  const chainKeys = ["steem", "hive", "tron"] as const;
+  const breakerTone = (s: string) => (s === "closed" ? "emerald" : s === "open" ? "rose" : "amber") as "emerald" | "rose" | "amber";
+  return (
+    <Panel title="System Health" icon={<Cpu className="h-4 w-4 text-violet-400" />} className="mb-4"
+      action={<Pill tone={engineLive ? "violet" : "rose"}><StatusDot tone={engineLive ? "violet" : "rose"} pulse={engineLive} /> {engineLive ? "כל-המערכות תקינות" : "מנוע-מעוכב"}</Pill>}>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        {/* מנוע-השרשרת */}
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+            <StatusDot tone={engineLive ? "emerald" : "rose"} pulse={engineLive} /> מנוע-שרשרת
+          </div>
+          <div className="mt-1 font-mono text-sm font-bold text-violet-300" dir="ltr">{st ? `${fmtInt(st.tps)} TPS` : "…"}</div>
+          <div className="text-[10px] text-zinc-500" dir="ltr">
+            block {st && st.lastBlockAgoMs !== null ? `${(st.lastBlockAgoMs / 1000).toFixed(1)}s ago` : "—"} · build {st?.buildMs ?? "—"}ms
+          </div>
+        </div>
+        {/* ממפול + ראיות */}
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+            <StatusDot tone={st?.dbOk ? "emerald" : "rose"} /> ראיות-DB
+          </div>
+          <div className="mt-1 font-mono text-sm font-bold text-zinc-100" dir="ltr">mempool {fmtInt(mempool)}</div>
+          <div className="text-[10px] text-zinc-500">{st?.dbOk ? "שרשור-האש נכתב ואומת" : "כתיבת-ראיות נכשלה"}</div>
+        </div>
+        {/* Relay */}
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+            <StatusDot tone={relay?.enabled ? "emerald" : "zinc"} pulse={relay?.enabled} /> Relay
+          </div>
+          <div className="mt-1 flex items-center gap-2 font-mono text-sm font-bold text-zinc-100" dir="ltr">
+            {chainKeys.map((k) => (
+              <span key={k} className="flex items-center gap-1 text-[11px]">
+                <StatusDot tone={relay?.chains[k].status === "anchored" ? "emerald" : relay?.chains[k].status === "pending" || relay?.chains[k].status === "idle" || relay?.chains[k].status === "sent-unconfirmed" ? "amber" : relay?.chains[k].status === "failed" ? "rose" : "zinc"} />
+                {k[0].toUpperCase()}
+              </span>
+            ))}
+            <span className="text-[10px] text-zinc-500">q{relay?.queue ?? 0}</span>
+          </div>
+          <div className="text-[10px] text-zinc-500" dir="ltr">
+            anchored {relay ? fmtInt(chainKeys.reduce((a, k) => a + relay.chains[k].anchored, 0)) : "—"} · queue {relay?.queue ?? 0}
+          </div>
+        </div>
+        {/* Circuit breakers */}
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Circuit Breakers</div>
+          <div className="mt-1 flex items-center gap-2" dir="ltr">
+            {chainKeys.map((k) => {
+              const b = relay?.chains[k].breaker;
+              return (
+                <span key={k} className="flex items-center gap-1 font-mono text-[11px] font-bold">
+                  <StatusDot tone={breakerTone(b?.state ?? "closed")} />
+                  {k[0].toUpperCase()}:{b?.state ?? "—"}
+                </span>
+              );
+            })}
+          </div>
+          <div className="text-[10px] text-zinc-500" dir="ltr">trips {relay ? fmtInt(relay.metrics.breakerTrips) : "—"} · econ-waits {relay ? fmtInt(relay.metrics.economicWaits) : "—"}</div>
+        </div>
+        {/* אימות-על-שרשרת */}
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">On-Chain Verify</div>
+          <div className="mt-1 flex items-center gap-3 font-mono text-sm font-bold" dir="ltr">
+            <span className="text-emerald-300">{relay ? fmtInt(relay.metrics.verified) : "—"}<span className="text-[10px] text-zinc-500"> ok</span></span>
+            <span className={(relay?.metrics.mismatches ?? 0) > 0 ? "text-rose-300" : "text-zinc-100"}>{relay ? fmtInt(relay.metrics.mismatches) : "—"}<span className="text-[10px] text-zinc-500"> mismatch</span></span>
+          </div>
+          <div className="text-[10px] text-zinc-500" dir="ltr">
+            latency {relay?.metrics.lastVerifyLatencyMs !== null && relay?.metrics.lastVerifyLatencyMs !== undefined ? `${fmtInt(relay.metrics.lastVerifyLatencyMs)}ms` : "—"}
+          </div>
+        </div>
+      </div>
+      {(relay && Object.values(relay.chains).some((c) => c.lastVerifyError)) && (
+        <div className="mt-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 font-mono text-[10px] text-rose-300" dir="ltr">
+          ALERT: {chainKeys.filter((k) => relay.chains[k].lastVerifyError).map((k) => `${k}: ${relay.chains[k].lastVerifyError}`).join(" · ").slice(0, 160)}
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -441,19 +584,18 @@ function BookLadder({ market }: { market?: MarketView }) {
 }
 
 // ─── טופס-פקודה על הספר + ההזמנות שלי ──────────────────────────────────────
-function BookTrade({ market, opWallet, busy, post }: {
-  market?: MarketView; opWallet?: WalletView; busy: boolean;
+function BookTrade({ market, opWallet, busy, post, version }: {
+  market?: MarketView; opWallet?: WalletView; busy: boolean; version: number | undefined;
   post: (url: string, body?: unknown) => Promise<{ ok: boolean; error?: string; note?: string }>;
 }) {
   const [side, setSide] = useState<"buy" | "sell">("buy");
   const [price, setPrice] = useState("");
   const [amount, setAmount] = useState("100");
-  const myOrders = useMyOrders(market?.key);
-  useEffect(() => {
-    if (market && !price) setPrice(String(market.bestBid || market.fair || ""));
-  }, [market, price]);
+  const myOrders = useMyOrders(market?.key, version);
+  /* מחיר-ברירת-מחדל נגזר (אין-effect): שדה-ריק = עוקב אחרי best bid/fair */
+  const priceValue = price !== "" ? price : String(market?.bestBid || market?.fair || "");
 
-  const priceMu = Math.floor(Number(price));
+  const priceMu = Math.floor(Number(priceValue));
   const amountMu = Math.floor(Number(amount) * 1000);
   const lockAsset = side === "buy" ? market?.quote : market?.base;
   const lockMu = side === "buy" ? Math.floor((priceMu * amountMu) / 1000) : amountMu;
@@ -472,7 +614,7 @@ function BookTrade({ market, opWallet, busy, post }: {
         </button>
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <input value={price} onChange={(e) => setPrice(e.target.value.replace(/[^0-9.]/g, ""))}
+        <input value={priceValue} onChange={(e) => setPrice(e.target.value.replace(/[^0-9.]/g, ""))}
           placeholder="מחיר (µ)" dir="ltr" inputMode="decimal"
           className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 font-mono text-xs outline-none focus:border-amber-500/60" />
         <input value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
@@ -486,7 +628,7 @@ function BookTrade({ market, opWallet, busy, post }: {
       <GoldButton className="mt-2 w-full !py-1.5 text-xs" disabled={busy || !(priceMu > 0) || !(amountMu > 0) || have < lockMu}
         tone={side === "buy" ? "emerald" : "rose"}
         onClick={() => void post("/api/dex/order", { action: "order", base: market?.base, quote: market?.quote, side, price: priceMu, amount: amountMu })}>
-        הצב {side === "buy" ? "ביד" : "אסק"} {market?.base} @{price || "—"}
+        הצב {side === "buy" ? "ביד" : "אסק"} {market?.base} @{priceValue || "—"}
       </GoldButton>
       {myOrders.length > 0 && (
         <div className="scroll-slim mt-2 max-h-24 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900/70 p-1.5">
@@ -495,8 +637,9 @@ function BookTrade({ market, opWallet, busy, post }: {
               <span className={o.side === "buy" ? "text-emerald-400" : "text-rose-400"}>{o.side} {(o.price / 1000).toFixed(4)}</span>
               <span className="text-zinc-400">{fmt(o.amount - o.filled, 0)}</span>
               <button disabled={busy} onClick={() => void post("/api/dex/cancel", { orderId: o.id })}
+                aria-label="בטל הזמנה"
                 className="rounded border border-zinc-700 px-1.5 text-zinc-400 hover:border-rose-500/60 hover:text-rose-300">
-                ✕
+                <X className="inline h-3 w-3" />
               </button>
             </div>
           ))}
@@ -506,32 +649,24 @@ function BookTrade({ market, opWallet, busy, post }: {
   );
 }
 
-function useMyOrders(marketKey?: string) {
+/* הזמנות-שלי: נשלפות בכל-גרסת-עולם (מנוע-אירוע) — AbortController לניקוי-מלא */
+function useMyOrders(marketKey: string | undefined, version: number | undefined) {
   const [orders, setOrders] = useState<{ id: number; base: string; quote: string; side: "buy" | "sell"; price: number; amount: number; filled: number }[]>([]);
   useEffect(() => {
-    let alive = true;
-    const pull = async () => {
+    const ctrl = new AbortController();
+    (async () => {
       try {
-        const r = await fetch("/api/dex/my-orders", { cache: "no-store" });
+        const r = await fetch("/api/dex/my-orders", { cache: "no-store", signal: ctrl.signal });
         const j = (await r.json()) as { ok: boolean; orders: typeof orders };
-        if (alive && j.ok) setOrders(j.orders.filter((o) => !marketKey || `${o.base}/${o.quote}` === marketKey));
-      } catch { /* ok */ }
-    };
-    void pull();
-    const t = setInterval(() => void pull(), 2500);
-    return () => { alive = false; clearInterval(t); };
-  }, [marketKey]);
+        if (!ctrl.signal.aborted && j.ok) setOrders(j.orders.filter((o) => !marketKey || `${o.base}/${o.quote}` === marketKey));
+      } catch { /* aborted / idle */ }
+    })();
+    return () => ctrl.abort();
+  }, [marketKey, version]);
   return orders;
 }
 
-// ─── סוואג' (AMM) ───────────────────────────────────────────────────────────
 // ─── עיגון-רשת (Relay) — חותמות ה-DEX עוגנות חי על Steem/Hive/TRON ──────────
-interface RelayRecord { chain: "steem" | "hive" | "tron"; height: number; status: string; txid: string | null; at: string; attempt: number; error?: string }
-interface RelayView {
-  enabled: boolean; account: string | null; anchorId: string; queue: number; tronIdentity: string | null;
-  chains: Record<"steem" | "hive" | "tron", { enabled: boolean; status: string; lastTxid: string | null; lastHeight: number | null; lastAt: string | null; lastError: string | null; anchored: number }>;
-  records: RelayRecord[];
-}
 const EXPLORER: Record<"steem" | "hive" | "tron", (tx: string) => string> = {
   steem: (tx) => `https://steemworld.org/tx/${tx}`,
   hive: (tx) => `https://hiveblocks.com/tx/${tx}`,
@@ -546,20 +681,7 @@ function relayTone(status: string): "emerald" | "amber" | "rose" | "zinc" {
   return "zinc";
 }
 
-function RelayPanel() {
-  const [relay, setRelay] = useState<RelayView | null>(null);
-  useEffect(() => {
-    const tick = async () => {
-      try {
-        const r = await fetch("/api/dex/relay", { cache: "no-store" });
-        const j = (await r.json()) as { ok: boolean; relay: RelayView };
-        if (j.ok) setRelay(j.relay);
-      } catch { /* השרת עוד קם */ }
-    };
-    void tick();
-    const t = setInterval(() => void tick(), 5000);
-    return () => clearInterval(t);
-  }, []);
+function RelayPanel({ relay }: { relay: RelayView | null }) {
   const keys = ["steem", "hive", "tron"] as const;
   const anchored = keys.filter((k) => relay?.chains[k].status === "anchored").length;
   return (
@@ -571,21 +693,29 @@ function RelayPanel() {
         {relay && (
           <div className="flex items-center justify-between font-mono text-[10px] text-zinc-500" dir="ltr">
             <span>account @{relay.account ?? "—"} · id {relay.anchorId}</span>
-            <span>queue {relay.queue}</span>
+            <span>queue {relay.queue} · broadcasts {fmtInt(relay.metrics.broadcasts)}</span>
           </div>
         )}
         {keys.map((k) => {
           const c = relay?.chains[k];
           const st = c?.status ?? "idle";
           const err = c?.lastError;
+          const vErr = c?.lastVerifyError;
           return (
             <div key={k} className="rounded-md border border-zinc-800 bg-zinc-900/70 px-2.5 py-2" dir="ltr">
               <div className="flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-[11px] font-bold text-zinc-300">
-                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${st === "anchored" ? "bg-emerald-400" : st === "pending" || st === "sent-unconfirmed" ? "bg-amber-400 animate-pulse" : st === "failed" ? "bg-rose-400" : "bg-zinc-600"}`} />
+                  <StatusDot tone={st === "anchored" ? "emerald" : st === "pending" || st === "sent-unconfirmed" ? "amber" : st === "failed" ? "rose" : "zinc"} pulse={st === "pending"} />
                   {CHAIN_LABEL[k]}
                 </span>
-                <Pill tone={relayTone(st)}>{st}</Pill>
+                <span className="flex items-center gap-1.5">
+                  {st === "anchored" && c && (
+                    <Pill tone={c.verified > 0 ? "emerald" : "amber"}>
+                      {c.verified > 0 ? <Check className="h-3 w-3" /> : null}V {c.verified}{c.mismatches > 0 ? ` · M ${c.mismatches}` : ""}
+                    </Pill>
+                  )}
+                  <Pill tone={relayTone(st)}>{st}</Pill>
+                </span>
               </div>
               <div className="mt-1 font-mono text-[10px] text-zinc-500">
                 {c?.lastTxid ? (
@@ -594,77 +724,69 @@ function RelayPanel() {
                   <>אין-עיגון עדיין</>
                 )}
                 {k === "tron" && relay?.tronIdentity && <> · identity {shortHash(relay.tronIdentity)}</>}
+                {c && <> · breaker {c.breaker.state}{c.breaker.trips > 0 ? ` (trips ${c.breaker.trips})` : ""}</>}
               </div>
-              {err && <div className="mt-1 font-mono text-[10px] text-rose-300/80" dir="ltr">{err.slice(0, 90)}</div>}
+              {err && <div className="mt-1 font-mono text-[10px] text-amber-300/80" dir="ltr">{err.slice(0, 90)}</div>}
+              {vErr && <div className="mt-1 font-mono text-[10px] text-rose-300" dir="ltr">verify: {vErr.slice(0, 90)}</div>}
             </div>
           );
         })}
         {relay && relay.records.length > 0 && (
-          <div className="max-h-32 overflow-y-auto rounded-md border border-zinc-800/70 bg-zinc-950/60 px-2 py-1.5 font-mono text-[10px] leading-relaxed" dir="ltr">
+          <div className="scroll-slim max-h-32 overflow-y-auto rounded-md border border-zinc-800/70 bg-zinc-950/60 px-2 py-1.5 font-mono text-[10px] leading-relaxed" dir="ltr">
             {relay.records.slice(0, 8).map((r, i) => (
               <div key={`${r.chain}-${r.height}-${r.at}-${i}`} className="flex items-center justify-between gap-2">
                 <span className="text-zinc-500">{CHAIN_LABEL[r.chain]} h{r.height}</span>
                 <span className={r.status === "anchored" ? "text-emerald-300" : r.status === "pending" ? "text-amber-300" : "text-rose-300"}>
                   {r.status}{r.txid ? ` · ${r.txid.slice(0, 12)}…` : ""}{r.attempt > 1 ? ` · try${r.attempt}` : ""}
+                  {r.status === "anchored" && r.verified !== null && (r.verified ? " · V" : " · verify-FAIL")}
                 </span>
               </div>
             ))}
           </div>
         )}
         <p className="text-[10px] leading-relaxed text-zinc-600">
-          כל חותם (כל-12 בלוקים) נשלח כ-custom_json בסמכות-active (אפס-עלות, RC) ל-Steem+Hive — חתימה מקומית, אימות-צד-שלישי בסיירים. TRON: זהות נגזרת מאותו סקלר — עיגון מתחיל עם מימון-bandwidth.
+          כל חותם (כל-12 בלוקים) נשלח כ-custom_json בסמכות-active (אפס-עלות, RC) ל-Steem+Hive — חתימה מקומית, אימות-צד-שלישי בסיירים.
+          אחרי-כל-txid מבוצעת קריאה-חוזרת ל-RPC: השוואת stateRoot על-השרשרת מול-המקומי (V = אומת). Circuit breaker per-chain עם backoff-אקספוננציאלי.
+          TRON: זהות נגזרת מאותו סקלר — עיגון מתחיל עם מימון-bandwidth.
         </p>
       </div>
     </Panel>
   );
 }
 
-function SwapPanel({ market, pools, opWallet, busy, post, flash }: {
-  market?: MarketView; pools: PoolView[]; opWallet?: WalletView; busy: boolean;
+// ─── סוואג' (AMM) ───────────────────────────────────────────────────────────
+function SwapPanel({ market, pools, opWallet, busy, post, version }: {
+  market?: MarketView; pools: PoolView[]; opWallet?: WalletView; busy: boolean; version: number | undefined;
   post: (url: string, body?: unknown) => Promise<{ ok: boolean; error?: string; note?: string }>;
-  flash: (tone: "ok" | "err", text: string) => void;
 }) {
   const [pair, setPair] = useState<string>("");
   const [dir, setDir] = useState<"a2b" | "b2a">("a2b");
   const [amount, setAmount] = useState("1000");
   const [quote, setQuote] = useState<{ out: number; price: number; minOut0: number } | null>(null);
-  const [pulse, setPulse] = useState(false);
 
-  const pool = useMemo(() => {
-    if (pair) return pools.find((p) => p.key === pair);
-    const key = market?.key ?? "";
-    const p = pools.find((x) => x.key === key);
-    if (p) { return p; }
-    return pools[0];
-  }, [pair, pools, market]);
-
-  useEffect(() => { if (pool && !pair) setPair(pool.key); }, [pool, pair]);
+  /* הבריכה הפעילה נגזרת (אין-effect): ברירת-מחדל = זו-של-הזוג הנבחר, אחרת הראשונה */
+  const activeKey = pair || pools.find((x) => x.key === market?.key)?.key || pools[0]?.key || "";
+  const pool = useMemo(() => pools.find((p) => p.key === activeKey), [pools, activeKey]);
 
   const assetIn = pool ? (dir === "a2b" ? pool.a : pool.b) : "";
   const assetOut = pool ? (dir === "a2b" ? pool.b : pool.a) : "";
   const amountMu = Math.floor(Number(amount) * 1000);
 
+  /* ציטוט-חד-פעמי-ציטוט: מתרענן עם כל-גרסת-עולם (אין-שהייה מלאכותית).
+   * setState רק בקולבק-אסינכרוני; ה-null-גזירה מחוץ-ל-effect. */
   useEffect(() => {
-    let alive = true;
-    if (!pool || !(amountMu > 0) || !assetIn) { setQuote(null); return; }
+    if (!pool || !(amountMu > 0) || !assetIn) return;
+    const ctrl = new AbortController();
     (async () => {
       try {
-        const r = await fetch(`/api/dex/swap?pair=${encodeURIComponent(pool.key)}&assetIn=${assetIn}&amount=${amountMu}`, { cache: "no-store" });
+        const r = await fetch(`/api/dex/swap?pair=${encodeURIComponent(pool.key)}&assetIn=${assetIn}&amount=${amountMu}`, { cache: "no-store", signal: ctrl.signal });
         const j = (await r.json()) as { ok: boolean; out: number; price: number; minOut0: number };
-        if (alive) setQuote(j.ok ? { out: j.out, price: j.price, minOut0: j.minOut0 } : null);
-      } catch { if (alive) setQuote(null); }
+        if (!ctrl.signal.aborted) setQuote(j.ok ? { out: j.out, price: j.price, minOut0: j.minOut0 } : null);
+      } catch { /* aborted / idle */ }
     })();
-    const t = setInterval(() => {
-      (async () => {
-        try {
-          const r = await fetch(`/api/dex/swap?pair=${encodeURIComponent(pool.key)}&assetIn=${assetIn}&amount=${amountMu}`, { cache: "no-store" });
-          const j = (await r.json()) as { ok: boolean; out: number; price: number; minOut0: number };
-          if (alive) setQuote(j.ok ? { out: j.out, price: j.price, minOut0: j.minOut0 } : null);
-        } catch { /* ok */ }
-      })();
-    }, 2500);
-    return () => { alive = false; clearInterval(t); };
-  }, [pool, assetIn, amountMu, pulse]);
+    return () => ctrl.abort();
+  }, [pool, assetIn, amountMu, version]);
+  const quoteView = pool && amountMu > 0 && assetIn ? quote : null;
 
   const have = opWallet?.balances[assetIn] ?? 0;
 
@@ -677,8 +799,8 @@ function SwapPanel({ market, pools, opWallet, busy, post, flash }: {
             className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-bold outline-none focus:border-amber-500/60">
             {pools.map((p) => <option key={p.key} value={p.key}>{p.key}</option>)}
           </select>
-          <GoldButton tone="ghost" onClick={() => { setDir(dir === "a2b" ? "b2a" : "a2b"); setPulse((x) => !x); }}>
-            ⇄ {assetIn}→{assetOut}
+          <GoldButton tone="ghost" onClick={() => setDir(dir === "a2b" ? "b2a" : "a2b")} aria-label="היפוך-כיוון">
+            <ArrowLeftRight className="inline h-3.5 w-3.5" /> {assetIn}→{assetOut}
           </GoldButton>
         </div>
         <div className="flex items-center gap-2">
@@ -695,16 +817,16 @@ function SwapPanel({ market, pools, opWallet, busy, post, flash }: {
         <div className="flex items-center justify-between rounded-lg bg-zinc-900/80 px-3 py-2 text-xs">
           <span className="text-zinc-400">תקבל (חד-פעמי-ציטוט)</span>
           <span className="font-mono font-bold text-emerald-300" dir="ltr">
-            {quote ? `${fmt(quote.out, 2)} ${assetOut}` : "—"}
+            {quoteView ? `${fmt(quoteView.out, 2)} ${assetOut}` : "—"}
           </span>
         </div>
         <div className="flex items-center justify-between px-1 text-[10px] text-zinc-500">
           <span>עמלה 30bps (70% LP · 30% אוצר)</span>
-          <span dir="ltr">{quote ? `slip-guard: min ${fmt(quote.minOut0, 2)}` : ""}</span>
+          <span dir="ltr">{quoteView ? `slip-guard: min ${fmt(quoteView.minOut0, 2)}` : ""}</span>
         </div>
         <GoldButton
-          className="w-full" disabled={busy || !quote || !(amountMu > 0) || have < amountMu}
-          onClick={() => void post("/api/dex/swap", { pair: pool?.key, assetIn, amount: amountMu, minOut: quote?.minOut0 })}>
+          className="w-full" disabled={busy || !quoteView || !(amountMu > 0) || have < amountMu}
+          onClick={() => void post("/api/dex/swap", { pair: pool?.key, assetIn, amount: amountMu, minOut: quoteView?.minOut0 })}>
           החלף {assetIn} → {assetOut}
         </GoldButton>
         <div className="text-center text-[10px] text-zinc-500" dir="ltr">
@@ -723,8 +845,9 @@ function PoolsPanel({ pools, opWallet, busy, post, flash }: {
 }) {
   const [sel, setSel] = useState<string>("");
   const [amountA, setAmountA] = useState("2000");
-  const pool = pools.find((p) => p.key === (sel || pools[0]?.key));
-  useEffect(() => { if (!sel && pools[0]) setSel(pools[0].key); }, [pools, sel]);
+  /* הבריכה הפעילה נגזרת (אין-effect) */
+  const activeKey = sel || pools[0]?.key || "";
+  const pool = pools.find((p) => p.key === activeKey);
   const lpKey = pool ? `LP|${pool.key}` : "";
   const myLp = opWallet?.balances[lpKey] ?? 0;
   const amountMu = Math.floor(Number(amountA) * 1000);
@@ -735,7 +858,7 @@ function PoolsPanel({ pools, opWallet, busy, post, flash }: {
       <div className="space-y-2">
         {pools.map((p) => (
           <button key={p.key} onClick={() => setSel(p.key)}
-            className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-right transition-colors ${pool?.key === p.key ? "border-amber-500/60 bg-amber-500/10" : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700"}`}>
+            className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-right transition-colors ${activeKey === p.key ? "border-amber-500/60 bg-amber-500/10" : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700"}`}>
             <span className="text-sm font-black text-zinc-100">{p.key}</span>
             <span className="font-mono text-[11px] text-zinc-400" dir="ltr">
               mid {(p.mid / 1000).toFixed(4)} · k {p.k.toExponential(2)} · swaps {p.swaps}
@@ -777,7 +900,7 @@ function ArenaPanel({ world, busy, post }: { world: WorldResp | null; busy: bool
   const arena = world?.arena;
   const p = arena?.params;
   const [local, setLocal] = useState<ArenaParams | null>(null);
-  useEffect(() => { if (p && !local) setLocal(p); }, [p, local]);
+  /* נגזרת-טהורה: עריכה-מקומית עד-שהיא קיימת, אחרת פרמטרי-השרת (אין-effect) */
   const cur = local ?? p;
   if (!cur) return <Panel title="הארנה האוטונומית" icon={<Bot className="h-4 w-4 text-amber-400" />}><div className="py-3 text-center text-xs text-zinc-600">טוען…</div></Panel>;
 
@@ -797,7 +920,7 @@ function ArenaPanel({ world, busy, post }: { world: WorldResp | null; busy: bool
       action={
         <GoldButton tone={cur.enabled ? "emerald" : "ghost"} className="!px-2 !py-1 text-xs" disabled={busy}
           onClick={() => { const next = { ...cur, enabled: !cur.enabled }; setLocal(next); void post("/api/dex/arena", next); }}>
-          {cur.enabled ? "פועל ●" : "כבוי ○"}
+          {cur.enabled ? <><StatusDot tone="emerald" pulse /> פועל</> : <><StatusDot tone="zinc" /> כבוי</>}
         </GoldButton>
       }>
       <div className="space-y-3">
