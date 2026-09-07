@@ -97,6 +97,13 @@ function flushSnapshot(rt: ChainRT): void {
   } catch { /* כשל-כתיבה לא מפיל את השרשרת */ }
 }
 
+/** seal — חותם-קיבוצי כל-12 בלוקים: שורש-מרקל על hashי-הבלוקים + stateRoot קנוני.
+ * SECURITY INTENT: החותם הוא העדות-הקריפטוגרפית היחידה שיוצאת מהמערכת —
+ * כל-hash-בלוק בחלון נכלל בשורש (מרקל), וה-stateRoot מחייב את מצב-העולם המלא.
+ * כל-שינוי-בדיעבד בבלוק או במצב = שורש אחר = גילוי מיידי באימות-עצמאי.
+ * הסדר קריטי: קבלה ל-DB → ואז relaySeal (לעולם לא-חוסם, לא-זורק — כשל-Relay
+ * אינו רשאי להפיל את השרשרת, ואילו כשל-DB מסומן dbOk לתצפית).
+ */
 async function seal(rt: ChainRT): Promise<void> {
   const st = rt.st;
   if (rt.blockHashes.length === 0) return;
@@ -234,11 +241,11 @@ export function ensureChain(): ChainRT {
       // ולא הספיקו-להיכלל) — ניקוי-כנה כדי-שהכתיבה-החוזרת לא תתנגש (unique-height)
       try {
         const stale = await db.blockHeader.deleteMany({ where: { height: { gt: rt.st.height } } });
-        if (stale.count > 0) console.log(`[saos-dex] purged ${stale.count} stale block headers beyond snapshot h${rt.st.height} (prior-run evidence)`);
+        if (stale.count > 0) console.info(`[saos-dex] purged ${stale.count} stale block headers beyond snapshot h${rt.st.height} (prior-run evidence)`);
       } catch { rt.dbOk = false; }
     }
     rt.timer = setInterval(() => void tick(rt), TICK_MS);
-    console.log(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… ${loaded ? "(snapshot)" : "(genesis)"}`);
+    console.info(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… ${loaded ? "(snapshot)" : "(genesis)"}`);
   })();
   return rt;
 }
