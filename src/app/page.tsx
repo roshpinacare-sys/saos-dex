@@ -322,6 +322,8 @@ export default function DexConsole() {
               </div>
             </Panel>
 
+            <RelayPanel />
+
             <Panel title="גיבוי-נכסים עטופים (1:1)" icon={<Anchor className="h-4 w-4 text-zinc-400" />}>
               <div className="space-y-1.5 text-xs">
                 {Object.entries(st?.backing ?? {}).length === 0 && <div className="text-zinc-600">אין-נכסים-עטופים פעילים — wrap_mint פתוח לכולם</div>}
@@ -523,6 +525,100 @@ function useMyOrders(marketKey?: string) {
 }
 
 // ─── סוואג' (AMM) ───────────────────────────────────────────────────────────
+// ─── עיגון-רשת (Relay) — חותמות ה-DEX עוגנות חי על Steem/Hive/TRON ──────────
+interface RelayRecord { chain: "steem" | "hive" | "tron"; height: number; status: string; txid: string | null; at: string; attempt: number; error?: string }
+interface RelayView {
+  enabled: boolean; account: string | null; anchorId: string; queue: number; tronIdentity: string | null;
+  chains: Record<"steem" | "hive" | "tron", { enabled: boolean; status: string; lastTxid: string | null; lastHeight: number | null; lastAt: string | null; lastError: string | null; anchored: number }>;
+  records: RelayRecord[];
+}
+const EXPLORER: Record<"steem" | "hive" | "tron", (tx: string) => string> = {
+  steem: (tx) => `https://steemworld.org/tx/${tx}`,
+  hive: (tx) => `https://hiveblocks.com/tx/${tx}`,
+  tron: (tx) => `https://tronscan.org/#/transaction/${tx}`,
+};
+const CHAIN_LABEL: Record<"steem" | "hive" | "tron", string> = { steem: "Steem", hive: "Hive", tron: "TRON" };
+
+function relayTone(status: string): "emerald" | "amber" | "rose" | "zinc" {
+  if (status === "anchored") return "emerald";
+  if (status === "pending" || status === "sent-unconfirmed") return "amber";
+  if (status === "failed") return "rose";
+  return "zinc";
+}
+
+function RelayPanel() {
+  const [relay, setRelay] = useState<RelayView | null>(null);
+  useEffect(() => {
+    const tick = async () => {
+      try {
+        const r = await fetch("/api/dex/relay", { cache: "no-store" });
+        const j = (await r.json()) as { ok: boolean; relay: RelayView };
+        if (j.ok) setRelay(j.relay);
+      } catch { /* השרת עוד קם */ }
+    };
+    void tick();
+    const t = setInterval(() => void tick(), 5000);
+    return () => clearInterval(t);
+  }, []);
+  const keys = ["steem", "hive", "tron"] as const;
+  const anchored = keys.filter((k) => relay?.chains[k].status === "anchored").length;
+  return (
+    <Panel title="עיגון-רשת חי (Relay → Steem/Hive/TRON)" icon={<Anchor className="h-4 w-4 text-emerald-400" />}
+      action={<Pill tone={relay?.enabled ? (anchored > 0 ? "emerald" : "amber") : "zinc"} pulse={relay?.enabled}>
+        {relay?.enabled ? (anchored > 0 ? `חי · ${anchored}/3` : "מאזין") : "כבוי"}
+      </Pill>}>
+      <div className="space-y-2 text-xs">
+        {relay && (
+          <div className="flex items-center justify-between font-mono text-[10px] text-zinc-500" dir="ltr">
+            <span>account @{relay.account ?? "—"} · id {relay.anchorId}</span>
+            <span>queue {relay.queue}</span>
+          </div>
+        )}
+        {keys.map((k) => {
+          const c = relay?.chains[k];
+          const st = c?.status ?? "idle";
+          const err = c?.lastError;
+          return (
+            <div key={k} className="rounded-md border border-zinc-800 bg-zinc-900/70 px-2.5 py-2" dir="ltr">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[11px] font-bold text-zinc-300">
+                  <span className={`inline-block h-1.5 w-1.5 rounded-full ${st === "anchored" ? "bg-emerald-400" : st === "pending" || st === "sent-unconfirmed" ? "bg-amber-400 animate-pulse" : st === "failed" ? "bg-rose-400" : "bg-zinc-600"}`} />
+                  {CHAIN_LABEL[k]}
+                </span>
+                <Pill tone={relayTone(st)}>{st}</Pill>
+              </div>
+              <div className="mt-1 font-mono text-[10px] text-zinc-500">
+                {c?.lastTxid ? (
+                  <>txid <a className="text-amber-300 underline decoration-dotted hover:text-amber-200" href={EXPLORER[k](c.lastTxid)} target="_blank" rel="noreferrer">{shortHash(c.lastTxid)}</a> · h{c.lastHeight ?? "?"}</>
+                ) : (
+                  <>אין-עיגון עדיין</>
+                )}
+                {k === "tron" && relay?.tronIdentity && <> · identity {shortHash(relay.tronIdentity)}</>}
+              </div>
+              {err && <div className="mt-1 font-mono text-[10px] text-rose-300/80" dir="ltr">{err.slice(0, 90)}</div>}
+            </div>
+          );
+        })}
+        {relay && relay.records.length > 0 && (
+          <div className="max-h-32 overflow-y-auto rounded-md border border-zinc-800/70 bg-zinc-950/60 px-2 py-1.5 font-mono text-[10px] leading-relaxed" dir="ltr">
+            {relay.records.slice(0, 8).map((r, i) => (
+              <div key={`${r.chain}-${r.height}-${r.at}-${i}`} className="flex items-center justify-between gap-2">
+                <span className="text-zinc-500">{CHAIN_LABEL[r.chain]} h{r.height}</span>
+                <span className={r.status === "anchored" ? "text-emerald-300" : r.status === "pending" ? "text-amber-300" : "text-rose-300"}>
+                  {r.status}{r.txid ? ` · ${r.txid.slice(0, 12)}…` : ""}{r.attempt > 1 ? ` · try${r.attempt}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="text-[10px] leading-relaxed text-zinc-600">
+          כל חותם (כל-12 בלוקים) נשלח כ-custom_json בסמכות-active (אפס-עלות, RC) ל-Steem+Hive — חתימה מקומית, אימות-צד-שלישי בסיירים. TRON: זהות נגזרת מאותו סקלר — עיגון מתחיל עם מימון-bandwidth.
+        </p>
+      </div>
+    </Panel>
+  );
+}
+
 function SwapPanel({ market, pools, opWallet, busy, post, flash }: {
   market?: MarketView; pools: PoolView[]; opWallet?: WalletView; busy: boolean;
   post: (url: string, body?: unknown) => Promise<{ ok: boolean; error?: string; note?: string }>;

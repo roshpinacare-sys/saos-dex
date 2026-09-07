@@ -15,6 +15,26 @@
 | bench | 🟢 ~26K ops/sec מדוד (~2.3 מיליארד/יום תאורטי) |
 | wrap 1:1 | 🟢 גיבוי-נעול נמדד (WSTEEM 300,000µ) |
 | dbOk | 🟢 ראיות נשמרות (BlockHeader/SealRecord/EvidenceReceipt) |
+| relay→Steem | 🟢 חי — custom_json סמכות-active על כל-חותם (id: saos-dex.anchor.v1) |
+| relay→Hive | 🟡 חי-מותנה-תקציב — עיגן בפועל (ראה ראיות); קצב נשלט-RC, ממתין-ריג'נרציה בכנות |
+| relay→TRON | 🟡 זהות נגזרת (TYVw…xTy) — הזרשרת חיה ונגישה; העיגון מותנה-מימון (0 TRX) |
+
+## עיגון-רשת חי (Relay — "הדלת")
+
+- **מקור-מפתחות:** fleet_keys.enc (AES-256-GCM, תג אומת) → agent/.env + keys/vault.json של
+  steem-main; ה-WIF הפעיל הוכח קריפטוגרפית מול הרשות-החיה של @headcorner ב-Steem+Hive.
+  מפתחות ב-.env (gitignored-אומת) ובזיכרון-בלבד. אפס סודות בלוגים/פלט/ריפו.
+- **מנגנון:** seal() → relaySeal() → תור לא-חוסם; Steem: כל-חותם · Hive: החותם החדש-ביותר
+  (תקציב-RC) · TRON: מותנה-מימון. rc-low/unfunded = המתנה-כלכלית (backoff, לא כישלון).
+- **ראיות על-השרשרת (נמדד, אימות-צד-שלישי ב-RPC):**
+  - Steem h1260 → txid 390bcfc2586def1ef02cc40a0e983c8dd8fce177 (block 10,937,394)
+  - Steem h1416 → txid 36be7b447f882001db5de29b1e6f551367669fa4 (block 10,937,411)
+  - Hive  h1416 → txid d4cf936b0b5e1eff8dcc8a508532f67c95682bd5 (block 10,970,856, @headcorner)
+  - Hive  h1596 → txid 239fab4b5fac4797a199babada14db2ca77666c5 (block 10,970,876, @tov)
+  - אותו stateRoot (a54a51c7…) עוגן בו-זמנית על Steem ו-Hive — עקביות-בין-שרשראות מוכחת.
+- **כלכלת-RC (מדיד):** עיגון-מכווץ (~190B) ≈ 142M RC ב-Hive; חשבונות-HP-נמוך מתרוקנים אחרי
+  1–2 עיגונים וממתינים-ריג'נרציה (כנות בפאנל). כפתור: HIVE_ANCHOR_ACCOUNT לחשבון-מואצל.
+- **UI:** פאנל "עיגון-רשת חי" בקונסולה — סטטוס-חי/קישורי-סייר (steemworld/hiveblocks/tronscan).
 
 ## מה תוקן בדרך (הנדסה-כנה)
 
@@ -27,6 +47,7 @@
 
 ## הבא בתור (לא-מובטח, סדר-עדיפויות)
 
-- עיגון custom_json אמת ל-Steem/Hive ברגע שמפתחות-מפעיל יוזרמו בסביבה-מאובטחת
+- מימון-זהות-TRON (≥0.3 TRX) → עיגון-TRON אוטומטי נדלק לבד (המודול קיים וממתין)
+- האצת-RC ל-Hive (האצלת-HP לחשבון-העוגן) → קצב-עיגון-מלא גם שם
 - קנדלסטיקים (OHLC) לגרף · WS push במקום polling
 - ארנה: רוטציית-תקציב למובילים (grid98) · בריכות-גשר WTRX

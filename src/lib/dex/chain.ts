@@ -123,6 +123,11 @@ async function seal(rt: ChainRT): Promise<void> {
       data: { fromHeight: info.fromHeight, toHeight: info.toHeight, root: info.root, stateRoot: info.stateRoot, leavesCount: info.leaves, note: "SAOS-DEX checkpoint" },
     });
   } catch { rt.dbOk = false; }
+  // ── RELAY: הדלת לשרשראות-הציבוריות — לא-חוסם, לא-זורק (anchor חי ל-Steem/Hive/TRON) ──
+  try {
+    const relay = await import("./relay");
+    relay.relaySeal(info);
+  } catch { /* כשל-Relay לעולם לא מפיל את השרשרת */ }
 }
 
 function ladderCheck(rt: ChainRT): void {
