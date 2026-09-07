@@ -22,6 +22,7 @@ import fs from "fs";
 import path from "path";
 import { createHash } from "crypto";
 import type { SealInfo } from "./chain";
+import { chaosPartitioned } from "./chaos";
 
 import steemLib from "steem";
 
@@ -133,7 +134,11 @@ interface RelayRT {
 }
 
 const g = globalThis as unknown as { __saosDexRelay?: RelayRT };
-const STATE_DIR = path.join(process.cwd(), "state");
+/* הפרדת-מצב: כלי-בדיקה (scripts/chaos-test.ts) מכוון SAOS_DEX_STATE_DIR לתיקיית-זמן —
+ * כך ראיות-בדיקה לעולם לא נוגעות ב-state/anchors.json הציבורי של הדמון החי */
+const STATE_DIR = process.env.SAOS_DEX_STATE_DIR
+  ? path.resolve(process.env.SAOS_DEX_STATE_DIR)
+  : path.join(process.cwd(), "state");
 const ANCHORS_FILE = path.join(STATE_DIR, "anchors.json");
 
 /* ── מפתחות: זיכרון-בלבד מ-.env (Next טוען אוטומטית; הקובץ gitignored-אומת) ── */
@@ -276,17 +281,24 @@ async function tronSealBroadcast(tronAddress: string, digest: string, wif: strin
 }
 
 /* ══ verifyOnChain — קריאה-חוזרת מה-RPC הציבורי והשוואת stateRoot ════════════
+ * SECURITY INTENT: זו עמוד-התווך של אמון-אפס בעצמנו — כל-txid שה-Relay שידר
+ * נקרא חזרה מתשתית-ציבורית בלתי-תלויה, ומושווה ביט-מול-ביט מול-המקומי.
+ * אי-התאמה = עדות לשחיתות-מצב, עדכון-מטעה או פגיעה-חתימה — ולכן היא נחסמת
+ * מלהיחשב "מאומת", נרשמת כ-mismatch במדדים ומדליקה ALERT מיידי ללוג.
  * Steem/Hive: condenser_api.get_transaction(txid) → custom_json(ANCHOR_ID) →
  *             השוואת height+stateRoot מול-החותם המקומי.
  * TRON:       gettransactioninfobyid (אישור-בלוק) + gettransactionbyid
  *             (extra_data מכיל את ה-digest).
- * תשובה: { ok, detail } — ok=false עם detail="not indexed" = נסיון-חוזר מותר.
+ * תשובה: { ok, detail } — ok=false עם detail="not indexed" = נסיון-חוזר מותר
+ * (ואינו מיסמאץ' — הרשומה נשארת null ונכנסת לתור-הפיוס).
  */
 export async function verifyOnChain(
   chain: ChainName,
   txid: string,
   expected: { height: number; stateRoot: string }
 ): Promise<{ ok: boolean; detail: string }> {
+  // chaos-gate: מחיצה-מוזרקת מדמה ניתוק-RPC מלא — גם על נתיב-הקריאה (אמת-היקף-התקלה)
+  if (chaosPartitioned(chain)) return { ok: false, detail: "not indexed: injected network partition (chaos)" };
   if (chain === "tron") {
     const info = await rpc<{ blockNumber?: number; receipt?: { status?: string } }>(
       `${TRON_RPC}/wallet/gettransactioninfobyid`, { value: txid, visible: true }, 15000,
@@ -348,10 +360,14 @@ function breakerOnSuccess(b: BreakerView): void {
   b.state = "closed";
 }
 
-function breakerOnFailure(b: BreakerView, chain: ChainName): void {
+function breakerOnFailure(rt: RelayRT, chain: ChainName): void {
+  const b = rt.chainState[chain].breaker;
   b.failures += 1;
   if (b.state === "half-open" || b.failures >= BREAKER_THRESHOLD) {
-    if (b.state !== "open") b.trips += 1;
+    if (b.state !== "open") {
+      b.trips += 1;
+      rt.metrics.breakerTrips += 1; // מדד-גלובלי — חייב לנוע עם-הפסקה (נקודת-תצפית מוסדית)
+    }
     b.state = "open";
     b.openedAt = Date.now();
     // ALERT — מוסדי: פתיחת-breaker היא אירוע-רעש-גבוה
@@ -447,6 +463,7 @@ async function verifyRecord(rt: RelayRT, rec: AnchorRecord): Promise<void> {
       rt.metrics.mismatches += 1;
       rt.chainState[rec.chain].mismatches += 1;
       rt.chainState[rec.chain].lastVerifyError = last.detail;
+      rec.error = last.detail.slice(0, 180); // הרשומה נושאת-את-הפירוט (ראיה-ציבורית)
       // ALERT — אי-התאמה בין השרשרת-הציבורית למקומי הוא אירוע-חמור
       console.error(`[saos-relay][ALERT] ${rec.chain} h${rec.height} stateRoot verification FAILED · ${last.detail}`);
     }
@@ -496,6 +513,13 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
     verified: null, verifiedAt: null,
   };
   try {
+    /* chaos-gate — scripts/chaos-test.ts: מחיצת-רשת מוזרקת בתוך-נתיב-הכשל הרגיל.
+     * SECURITY INTENT: הזריקה חייבת לעבור בדיוק כמו RPC בלתי-נגיש — catch →
+     * breakerOnFailure (בניגוד לתנאי-תקציב) → backoff → רשומה כנה. אינרטי
+     * בפרודקשן: chaosPartitioned === false תמיד, אלא אם כלי-בדיקה חימם אותו. */
+    if (chaosPartitioned(chain)) {
+      throw new Error(`chaos: injected network partition on ${chain} — rpc unreachable (fault-injection)`);
+    }
     if (chain === "tron") {
       if (!rt.tronAddress) rt.tronAddress = await tronIdentity(keys.steemWif);
       if (!rt.tronAddress) throw new Error("tron identity derivation failed");
@@ -534,7 +558,7 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
       else rec.error = msg;
       rt.chainState[chain].lastError = msg;
     } else {
-      breakerOnFailure(b, chain); // כשל-קשי — נספר ל-breaker (עלול לפתוח אותו)
+      breakerOnFailure(rt, chain); // כשל-קשי — נספר ל-breaker (עלול לפתוח אותו)
       if (cs.attempts >= RETRY_MAX) {
         rec.status = "failed";
         cs.done = true;
@@ -622,7 +646,7 @@ function restoreRecords(rt: RelayRT): void {
     }
     rt.metrics.verified = clean.filter((r) => r.verified === true).length;
     rt.metrics.mismatches = clean.filter((r) => r.verified === false).length;
-    console.log(`[saos-relay] restored ${clean.length} anchor records from prior run — reconcile queue re-armed`);
+    console.info(`[saos-relay] restored ${clean.length} anchor records from prior run — reconcile queue re-armed`);
   } catch { /* אין-קובץ/פורמט-ישן — פתיחה-נקייה */ }
 }
 
@@ -667,6 +691,29 @@ export function relaySeal(info: SealInfo): void {
     });
     void processQueue(rt).catch(() => { /* לעולם לא מפיל את השרשרת */ });
   } catch { /* לעולם לא מפיל את השרשרת */ }
+}
+
+/** relayAuditVerify — ערוץ-אימות לכלי-ביקורת (ולמבחני-כאוס):
+ * מריץ רשומה אחת במלוא-נתיב-האימות — קריאה-חוזרת מה-RPC הציבורי, השוואת
+ * stateRoot+height, ALERT בלוג על-מיסמאץ', ועדכון-מדדים (mismatches/verified).
+ * SECURITY INTENT: מאפשר להוכיח שהמערכת מזהה stateRoot מזויף ומסרבת לאשר אותו —
+ * בלי שידור, בלי חסימה, ובלי גישה למפתחות. מבודד-מצב דרך SAOS_DEX_STATE_DIR.
+ */
+export async function relayAuditVerify(
+  chain: ChainName,
+  txid: string,
+  expected: { height: number; stateRoot: string }
+): Promise<{ ok: boolean; verified: boolean | null; detail: string }> {
+  const rt = rtInit();
+  const rec: AnchorRecord = {
+    chain, height: expected.height, stateRoot: expected.stateRoot, digest: "",
+    txid, status: "anchored", at: new Date().toISOString(), attempt: 1,
+    verified: null, verifiedAt: null,
+  };
+  await verifyRecord(rt, rec);
+  if (rec.verified === true) return { ok: true, verified: true, detail: "verified on-chain (read-back match)" };
+  if (rec.verified === false) return { ok: false, verified: false, detail: rec.error ?? rt.chainState[chain].lastVerifyError ?? "mismatch" };
+  return { ok: false, verified: null, detail: "not indexed (pending reconciliation)" };
 }
 
 /** מצב-ציבורי ל-API/UI — אפס סודות */
