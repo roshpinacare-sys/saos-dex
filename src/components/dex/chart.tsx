@@ -1,10 +1,12 @@
 /**
  * chart.tsx — גרף-מחיר בסטנדרט-מוסדי: lightweight-charts (TradingView).
  * עדכון-setData בכל-תמונת-עולם — אפס-אנימציה, קריאות-צפופות, monospace-צירים.
+ * UI Nuclear Override: data-testid="lightweight-charts-container" לאימות-DOM אגרסיבי,
+ * placeholder מוכר כשהספרייה נכשלת, ו-console.error על-כל-כשל-אתחול (אף-כשל שקט).
  */
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AreaSeries,
   ColorType,
@@ -16,56 +18,74 @@ import {
 
 const GOLD = "#f5b841";
 
-export function PriceChart({ data, height = 208 }: { data: { t: number; p: number }[]; height?: number }) {
+export function PriceChart({ data, height = 320 }: { data: { t: number; p: number }[]; height?: number }) {
   const boxRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Area"> | null>(null);
+  const [failed, setFailed] = useState(false);
 
-  // אתחול-חד-פעמי (שורד re-render; ניקוי מלא ב-unmount)
+  // אתחול-חד-פעמי (שורד re-render; ניקוי מלא ב-unmount).
+  // ה-init רץ בתוך-rAF — סנכרון-מול-מערכת-חוץ (DOM), לא-cascading-renders.
   useEffect(() => {
     const box = boxRef.current;
     if (!box) return;
-    const chart = createChart(box, {
-      width: box.clientWidth,
-      height,
-      layout: {
-        background: { type: ColorType.Solid, color: "transparent" },
-        textColor: "#71717a",
-        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize: 10,
-        attributionLogo: false,
-      },
-      grid: {
-        vertLines: { color: "rgba(63, 63, 70, 0.35)" },
-        horzLines: { color: "rgba(63, 63, 70, 0.35)" },
-      },
-      rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.08 } },
-      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, rightOffset: 2 },
-      crosshair: {
-        mode: 1, // Magnet — קריאה-מדויקת בלבד
-        vertLine: { color: "#52525b", width: 1, style: 3, labelBackgroundColor: "#27272a" },
-        horzLine: { color: "#52525b", width: 1, style: 3, labelBackgroundColor: "#27272a" },
-      },
+    let disposed = false;
+    let chart: IChartApi | null = null;
+    let series: ISeriesApi<"Area"> | null = null;
+    let ro: ResizeObserver | null = null;
+    const raf = requestAnimationFrame(() => {
+      if (disposed || !box) return;
+      try {
+        chart = createChart(box, {
+          width: box.clientWidth,
+          height,
+          layout: {
+            background: { type: ColorType.Solid, color: "transparent" },
+            textColor: "#71717a",
+            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+            fontSize: 10,
+            attributionLogo: false,
+          },
+          grid: {
+            vertLines: { color: "rgba(63, 63, 70, 0.35)" },
+            horzLines: { color: "rgba(63, 63, 70, 0.35)" },
+          },
+          rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.08 } },
+          timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false, rightOffset: 2 },
+          crosshair: {
+            mode: 1, // Magnet — קריאה-מדויקת בלבד
+            vertLine: { color: "#52525b", width: 1, style: 3, labelBackgroundColor: "#27272a" },
+            horzLine: { color: "#52525b", width: 1, style: 3, labelBackgroundColor: "#27272a" },
+          },
+        });
+      } catch (e) {
+        // כשל-אתחול חייב להיות נראה: placeholder מפורש + שגיאה בקונסולה — לא מסך-שקט
+        console.error("[saos-dex][chart] lightweight-charts init failed:", e instanceof Error ? e.message : e);
+        setFailed(true);
+        return;
+      }
+      series = chart.addSeries(AreaSeries, {
+        lineColor: GOLD,
+        topColor: "rgba(245, 184, 65, 0.28)",
+        bottomColor: "rgba(245, 184, 65, 0.01)",
+        lineWidth: 2,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        crosshairMarkerBorderColor: GOLD,
+        crosshairMarkerBackgroundColor: "#09090b",
+      });
+      chartRef.current = chart;
+      seriesRef.current = series;
+      ro = new ResizeObserver(() => {
+        chart?.applyOptions({ width: box.clientWidth, height });
+      });
+      ro.observe(box);
     });
-    const series = chart.addSeries(AreaSeries, {
-      lineColor: GOLD,
-      topColor: "rgba(245, 184, 65, 0.28)",
-      bottomColor: "rgba(245, 184, 65, 0.01)",
-      lineWidth: 2,
-      priceLineVisible: false,
-      lastValueVisible: true,
-      crosshairMarkerBorderColor: GOLD,
-      crosshairMarkerBackgroundColor: "#09090b",
-    });
-    chartRef.current = chart;
-    seriesRef.current = series;
-    const ro = new ResizeObserver(() => {
-      chart.applyOptions({ width: box.clientWidth, height });
-    });
-    ro.observe(box);
     return () => {
-      ro.disconnect();
-      chart.remove();
+      disposed = true;
+      cancelAnimationFrame(raf);
+      ro?.disconnect();
+      chart?.remove();
       chartRef.current = null;
       seriesRef.current = null;
     };
@@ -84,5 +104,32 @@ export function PriceChart({ data, height = 208 }: { data: { t: number; p: numbe
     chartRef.current?.timeScale().fitContent();
   }, [data]);
 
-  return <div ref={boxRef} style={{ height }} className="w-full" dir="ltr" />;
+  if (failed) {
+    return (
+      <div
+        data-testid="lightweight-charts-container"
+        data-chart-status="failed"
+        className="flex w-full items-center justify-center rounded-lg border border-dashed border-rose-500/40 bg-rose-500/5"
+        style={{ height }}
+        dir="ltr"
+      >
+        <div className="text-center">
+          <div className="font-mono text-xs font-bold text-rose-300">CHART ENGINE UNAVAILABLE</div>
+          <div className="mt-1 text-[10px] text-zinc-500">lightweight-charts failed to initialize — see console for the error</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={boxRef}
+      data-testid="lightweight-charts-container"
+      data-chart-status={data.length === 0 ? "waiting" : "live"}
+      data-points={data.length}
+      style={{ height }}
+      className="w-full"
+      dir="ltr"
+    />
+  );
 }

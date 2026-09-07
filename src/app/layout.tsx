@@ -5,6 +5,11 @@ export const metadata: Metadata = {
   title: "SAOS-DEX — הבורסה הריבונית של הרשת",
   description:
     "בורסה ריבונית אוטונומית: ספר-הזמנות דטרמיניסטי, בריכות 30bps, ארנת-חיילים עם שער-שוליים, חותמים מעוגנים וסולם-ערך מגובה. מורשת saos-dex + grid98.",
+  other: {
+    // UI Nuclear Override: אפס-הסתמכות על cache ישן — הדפדפן תמיד מבקש גרסה-חיה
+    "Cache-Control": "no-store, must-revalidate",
+    Pragma: "no-cache",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
