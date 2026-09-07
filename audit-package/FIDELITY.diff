@@ -1,20 +1,13 @@
 # FIDELITY.diff — חבילת-הביקורת מול עץ-הייצור
 # Production tree: saos-dex @ main (roshpinacare-sys/saos-dex)
 # ההבדל היחיד בין העותקים: שורת-ייבוא אחת ב-chain.ts (DB → evidence-port).
-# כל-הקבצים האחרים (canonical/invariant/amm/book/kernel/mm/chaos/relay) זהים-בייט.
+# כל-הקבצים האחרים (canonical/invariant/amm/book/kernel/mm/chaos/relay/relay-eth/relay-sol) זהים-בייט.
 #
 # --- FIDELITY.diff — audit package vs production tree ---
 # The ONLY difference: one import line in chain.ts (local DB -> evidence-port).
 # All other audit files are byte-identical to production.
 
---- src/lib/dex/chain.ts	2026-09-07 18:35:05.886566770 +0000
-+++ audit-package/src/chain.ts	2026-09-07 18:39:02.861207586 +0000
-@@ -10,7 +10,7 @@
-  */
- import fs from "fs";
- import path from "path";
--import { db } from "@/lib/db";
-+import { db } from "./evidence-port";
- import {
-   applyOp, genesisState, stateRoot, type DexState, type Op, type TradeEvent,
-   GAS_TABLE, notional, poolKey,
+13c13
+< import { db } from "@/lib/db";
+---
+> import { db } from "./evidence-port";
