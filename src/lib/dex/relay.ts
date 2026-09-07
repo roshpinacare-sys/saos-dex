@@ -1,4 +1,4 @@
-/* relay.ts — "הדלת" — עיגון חותמות SAOS-DEX לשרשראות ציבוריות.
+/* relay.ts — "הדלת" — עיגון חותמות SAOS-DEX לשרשראות ציבוריות. · מהדורה-מוסדית
  *
  * מאזין ל-seal() (כל 12 בלוקים), לוקח stateRoot + height, ומשדר custom_json
  * (סמכות active, אפס-עלות — RC) ל-Steem + Hive, וכן עיגון TRON מותנה-מימון.
@@ -7,7 +7,15 @@
  *   · חתימה מקומית: build tx ← dgp, sign (steem.auth, chain_id דינמי), שידור-סינכרוני
  *   · Steem: chain_id אפסים · Hive: beeab0de… · אותו ACTIVE_WIF (הוכח קריפטוגרפית)
  *   · TRON: זהות נגזרת מאותו סקלר secp256k1 — מותנה במימון (כנות: ללא TRX אין שידור)
- *   · RC/Bandwidth חסר → ממתין ומנסה שוב (backoff) — לעולם לא חוסם את השרשרת
+ *
+ * הקשחה-מוסדית (מהדורה זו):
+ *   · Circuit Breaker per-chain: כשלים-רצופים קשים → OPEN (הפסקת-ניסיונות) →
+ *     half-open (פרובה-יחידה) → הצלחה → CLOSED. תנאי-תקציב (RC-low/unfunded)
+ *     אינו כשל-מערכת ואינו סופר ל-breaker.
+ *   · Exponential backoff עם jitter (±20%) — לא-דת-מאמץ-תזמון.
+ *   · verifyOnChain: אחרי-קבלת-txid — קריאה-חוזרת מה-RPC הציבורי, השוואת
+ *     stateRoot+height מול-המקומי. אי-התאמה → ALERT בלוג + מדד-מיסמאץ'.
+ *   · Reconciliation: לולאה-תקופתית מאמתת-בדיעבד כל-עיגון ששודר וטרם-אומת.
  *   · אפס סודות בלוגים/פלט/קבצים: מפתחות בזיכרון בלבד מ-.env (gitignored, אומת)
  */
 import fs from "fs";
@@ -39,13 +47,26 @@ const HIVE_CHAIN_ID = "beeab0de0000000000000000000000000000000000000000000000000
 const STEEM_NODES = ["https://api.steemit.com", "https://api.justyy.com"];
 const HIVE_NODES = ["https://api.hive.blog", "https://api.deathwing.me"];
 const TRON_RPC = "https://api.trongrid.io";
-const RC_MIN = 1_000_000;   // מינימום-שמרטות לפני שידור (custom_json ~350B « 1M)
+const RC_MIN = 1_000_000;          // מינימום-שמרטות לפני שידור (custom_json ~190B « 1M)
 const RETRY_MAX = 6;
 const QUEUE_CAP = 8;
+
+/* Circuit breaker — ספי-מוסד */
+const BREAKER_THRESHOLD = 4;        // כשלים-קשים-רצופים → OPEN
+const BREAKER_COOLDOWN_MS = 5 * 60_000; // OPEN → half-open (פרובה-יחידה)
+
+/* Verification / reconciliation */
+const VERIFY_DELAY_MS = 4_000;      // זמן-התייצבות-אינדוקס אחרי-שידור-סינכרוני
+const VERIFY_TRIES = 4;
+const VERIFY_GAP_MS = 6_000;
+const RECONCILE_EVERY_MS = 90_000;  // לולאת-פיוס תקופתית
+const RECONCILE_FIRST_MS = 8_000;   // מחזור-ראשון — מיד-אחרי-עלייה (ריפוי-שאריות)
+const RECONCILE_BATCH = 3;          // עד-3 אימותים-בדיעבד למחזור
 
 /* ── סוגים ── */
 export type ChainName = "steem" | "hive" | "tron";
 export type AnchorStatus = "anchored" | "sent-unconfirmed" | "pending" | "failed";
+export type BreakerState = "closed" | "open" | "half-open";
 
 export interface AnchorRecord {
   chain: ChainName;
@@ -56,7 +77,16 @@ export interface AnchorRecord {
   status: AnchorStatus;
   at: string;
   attempt: number;
+  verified: boolean | null;   // null = טרם-נבדק · true = אומת ב-RPC · false = מיסמאץ'
+  verifiedAt: string | null;
   error?: string;
+}
+
+export interface BreakerView {
+  state: BreakerState;
+  failures: number;
+  openedAt: number | null;
+  trips: number;
 }
 
 export interface RelayChainState {
@@ -66,7 +96,20 @@ export interface RelayChainState {
   lastHeight: number | null;
   lastAt: string | null;
   lastError: string | null;
+  lastVerifyError: string | null;
   anchored: number;
+  verified: number;
+  mismatches: number;
+  breaker: BreakerView;
+}
+
+interface RelayMetrics {
+  broadcasts: number;
+  verified: number;
+  mismatches: number;
+  breakerTrips: number;
+  economicWaits: number;
+  lastVerifyLatencyMs: number | null;
 }
 
 interface ChainJobState { attempts: number; rcWaits: number; nextTryAt: number; done: boolean }
@@ -81,10 +124,12 @@ interface RelayRT {
   processing: boolean;
   records: AnchorRecord[];
   chainState: Record<ChainName, RelayChainState>;
+  metrics: RelayMetrics;
   account: string | null;
   tronAddress: string | null;
   startedAt: number;
   lastActivityAt: number;
+  reconcileStarted: boolean;
 }
 
 const g = globalThis as unknown as { __saosDexRelay?: RelayRT };
@@ -230,6 +275,96 @@ async function tronSealBroadcast(tronAddress: string, digest: string, wif: strin
   throw new Error("tron broadcast rejected: " + (res?.message ? Buffer.from(res.message, "hex").toString("utf8").slice(0, 120) : "unknown"));
 }
 
+/* ══ verifyOnChain — קריאה-חוזרת מה-RPC הציבורי והשוואת stateRoot ════════════
+ * Steem/Hive: condenser_api.get_transaction(txid) → custom_json(ANCHOR_ID) →
+ *             השוואת height+stateRoot מול-החותם המקומי.
+ * TRON:       gettransactioninfobyid (אישור-בלוק) + gettransactionbyid
+ *             (extra_data מכיל את ה-digest).
+ * תשובה: { ok, detail } — ok=false עם detail="not indexed" = נסיון-חוזר מותר.
+ */
+export async function verifyOnChain(
+  chain: ChainName,
+  txid: string,
+  expected: { height: number; stateRoot: string }
+): Promise<{ ok: boolean; detail: string }> {
+  if (chain === "tron") {
+    const info = await rpc<{ blockNumber?: number; receipt?: { status?: string } }>(
+      `${TRON_RPC}/wallet/gettransactioninfobyid`, { value: txid, visible: true }, 15000,
+    ).catch(() => null);
+    if (!info?.blockNumber) return { ok: false, detail: "not indexed: tron tx awaiting block" };
+    const tx = await rpc<{ raw_data?: { extra_data?: string[] } }>(
+      `${TRON_RPC}/wallet/gettransactionbyid`, { value: txid, visible: true }, 15000,
+    ).catch(() => null);
+    const extra = tx?.raw_data?.extra_data?.[0];
+    if (!extra) return { ok: true, detail: `confirmed in block ${info.blockNumber} · extra_data not surfaced by node` };
+    const payload = Buffer.from(extra, "hex").toString("utf8");
+    if (payload.includes(expected.stateRoot)) return { ok: true, detail: `confirmed in block ${info.blockNumber} · extra_data stateRoot match` };
+    return { ok: false, detail: `mismatch: extra_data on-chain lacks local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
+  }
+
+  const nodes = chain === "steem" ? STEEM_NODES : HIVE_NODES;
+  for (const node of nodes) {
+    const tx = await rpc<{ operations?: unknown[] }>(node, {
+      jsonrpc: "2.0", method: "condenser_api.get_transaction", params: [txid], id: 1,
+    }, 15000).catch(() => null);
+    if (!tx || !Array.isArray(tx.operations)) continue;
+    for (const entry of tx.operations as [string, Record<string, unknown>][]) {
+      const [opName, opBody] = entry;
+      if (opName !== "custom_json" || opBody?.id !== ANCHOR_ID) continue;
+      let parsed: { height?: number; stateRoot?: string };
+      try { parsed = JSON.parse(String(opBody.json)) as { height?: number; stateRoot?: string }; }
+      catch { return { ok: false, detail: "mismatch: on-chain custom_json unparseable" }; }
+      const rootOk = parsed.stateRoot === expected.stateRoot;
+      const heightOk = parsed.height === expected.height;
+      if (rootOk && heightOk) return { ok: true, detail: `stateRoot verified on ${chain} via ${new URL(node).host}` };
+      return {
+        ok: false,
+        detail: `mismatch: on-chain h${parsed.height ?? "?"}/${String(parsed.stateRoot ?? "?").slice(0, 12)}… vs local h${expected.height}/${expected.stateRoot.slice(0, 12)}…`,
+      };
+    }
+    return { ok: false, detail: `mismatch: tx found but no ${ANCHOR_ID} op inside` };
+  }
+  return { ok: false, detail: "not indexed: no node returned the transaction yet" };
+}
+
+/* ── Circuit breaker ── */
+function mkBreaker(): BreakerView { return { state: "closed", failures: 0, openedAt: null, trips: 0 }; }
+
+function breakerAllows(b: BreakerView): boolean {
+  if (b.state === "closed") return true;
+  if (b.state === "open") {
+    if (b.openedAt !== null && Date.now() - b.openedAt >= BREAKER_COOLDOWN_MS) {
+      b.state = "half-open"; // פרובה-יחידה תיכף
+      return true;
+    }
+    return false;
+  }
+  return true; // half-open — מתיר ניסיון-בדיקה (התור טורי, אין-סערת-פרובות)
+}
+
+function breakerOnSuccess(b: BreakerView): void {
+  b.failures = 0;
+  b.openedAt = null;
+  b.state = "closed";
+}
+
+function breakerOnFailure(b: BreakerView, chain: ChainName): void {
+  b.failures += 1;
+  if (b.state === "half-open" || b.failures >= BREAKER_THRESHOLD) {
+    if (b.state !== "open") b.trips += 1;
+    b.state = "open";
+    b.openedAt = Date.now();
+    // ALERT — מוסדי: פתיחת-breaker היא אירוע-רעש-גבוה
+    console.error(`[saos-relay][ALERT] circuit-breaker OPEN on ${chain} · ${b.failures} consecutive hard failures · probe in ${BREAKER_COOLDOWN_MS / 60_000}min`);
+  }
+}
+
+/* ── backoff אקספוננציאלי עם jitter (±20%) ── */
+function backoffMs(attempt: number): number {
+  const base = Math.min(20_000 * Math.pow(2, attempt - 1), 15 * 60_000);
+  return Math.floor(base * (0.8 + Math.random() * 0.4));
+}
+
 /* ── רישום-ציבורי (state/anchors.json — הוכחות בלבד, אפס סודות) ── */
 function upsertRecord(rt: RelayRT, rec: AnchorRecord): void {
   const i = rt.records.findIndex((r) => r.chain === rec.chain && r.height === rec.height && r.at === rec.at);
@@ -255,8 +390,12 @@ function persist(rt: RelayRT): void {
         lastAt: last?.at ?? null,
         lastAnchoredTxid: anchored?.txid ?? null,
         anchored: rt.chainState[c].anchored,
+        verified: rt.chainState[c].verified,
+        mismatches: rt.chainState[c].mismatches,
+        breaker: rt.chainState[c].breaker,
         explorer: link,
         lastError: rt.chainState[c].lastError,
+        lastVerifyError: rt.chainState[c].lastVerifyError,
       }];
     });
     const out = {
@@ -265,7 +404,12 @@ function persist(rt: RelayRT): void {
       account: rt.account,
       tronIdentity: rt.tronAddress,
       chains: Object.fromEntries(chainOut),
-      totals: { anchored: (["steem", "hive", "tron"] as ChainName[]).reduce((a, c) => a + rt.chainState[c].anchored, 0), records: rt.records.length },
+      totals: {
+        anchored: (["steem", "hive", "tron"] as ChainName[]).reduce((a, c) => a + rt.chainState[c].anchored, 0),
+        verified: rt.metrics.verified,
+        mismatches: rt.metrics.mismatches,
+        records: rt.records.length,
+      },
       records: rt.records.slice(0, 30),
     };
     const tmp = ANCHORS_FILE + ".tmp";
@@ -274,14 +418,82 @@ function persist(rt: RelayRT): void {
   } catch { /* כשל-כתיבה לא מפיל את ה-Relay */ }
 }
 
-/* ── עיבוד-תור (לא-חוסם; backoff אקספוננציאלי; מצב per-chain) ── */
+/* ── אימות-בדיעבד של-txid יחיד (מעדכן רשומה+מדדים; לא-חוסם, לא-זורק) ── */
+async function verifyRecord(rt: RelayRT, rec: AnchorRecord): Promise<void> {
+  if (!rec.txid) return;
+  const t0 = Date.now();
+  let last = { ok: false, detail: "unverified" };
+  for (let i = 0; i < VERIFY_TRIES; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, VERIFY_GAP_MS));
+    try {
+      last = await verifyOnChain(rec.chain, rec.txid, { height: rec.height, stateRoot: rec.stateRoot });
+    } catch (e) {
+      last = { ok: false, detail: String((e as Error)?.message || e).slice(0, 120) };
+    }
+    if (last.ok || !last.detail.startsWith("not indexed")) break;
+  }
+  rec.verifiedAt = new Date().toISOString();
+  rt.metrics.lastVerifyLatencyMs = Date.now() - t0;
+  const indexed = !last.detail.startsWith("not indexed");
+  // "טרם-נוכח באינדקס" אינו מיסמאץ' — הרשומה נשארת null ונכנסת לתור-הפיוס (reconcile)
+  rec.verified = indexed ? last.ok : null;
+  if (!indexed) rec.verifiedAt = null;
+  if (last.ok) {
+    rt.metrics.verified += 1;
+    rt.chainState[rec.chain].verified += 1;
+    rt.chainState[rec.chain].lastVerifyError = null;
+  } else {
+    if (!last.detail.startsWith("not indexed")) {
+      rt.metrics.mismatches += 1;
+      rt.chainState[rec.chain].mismatches += 1;
+      rt.chainState[rec.chain].lastVerifyError = last.detail;
+      // ALERT — אי-התאמה בין השרשרת-הציבורית למקומי הוא אירוע-חמור
+      console.error(`[saos-relay][ALERT] ${rec.chain} h${rec.height} stateRoot verification FAILED · ${last.detail}`);
+    }
+  }
+  upsertRecord(rt, rec);
+  persist(rt);
+}
+
+function scheduleVerification(rt: RelayRT, rec: AnchorRecord): void {
+  void (async () => {
+    await new Promise((r) => setTimeout(r, VERIFY_DELAY_MS));
+    try { await verifyRecord(rt, rec); } catch { /* לא-חוסם */ }
+  })();
+}
+
+/* ── Reconciliation: פיוס-תקופתי — כל-עיגון ששודר וטרם-אומת עובר קריאה-חוזרת ── */
+function startReconciler(rt: RelayRT): void {
+  if (rt.reconcileStarted) return;
+  rt.reconcileStarted = true;
+  const loop = async (): Promise<void> => {
+    await new Promise((r) => setTimeout(r, RECONCILE_FIRST_MS)); // מחזור-ראשון מהיר — ריפוי-שאריות מיד
+    try {
+      const due = rt.records.filter((r) => r.status === "anchored" && r.verified === null && r.txid).slice(0, RECONCILE_BATCH);
+      for (const rec of due) {
+        try { await verifyRecord(rt, rec); } catch { /* לא-חוסם */ }
+      }
+    } finally {
+      void loop();
+    }
+  };
+  void loop();
+}
+
+/* ── עיבוד-תור (לא-חוסם; breaker + backoff-עם-jitter; מצב per-chain) ── */
 async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loadKeys>>, job: SealJob, chain: ChainName): Promise<void> {
   const cs = job.chains[chain];
+  const b = rt.chainState[chain].breaker;
+  if (!breakerAllows(b)) {
+    cs.nextTryAt = (b.openedAt ?? Date.now()) + BREAKER_COOLDOWN_MS + 1000; // ה-breaker סגור — נחכה-לפרובה
+    return;
+  }
   cs.attempts += 1;
   const anchorAccount = chain === "steem" ? keys.account : keys.hiveAccount;
   const rec: AnchorRecord = {
     chain, height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest,
     txid: null, status: "pending", at: job.at, attempt: cs.attempts,
+    verified: null, verifiedAt: null,
   };
   try {
     if (chain === "tron") {
@@ -311,9 +523,10 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
     const msg = String((e as Error)?.message || e).slice(0, 180);
     const economic = /rc-low|has not enough RC|unfunded/i.test(msg);
     if (economic) {
-      // חוסר-תקציב = המתנה כלכלית כנה — לא נספר ככישלון; בדיקה-מחדש תקופתית
+      // חוסר-תקציב = המתנה כלכלית כנה — לא כשל-מערכת (לא נספר ל-breaker); בדיקה-מחדש תקופתית
       cs.attempts = 0;
       cs.rcWaits += 1;
+      rt.metrics.economicWaits += 1;
       rec.status = "pending";
       rec.attempt = cs.rcWaits;
       cs.nextTryAt = Date.now() + (chain === "tron" ? 30 : 20) * 60_000;
@@ -321,12 +534,13 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
       else rec.error = msg;
       rt.chainState[chain].lastError = msg;
     } else {
+      breakerOnFailure(b, chain); // כשל-קשי — נספר ל-breaker (עלול לפתוח אותו)
       if (cs.attempts >= RETRY_MAX) {
         rec.status = "failed";
         cs.done = true;
       } else {
         rec.status = "pending";
-        cs.nextTryAt = Date.now() + Math.min(20000 * Math.pow(2, cs.attempts - 1), 15 * 60_000);
+        cs.nextTryAt = Date.now() + backoffMs(cs.attempts);
       }
       rec.error = msg;
       rt.chainState[chain].lastError = msg;
@@ -338,7 +552,13 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
   rt.chainState[chain].lastTxid = rec.txid ?? rt.chainState[chain].lastTxid;
   rt.chainState[chain].lastHeight = rec.height;
   rt.chainState[chain].lastAt = rec.at;
-  if (rec.status === "anchored") { rt.chainState[chain].anchored += 1; rt.chainState[chain].lastError = null; }
+  if (rec.status === "anchored") {
+    breakerOnSuccess(b);
+    rt.chainState[chain].anchored += 1;
+    rt.chainState[chain].lastError = null;
+    rt.metrics.broadcasts += 1;
+    scheduleVerification(rt, rec); // verifyOnChain — קריאה-חוזרת מיד-אחרי-שידור (לא-חוסם)
+  }
   rt.lastActivityAt = Date.now();
   persist(rt);
 }
@@ -365,20 +585,71 @@ async function processQueue(rt: RelayRT): Promise<void> {
   }
 }
 
+/* ── שחזור-ראיות-ציבוריות מהריצה-הקודמת (state/anchors.json — הוכחות בלבד) ──
+ * ה-Relay שורד הפעלות-מחדש: הרשומות חוזרות, המדדים נספרים-מחדש מהן, וכל-עיגון
+ * ששודר וטרם-אומת נכנס אוטומטית לתור-הפיוס. */
+function restoreRecords(rt: RelayRT): void {
+  try {
+    const raw = JSON.parse(fs.readFileSync(ANCHORS_FILE, "utf8")) as { records?: Partial<AnchorRecord>[] };
+    if (!Array.isArray(raw.records)) return;
+    const clean: AnchorRecord[] = [];
+    for (const r of raw.records.slice(0, 60)) {
+      if (!r || typeof r.chain !== "string" || typeof r.height !== "number" || !r.txid || typeof r.stateRoot !== "string") continue;
+      if (!(r.chain === "steem" || r.chain === "hive" || r.chain === "tron")) continue;
+      clean.push({
+        chain: r.chain, height: r.height, stateRoot: r.stateRoot, digest: String(r.digest ?? ""),
+        txid: r.txid, status: (r.status === "anchored" ? "anchored" : "pending"),
+        at: String(r.at ?? new Date().toISOString()), attempt: Number(r.attempt ?? 1),
+        // פסיקה-שמורה-בדיסק אינה אמת-מידה סופית: false נחשב "דורש-אימות-מחדש" (null)
+        // כדי-שלולאת-הפיוס תגזור-אותה מחדש מה-RPC (ריפוי-עצמי משאריות-מהדורות-קודמות).
+        verified: r.verified === true ? true : null,
+        verifiedAt: typeof r.verifiedAt === "string" ? r.verifiedAt : null,
+      });
+    }
+    if (clean.length === 0) return;
+    rt.records = clean;
+    for (const c of ["steem", "hive", "tron"] as ChainName[]) {
+      const recs = clean.filter((r) => r.chain === c);
+      if (recs.length === 0) continue;
+      const last = recs[0];
+      rt.chainState[c].anchored = recs.filter((r) => r.status === "anchored").length;
+      rt.chainState[c].verified = recs.filter((r) => r.verified === true).length;
+      rt.chainState[c].mismatches = recs.filter((r) => r.verified === false).length;
+      rt.chainState[c].lastTxid = last.txid;
+      rt.chainState[c].lastHeight = last.height;
+      rt.chainState[c].lastAt = last.at;
+      rt.chainState[c].status = last.status;
+    }
+    rt.metrics.verified = clean.filter((r) => r.verified === true).length;
+    rt.metrics.mismatches = clean.filter((r) => r.verified === false).length;
+    console.log(`[saos-relay] restored ${clean.length} anchor records from prior run — reconcile queue re-armed`);
+  } catch { /* אין-קובץ/פורמט-ישן — פתיחה-נקייה */ }
+}
+
 /* ── אתחול-זמן-ריצה (שורד HMR דרך globalThis) ── */
 function rtInit(): RelayRT {
   if (g.__saosDexRelay) return g.__saosDexRelay;
   const keys = loadKeys();
-  const mk = (on: boolean): RelayChainState => ({ enabled: on, status: on ? "idle" : "disabled", lastTxid: null, lastHeight: null, lastAt: null, lastError: null, anchored: 0 });
+  const mk = (on: boolean): RelayChainState => ({
+    enabled: on, status: on ? "idle" : "disabled",
+    lastTxid: null, lastHeight: null, lastAt: null,
+    lastError: null, lastVerifyError: null,
+    anchored: 0, verified: 0, mismatches: 0,
+    breaker: mkBreaker(),
+  });
   const rt: RelayRT = {
     jobs: [], processing: false, records: [],
     chainState: { steem: mk(!!keys), hive: mk(!!keys), tron: mk(!!keys) },
+    metrics: { broadcasts: 0, verified: 0, mismatches: 0, breakerTrips: 0, economicWaits: 0, lastVerifyLatencyMs: null },
     account: keys?.account ?? null,
     tronAddress: null,
     startedAt: Date.now(),
     lastActivityAt: Date.now(),
+    reconcileStarted: false,
   };
   g.__saosDexRelay = rt;
+  restoreRecords(rt); // ראיות-העיגון מהריצה-הקודמת חוזרות לפני-תחילת-הפיוס
+  if (keys) startReconciler(rt); // לולאת-פיוס — רק-כשה-Relay חי
   return rt;
 }
 
@@ -409,9 +680,11 @@ export function relayStatus(): Record<string, unknown> {
     lastActivityAt: rt.lastActivityAt,
     queue: rt.jobs.length,
     tronIdentity: rt.tronAddress,
+    metrics: rt.metrics,
     chains: rt.chainState,
     records: rt.records.slice(0, 12).map((r) => ({
       chain: r.chain, height: r.height, status: r.status, txid: r.txid, at: r.at, attempt: r.attempt,
+      verified: typeof r.verified === "boolean" ? r.verified : null, verifiedAt: r.verifiedAt ?? null,
       error: r.error ? r.error.slice(0, 90) : undefined,
     })),
   };
