@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+:root {
+  --gold: #f5b841;
+  --sovereign: #18181b;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  font-family:
+    "Rubik", "Heebo", "Segoe UI", "Arial Hebrew", "Noto Sans Hebrew", system-ui,
+    -apple-system, sans-serif;
+  background:
+    radial-gradient(1200px 600px at 85% -10%, rgba(245, 184, 65, 0.08), transparent 60%),
+    radial-gradient(900px 500px at 10% 110%, rgba(16, 185, 129, 0.06), transparent 60%),
+    #09090b;
+  min-height: 100vh;
+}
+
+/* custom scrollbar for long lists */
+.scroll-slim::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-slim::-webkit-scrollbar-track {
+  background: rgba(63, 63, 70, 0.3);
+  border-radius: 8px;
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  background: rgba(245, 184, 65, 0.35);
+  border-radius: 8px;
+}
+.scroll-slim::-webkit-scrollbar-thumb:hover {
+  background: rgba(245, 184, 65, 0.55);
+}
+
+/* range slider styling (sovereign gold) */
+input[type="range"].sovereign-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  background: linear-gradient(to left, #f5b84133, #3f3f46);
+  outline: none;
+}
+input[type="range"].sovereign-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #f5b841;
+  border: 2px solid #18181b;
+  cursor: pointer;
+  box-shadow: 0 0 0 3px rgba(245, 184, 65, 0.25);
+}
+input[type="range"].sovereign-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #f5b841;
+  border: 2px solid #18181b;
+  cursor: pointer;
+}
+
+@keyframes pulse-gold {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.animate-pulse-gold {
+  animation: pulse-gold 2.2s ease-in-out infinite;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-rise {
+  animation: rise 0.45s ease-out both;
+}
