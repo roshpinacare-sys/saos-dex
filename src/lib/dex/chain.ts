@@ -169,6 +169,8 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   rt.blockHashes.push(bh);
   const buildMs = Date.now() - t0;
   rt.buildMsRolling = Math.floor(rt.buildMsRolling * 0.8 + buildMs * 0.2);
+  // TPS מדוד-אמת: ops שיושמו בפועל בבלוק, ממוצע-נע על קצב-הפעימה
+  rt.opsPerSecRolling = Math.floor(rt.opsPerSecRolling * 0.7 + (applied / (TICK_MS / 1000)) * 0.3);
   rt.lastBlockAt = Date.now();
 
   try {
@@ -227,6 +229,13 @@ export function ensureChain(): ChainRT {
       // עוגן-ג'נזיס חתום מיד (בלוק-ראשון)
       await buildBlock(rt);
       pushReceipt(rt, "genesis", { root: stateRoot(rt.st), at: Date.now() });
+    } else {
+      // ראיות-מעבר-לתמונת-המצב הן-שאריות-מריצה-קודמת (נחתמו-אחרי-הסנפלוט האחרון
+      // ולא הספיקו-להיכלל) — ניקוי-כנה כדי-שהכתיבה-החוזרת לא תתנגש (unique-height)
+      try {
+        const stale = await db.blockHeader.deleteMany({ where: { height: { gt: rt.st.height } } });
+        if (stale.count > 0) console.log(`[saos-dex] purged ${stale.count} stale block headers beyond snapshot h${rt.st.height} (prior-run evidence)`);
+      } catch { rt.dbOk = false; }
     }
     rt.timer = setInterval(() => void tick(rt), TICK_MS);
     console.log(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… ${loaded ? "(snapshot)" : "(genesis)"}`);
@@ -401,11 +410,18 @@ export function getLatestSealLeaves(): string[] | null {
   return rt.blockHashes;
 }
 
+/** גרסה-מונוטונית של מצב-העולם (long-polling מבוסס-אירוע) */
+export function chainVersion(): number {
+  const rt = ensureChain();
+  return rt.st.height;
+}
+
 export function getState() {
   const rt = ensureChain();
   const st = rt.st;
   return {
     height: st.height,
+    tps: rt.opsPerSecRolling,
     stateRoot: stateRoot(st),
     gasUsed: st.gasUsed,
     opsTotal: st.stats.opsTotal,

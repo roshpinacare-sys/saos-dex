@@ -9,7 +9,7 @@
  * עסקה לא-חוקית לא נוגעת במצב · stateRoot = sha256(canonicalJSON(state)).
  */
 import { canon, sha256, stateRootOf } from "./canonical";
-import { placeOrder, cancelOrder, matchBook, gcOrders, type BookOrder } from "./book";
+import { cancelOrder, matchBook, gcOrders, type BookOrder } from "./book";
 import { poolAdd, poolSwap, poolRm } from "./amm";
 
 // ─── טבלת-GAS (מפרט-הברזל + הרחבות 96–113 של kernel.cjs) ────────────────────
@@ -217,8 +217,29 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       return { ok: true, gas };
     }
     case "order": {
-      const r = placeOrder(st, op, nowMs, consume);
-      return r;
+      // פקודת-לימיט מוסדית (סטנדרט-בורסות): חפיפה-מיידית כ-taker במחיר-המייקר,
+      // ושארית נחה בספר. אין-חפיפה כלל → מנוחה-מלאה. נעילה-מראש על מלוא-הכמות;
+      // matchBook משחרר-במדויק לכל-רגל — הנעילה נשארת מדויקת-בסוף (מורשת saos-dex).
+      const px = op.price ?? 0, amt = op.amount ?? 0;
+      const lockAsset = (op.side === "sell" ? op.base : op.quote) as string;
+      const lockMu = op.side === "sell" ? amt : notional(px, amt);
+      if (!(px > 0) || !(amt > 0) || !(lockMu > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
+      if (st.orders.filter((o) => o.live && o.owner === op.issuer).length >= 24)
+        return { ok: false, err: "order-cap", gas: 0 };
+      if (avail(st, op.issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
+      addLock(st, op.issuer, lockAsset, lockMu);
+      const cross = matchBook(st, op, nowMs, consume);
+      if (cross.ok) return cross; // שארית (אם-נותרה) כבר נחה בספר — הנעילה מדויקת
+      addLock(st, op.issuer, lockAsset, -lockMu); // כשל-שאינו-חפיפה → שחרור-מלא
+      if (cross.err !== "no-cross") return cross;
+      // אין-חפיפה: הפקודה נחה בספר (matchBook לא-צרך כשאין-אירועים)
+      const c2 = consume(); if (c2) return c2;
+      const seq = st.nextSeq++;
+      st.orders.push({
+        seq, id: seq, owner: op.issuer, base: op.base as string, quote: op.quote as string, side: op.side as "buy" | "sell",
+        price: px, amount: amt, filled: 0, live: true, nonce: op.nonce, at: nowMs,
+      });
+      return { ok: true, gas: 0 };
     }
     case "fill": {
       // טייק-מיידי: חוצה את הספר לפי מחיר-מייקר (saos-dex) — market או limit-חוצה

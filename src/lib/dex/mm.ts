@@ -88,6 +88,21 @@ export function arenaTick(
 ): void {
   const soldiers = ["soldier-1", "soldier-2", "soldier-3", "soldier-4"];
 
+  // קצבת-בוטים (מורשת-rebalancing של עושי-שוק אמת): כל-24 טיקים ממלאים-מחדש
+  // סוחרי-רעש שנדלדלו — בלי-זה הזרימה-החופשית מתה על-זוג-שלם (אפס-מילויים →
+  // אפס-גילוי-מחיר). מסד-הגבול: סכומים-קטנים מהאוצר, שקוף-על-הספר (transfer מדוד-GAS).
+  if (params.noise && tick % 24 === 0) {
+    for (const bot of ["bot-a", "bot-b", "bot-c"]) {
+      const b = st.balances[bot] ?? {};
+      if ((b["USDS"] ?? 0) < 15_000) {
+        pushOp({ type: "transfer", issuer: "treasury", nonce: `botseed-u${tick}-${bot}`, to: bot, asset: "USDS", amount: 40_000 });
+      }
+      if ((b["SAOS"] ?? 0) < 30_000) {
+        pushOp({ type: "transfer", issuer: "treasury", nonce: `botseed-s${tick}-${bot}`, to: bot, asset: "SAOS", amount: 30_000 });
+      }
+    }
+  }
+
   for (const m of MARKETS) {
     const fair = fairPrice(st, m.base, m.quote);
     if (fair <= 0) continue;
@@ -160,7 +175,9 @@ export function arenaTick(
       }
     }
 
-    // בוטי-רעש: זרימה-חופשית → גילוי-מחיר אמת; לפעמים טייק-שוק (חוצה-ספרד)
+    // בוטי-רעש: זרימה-חופשית → גילוי-מחיר אמת; לפעמים טייק-שוק (חוצה-ספרד).
+    // גודל-הטייק מותאם-תקציב-אמת (affordable) — פקודות-שוק שלא-ניתן לממן נדחות
+    // על-הספר ומבזבזות-GAS; בוט מכסה-את-מה-שיש-לו, כמו-סוחר-אמת.
     if (params.noise) {
       const bots = ["bot-a", "bot-b", "bot-c"];
       const bot = bots[tick % bots.length]!;
@@ -168,8 +185,21 @@ export function arenaTick(
       if (roll < 3) {
         // טייק-שוק של בוט — יוצר מילויים וגילוי-מחיר אמיתי
         const side: "buy" | "sell" = roll === 0 ? "buy" : "sell";
-        submit(rt, bot, { type: "fill", base: m.base, quote: m.quote, side, amount: 25_000 + (tick % 5) * 10_000, market: true }, pushOp);
+        const px = side === "buy" ? (sortBook(st, m.base, m.quote, "sell")[0]?.price ?? fair) : (sortBook(st, m.base, m.quote, "buy")[0]?.price ?? fair);
+        const assetHave = side === "buy" ? m.quote : m.base;
+        const affordable = px > 0 ? Math.floor((avail(st, bot, assetHave) * 9) / (px * 10)) : 0;
+        const qty = Math.min(25_000 + (tick % 5) * 10_000, affordable);
+        if (qty > 0) {
+          submit(rt, bot, { type: "fill", base: m.base, quote: m.quote, side, amount: qty, market: true }, pushOp);
+        }
       } else if (roll < 6) {
+        // היגיינת-פקודות לבוטים: בוט מחזיק עד-פקודת-רעש אחת פר-זוג — ישנות מבוטלות.
+        // בלי-זה הבוטים צוברים פקודות-מנוחה שנועלות-את-כל-המלאי עד order-cap והזרימה מתה.
+        for (const o of st.orders) {
+          if (o.live && o.owner === bot && o.base === m.base && o.quote === m.quote) {
+            submit(rt, bot, { type: "cancel", orderId: o.id }, pushOp);
+          }
+        }
         const px = Math.floor((fair * (10_000 + (roll === 3 ? 40 : -40))) / 10_000);
         const side: "buy" | "sell" = roll === 4 ? "sell" : "buy";
         const amt = 20_000 + (tick % 7) * 8_000;
