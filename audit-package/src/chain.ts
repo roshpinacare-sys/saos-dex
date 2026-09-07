@@ -53,6 +53,7 @@ interface ChainRT {
   faucetAt: Record<string, number>;
   dbOk: boolean;
   halted: boolean; // fail-fast: הפרת-אינווריאנטה מעלה-את-השרשרת (לא בונה בלוקים נוספים)
+  haltReason: string | null; // פורנזי — מה בדיוק נתפס (חשוף ב-API)
   version: number;
 }
 
@@ -230,6 +231,7 @@ async function tick(rt: ChainRT): Promise<void> {
        * השרשרת מעלה-את-עצמה (HALT) — נשארת-חיה לקריאה/תצפית, אך מסרבת
        * לבנות בלוקים נוספים ממצב-חשוד. הזנקת-ALERT קשה לתצפית-תפעולית. */
       rt.halted = true;
+      rt.haltReason = String(e.message).slice(0, 300); // פורנזי — חשוף ב-API ושרד-אתחול-מחדש
       if (rt.timer) { clearInterval(rt.timer); rt.timer = null; }
       console.error(`[saos-dex][ALERT] INVARIANT VIOLATION — chain HALTED (fail-fast, refuses undefined state): ${e.message}`);
       return;
@@ -248,7 +250,7 @@ export function ensureChain(): ChainRT {
     tape: [], blockHashes: [], seals: [], receipts: [],
     lastReceiptDigest: null, tickCount: 0, timer: null, busy: false,
     buildMsRolling: 0, opsPerSecRolling: 0, startedAt: Date.now(), lastBlockAt: 0,
-    faucetAt: {}, dbOk: true, halted: false, version: 1,
+    faucetAt: {}, dbOk: true, halted: false, haltReason: null, version: 1,
   };
   g.__saosDexChain = rt;
   // אתחול-אסינכרוני: תמונת-מצב → אחרת ג'נזיס; אחר-כך טיימר
@@ -473,6 +475,7 @@ export function getState() {
     lastBlockAgoMs: rt.lastBlockAt ? Date.now() - rt.lastBlockAt : null,
     dbOk: rt.dbOk,
     halted: rt.halted === true, // חשיפה-תפעולית: מצב-fail-fast נראה-ב-System Health
+    haltReason: rt.haltReason ?? null, // פורנזי: מקור-ה-ALERT (מה בדיוק נתפס)
     tickMs: TICK_MS,
     sealEvery: SEAL_EVERY,
     nextSealIn: SEAL_EVERY - (st.height % SEAL_EVERY),
