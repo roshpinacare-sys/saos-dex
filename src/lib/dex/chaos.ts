@@ -12,7 +12,7 @@
  *  · אין גישה למפתחות, אין קריאת-.env, אין רשת — מודול-טהור לחלוטין.
  */
 
-export type ChaosTarget = "steem" | "hive" | "tron";
+export type ChaosTarget = "steem" | "hive" | "tron" | "eth" | "sol";
 
 const g = globalThis as unknown as { __saosDexChaos?: Map<ChaosTarget, number> };
 

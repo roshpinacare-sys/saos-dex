@@ -64,11 +64,14 @@ interface WorldResp {
   proofs: { seals: SealInfo[]; receipts: { kind: string; digest: string; at: number }[]; blockWindow: number };
   tape: TapeEv[];
 }
-interface RelayRecord { chain: "steem" | "hive" | "tron"; height: number; status: string; txid: string | null; at: string; attempt: number; verified: boolean | null; verifiedAt: string | null; error?: string }
+type RelayChain = "steem" | "hive" | "tron" | "eth" | "sol";
+interface RelayRecord { chain: RelayChain; height: number; status: string; txid: string | null; at: string; attempt: number; verified: boolean | null; verifiedAt: string | null; error?: string }
 interface RelayView {
   enabled: boolean; account: string | null; anchorId: string; queue: number; tronIdentity: string | null;
+  identities?: { eth: string | null; sol: string | null };
+  ethIntents?: { height: number; intentHash: string; signature: string; address: string; verified: boolean }[];
   metrics: { broadcasts: number; verified: number; mismatches: number; breakerTrips: number; economicWaits: number; lastVerifyLatencyMs: number | null };
-  chains: Record<"steem" | "hive" | "tron", {
+  chains: Record<RelayChain, {
     enabled: boolean; status: string; lastTxid: string | null; lastHeight: number | null; lastAt: string | null;
     lastError: string | null; lastVerifyError: string | null; anchored: number; verified: number; mismatches: number;
     breaker: { state: "closed" | "open" | "half-open"; failures: number; openedAt: number | null; trips: number };
@@ -237,7 +240,7 @@ function Watchlist({ markets, selected, onSelect }: {
 
 // ─── פאנל: System Health & Relay (testid=system-health-panel) — טור-ימין ────
 function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; relay: RelayView | null; mempool: number }) {
-  const breakers = relay ? (["steem", "hive", "tron"] as const).map((c) => relay.chains[c].breaker.state) : [];
+  const breakers = relay ? (["steem", "hive", "tron", "eth", "sol"] as const).map((c) => relay.chains[c]?.breaker.state).filter((s): s is "closed" | "open" | "half-open" => !!s) : [];
   const breakerOpen = breakers.includes("open");
   const breakerHalf = breakers.includes("half-open");
   const mismatched = (relay?.metrics.mismatches ?? 0) > 0;
@@ -286,9 +289,12 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
       </div>
 
       <div className="mt-2 space-y-1.5" dir="ltr">
-        {relay ? (["steem", "hive", "tron"] as const).map((c) => {
+        {relay ? (["steem", "hive", "tron", "eth", "sol"] as const).map((c) => {
           const ch = relay.chains[c];
+          if (!ch) return null; // שרת-ישן ללא-השרשראות-החדשות — לא קורסים
           const last = relay.records.find((r) => r.chain === c && r.txid);
+          const pendingFunding = ch.enabled && /unfunded/i.test(ch.lastError ?? "");
+          const armedIdle = ch.enabled && ch.status === "idle";
           return (
             <div key={c} className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-2.5 py-1.5">
               <div className="flex items-center justify-between gap-2">
@@ -299,11 +305,25 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
                   breaker: {ch.breaker.state}
                 </span>
               </div>
+              {pendingFunding && (
+                <div className="mt-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-amber-300" dir="ltr">
+                  pending funding — armed (signing live, broadcast gated)
+                </div>
+              )}
+              {armedIdle && (
+                <div className="mt-1 rounded border border-green-500/40 bg-green-500/10 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-green-300" dir="ltr">
+                  armed — identity loaded
+                </div>
+              )}
               <div className="mt-1 flex items-center justify-between gap-2 font-mono text-[10px] text-zinc-500">
                 <span>{ch.anchored} anchored · {ch.verified} verified</span>
                 {last?.txid && (
                   <a
-                    href={c === "steem" ? `https://steemworld.org/tx/${last.txid}` : c === "hive" ? `https://hiveblocks.com/tx/${last.txid}` : `https://tronscan.org/#/transaction/${last.txid}`}
+                    href={c === "steem" ? `https://steemworld.org/tx/${last.txid}`
+                      : c === "hive" ? `https://hiveblocks.com/tx/${last.txid}`
+                      : c === "tron" ? `https://tronscan.org/#/transaction/${last.txid}`
+                      : c === "eth" ? `https://etherscan.io/tx/${last.txid}`
+                      : `https://explorer.solana.com/tx/${last.txid}?cluster=devnet`}
                     target="_blank" rel="noreferrer"
                     className="text-amber-400 underline-offset-2 hover:underline"
                   >
@@ -317,6 +337,17 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
           <div className="py-2 text-center font-mono text-[11px] text-zinc-600">relay telemetry connecting…</div>
         )}
       </div>
+
+      {relay?.identities && (relay.identities.eth || relay.identities.sol) && (
+        <div className="mt-2 space-y-0.5 rounded-lg border border-zinc-800 bg-zinc-900/40 px-2.5 py-1.5 font-mono text-[9px] text-zinc-500" dir="ltr">
+          <div className="font-bold uppercase tracking-widest text-zinc-400">fleet identities (anchored manifest)</div>
+          {relay.identities.eth && <div className="truncate">eth {relay.identities.eth}</div>}
+          {relay.identities.sol && <div className="truncate">sol {relay.identities.sol}</div>}
+          {relay.ethIntents && relay.ethIntents.length > 0 && (
+            <div className="truncate text-violet-300/80">eip-191 intent h{relay.ethIntents[0].height} · sig verified: {String(relay.ethIntents[0].verified)}</div>
+          )}
+        </div>
+      )}
 
       <p className="mt-2 font-mono text-[10px] text-zinc-600" dir="ltr">
         breaker trips {relay ? fmtInt(relay.metrics.breakerTrips) : "…"} · econ waits {relay ? fmtInt(relay.metrics.economicWaits) : "…"} · queue {relay ? fmtInt(relay.queue) : "…"}
