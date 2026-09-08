@@ -126,6 +126,56 @@ function useShowcase(): { data: ShowcaseResp | null; loading: boolean; rerun: ()
   return { data, loading, rerun: () => void run() };
 }
 
+/* ══ עמדת-הסליקה: SIM→REAL — מבחן-כסף-אמת לסוכנים + יציבות-שוק ══════════════ */
+interface CensusAgent { name: string; role: string; credits: number; equity: number; liveOrders: number; balances: Record<string, number>; locked: Record<string, number> }
+interface SettleResp {
+  ok: boolean; at: string; height: number; stateRoot: string; halted: boolean; cached?: boolean;
+  census: { agents: CensusAgent[] };
+  ledger: {
+    ok: boolean;
+    credits: { sum: number; gasUsed: number; expected: number; ok: boolean };
+    assets: { asset: string; live: number; expected: number; ok: boolean; kind: string }[];
+    escrow: { accounts: number; lockedSum: number; ordersSum: number; exact: boolean; availOk: boolean; ok: boolean };
+    fees: { poolsTreasury: number; feeMeterPlusProfit: number; ok: boolean };
+    errors: string[];
+  };
+  exam: {
+    ok: boolean; determinismIdentical: boolean; roots: string[];
+    agents: { agent: string; score: number; pass: boolean; conservationAfterEach: boolean; tasks: { task: string; ok: boolean; note: string }[] }[];
+  };
+  realMoney: {
+    ok: boolean; liveRails: number; verifiedNow: number;
+    rails: { rail: string; identity: string; native: string; extra: string; ok: boolean; detail: string }[];
+    anchors: { rail: string; height: number; ok: boolean; verified: boolean; detail: string }[];
+  };
+  stability: {
+    pair: string; refPrice: number; fair: number; poolMid: number; bookMid: number;
+    dissonanceBps: { poolVsFair: number; bookVsRef: number; fairVsRef: number };
+    spreadBps: number; depth1pct: { bidMu: number; askMu: number }; topImbalanceBps: number;
+    sitting: boolean; reasons: string[];
+  };
+  verdict: { ledgerOk: boolean; examOk: boolean; realMoneyOk: boolean; marketSitting: boolean; allSettled: boolean };
+}
+
+function useSettleDesk(): { data: SettleResp | null; loading: boolean; refresh: () => void } {
+  const [data, setData] = useState<SettleResp | null>(null);
+  const [loading, setLoading] = useState(false);
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(api("/api/dex/settle"), { cache: "no-store" });
+      const j = (await r.json()) as SettleResp;
+      if (j.ok) setData(j);
+    } catch { /* הדמון עוד קם */ } finally { setLoading(false); }
+  }, []);
+  useEffect(() => {
+    void refresh();
+    const t = setInterval(() => void refresh(), 32_000); // השרת-cache 25ש׳ — אנחנו 32ש׳
+    return () => clearInterval(t);
+  }, [refresh]);
+  return { data, loading, refresh };
+}
+
 /* ══ מנוע-זרימה: long-polling מבוסס-אירוע + AbortController ══════════════════
  * הלקוח תולה בקשה עם הגרסה-המקומית; השרת משיב רק כשהשרשרת התקדמה (או keepalive
  * כל-12ש׳). אפס-סקר-תקופתי — עדכון עם-כל-בלוק. */
@@ -424,6 +474,179 @@ function SovereignMetricsPanel({ showcase, loading, rerun }: {
             </p>
           )}
         </>
+      )}
+    </section>
+  );
+}
+
+// ─── פאנל: עמדת-הסליקה SIM→REAL (testid=settlement-desk) — רוחב-מלא ────────
+// הפקודה: לבדוק את הסוכנים ולעשות להם מבחן עם כסף-אמת; לסדר, לייצב את השוק שהכל ישב.
+function SettlementDeskPanel({ report, loading, refresh, stabilize, stabilizing }: {
+  report: SettleResp | null; loading: boolean; refresh: () => void;
+  stabilize: () => void; stabilizing: boolean;
+}) {
+  const s = report;
+  const examOf = (name: string) => s?.exam.agents.find((a) => a.agent === name);
+  const anchorOf = (rail: string) => s?.realMoney.anchors.find((a) => a.rail === rail);
+  return (
+    <section
+      data-testid="settlement-desk"
+      className="rounded-xl border border-emerald-500/30 bg-gradient-to-l from-emerald-500/[0.04] via-zinc-900/60 to-zinc-900/60 p-4"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-sm font-black tracking-wide text-emerald-200">
+          <ShieldCheck className="h-4 w-4 text-emerald-400" aria-hidden />
+          SETTLEMENT DESK · SIM→REAL
+          <span
+            className={`rounded-full border px-2 py-0.5 font-mono text-[9px] font-black uppercase tracking-widest ${
+              s?.verdict.allSettled
+                ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+                : "border-red-500/40 bg-red-500/10 text-red-300"
+            }`}
+            data-testid="settle-verdict"
+          >
+            {s ? (s.verdict.allSettled ? "ALL SETTLED — הכל יושב" : "NOT SETTLED") : "…"}
+          </span>
+        </h2>
+        <div className="flex items-center gap-2">
+          <GoldButton tone="ghost" onClick={stabilize} disabled={stabilizing} testid="settle-stabilize" className="px-2.5 py-1 text-[11px]">
+            <GaugeCircle className={`h-3 w-3 ${stabilizing ? "animate-pulse" : ""}`} /> STABILIZE NOW
+          </GoldButton>
+          <GoldButton tone="ghost" onClick={refresh} disabled={loading} testid="settle-refresh" className="px-2.5 py-1 text-[11px]">
+            <RefreshCcw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} /> AUDIT
+          </GoldButton>
+        </div>
+      </div>
+
+      {!s && (
+        <p className="py-6 text-center font-mono text-[11px] text-zinc-500" data-testid="settle-loading">
+          {loading ? "מריץ ביקורת-חשבונאות · מבחן-סוכנים · קריאות-כסף-אמת…" : "עמדת-הסליקה מתחברת לדמון…"}
+        </p>
+      )}
+
+      {s && (
+        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
+          {/* (1) מפקד-סוכנים ומבחנים */}
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3" data-testid="settle-census">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Agents · Census &amp; Exam</h3>
+              <span className={`font-mono text-[10px] font-bold ${s.exam.ok ? "text-emerald-300" : "text-red-300"}`}>
+                exam {s.exam.ok ? "PASS" : "FAIL"}{s.exam.determinismIdentical ? " · deterministic" : " · NON-DETERMINISTIC"}
+              </span>
+            </div>
+            <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+              {s.census.agents.map((w) => {
+                const ex = examOf(w.name);
+                return (
+                  <div key={w.name} className="flex items-center justify-between rounded-md border border-zinc-800/80 bg-zinc-950/60 px-2.5 py-1.5">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate font-mono text-[11px] font-bold text-zinc-200">{w.name}</span>
+                        <span className="rounded bg-zinc-800 px-1 font-mono text-[8px] uppercase text-zinc-400">{w.role}</span>
+                      </div>
+                      <div className="font-mono text-[9px] text-zinc-500" dir="ltr">
+                        equity {fmtInt(w.equity)}µ · {w.liveOrders} live · locked {fmtInt(Object.values(w.locked).reduce((a, b) => a + b, 0))}µ
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-0.5" title={ex?.tasks.map((t) => `${t.task}:${t.ok ? "✓" : "✗"}`).join(" ") || ""}>
+                      {["quote", "cross", "cancel"].map((t) => {
+                        const task = ex?.tasks.find((x) => x.task === t);
+                        const on = task?.ok === true;
+                        return <span key={t} className={`h-1.5 w-1.5 rounded-full ${on ? "bg-emerald-400" : task ? "bg-red-400" : "bg-zinc-700"}`} />;
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-2 space-y-0.5 font-mono text-[9px] text-zinc-500" dir="ltr">
+              <div>ledger conservation: <span className={s.ledger.ok ? "text-emerald-300" : "text-red-300"}>{s.ledger.ok ? "EXACT" : "VIOLATION"}</span>
+                {s.ledger.ok ? "" : ` · ${s.ledger.errors[0] ?? ""}`}</div>
+              <div>escrow: {fmtInt(s.ledger.escrow.lockedSum)}µ locked === {fmtInt(s.ledger.escrow.ordersSum)}µ orders · credits Σ+gas === genesis: {s.ledger.credits.ok ? "YES" : "NO"}</div>
+              <div>fees measured: {fmtInt(s.ledger.fees.poolsTreasury)}µ === feeMeter+profit: {s.ledger.fees.ok ? "YES" : "NO"}</div>
+            </div>
+          </div>
+
+          {/* (2) כסף-אמת: 5-רשתות חיות */}
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3" data-testid="settle-realmoney">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Real Money · 5 Rails Live</h3>
+              <span className={`font-mono text-[10px] font-bold ${s.realMoney.ok ? "text-emerald-300" : "text-amber-300"}`}>
+                {s.realMoney.liveRails}/5 live · {s.realMoney.verifiedNow} verified now
+              </span>
+            </div>
+            <div className="max-h-56 space-y-1 overflow-y-auto pr-1" dir="ltr">
+              {s.realMoney.rails.map((r) => {
+                const an = anchorOf(r.rail);
+                return (
+                  <div key={r.rail} className="rounded-md border border-zinc-800/80 bg-zinc-950/60 px-2.5 py-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <StatusDot tone={r.ok ? "green" : "red"} />
+                        <span className="font-mono text-[10px] font-black uppercase text-zinc-300">{r.rail}</span>
+                        <span className="truncate font-mono text-[9px] text-zinc-500">{r.identity}</span>
+                      </div>
+                      <span className="shrink-0 font-mono text-[10px] font-bold text-amber-300">{r.native}</span>
+                    </div>
+                    <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[8px] text-zinc-600">
+                      <span className="truncate">{r.extra}</span>
+                      {an && (
+                        <span className={`shrink-0 ${an.verified ? "text-emerald-400" : an.height === 0 ? "text-zinc-500" : an.detail.includes("not indexed") || an.detail.includes("awaiting") ? "text-amber-400" : "text-red-400"}`}>
+                          {an.height === 0 ? "no anchor record (honest)" : `anchor h${an.height} ${an.verified ? "✓ re-verified" : an.detail.includes("not indexed") || an.detail.includes("awaiting") ? "· reconciling" : "· mismatch"}`}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-2 font-mono text-[9px] leading-snug text-zinc-500" dir="ltr">
+              book = SIM µ (honest). every seal = real anchor on public rails — re-read from public RPC right now.
+            </p>
+          </div>
+
+          {/* (3) יציבות-שוק: האם-הכל-יושב */}
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3" data-testid="settle-stability">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Market Stability · {s.stability.pair}</h3>
+              <span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] font-black ${s.stability.sitting ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-amber-500/40 bg-amber-500/10 text-amber-300"}`}>
+                {s.stability.sitting ? "SITTING" : "CONVERGING"}
+              </span>
+            </div>
+            <div className="space-y-1 font-mono text-[10px]" dir="ltr">
+              {[
+                { k: "ladder ref", v: fmtInt(s.stability.refPrice) },
+                { k: "book fair", v: fmtInt(s.stability.fair), d: s.stability.dissonanceBps.fairVsRef },
+                { k: "book mid", v: fmtInt(s.stability.bookMid), d: s.stability.dissonanceBps.bookVsRef },
+                { k: "pool mid", v: fmtInt(s.stability.poolMid), d: s.stability.dissonanceBps.poolVsFair },
+              ].map((row) => (
+                <div key={row.k} className="flex items-center justify-between rounded-md border border-zinc-800/80 bg-zinc-950/60 px-2.5 py-1">
+                  <span className="text-zinc-500">{row.k}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="font-bold text-zinc-200">{row.v}</span>
+                    {row.d !== undefined && (
+                      <span className={`text-[9px] ${Math.abs(row.d) <= 60 ? "text-emerald-400" : Math.abs(row.d) <= 450 ? "text-amber-400" : "text-red-400"}`}>{row.d > 0 ? "+" : ""}{row.d} bps</span>
+                    )}
+                  </span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between rounded-md border border-zinc-800/80 bg-zinc-950/60 px-2.5 py-1">
+                <span className="text-zinc-500">spread · depth ±1%</span>
+                <span className="text-zinc-200">
+                  {s.stability.spreadBps} bps · <span className="text-green-400">{fmtInt(s.stability.depth1pct.bidMu)}µ</span> / <span className="text-red-400">{fmtInt(s.stability.depth1pct.askMu)}µ</span>
+                </span>
+              </div>
+            </div>
+            {s.stability.reasons.length > 0 && (
+              <ul className="mt-2 space-y-0.5 font-mono text-[9px] text-amber-300/80" dir="ltr">
+                {s.stability.reasons.slice(0, 3).map((r, i) => <li key={i}>· {r}</li>)}
+              </ul>
+            )}
+            <p className="mt-2 font-mono text-[9px] leading-snug text-zinc-500" dir="ltr">
+              pegkeeper: pool-lock vs fair every 2 ticks · ladder-band ±400bps every 4 · arena funds the floor from measured fees
+            </p>
+          </div>
+        </div>
       )}
     </section>
   );
@@ -922,14 +1145,32 @@ export default function DexTerminal() {
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const showcase = useShowcase();
-
-  const relay = useRelayStream(world?.version);
-  const myOrders = useMyOrders(world?.version);
+  const settle = useSettleDesk();
+  const [stabilizing, setStabilizing] = useState(false);
 
   const flash = useCallback((tone: "ok" | "err", text: string) => {
     setMsg({ tone, text });
     setTimeout(() => setMsg(null), 4000);
   }, []);
+
+  const stabilizeNow = useCallback(async () => {
+    setStabilizing(true);
+    try {
+      const r = await fetch(api("/api/dex/settle"), { method: "POST" });
+      const j = (await r.json()) as { ok: boolean; pushed?: { kind: string; detail: string }[] };
+      if (j.ok) flash("ok", `ייצוב: ${j.pushed?.map((p) => p.detail).join(" · ") || "הפרמטרים הודקו"}`);
+      else flash("err", "פעולת-הייצוב נדחתה");
+      void settle.refresh();
+      void load();
+    } catch {
+      flash("err", "כשל-רשת בייצוב");
+    } finally {
+      setStabilizing(false);
+    }
+  }, [flash, load, settle]);
+
+  const relay = useRelayStream(world?.version);
+  const myOrders = useMyOrders(world?.version);
 
   const post = useCallback(async (url: string, body?: unknown) => {
     setBusy(true);
@@ -1002,7 +1243,7 @@ export default function DexTerminal() {
                 <Crown className="h-3 w-3" aria-hidden /> SOVEREIGN MARKET
               </Pill>
             )}
-            <Pill tone="amber">SIM — ספר-ריבוני, אין כסף-אמת</Pill>
+            <Pill tone="amber" testid="header-sim-pill">SIM book · REAL-money audited ×5</Pill>
           </div>
         </div>
       </header>
@@ -1018,6 +1259,14 @@ export default function DexTerminal() {
       <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4">
         {/* ═════ פאנל-הכתר: SAOS SOVEREIGN METRICS — ההוכחה החיה בראש-המסך ═════ */}
         <SovereignMetricsPanel showcase={showcase.data} loading={showcase.loading} rerun={showcase.rerun} />
+
+        {/* ═════ עמדת-הסליקה: SIM→REAL — סוכנים-נבחנים · כסף-אמת · השוק-יושב ═════ */}
+        <div className="mt-4">
+          <SettlementDeskPanel
+            report={settle.data} loading={settle.loading} refresh={settle.refresh}
+            stabilize={() => void stabilizeNow()} stabilizing={stabilizing}
+          />
+        </div>
 
         {/* ═════ מבנה 3-טורי מחייב: 20% Watchlist · 50% גרף+ספר · 30% מסחר+בריאות ═════ */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-10">
@@ -1127,7 +1376,7 @@ export default function DexTerminal() {
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-[10px] text-zinc-600" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
           <span className="flex items-center gap-1.5">
-            <Bot className="h-3.5 w-3.5" /> סימולציה-ריבונית — ספר-מקומי, אין כסף-אמת, אין הבטחות-תשואה
+            <Bot className="h-3.5 w-3.5" /> ספר-SIM ריבוני — חשבונאות-מדויקת-בברזל, נבחנת-מול כסף-אמת ועיגון-חי ×5 רשתות · אין הבטחות-תשואה
           </span>
           <span className="flex items-center gap-3">
             <span className="flex items-center gap-1"><Anchor className="h-3.5 w-3.5" /> עיגון חי · {relay ? `${fmtInt(relay.metrics.verified)} verified` : "…"}</span>

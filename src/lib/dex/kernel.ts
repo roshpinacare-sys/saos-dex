@@ -268,6 +268,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       st.orders.push({
         seq, id: seq, owner: op.issuer, base: op.base as string, quote: op.quote as string, side: op.side as "buy" | "sell",
         price: px, amount: amt, filled: 0, live: true, nonce: op.nonce, at: nowMs,
+        lockMu: lockMu, // מד-הנעילה-הפרטי — הפקודה נחה עם-הנעילה-המלאה שלה
       });
       return { ok: true, gas: 0 };
     }

@@ -803,8 +803,9 @@ export function relayStatus(): Record<string, unknown> {
     ethIntents: rt.ethIntents.slice(0, 3).map((i) => ({ height: i.height, intentHash: i.intentHash.slice(0, 18) + "…", signature: i.signature.slice(0, 12) + "…", address: i.address, verified: i.verified })),
     metrics: rt.metrics,
     chains: rt.chainState,
-    records: rt.records.slice(0, 12).map((r) => ({
+    records: rt.records.slice(0, 60).map((r) => ({
       chain: r.chain, height: r.height, status: r.status, txid: r.txid, at: r.at, attempt: r.attempt,
+      stateRoot: r.stateRoot, // עדות-ציבורית — נדרשת לאימות-עיגון-טרי בעמדת-הסליקה
       verified: typeof r.verified === "boolean" ? r.verified : null, verifiedAt: r.verifiedAt ?? null,
       error: r.error ? r.error.slice(0, 90) : undefined,
     })),
