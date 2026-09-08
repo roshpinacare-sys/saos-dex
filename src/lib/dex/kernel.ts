@@ -52,7 +52,21 @@ export const FUEL_FUNDERS = ["treasury", "arena", "operator"] as const; // ממ�
 export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter≥8000 להרמה — המטבע לא ירעיב-אותו
 export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
 
+export type FuelFunder = (typeof FUEL_FUNDERS)[number];
+/** ממנה-דלק מדורג (SETTLE-5/9): arena → treasury → operator.
+ * FIX(SETTLE-9 dedup): הסולם היה מועתק-בשלמותו בין mm.ts ל-settle/route.ts —
+ * לוגיקת-כסף-קונצנזוסית חייבת לחיות במקום-אחד (הדריפט פה = דליפה-כלכלית).
+ * exclude — לא-לממן-עצמי (הארנה אסור-שתממן-את-עצמה: המנוע דוחה rTo==issuer). */
+export function funderFor(st: DexState, amt: number, exclude?: string): FuelFunder {
+  const cr = (n: string) => st.credits[n] ?? 0;
+  if (exclude !== "arena" && cr("arena") >= amt + 10_000) return "arena";
+  if (exclude !== "treasury" && cr("treasury") >= amt) return "treasury";
+  return "operator";
+}
+
 export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM";
+/** רשימת-ריצה של הנכסים — אימות-קלט fail-closed ב-routes ובגרעין (SETTLE-9). */
+export const ASSETS: Asset[] = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE", "STEEM"];
 
 export interface Pool {
   a: Asset; b: Asset; // ממוינים אלפבתית — מפתח-קנוני
@@ -110,9 +124,24 @@ export function chargeGas(st: DexState, who: string, gas: number): boolean {
 }
 /** dedupe-קשיח עם חלון-נע (מונע צמיחת-זיכרון בריצה ארוכה — מורשת WINDOW_FLUSH) */
 const NONCE_WINDOW = 6000;
+// FIX(SETTLE-9 perf): st.nonces.includes היה סריקה O(window) לכל-op (21µs × 160 ops/בלוק
+// = ~3.3ms/בלוק). Set מקביל שומר-סנכרון מול-המערך (שניהם תמיד חד-ערכיים — המערך
+// ממשיך להיות חלק-מה-canonical/שורש, ה-Set חוץ-מצב לגמרי). נבנה-עצלנית לכל-אובייקט-
+// מצב: כיסוי-מלא ל-loadSnapshot/resetChain/שיבוטי-exam (אובייקט-חדש = בנייה-מחדש).
+const nonceSets = new WeakMap<DexState, Set<string>>();
+function nonceSet(st: DexState): Set<string> {
+  let s = nonceSets.get(st);
+  if (!s) { s = new Set(st.nonces); nonceSets.set(st, s); }
+  return s;
+}
 function pushNonce(st: DexState, key: string): void {
   st.nonces.push(key);
-  if (st.nonces.length > NONCE_WINDOW) st.nonces.splice(0, 1000);
+  nonceSet(st).add(key);
+  if (st.nonces.length > NONCE_WINDOW) {
+    const removed = st.nonces.splice(0, 1000);
+    const s = nonceSet(st);
+    for (const k of removed) s.delete(k);
+  }
 }
 export const poolKey = (x: string, y: string): string => [x, y].sort().join("/");
 export const notional = (price: number, amountMu: number): number =>
@@ -212,7 +241,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
   op.issuer = issuer;
   if (typeof op.to === "string") op.to = op.to.toLowerCase(); // אותו-עיקרון לנמענים — אין-חשבונות-רפאים בגלל-רישוי
   const dedupeKey = `${issuer}:${op.nonce}`;
-  if (st.nonces.includes(dedupeKey)) return { ok: false, err: "replay-rejected", gas: 0 };
+  if (nonceSet(st).has(dedupeKey)) return { ok: false, err: "replay-rejected", gas: 0 };
 
   const consume = (): OpResult | null => {
     if (!chargeGas(st, issuer, gas)) return { ok: false, err: "insufficient-credits", gas };
@@ -281,6 +310,12 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // לפני-המנוחה יצר פקודה בלתי-מגובה (uncollateralized) שמילויה-כמייקר
       // משחרר נעילות-פנטום (נתפס-ע"י invariant: escrow-underflow — HALT).
       const px = op.price ?? 0, amt = op.amount ?? 0;
+      // FIX(SETTLE-9 fail-closed): הצבע-החד (op.side?op.base:op.quote) היה-לפני כל-
+      // אימות — פרמטרים-זבל נדחו רק במקרה (תאונת-escrow). אימות-מפורש לפני-הכל.
+      if ((op.side !== "buy" && op.side !== "sell")
+        || !ASSETS.includes(op.base as Asset) || !ASSETS.includes(op.quote as Asset)
+        || op.base === op.quote)
+        return { ok: false, err: "bad-order-params", gas: 0 };
       const lockAsset = (op.side === "sell" ? op.base : op.quote) as string;
       const lockMu = op.side === "sell" ? amt : notional(px, amt);
       if (!(px > 0) || !(amt > 0) || !(lockMu > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
@@ -350,11 +385,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
     }
     case "order_gc": {
       const c = consume(); if (c) return c;
-      const removed = gcOrders(st);
-      const evs: TradeEvent[] = removed > 0
-        ? [{ kind: "fill", base: "SAOS", quote: "USDS", price: 0, amountMu: -removed, taker: "gc", at: nowMs }]
-        : [];
-      void evs; // gc מנקה-מצב; אין-אירועי-סליל (כנות)
+      gcOrders(st); // FIX(SETTLE-9 dead-code): ה-events שנבנו-כאן היו void-תמיד — הוסרו (כנות: gc מנקה-מצב, אין-אירועי-סליל)
       return { ok: true, gas, events: [] };
     }
     case "pool_add":

@@ -1,6 +1,6 @@
 # STATUS — SAOS-DEX
 
-**גרסה:** טביעת-הקוד-החיה: `saos-dex/1.7.0+settle8-crossaudit` (CODE_VERSION, chain.ts) · **ענף:** main · **פורט:** 3010 (basePath `/saos-dex`) · **עודכן:** 2026-09-08 (SETTLE-8 — סבב-חיבור-הרשת: ממצאי-סוכנים-חוצי-ריפואות מומשו — POSTING-authority, הקרנת-RC, finalized-ביקורת, intents-לדיסק, שער-קונסולה-ל-9-נתיבים; ראה §13 ב-PROOF)
+**גרסה:** טביעת-הקוד-החיה: `saos-dex/1.8.0+settle9-optimize` (CODE_VERSION, chain.ts) · **ענף:** main · **פורט:** 3010 מקושר-`127.0.0.1` (basePath `/saos-dex`) · **עודכן:** 2026-09-08 (SETTLE-9 — סבב-אופטימיזציה-ואימות-חוצה-סוכנים: stateRoot-חד-פעמי-פר-בלוק, cache-שורש-פר-גובה, dedupe-Set, minOut-fail-closed, אימות-נכסים-מפורש, funderFor-אחד, Math.random-האחרון-מוסר, F-04-endpointHost, restoreRecords-סימטרי, bind-מקומי, **U-01-נפתר: עוגני-SOL-על-mainnet-מאומת-RPC**; ראה §14 ב-PROOF)
 > היסטורי: v1.0.0 (2026-09-07) — מסמך-זה-מתעדכן-כעת מטביעת-הקוד-החיה ולא-ממועד-העריכה.
 
 ## סטטוס-ריצה (נמדד)

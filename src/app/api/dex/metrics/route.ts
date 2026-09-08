@@ -12,9 +12,23 @@ export const dynamic = "force-dynamic";
  * ממצא-הסקר (SETTLE-7): כל-הנתונים כבר-היו-חיים ב-relayStatus()/chain — היה
  * חסר רק קצה-אחיד לגרירה-חיצונית (DEPLOYMENT_CHECKLIST B2 דרש-את-זה).
  */
+interface MetricsCache { at: number; height: number; text: string; json: string }
+const gMetrics = globalThis as unknown as { __saosDexMetrics?: MetricsCache };
+const METRICS_CACHE_MS = 5_000;
+
+/** GET /api/dex/metrics — ממוסגר-5ש׳: סערת-scrapes לא יכולה להפוך ל-DoS חישובי
+ * (FIX SETTLE-9: היה-ללא-בולם — ה-GET הציבורי היחיד עם אפס-ספיגת-הלם). */
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const rt = ensureChain();
+  const wantJson = url.searchParams.get("format") === "json";
+  const cached = gMetrics.__saosDexMetrics;
+  if (cached && Date.now() - cached.at < METRICS_CACHE_MS && cached.height === rt.st.height
+    && (wantJson ? cached.json : cached.text)) {
+    return wantJson
+      ? new NextResponse(cached.json, { headers: { "content-type": "application/json", "cache-control": "no-store" } })
+      : new NextResponse(cached.text, { headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8", "cache-control": "no-store" } });
+  }
   const st = getLiveState();
   const s = getState();
   const audit = ledgerAudit(st, genesisTotals());
@@ -77,10 +91,13 @@ export async function GET(req: Request) {
     if (typeof v === "number") push(`saos_relay_${k}`, v, undefined, "counter");
   }
 
-  if (url.searchParams.get("format") === "json") {
-    return NextResponse.json({ ok: true, at: Date.now(), codeVersion: CODE_VERSION, chain: s, runway, audit, relay });
+  const text = lines.join("\n") + "\n";
+  const json = JSON.stringify({ ok: true, at: Date.now(), codeVersion: CODE_VERSION, chain: s, runway, audit, relay });
+  gMetrics.__saosDexMetrics = { at: Date.now(), height: rt.st.height, text, json };
+  if (wantJson) {
+    return new NextResponse(json, { headers: { "content-type": "application/json", "cache-control": "no-store" } });
   }
-  return new NextResponse(lines.join("\n") + "\n", {
+  return new NextResponse(text, {
     headers: { "content-type": "text/plain; version=0.0.4; charset=utf-8", "cache-control": "no-store" },
   });
 }

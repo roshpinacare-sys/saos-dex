@@ -25,10 +25,14 @@ export async function POST(req: Request) {
     pair?: string; assetIn?: string; amount?: number; minOut?: number;
   };
   const amount = Math.floor(Number(body.amount));
-  if (!body.pair || !body.assetIn || !(amount > 0)) {
+  // FIX(SETTLE-9 fail-closed): minOut NaN עקף את מגן-ההחלקה — Number(garbage)=NaN
+  // ו-`out < NaN` הוא תמיד-false ב-amm.ts → ה-swap היה עובר בלי-הגנה בכלל.
+  const rawMinOut = body.minOut === undefined ? undefined : Number(body.minOut);
+  if (!body.pair || !body.assetIn || !(amount > 0)
+    || (rawMinOut !== undefined && !Number.isFinite(rawMinOut))) {
     return NextResponse.json({ ok: false, error: "bad-request" }, { status: 200 });
   }
-  const minOut = body.minOut === undefined ? undefined : Math.floor(Number(body.minOut));
+  const minOut = rawMinOut === undefined ? undefined : Math.max(0, Math.floor(rawMinOut));
   const r = submitOp({
     type: "pool_swap",
     issuer: "operator",

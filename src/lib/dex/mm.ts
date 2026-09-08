@@ -7,7 +7,7 @@
  *  · בוטי-רעש: זרימה-חופשית שמגלה-מחיר (dex-facts: "עודף-מחיר נאכל מיד")
  */
 import type { DexState, Op, Asset } from "./kernel";
-import { FEE_BPS, LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, poolKey, avail, notional } from "./kernel";
+import { FEE_BPS, LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, funderFor, poolKey, avail, notional } from "./kernel";
 import { sortBook } from "./book";
 import { poolMid, getPool } from "./amm";
 
@@ -160,9 +160,10 @@ export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void 
   }
 }
 
-/** טיק-ארנה: ריקוט-גריד לכל-חייל + טייק-מסתובב עם-שער-שוליים + בוטי-רעש */
+/** טיק-ארנה: ריקוט-גריד לכל-חייל + טייק-מסתובב עם-שער-שוליים + בוטי-רעש
+ * FIX(SETTLE-9): ה-param nowMs היה-מת (void nowMs בלבד) — הוסר מהחתימה ומהקריאה. */
 export function arenaTick(
-  st: DexState, tick: number, nowMs: number,
+  st: DexState, tick: number,
   params: ArenaParams,
   rt: Map<string, SoldierRT>,
   pushOp: PushOp,
@@ -191,15 +192,12 @@ export function arenaTick(
       if (c < 4_000) {
         const amt = Math.min(30_000 - c, REFUEL_CAP);
         if (amt <= 0) continue;
-        // ממנה-מדורג (SETTLE-5): ארנה (רזרבה-עמוקה) → אוצר (עמלות — THE-FOUNTAIN)
-        // → מפעיל-אנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון; העברה-טהורה, אפס-הטבעה).
+        // ממנה-מדורג (SETTLE-5/9 — funderFor אחד בגרעין): ארנה (רזרבה-עמוקה) → אוצר
+ // (עמלות — THE-FOUNTAIN) → מפעיל-אנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון).
         // FIX(SETTLE-7): הארנה עצמה נוספה-לרשימת-המקבלים — היא משלמת-גז על
         // pegkeeper וממנת-את-כולם ומעולם-לא-קיבלה-עירוי. אסור-שתממן-את-עצמה
         // (המנוע דוחה rTo==issuer) — לכן-הממנה-שלה הוא אוצר/מפעיל בלבד.
-        const cr = (n: string) => st.credits[n] ?? 0;
-        const funder = ag === "arena"
-          ? (cr("treasury") >= amt ? "treasury" : "operator")
-          : cr("arena") >= amt + 10_000 ? "arena" : cr("treasury") >= amt ? "treasury" : "operator";
+        const funder = funderFor(st, amt, ag === "arena" ? "arena" : undefined);
         pushOp({ type: "refuel", issuer: funder, nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
       }
     }
@@ -338,5 +336,4 @@ export function arenaTick(
       }
     }
   }
-  void nowMs;
 }

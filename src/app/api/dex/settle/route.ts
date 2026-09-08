@@ -5,7 +5,7 @@ import {
 } from "@/lib/dex/settle";
 import { DEFAULT_PARAMS } from "@/lib/dex/mm";
 import { poolMid, getPool } from "@/lib/dex/amm";
-import { poolKey, avail } from "@/lib/dex/kernel";
+import { poolKey, avail, funderFor, LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
 
 export const dynamic = "force-dynamic";
@@ -77,9 +77,12 @@ export async function POST(req: Request) {
   // Σcredits+gas−minted===ג'נזיס וביקורת-העמלות עומדות.
   {
     const trCr = st.credits["treasury"] ?? 0;
-    const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, Math.floor(((st.feeMeter ?? 0) - 8_000) / 2));
+    // FIX(SETTLE-9): היה-קידוד-קשיח (8_000/100_000) במקום קבועי-הגרעין — דריפט-סיכון
+    // בלוגיקת-כסף. הסף (60k) גבוה-מכוון מהפעימה-האוטומטית (10k ב-mm.ts):
+    // settle-הוא פעולת-מפעיל — מטעין-עומק, לא מתערב-בכל-נשימה.
+    const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, Math.floor(((st.feeMeter ?? 0) - LADDER_FUEL_FLOOR) / 2));
     if (trCr < 60_000 && fuelAvail > 20_000) {
-      const mint = Math.min(100_000, fuelAvail);
+      const mint = Math.min(MINT_FUEL_CAP, fuelAvail);
       if (mint > 0) {
         const r = submitOp({ type: "mint_fuel", issuer: "treasury", nonce: `settle-fountain-${Date.now().toString(36)}`, to: "treasury", amount: mint });
         pushed.push({ kind: "mint-fuel", detail: r.queued ? `treasury self-mint +${mint}µ credits (fees-backed: profit ${st.treasuryProfit} + meter ${st.feeMeter})` : `rejected: ${r.reason}` });
@@ -90,12 +93,10 @@ export async function POST(req: Request) {
   for (const ag of EXAM_AGENTS) {
     const c = st.credits[ag] ?? 0;
     if (c < 8_000) {
-      const amt = Math.min(30_000 - c, 100_000);
+      const amt = Math.min(30_000 - c, REFUEL_CAP);
       if (amt > 0) {
-        // ממנה-מדורג (SETTLE-5): ארנה → אוצר (עמלות — THE-FOUNTAIN) → מפעיל-אנושי
-        // (רזרבת-ג'נזיס — קו-הגנה-האחרון; העברה-טהורה, אפס-הטבעה)
-        const cr = (n: string) => st.credits[n] ?? 0;
-        const funder = cr("arena") >= amt + 10_000 ? "arena" : cr("treasury") >= amt ? "treasury" : "operator";
+        // ממנה-מדורג (SETTLE-5/9 — funderFor אחד בגרעין): ארנה → אוצר → מפעיל
+        const funder = funderFor(st, amt);
         const r = submitOp({ type: "refuel", issuer: funder, nonce: `settle-refuel-${ag}-${Date.now().toString(36)}`, to: ag, amount: amt });
         pushed.push({ kind: "refuel", detail: r.queued ? `${ag} +${amt}µ credits ← ${funder} (had ${c})` : `rejected: ${r.reason}` });
       }
