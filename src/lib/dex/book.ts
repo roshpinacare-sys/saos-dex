@@ -104,7 +104,8 @@ export function cancelOrder(st: DexState, op: Op, consume: () => OpResult | null
  */
 export function matchBook(
   st: DexState, op: Op, nowMs: number,
-  consume: () => OpResult | null
+  consume: () => OpResult | null,
+  preLocked = false, // FIX(SETTLE-7): נתיב-"order" נועל-מראע בגרעין — כאן מדלגים על בדיקת-הזמין הכפולה
 ): OpResult {
   const base = op.base, quote = op.quote, side = op.side;
   if (!base || !quote || (side !== "buy" && side !== "sell")) return { ok: false, err: "bad-fill", gas: 0 };
@@ -119,7 +120,7 @@ export function matchBook(
   const lockMu = isLimit
     ? (side === "buy" ? notional(limitPx!, amount) : amount)
     : 0;
-  if (isLimit && avail(st, op.issuer, lockAsset) < lockMu)
+  if (isLimit && !preLocked && avail(st, op.issuer, lockAsset) < lockMu)
     return { ok: false, err: "insufficient-taker", gas: 0 };
 
   const opp = sortBook(st, base, quote, side === "buy" ? "sell" : "buy");

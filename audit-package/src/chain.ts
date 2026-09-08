@@ -10,7 +10,7 @@
  */
 import fs from "fs";
 import path from "path";
-import { db } from "./evidence-port";
+import { db } from "./evidence-port"; // FIDELITY: העיבוד-היחיד — שכבת-ה-DB מוחלפת בפורט no-op (ראה FIDELITY.diff)
 import {
   applyOp, genesisState, stateRoot, type DexState, type Op, type TradeEvent,
   GAS_TABLE, notional, poolKey,
@@ -29,6 +29,18 @@ const LADDER_EVERY = 24;
 const TAPE_CAP = 600;
 const CHART_CAP = 240;
 
+/** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
+ * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
+ * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
+export const CODE_VERSION = "saos-dex/1.6.0+settle7-audit";
+
+/** טבעת-דגימת-הדלק (SETTLE-5): {גובה, גז-מצטבר} לכל-בלוק, חלון-~400 בלוקים.
+ * צריכת-השריפה-החלונית = (אחרון−ראשון)/(hאחרון−hראשון) — אמת-לרגע זה,
+ * בניגוד לממוצע-החיים (gasUsed/height) שדורד לאט ומציג-משטר-ישן. */
+export function getBurnWindow(): { h: number; gasUsed: number }[] {
+  return g.__saosDexChain?.fuelSamples ?? [];
+}
+
 export interface TapeEvent extends TradeEvent { h: number }
 export interface SealInfo { fromHeight: number; toHeight: number; root: string; stateRoot: string; leaves: number; at: number; digest: string }
 export interface ReceiptInfo { kind: string; digest: string; at: number }
@@ -46,6 +58,7 @@ interface ChainRT {
   tickCount: number;
   timer: ReturnType<typeof setInterval> | null;
   busy: boolean;
+  fuelSamples: { h: number; gasUsed: number }[]; // SETTLE-5: טבעת-דגימת-דלק (חוץ-מצב — לא-חלק-מה-DexState/שורש) לשריפה-חלונית-אמת
   buildMsRolling: number;
   opsPerSecRolling: number;
   startedAt: number;
@@ -63,17 +76,22 @@ const SNAPSHOT_FILE = path.join(DATA_DIR, "state-snapshot.json");
 const TAPE_FILE = path.join(DATA_DIR, "tape.jsonl");
 
 function sysNonce(st: DexState, tag: string): string {
-  return `${tag}-${st.height}-${st.nonces.length}-${Math.random().toString(36).slice(2, 8)}`;
+  // FIX(SETTLE-7): אפס-Math.random — ה-nonce נכנס ל-st.nonces ולכן ל-stateRoot.
+  // רנדומיות-כאן שברה את טענת-הריפליי-הדטרמיניסטי (אותה-רצפת-ops לא-שחזרה את
+  // אותו-שורש). tag ייחודי-פר-סוג-פעולה + height מונוטוני + אורך-החלון =
+  // ייחודיות מלאה בלי-מקריות.
+  return `${tag}-${st.height}-${st.nonces.length}`;
 }
 
 function pushReceipt(rt: ChainRT, kind: string, payload: unknown): ReceiptInfo {
-  const digest = sha256(canon({ kind, payload, prev: rt.lastReceiptDigest }));
+  const prev = rt.lastReceiptDigest; // FIX(SETTLE-7): לוכדים את ה-prev לפני-שהוא נדרס — התנאי-הישן (rec.digest===digest) היה תמיד-אמת והעמודה ב-DB נשארה null-תמיד
+  const digest = sha256(canon({ kind, payload, prev }));
   const rec: ReceiptInfo = { kind, digest, at: Date.now() };
   rt.receipts.unshift(rec);
   rt.receipts = rt.receipts.slice(0, 40);
   rt.lastReceiptDigest = digest;
   void db.evidenceReceipt.create({
-    data: { kind, digest, prevDigest: rec.digest === digest ? null : rt.receipts[1]?.digest ?? null, payload: canon(payload).slice(0, 4000) },
+    data: { kind, digest, prevDigest: prev, payload: canon(payload).slice(0, 4000) },
   }).then(() => { rt.dbOk = true; }).catch(() => { rt.dbOk = false; });
   return rec;
 }
@@ -83,6 +101,38 @@ async function loadSnapshot(rt: ChainRT): Promise<boolean> {
     const raw = JSON.parse(fs.readFileSync(SNAPSHOT_FILE, "utf8")) as { version: number; state: DexState };
     if (raw?.version === rt.version && raw?.state?.height > 0 && raw.state.pools && raw.state.balances) {
       rt.st = raw.state;
+      // ── FIX(escrow-dust) — פיוס-ערבות בעת-טעינה ──
+      // (1) נרמול: פקודות-ישנות בלי מד-נעילה מקבלות מד-נגזר (rem/notional(rem))
+      for (const o of rt.st.orders) {
+        if (typeof o.lockMu !== "number" || !Number.isSafeInteger(o.lockMu) || o.lockMu < 0) {
+          const rem = o.amount - o.filled;
+          o.lockMu = o.side === "sell" ? rem : notional(o.price, rem);
+        }
+      }
+      // (2) פיוס: locked := Σ מדי-הנעילה של-פקודות-חיות — מחיקת-אבק-רצפה
+      // היסטורי (נתפס-ע"י ביקורת-הסליקה; notional-floor אינו-אדיטיבי). האבק
+      // חוזר-לזמין — הוא-מעולם לא היה מובטח-לאף-אחד. נרשם-כראיה.
+      const orderLocks: Record<string, Record<string, number>> = {};
+      for (const o of rt.st.orders) {
+        if (!o.live) continue;
+        const a = o.side === "sell" ? o.base : o.quote;
+        const w = (orderLocks[o.owner] = orderLocks[o.owner] ?? {});
+        w[a] = (w[a] ?? 0) + o.lockMu;
+      }
+      const reconciled: string[] = [];
+      for (const [who, wallet] of Object.entries(rt.st.locked)) {
+        for (const a of Object.keys(wallet)) {
+          const target = orderLocks[who]?.[a] ?? 0;
+          if (wallet[a] !== target) {
+            reconciled.push(`${who}.${a}:${wallet[a]}→${target}`);
+            wallet[a] = target;
+          }
+        }
+      }
+      if (reconciled.length > 0) {
+        console.info(`[saos-dex] escrow reconcile on load: ${reconciled.join(", ")}`);
+        pushReceipt(rt, "escrow-reconcile", { fixed: reconciled, at: Date.now() });
+      }
       return true;
     }
   } catch { /* אין-תמונת-מצב — ג'נזיס */ }
@@ -187,6 +237,11 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     }
   }
   rt.tape = rt.tape.slice(0, TAPE_CAP);
+  // FIX(SETTLE-7 journal-bleed): st.journal הוא חלק-מה-DexState (ולכן מוטבע
+  // בתמונת-מצב ובשורש) — attest ×4/חותם + pay/refuel/mint/relay הצטברו-לנצח
+  // (זיכרון + דיסק + stateRootOf O(n) פעמיים-בבלוק). תקרה-קשה — ההיסטוריה
+  // המלאה חיה ב-evidenceReceipt/arenaJournal ב-DB, לא במצב-החי.
+  if (st.journal.length > 600) st.journal.splice(0, st.journal.length - 500);
 
   // פעימה-אוטומטית (heartbeat — מדידת-חיות על-הספר)
   applyOp(st, { type: "heartbeat", issuer: "treasury", nonce: sysNonce(st, "hb") }, t0);
@@ -224,6 +279,10 @@ async function tick(rt: ChainRT): Promise<void> {
       if (rt.mempool.length < 512) rt.mempool.push(op);
     });
     await buildBlock(rt);
+    // דגימת-דלק (SETTLE-5): כל-בלוק — טבעת-400 (≈20 דק׳) לשריפה-חלונית-אמת.
+    // חוץ-מצב בכוונה: ה-DexState/שורש-המצב נשארים-דטרמיניסטיים-לריפליי.
+    rt.fuelSamples.push({ h: rt.st.height, gasUsed: rt.st.gasUsed });
+    if (rt.fuelSamples.length > 400) rt.fuelSamples.splice(0, 100);
     if (rt.tickCount % SNAPSHOT_EVERY === 0) flushSnapshot(rt);
   } catch (e) {
     if (e instanceof InvariantViolation) {
@@ -249,6 +308,7 @@ export function ensureChain(): ChainRT {
     mempool: [], rt: new Map(), params: { ...DEFAULT_PARAMS },
     tape: [], blockHashes: [], seals: [], receipts: [],
     lastReceiptDigest: null, tickCount: 0, timer: null, busy: false,
+    fuelSamples: [],
     buildMsRolling: 0, opsPerSecRolling: 0, startedAt: Date.now(), lastBlockAt: 0,
     faucetAt: {}, dbOk: true, halted: false, haltReason: null, version: 1,
   };
@@ -384,6 +444,29 @@ export function getWallets() {
   })).filter((w) => Object.keys(w.balances).length > 0 || w.credits > 0);
 }
 
+/** מפקד-הסוכנים (עמדת-הסליקה): תפקיד · הון-סימולציה · פקודות-חיות לכל-סוכן */
+export function getCensus(): { name: string; role: string; credits: number; equity: number; liveOrders: number; balances: Record<string, number>; locked: Record<string, number> }[] {
+  const st = ensureChain().st;
+  const fair = fairPrice(st, "SAOS", "USDS") || (st.assets["SAOS"]?.refPrice ?? 0);
+  const role = (n: string): string =>
+    n === "treasury" ? "central-bank" : n === "operator" ? "human" : n === "arena" ? "pegkeeper" : n.startsWith("soldier") ? "grid-mm" : "noise";
+  return getWallets().map((w) => {
+    const equity =
+      (w.balances["USDS"] ?? 0) +
+      Math.floor(((w.balances["SAOS"] ?? 0) * fair) / 1000) +
+      Object.entries(w.balances)
+        .filter(([a]) => a !== "USDS" && a !== "SAOS")
+        .reduce((s, [a, v]) => s + Math.floor((v * (st.assets[a]?.refPrice ?? 0)) / 1000), 0);
+    const liveOrders = st.orders.filter((o) => o.live && o.owner === w.name).length;
+    return { name: w.name, role: role(w.name), credits: w.credits, equity, liveOrders, balances: w.balances, locked: w.locked };
+  });
+}
+
+/** מצב-חי לעמדת-הסליקה (קריאה-בלבד — המבחנים עובדים על-שיבוטים) */
+export function getLiveState(): DexState {
+  return ensureChain().st;
+}
+
 export function getArena() {
   const rt = ensureChain();
   const st = rt.st;
@@ -411,12 +494,24 @@ export function getArena() {
 
 export function setArenaParams(patch: Partial<ArenaParams>): ArenaParams {
   const rt = ensureChain();
+  // FIX(SETTLE-7 DoS): תקרות-פר-פרמטר — הבקרה-הציבורית (/api/dex/arena POST)
+  // היתה-מרשה levels=9,999,999 → arenaTick רץ 10⁸-איטרציות פר-טיק (3 שנ׳) =
+  // חנק-שרשרת/OOM ללא-אימות. גם-חוסר-היתר (v<10M) עבר כל-דבר-גדול-אחר.
+  const LIMITS: Record<keyof ArenaParams, [number, number]> = {
+    spreadBps: [5, 2_000], stepBps: [2, 2_000], levels: [1, 12],
+    sizeMu: [1_000, 2_000_000], maxInventoryMu: [100_000, 30_000_000],
+    minEdgeBps: [0, 2_000], requoteBps: [1, 2_000],
+    enabled: [0, 1], noise: [0, 1],
+  } as never;
   const clean: Partial<ArenaParams> = {};
   if (typeof patch.enabled === "boolean") clean.enabled = patch.enabled;
   if (typeof patch.noise === "boolean") clean.noise = patch.noise;
   for (const k of ["spreadBps", "stepBps", "levels", "sizeMu", "maxInventoryMu", "minEdgeBps", "requoteBps"] as const) {
     const v = patch[k];
-    if (typeof v === "number" && Number.isSafeInteger(v) && v > 0 && v < 10_000_000) clean[k] = v;
+    if (typeof v === "number" && Number.isSafeInteger(v)) {
+      const [lo, hi] = LIMITS[k];
+      clean[k] = Math.min(hi, Math.max(lo, v)); // clamp — לא-reject: המפעיל מקבל מה-שביקש, מרוסן
+    }
   }
   rt.params = { ...rt.params, ...clean };
   return rt.params;
@@ -489,8 +584,16 @@ export function getTape(limit = 30): TapeEvent[] {
   return rt.tape.slice(0, limit).filter((e) => e.amountMu > 0);
 }
 
-/** הוכחת-יכולת: מדידת-קצב על-מצב-טרי (מורשת grid98 --bench) */
-export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: number; perDay: number } {
+/** הוכחת-יכולת: מדידת-קצב על-מצב-טרי (מורשת grid98 --bench)
+ * FIX(SETTLE-7): התקררות-60 שנ׳ — ה-route הציבורי היה-מריץ עד-200k-ops + כותב
+ * קבלה-ל-DB בכל-קריאה = DoS-מחשוב + זיהום-שרשרת-העדויות בלי-גבול. */
+let benchCache: { at: number; res: { ops: number; ms: number; opsPerSec: number; perDay: number } } | null = null;
+export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: number; perDay: number; cached?: boolean } {
+  const rt = ensureChain();
+  if (benchCache && Date.now() - benchCache.at < 60_000) {
+    return { ...benchCache.res, cached: true };
+  }
+  ops = Math.min(200_000, Math.max(1_000, Math.floor(ops)));
   const st = genesisState();
   const t0 = Date.now();
   let i = 0;
@@ -508,7 +611,7 @@ export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: numbe
   const ms = Math.max(1, Date.now() - t0);
   const opsPerSec = Math.floor((ops / ms) * 1000);
   const res = { ops, ms, opsPerSec, perDay: opsPerSec * 86_400 };
-  const rt = ensureChain();
+  benchCache = { at: Date.now(), res };
   pushReceipt(rt, "bench", res);
   return res;
 }
@@ -520,6 +623,12 @@ export async function resetChain(): Promise<void> {
   rt.mempool = []; rt.rt = new Map(); rt.tape = [];
   rt.blockHashes = []; rt.seals = []; rt.receipts = [];
   rt.lastReceiptDigest = null; rt.tickCount = 0; rt.faucetAt = {};
+  // FIX(SETTLE-7 reset-hygiene): הטבעת-הדגימה לא-נוקתה — אחרי-reset החלון
+  // ערבב-עידנים (dh שלילי → שריפה שלילית → ריצה-שלילית = טלמטריה-משקרת —
+  // בדיוק-מה-SETTLE-5 ריפא). וגם: chain-מושהית (halted) נשארה-מתה-אחרי-reset
+  // (tick מסרב-מוקדם) — reset הוא נתיב-ההתאוששות והוא חייב להעיר.
+  rt.fuelSamples = []; rt.buildMsRolling = 0; rt.opsPerSecRolling = 0;
+  rt.halted = false; rt.haltReason = null;
   try {
     await db.blockHeader.deleteMany({});
     await db.sealRecord.deleteMany({});

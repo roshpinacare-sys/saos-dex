@@ -83,8 +83,12 @@ async function main(): Promise<void> {
   if (!status().enabled) FAIL_EXIT("relay disabled — .env keys missing in this environment; chaos test requires the live relay path");
 
   /* ══ תרחיש A — מחיצת-רשת יזומה (60 שניות) ═══════════════════════════════ */
-  log("PHASE-A", "arming 60s network partition on steem + hive + tron (fault-injection — zero real traffic)");
-  for (const t of ["steem", "hive", "tron"] as const) chaos.armChaos(t, 60_000);
+  log("PHASE-A", "arming 60s network partition on all 5 rails: steem + hive + tron + eth + sol (fault-injection — zero real traffic)");
+  // FIX(SETTLE-7 coverage): היה-3/5-פסים — ה-ETH/SOL-שידורים (הקוד-היחיד שנוגע
+  // בכסף-אמת, f9d813e) היו-ללא-כיסויי-כאוס והסקריפט הציג-"13/13" על-זה.
+  // eth/sol מזוינים-באותו-חלון: שידורים-בזמן-מחיצה חייבים-להיכשל-בכנות
+  // (economic-wait/backoff), והמחיצה לא-רשאית-להפיל-את-התהליך.
+  for (const t of ["steem", "hive", "tron", "eth", "sol"] as const) chaos.armChaos(t, 60_000);
 
   const SEALS_AT_SEC = [0, 15, 30, 45, 58]; // חותמות נכנסות גם בזמן-המחיצה (כמו-בפרודקשן)
   const makeSeal = (n: number): SealInfo => {

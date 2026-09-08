@@ -206,6 +206,11 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
   if (gas === undefined) return { ok: false, err: "unknown-op", gas: 0 };
   const issuer = String(op.issuer ?? "").toLowerCase();
   if (!issuer || !op.nonce) return { ok: false, err: "issuer+nonce-required", gas: 0 };
+  // FIX(SETTLE-7 authz-split): נרמול-פעם-אחת בכניסה — כל-הנתיבים (יתרות/נעילות/
+  // order-cap/ספר/בריכות) חייבים-לראות את אותו-מזהה. החור-ההיסטורי: issuer-גולמי
+  // ("TREASURY") עבר בדיקת-funder-only במנוע-המנורמל אך נגע ביתרות-של-מזהה-אחר.
+  op.issuer = issuer;
+  if (typeof op.to === "string") op.to = op.to.toLowerCase(); // אותו-עיקרון לנמענים — אין-חשבונות-רפאים בגלל-רישוי
   const dedupeKey = `${issuer}:${op.nonce}`;
   if (st.nonces.includes(dedupeKey)) return { ok: false, err: "replay-rejected", gas: 0 };
 
@@ -284,7 +289,12 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (avail(st, op.issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
       addLock(st, op.issuer, lockAsset, lockMu);
       const lockBefore = lockedOf(st, op.issuer, lockAsset);
-      const cross = matchBook(st, op, nowMs, consume);
+      // FIX(SETTLE-7 double-escrow): הנעילה כבר-על-הספר (שורה למעלה) — מעבירים
+      // preLocked=true כדי-ש-matchBook לא-ידרוש שוב avail ≥ lockMu (הזמין כבר-ירד
+      // בגובה-הנעילה!). החור-ההיסטורי: חשבון-עם **בדיוק** הערבות-הנדרשת קיבל
+      // "insufficient-taker" — כל-פקודת-לימיט חייבה 2× ערבות, והדחייה הייתה שקטה
+      // (ה-route מדווח "queued", buildBlock מוריד-את-ה-op בלי-עדה).
+      const cross = matchBook(st, op, nowMs, consume, true);
       if (cross.ok) {
         // שחרור-אבק-רצפה: floor לא-אדיטיבי עלול להשאיר נעילה-עודפת בלי-פקודה
         // מאחוריה — מכוונים את הנעילה בדיוק לשארית (או-אפס אם-מולאה-כולה).
@@ -325,7 +335,12 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       return { ok: true, gas: 0 };
     }
     case "fill": {
-      // טייק-מיידי: חוצה את הספר לפי מחיר-מייקר (saos-dex) — market או limit-חוצה
+      // טייק-מיידי: חוצה את הספר לפי מחיר-מייקר (saos-dex).
+      // FIX(SETTLE-7): fill הוא **market-בלבד** — fill-limit עובר את matchBook כ-taker
+      // limit בלי-נעילת-מראע, ומשחרר-נעילות שלא-הוצבו (addLock שלילי →
+      // escrow-underflow → HALT של-השרשרת כולה). דחייה-מפורשת fail-closed:
+      // מי-שרוצה limit חוצה — משתמש ב-"order" (נועל-מראע בגרעין).
+      if (!op.market) return { ok: false, err: "limit-fill-unsupported", gas: 0 };
       const r = matchBook(st, op, nowMs, consume);
       return r;
     }

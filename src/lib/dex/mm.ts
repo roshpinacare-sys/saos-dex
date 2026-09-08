@@ -62,13 +62,37 @@ export function fairPrice(st: DexState, base: string, quote: string): number {
   return Math.floor(parts.reduce((s, [v, w]) => s + v * w, 0) / wsum);
 }
 
-function skewShiftBps(st: DexState, soldier: string, base: string): number {
+function skewShiftBps(st: DexState, soldier: string, base: string, params: ArenaParams): number {
+  // FIX(SETTLE-7): קראו מ-params החיים (לא DEFAULT_PARAMS) — שינוי-פרמטרים ב-API
+  // לא-השפיע על ה-skew והטלמטריה סטתה מהגריד בפועל.
   const inv = st.balances[soldier]?.[base] ?? 0;
-  const target = Math.floor(DEFAULT_PARAMS.maxInventoryMu / 2);
-  const dev = (inv - target) / DEFAULT_PARAMS.maxInventoryMu; // -0.5..0.5+
+  const target = Math.floor(params.maxInventoryMu / 2);
+  const dev = (inv - target) / params.maxInventoryMu; // -0.5..0.5+
   const clamped = Math.max(-1, Math.min(1, dev * 2));
-  return Math.floor(clamped * (DEFAULT_PARAMS.spreadBps / 2)); // מלאי-כבד → מוכר-זול יותר
+  return Math.floor(clamped * (params.spreadBps / 2)); // מלאי-כבד → מוכר-זול יותר
 }
+
+/** FIX(SETTLE-7 anti-bandit): שער-תשואה-הפסד לחיילים — סוחר-ממשי עוצר-לצטט
+ * כשההון שלו נמחק. בלי-זה: זרימה-עוינת דוחפת את הבריכה ואז מכה-את-הציטוטים
+ * המנוחים — הארנה ממחזרת את עצמה אל-הבנדיט ללא-גבול. מתחת-לרצפת-ההון (60%
+ * מג'נזיס) החייל מבטל-בלבד (מנקה-ספר) ולא מציב-פקודות-חדשות — שומר-על
+ * ההון-שנותר ומאפשר-התאוששות. דטרמיניסטי (מצב-בלבד, אין-רנדומיות). */
+const SOLDIER_GENESIS_EQUITY = 6_000_000; // 3M USDS + 1.2M SAOS @2500 (ג'נזיס)
+const SOLDIER_EQUITY_FLOOR = Math.floor(SOLDIER_GENESIS_EQUITY * 0.6);
+export function soldierEquity(st: DexState, soldier: string, fair: number): number {
+  const usds = st.balances[soldier]?.["USDS"] ?? 0;
+  const saos = st.balances[soldier]?.["SAOS"] ?? 0;
+  const p = fair > 0 ? fair : 2500;
+  return usds + Math.floor((saos * p) / 1000);
+}
+
+/** FIX(SETTLE-7 anti-bandit): תקרות-זריעה-מצטברות לבוטי-הרעש (חוץ-מצב — לא נוגעות
+ * ב-DexState/שורש). בלי-תקרה, זרימה-עוינת שואבת את הארנה דרך-הבוטים לנצח
+ * (מחזור-פתוח: בנדיט מנקה-את-הבוטים → קצבה חדשה → שוב). 2.4M USDS + 1.2M SAOS
+ * לכל-בוט לכל-חיי-התהליך = גילוי-מחיר חי אך-ורק עם גג-נזק-מרבי מדוד. */
+const BOT_SEED_CAP_USDS = 2_400_000;
+const BOT_SEED_CAP_SAOS = 1_200_000;
+const botSeedCaps = new Map<string, { usds: number; saos: number }>();
 
 type PushOp = (op: Op) => void;
 
@@ -162,15 +186,20 @@ export function arenaTick(
       const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
       if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-${tick}`, to: "treasury", amount: mint });
     }
-    for (const ag of [...soldiers, "bot-a", "bot-b", "bot-c"]) {
+    for (const ag of [...soldiers, "arena", "bot-a", "bot-b", "bot-c"]) {
       const c = st.credits[ag] ?? 0;
       if (c < 4_000) {
         const amt = Math.min(30_000 - c, REFUEL_CAP);
         if (amt <= 0) continue;
         // ממנה-מדורג (SETTLE-5): ארנה (רזרבה-עמוקה) → אוצר (עמלות — THE-FOUNTAIN)
         // → מפעיל-אנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון; העברה-טהורה, אפס-הטבעה).
+        // FIX(SETTLE-7): הארנה עצמה נוספה-לרשימת-המקבלים — היא משלמת-גז על
+        // pegkeeper וממנת-את-כולם ומעולם-לא-קיבלה-עירוי. אסור-שתממן-את-עצמה
+        // (המנוע דוחה rTo==issuer) — לכן-הממנה-שלה הוא אוצר/מפעיל בלבד.
         const cr = (n: string) => st.credits[n] ?? 0;
-        const funder = cr("arena") >= amt + 10_000 ? "arena" : cr("treasury") >= amt ? "treasury" : "operator";
+        const funder = ag === "arena"
+          ? (cr("treasury") >= amt ? "treasury" : "operator")
+          : cr("arena") >= amt + 10_000 ? "arena" : cr("treasury") >= amt ? "treasury" : "operator";
         pushOp({ type: "refuel", issuer: funder, nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
       }
     }
@@ -183,10 +212,14 @@ export function arenaTick(
   // נעילות-ספר) ולא-יתרה-גולמית — פקודות-מנוחות של-בוט לא-ימנעו-מימון-חדש.
   if (params.noise && tick % 24 === 0) {
     for (const bot of ["bot-a", "bot-b", "bot-c"]) {
-      if (avail(st, bot, "USDS") < 100_000) {
+      const caps = botSeedCaps.get(bot) ?? { usds: 0, saos: 0 };
+      if (avail(st, bot, "USDS") < 100_000 && caps.usds < BOT_SEED_CAP_USDS) {
+        botSeedCaps.set(bot, { ...caps, usds: caps.usds + 400_000 });
         pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-u${tick}-${bot}`, to: bot, asset: "USDS", amount: 400_000 });
       }
-      if (avail(st, bot, "SAOS") < 100_000) {
+      const caps2 = botSeedCaps.get(bot) ?? { usds: 0, saos: 0 };
+      if (avail(st, bot, "SAOS") < 100_000 && caps2.saos < BOT_SEED_CAP_SAOS) {
+        botSeedCaps.set(bot, { ...caps2, saos: caps2.saos + 200_000 });
         pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-s${tick}-${bot}`, to: bot, asset: "SAOS", amount: 200_000 });
       }
     }
@@ -197,10 +230,10 @@ export function arenaTick(
     if (fair <= 0) continue;
 
     if (params.enabled) {
-      const shift = 0; // skew מחושב-פר-חייל בהמשך
-      void shift;
       for (const soldier of soldiers) {
-        const sk = skewShiftBps(st, soldier, m.base);
+        // FIX(SETTLE-7): שער-הפסד — חייל-מתחת-לרצפת-הון לא מציב-פקודות-חדשות (רק-מנקה)
+        const starving = soldierEquity(st, soldier, fair) < SOLDIER_EQUITY_FLOOR;
+        const sk = skewShiftBps(st, soldier, m.base, params);
         // ריקוט: בטל ציטוטים שסטו מעל הרף
         const mine = st.orders.filter((o) => o.live && o.owner === soldier && o.base === m.base && o.quote === m.quote);
         const desired = new Map<number, { side: "buy" | "sell"; px: number }>();
@@ -226,6 +259,8 @@ export function arenaTick(
           }
         }
         // הצב-חסרים — רק-אם-הערבות בכדאיות (מניעת-הצפת-ממפול מדחיות-חוזרות)
+        // ורק-אם-החייל מעל-רצפת-ההון (שער-הפסד, SETTLE-7)
+        if (!starving) {
         let lvl = 1;
         for (const [, d] of desired) {
           const size = Math.floor(params.sizeMu * (1 + (lvl - 1) * 0.5));
@@ -237,6 +272,7 @@ export function arenaTick(
             type: "order", base: m.base, quote: m.quote, side: d.side,
             price: d.px, amount: size,
           }, pushOp);
+        }
         }
       }
     }

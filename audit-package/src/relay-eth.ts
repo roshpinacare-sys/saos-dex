@@ -92,7 +92,7 @@ async function rpc<T>(endpoint: string, method: string, params: unknown[], timeo
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: ctrl.signal });
+    const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "saos-relay/1.0" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: ctrl.signal });
     const json = (await res.json()) as { result?: T; error?: { message?: string } };
     if (json.error) throw new Error(String(json.error.message || "eth rpc error").slice(0, 120));
     return json.result as T;
@@ -101,22 +101,30 @@ async function rpc<T>(endpoint: string, method: string, params: unknown[], timeo
   }
 }
 
-/* ── RLP מינימלי (bytes / רשימות) — מספיק לעסקת-EIP-1559 ── */
+/* ── RLP קנוני (EIP-1559) — בונים-מפורשים: אפס קידוד-כפול ──
+ * rlpScalar: מספר-שלם → big-endian מינימלי (0 → ריק) · rlpStr: מחרוזת-בייטים
+ * קנונית (בייט-יחיד <0x80 → עצמו) · rlpList: רשימה מעל פריטים כבר-מקודדים. */
 function rlpScalar(n: bigint): Uint8Array {
   if (n === 0n) return new Uint8Array(0);
   let hex = n.toString(16);
   if (hex.length % 2) hex = "0" + hex;
   return Buffer.from(hex, "hex");
 }
+function rlpWrap(payload: Uint8Array, offset: number): Uint8Array {
+  if (payload.length === 1 && payload[0] < 0x80) return Buffer.from(payload);
+  if (payload.length < 56) return Buffer.concat([Buffer.from([offset + payload.length]), payload]);
+  const lenBytes = rlpScalar(BigInt(payload.length));
+  return Buffer.concat([Buffer.from([offset + 55 + lenBytes.length]), lenBytes, payload]);
+}
+function rlpStr(b: Uint8Array): Uint8Array {
+  return rlpWrap(Buffer.from(b), 0x80);
+}
+function rlpList(encodedItems: Uint8Array[]): Uint8Array {
+  return rlpWrap(Buffer.concat(encodedItems.map((x) => Buffer.from(x))), 0xc0);
+}
 function rlpEncode(item: Uint8Array | Uint8Array[]): Uint8Array {
-  const wrap = (payload: Uint8Array, offset: number): Uint8Array => {
-    if (payload.length < 56) return Buffer.concat([Buffer.from([offset + payload.length]), payload]);
-    const lenBytes = rlpScalar(BigInt(payload.length));
-    return Buffer.concat([Buffer.from([offset + 55 + lenBytes.length]), lenBytes, payload]);
-  };
-  if (Array.isArray(item)) return wrap(Buffer.concat(item.map(rlpEncode)), 0xc0);
-  if (item.length === 1 && item[0] < 0x80) return Buffer.from(item);
-  return wrap(Buffer.from(item), 0x80);
+  if (Array.isArray(item)) return rlpList(item.map((x) => rlpStr(x)));
+  return rlpStr(item);
 }
 
 const utf8ToHex = (s: string) => Buffer.from(s, "utf8").toString("hex");
@@ -129,10 +137,10 @@ export async function ethSealBroadcast(
   payload: unknown,
   privHex: string,
 ): Promise<{ txid: string; intent: EthAnchorIntent; address: string }> {
-  /* שער-מדיניות (המפעיל): אפס שידור-חי כברירת-מחדל — גז כסף אמת.
-   * הטירה-הראשונה (EIP-191 intent) תמיד רצה ומשאירה ראיה-חתומה;
-   * השידור נשאר נעול עד-שהמפעיל יחמש אותו מפורשות (ETH_BROADCAST_ENABLED=1). */
-  if (process.env.ETH_BROADCAST_ENABLED !== "1") {
+  /* שער-מדיניות (המפעיל): חמוש-כברירת-מחדל אך נעול-שידור עד-חימוש-מפורש.
+   * מקבל "1" או "true" — ETH_BROADCAST_ENABLED=true מפעיל שידור-חי אמת (גז-אמת). */
+  const ethGate = process.env.ETH_BROADCAST_ENABLED?.trim().toLowerCase();
+  if (ethGate !== "1" && ethGate !== "true") {
     throw new Error("unfunded-policy: live ETH broadcast disabled by operator gate (ETH_BROADCAST_ENABLED) — armed, intents signed (zero gas)");
   }
   const endpoint = ETH_RPCS[0];
@@ -151,8 +159,8 @@ export async function ethSealBroadcast(
   const balance = BigInt(balHex);
   const gasPrice = BigInt(gasHex);
   const nonce = BigInt(nonceHex);
-  const maxFee = gasPrice * 2n;
   const maxPriority = 1_000_000_000n; // 1 gwei
+  const maxFee = maxPriority + gasPrice * 2n; // tip ≤ maxFee תמיד (EIP-1559) + מרווח-baseFee
   const floor = BigInt(gasLimit) * maxFee * 2n;
   if (balance < floor) {
     throw new Error(`unfunded: ${Number(balance / 10n ** 12n)} mwei < gas floor ${Number(floor / 10n ** 12n)} mwei — pending funding (armed, intent signed)`);
@@ -160,19 +168,35 @@ export async function ethSealBroadcast(
 
   const to = Buffer.from(address.replace(/^0x/, "").toLowerCase(), "hex");
   const dataBytes = Buffer.from(data, "hex");
-  const chainIdB = rlpScalar(chainId);
-  const preSign = rlpEncode([
-    chainIdB, rlpScalar(nonce), rlpScalar(maxPriority), rlpScalar(maxFee), rlpScalar(BigInt(gasLimit)),
-    to, rlpScalar(0n), dataBytes, new Uint8Array(0), // accessList ריק (רשימה-ריקה)
-  ]);
+  /* EIP-1559 [chainId,nonce,tip,fee,gas,to,value,data,accessList(+yParity,r,s)] —
+   * כל-פריט נבנה-מפורש קנונית; רשימת-גישה ריקה = 0xc0 אמת (לא מחרוזת). */
+  const txFields = [
+    rlpStr(rlpScalar(chainId)),
+    rlpStr(rlpScalar(nonce)),
+    rlpStr(rlpScalar(maxPriority)),
+    rlpStr(rlpScalar(maxFee)),
+    rlpStr(rlpScalar(BigInt(gasLimit))),
+    rlpStr(to),
+    rlpStr(rlpScalar(0n)),
+    rlpStr(dataBytes),
+    rlpList([]), // accessList ריק
+  ];
+  /* EIP-1559 sig-hash = keccak(0x02 || rlp([...])) — בלי קידומת-הטיפוס בחשיש
+   * ecrecover מחזיר שולח-אחר (חסר-יתרה) וה-RPC דוחה "available 0". */
+  const preSign = Buffer.concat([Buffer.from([0x02]), rlpList(txFields)]);
   const sig = secp256k1.sign(keccak_256(preSign), Buffer.from(privHex.replace(/^0x/, ""), "hex"), { prehash: false });
   const yParity = sig.recovery ?? 0;
-  const signed = rlpEncode([
-    chainIdB, rlpScalar(nonce), rlpScalar(maxPriority), rlpScalar(maxFee), rlpScalar(BigInt(gasLimit)),
-    to, rlpScalar(0n), dataBytes, new Uint8Array(0),
-    rlpScalar(BigInt(yParity)), pad32(sig.toCompactRawBytes().subarray(0, 32)), pad32(sig.toCompactRawBytes().subarray(32, 64)),
+  const compact = sig.toCompactRawBytes();
+  // r/s כמספרים-שלמים קנוניים (RLP minimal) — לא מחרוזות-32בייט מרופדות
+  const rS = rlpStr(rlpScalar(BigInt("0x" + Buffer.from(compact.subarray(0, 32)).toString("hex"))));
+  const sS = rlpStr(rlpScalar(BigInt("0x" + Buffer.from(compact.subarray(32, 64)).toString("hex"))));
+  const signed = rlpList([
+    ...txFields,
+    rlpStr(rlpScalar(BigInt(yParity))), rS, sS,
   ]);
-  const raw = "0x" + Buffer.from(signed).toString("hex");
+  /* EIP-1559: raw = 0x02 || rlp([chainId,…,yParity,r,s]) — בלי קידומת-הטיפוס
+   * geth מפענח כ-LegacyTx ונופל על "input string too short for common.Address". */
+  const raw = "0x02" + Buffer.from(signed).toString("hex");
   const txid = await rpc<string>(endpoint, "eth_sendRawTransaction", [raw], 30000);
   if (!txid || !/^0x[0-9a-f]{64}$/.test(txid)) throw new Error("eth broadcast answered without valid hash (honest)");
   const intent = signEthAnchor(payload, privHex);

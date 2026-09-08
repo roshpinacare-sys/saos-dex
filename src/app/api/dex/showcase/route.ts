@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { ensureChain, getMarkets, getTape } from "@/lib/dex/chain";
 import { getPool, poolMid, poolKey } from "@/lib/dex/amm";
 import { fairPrice } from "@/lib/dex/mm";
-import { stateRoot } from "@/lib/dex/kernel";
+import { stateRoot, GAS_TABLE } from "@/lib/dex/kernel";
 import { scenarioA, scenarioAClean, scenarioB1, scenarioB2, scenarioB3, scenarioC, type BookLevel } from "@/lib/dex/showcase";
 import { relayStatus } from "@/lib/dex/relay";
 
@@ -90,7 +90,9 @@ export async function GET() {
         bridgesRequired: 0,
       },
       meta: {
-        gasFill: 200, gasPoolSwap: 220, feeBpsBook: 0, feeBpsPool: 30,
+        // FIX(SETTLE-7): נגזר מ-GAS_TABLE — היה-מקודש (200/220) בעוד-הטבלה החיה
+        // אומרת 60/100 מאז-SETTLE-5 (לוח-הזמנים-סיבולת). ממשק-ההוכחה הציג-נתונים-שקריים.
+        gasFill: GAS_TABLE.fill, gasPoolSwap: GAS_TABLE.pool_swap, feeBpsBook: 0, feeBpsPool: 30,
         notes: [
           "A: book fills at exact maker price (book.ts matchBook) vs pool x*y=k + 30bps (amm.ts poolSwap)",
           "B1: identical op stream on 3 fresh genesis states → identical stateRoot (kernel.ts applyOp determinism)",

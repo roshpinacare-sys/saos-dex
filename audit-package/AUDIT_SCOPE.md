@@ -13,9 +13,11 @@
 
 | File (package) | Production path | Role | Audit weight |
 |---|---|---|---|
-| `src/kernel.ts` | `src/lib/dex/kernel.ts` | Deterministic state machine: 21 ops, GAS table, integer-only state, hard nonce dedupe, escrow placement, wrap 1:1, bounded harvest | **Critical** |
+| `src/kernel.ts` | `src/lib/dex/kernel.ts` | Deterministic state machine: 23 ops (incl. refuel/mint_fuel — THE-REFUEL/THE-FOUNTAIN), GAS table, integer-only state, hard nonce dedupe, escrow placement, wrap 1:1, bounded harvest | **Critical** |
 | `src/book.ts` | `src/lib/dex/book.ts` | Order book + `matchBook` (all escrowed funds move only through this function): maker-price fills, limit/market taker, no self-fill, fail-fast invariants | **Critical** |
 | `src/chain.ts` | `src/lib/dex/chain.ts` | Block production (3s), `seal()` every 12 blocks (merkle root over block hashes + canonical stateRoot), fail-fast HALT on invariant violation | **Critical** |
+| `src/settle.ts` | `src/lib/dex/settle.ts` | Settlement desk: ledger audit (3 iron invariants), deterministic agent exam on clones, real-money rail audit — NEW in SETTLE-7 repackage | **Critical** |
+| `src/showcase.ts` | `src/lib/dex/showcase.ts` | Attack harness: sandwich/pool-vs-book proofs, determinism replay — NEW in SETTLE-7 repackage | High |
 | `src/relay.ts` | `src/lib/dex/relay.ts` | Public-chain anchoring (Steem/Hive custom_json, TRON conditional, ETH two-tier armed-gated, SOL memo fee-gated): `verifyOnChain` read-back, circuit breakers, exponential backoff+jitter, reconciliation, zero secrets in logs | **Critical** |
 | `src/relay-eth.ts` | `src/lib/dex/relay-eth.ts` | Ethereum adapter (fleet identity, EIP-191 signed anchor intents — zero gas; funded EIP-1559 calldata broadcast path; on-chain verify). Adapted from operator's proven cross-chain wallet code | **High** |
 | `src/relay-sol.ts` | `src/lib/dex/relay-sol.ts` | Solana adapter (fleet ed25519 identity, SPL-Memo v2 anchoring, balance-gated broadcast, log read-back verify). Adapted from operator's proven devnet flagship code | **High** |

@@ -1,13 +1,38 @@
-# FIDELITY.diff — חבילת-הביקורת מול עץ-הייצור
-# Production tree: saos-dex @ main (roshpinacare-sys/saos-dex)
-# ההבדל היחיד בין העותקים: שורת-ייבוא אחת ב-chain.ts (DB → evidence-port).
-# כל-הקבצים האחרים (canonical/invariant/amm/book/kernel/mm/chaos/relay/relay-eth/relay-sol) זהים-בייט.
-#
-# --- FIDELITY.diff — audit package vs production tree ---
-# The ONLY difference: one import line in chain.ts (local DB -> evidence-port).
-# All other audit files are byte-identical to production.
+# FIDELITY.diff — הוכחת-נאמנות חבילת-הביקורת (SETTLE-7, 2026-09-08)
 
-13c13
-< import { db } from "@/lib/db";
+> **כלל-הברזל:** כל-קובץ ב-`src/` זהה-ביט-מול-ביט לעץ-הייצור `src/lib/dex/`
+> פרט-לעיבוד-אחד-מתועד-להלן. החבילה נארזה-מהעץ-שבקומיט
+> `a9f13ea73020cbf9a4347724de74cdefbcf5a0f2` (SETTLE-7 — סבב-ביקורת-פנימית + 20-תיקונים).
+> אימות-עצמאי:
+> ```bash
+> # בריפו:
+> sha256sum -c audit-package/MANIFEST.sha256   # מול-החבילה
+> diff -u audit-package/src/chain.ts src/lib/dex/chain.ts   # חייב-להציג בדיוק את העיבוד-להלן
+> git log --oneline -1 -- audit-package/          # קומיט-האריזה
+> ```
+
+## העיבוד-היחיד — chain.ts שורת-הייבוא (13):
+
+שכבת-ה-Prisma (`@/lib/db`) אינה-בהיקף-הביקורת (אחסון-ראיות בלבד,
+לא-בנתיב-הקונצנזוס — כל-כתיבה ב-chain.ts עטופה-try/catch ומסומנת-dbOk).
+בחבילה היא-מוחלפת בפורט-no-op זהה-ממשק (`evidence-port.ts`):
+
+--- audit-package/src/chain.ts (package)	2026-09-08 18:51:21.458609559 +0000
++++ src/lib/dex/chain.ts (production)	2026-09-08 18:39:46.308716345 +0000
+@@ -10,7 +10,7 @@
+  */
+ import fs from "fs";
+ import path from "path";
+-import { db } from "./evidence-port"; // FIDELITY: העיבוד-היחיד — שכבת-ה-DB מוחלפת בפורט no-op (ראה FIDELITY.diff)
++import { db } from "@/lib/db";
+ import {
+   applyOp, genesisState, stateRoot, type DexState, type Op, type TradeEvent,
+   GAS_TABLE, notional, poolKey,
 ---
-> import { db } from "./evidence-port";
+
+## היסטוריית-אריזה:
+
+| תאריך | קומיט-מקור | הערות |
+|---|---|---|
+| 2026-09-07 (Phase5) | 136497f | אריזה-ראשונה, 11-קבצים |
+| 2026-09-08 (SETTLE-7) | `a9f13ea73020cbf9a4347724de74cdefbcf5a0f2` | **אריזה-מחדש-מלאה**: 13-קבצים-יצור (נוספו settle.ts + showcase.ts) · כולל תיקוני b93502c(escrow-units) · 582df50(escrow-dust) · 9357b93/779e605(REFUEL/FOUNTAIN) · f9d813e(EIP-1559-חי) · 00a8052(SETTLE-5-סיבולת) · SETTLE-7(20-תיקוני-ביקורת-פנימית). גרסת-הקוד-החיה: saos-dex/1.6.0+settle7-audit |

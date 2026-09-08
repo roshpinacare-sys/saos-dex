@@ -32,7 +32,7 @@ const CHART_CAP = 240;
 /** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
  * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
  * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
-export const CODE_VERSION = "saos-dex/1.5.1+settle5-endurance";
+export const CODE_VERSION = "saos-dex/1.6.0+settle7-audit";
 
 /** טבעת-דגימת-הדלק (SETTLE-5): {גובה, גז-מצטבר} לכל-בלוק, חלון-~400 בלוקים.
  * צריכת-השריפה-החלונית = (אחרון−ראשון)/(hאחרון−hראשון) — אמת-לרגע זה,
@@ -76,17 +76,22 @@ const SNAPSHOT_FILE = path.join(DATA_DIR, "state-snapshot.json");
 const TAPE_FILE = path.join(DATA_DIR, "tape.jsonl");
 
 function sysNonce(st: DexState, tag: string): string {
-  return `${tag}-${st.height}-${st.nonces.length}-${Math.random().toString(36).slice(2, 8)}`;
+  // FIX(SETTLE-7): אפס-Math.random — ה-nonce נכנס ל-st.nonces ולכן ל-stateRoot.
+  // רנדומיות-כאן שברה את טענת-הריפליי-הדטרמיניסטי (אותה-רצפת-ops לא-שחזרה את
+  // אותו-שורש). tag ייחודי-פר-סוג-פעולה + height מונוטוני + אורך-החלון =
+  // ייחודיות מלאה בלי-מקריות.
+  return `${tag}-${st.height}-${st.nonces.length}`;
 }
 
 function pushReceipt(rt: ChainRT, kind: string, payload: unknown): ReceiptInfo {
-  const digest = sha256(canon({ kind, payload, prev: rt.lastReceiptDigest }));
+  const prev = rt.lastReceiptDigest; // FIX(SETTLE-7): לוכדים את ה-prev לפני-שהוא נדרס — התנאי-הישן (rec.digest===digest) היה תמיד-אמת והעמודה ב-DB נשארה null-תמיד
+  const digest = sha256(canon({ kind, payload, prev }));
   const rec: ReceiptInfo = { kind, digest, at: Date.now() };
   rt.receipts.unshift(rec);
   rt.receipts = rt.receipts.slice(0, 40);
   rt.lastReceiptDigest = digest;
   void db.evidenceReceipt.create({
-    data: { kind, digest, prevDigest: rec.digest === digest ? null : rt.receipts[1]?.digest ?? null, payload: canon(payload).slice(0, 4000) },
+    data: { kind, digest, prevDigest: prev, payload: canon(payload).slice(0, 4000) },
   }).then(() => { rt.dbOk = true; }).catch(() => { rt.dbOk = false; });
   return rec;
 }
@@ -232,6 +237,11 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     }
   }
   rt.tape = rt.tape.slice(0, TAPE_CAP);
+  // FIX(SETTLE-7 journal-bleed): st.journal הוא חלק-מה-DexState (ולכן מוטבע
+  // בתמונת-מצב ובשורש) — attest ×4/חותם + pay/refuel/mint/relay הצטברו-לנצח
+  // (זיכרון + דיסק + stateRootOf O(n) פעמיים-בבלוק). תקרה-קשה — ההיסטוריה
+  // המלאה חיה ב-evidenceReceipt/arenaJournal ב-DB, לא במצב-החי.
+  if (st.journal.length > 600) st.journal.splice(0, st.journal.length - 500);
 
   // פעימה-אוטומטית (heartbeat — מדידת-חיות על-הספר)
   applyOp(st, { type: "heartbeat", issuer: "treasury", nonce: sysNonce(st, "hb") }, t0);
@@ -484,12 +494,24 @@ export function getArena() {
 
 export function setArenaParams(patch: Partial<ArenaParams>): ArenaParams {
   const rt = ensureChain();
+  // FIX(SETTLE-7 DoS): תקרות-פר-פרמטר — הבקרה-הציבורית (/api/dex/arena POST)
+  // היתה-מרשה levels=9,999,999 → arenaTick רץ 10⁸-איטרציות פר-טיק (3 שנ׳) =
+  // חנק-שרשרת/OOM ללא-אימות. גם-חוסר-היתר (v<10M) עבר כל-דבר-גדול-אחר.
+  const LIMITS: Record<keyof ArenaParams, [number, number]> = {
+    spreadBps: [5, 2_000], stepBps: [2, 2_000], levels: [1, 12],
+    sizeMu: [1_000, 2_000_000], maxInventoryMu: [100_000, 30_000_000],
+    minEdgeBps: [0, 2_000], requoteBps: [1, 2_000],
+    enabled: [0, 1], noise: [0, 1],
+  } as never;
   const clean: Partial<ArenaParams> = {};
   if (typeof patch.enabled === "boolean") clean.enabled = patch.enabled;
   if (typeof patch.noise === "boolean") clean.noise = patch.noise;
   for (const k of ["spreadBps", "stepBps", "levels", "sizeMu", "maxInventoryMu", "minEdgeBps", "requoteBps"] as const) {
     const v = patch[k];
-    if (typeof v === "number" && Number.isSafeInteger(v) && v > 0 && v < 10_000_000) clean[k] = v;
+    if (typeof v === "number" && Number.isSafeInteger(v)) {
+      const [lo, hi] = LIMITS[k];
+      clean[k] = Math.min(hi, Math.max(lo, v)); // clamp — לא-reject: המפעיל מקבל מה-שביקש, מרוסן
+    }
   }
   rt.params = { ...rt.params, ...clean };
   return rt.params;
@@ -562,8 +584,16 @@ export function getTape(limit = 30): TapeEvent[] {
   return rt.tape.slice(0, limit).filter((e) => e.amountMu > 0);
 }
 
-/** הוכחת-יכולת: מדידת-קצב על-מצב-טרי (מורשת grid98 --bench) */
-export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: number; perDay: number } {
+/** הוכחת-יכולת: מדידת-קצב על-מצב-טרי (מורשת grid98 --bench)
+ * FIX(SETTLE-7): התקררות-60 שנ׳ — ה-route הציבורי היה-מריץ עד-200k-ops + כותב
+ * קבלה-ל-DB בכל-קריאה = DoS-מחשוב + זיהום-שרשרת-העדויות בלי-גבול. */
+let benchCache: { at: number; res: { ops: number; ms: number; opsPerSec: number; perDay: number } } | null = null;
+export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: number; perDay: number; cached?: boolean } {
+  const rt = ensureChain();
+  if (benchCache && Date.now() - benchCache.at < 60_000) {
+    return { ...benchCache.res, cached: true };
+  }
+  ops = Math.min(200_000, Math.max(1_000, Math.floor(ops)));
   const st = genesisState();
   const t0 = Date.now();
   let i = 0;
@@ -581,7 +611,7 @@ export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: numbe
   const ms = Math.max(1, Date.now() - t0);
   const opsPerSec = Math.floor((ops / ms) * 1000);
   const res = { ops, ms, opsPerSec, perDay: opsPerSec * 86_400 };
-  const rt = ensureChain();
+  benchCache = { at: Date.now(), res };
   pushReceipt(rt, "bench", res);
   return res;
 }
@@ -593,6 +623,12 @@ export async function resetChain(): Promise<void> {
   rt.mempool = []; rt.rt = new Map(); rt.tape = [];
   rt.blockHashes = []; rt.seals = []; rt.receipts = [];
   rt.lastReceiptDigest = null; rt.tickCount = 0; rt.faucetAt = {};
+  // FIX(SETTLE-7 reset-hygiene): הטבעת-הדגימה לא-נוקתה — אחרי-reset החלון
+  // ערבב-עידנים (dh שלילי → שריפה שלילית → ריצה-שלילית = טלמטריה-משקרת —
+  // בדיוק-מה-SETTLE-5 ריפא). וגם: chain-מושהית (halted) נשארה-מתה-אחרי-reset
+  // (tick מסרב-מוקדם) — reset הוא נתיב-ההתאוששות והוא חייב להעיר.
+  rt.fuelSamples = []; rt.buildMsRolling = 0; rt.opsPerSecRolling = 0;
+  rt.halted = false; rt.haltReason = null;
   try {
     await db.blockHeader.deleteMany({});
     await db.sealRecord.deleteMany({});

@@ -268,8 +268,8 @@ async function grapheneSealBroadcast(node: string, chainId: string, account: str
   throw new Error("sync-broadcast answered without id (honest)");
 }
 
-/* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = digest) ── */
-async function tronSealBroadcast(tronAddress: string, digest: string, wif: string): Promise<{ txid: string }> {
+/* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = stateRoot) ── */
+async function tronSealBroadcast(tronAddress: string, stateRoot: string, wif: string): Promise<{ txid: string }> {
   const acc = await fetch(`${TRON_RPC}/v1/accounts/${tronAddress}`, { signal: AbortSignal.timeout(12000) }).then((r) => r.json()) as { data: { balance?: number }[] };
   const balance = acc?.data?.[0]?.balance ?? 0;
   if (balance < 300_000) throw new Error(`unfunded: ${balance} sun (<0.3 TRX bandwidth floor) — queued honestly`);
@@ -278,7 +278,10 @@ async function tronSealBroadcast(tronAddress: string, digest: string, wif: strin
   const raw58 = Buffer.from(b58.decode(tronAddress));
   const hex20 = raw58.subarray(1, 21).toString("hex");
   const built = await rpc<{ txID?: string; raw_data_hex?: string }>(`${TRON_RPC}/wallet/createtransaction`, {
-    to_address: hex20, owner_address: hex20, amount: 1, extra_data: Buffer.from(digest, "utf8").toString("hex"),
+    // FIX(SETTLE-7 self-verify): אנחנו משדרים את מה-ש-verifyOnChain קורא-חזרה.
+    // ההיסטורי: שידור-דייג'סט ב-extra_data אך המאמת בודק stateRoot → כל-עוגן
+    // TRON ממומן היה-מאומת כ-"mismatch" לנצח (סתירה-עצמית → allSettled=false).
+    to_address: hex20, owner_address: hex20, amount: 1, extra_data: Buffer.from(stateRoot, "utf8").toString("hex"),
   }, 15000);
   if (!built?.txID || !built?.raw_data_hex) throw new Error("createtransaction answered without txID/raw_data_hex");
 
@@ -557,7 +560,7 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
     if (chain === "tron") {
       if (!rt.tronAddress) rt.tronAddress = await tronIdentity(keys.steemWif);
       if (!rt.tronAddress) throw new Error("tron identity derivation failed");
-      const r = await tronSealBroadcast(rt.tronAddress, job.info.digest, keys.steemWif);
+      const r = await tronSealBroadcast(rt.tronAddress, job.info.stateRoot, keys.steemWif);
       rec.txid = r.txid;
       rec.status = "anchored";
     } else if (chain === "eth") {
