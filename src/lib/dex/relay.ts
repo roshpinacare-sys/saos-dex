@@ -417,9 +417,14 @@ function persist(rt: RelayRT): void {
     const chainOut = (ALL_CHAINS as ChainName[]).map((c) => {
       const last = rt.records.find((r) => r.chain === c);
       const anchored = rt.records.find((r) => r.chain === c && r.status === "anchored");
-      const link = anchored?.txid
-        ? (c === "steem" ? `https://steemworld.org/tx/${anchored.txid}` : c === "hive" ? `https://hiveblocks.com/tx/${anchored.txid}` : `https://tronscan.org/#/transaction/${anchored.txid}`)
-        : null;
+      const EXPLORER: Record<ChainName, (id: string) => string> = {
+        steem: (id) => `https://steemworld.org/tx/${id}`,
+        hive: (id) => `https://hiveblocks.com/tx/${id}`,
+        tron: (id) => `https://tronscan.org/#/transaction/${id}`,
+        eth: (id) => `https://etherscan.io/tx/${id}`,
+        sol: (id) => `https://solscan.io/tx/${id}`,
+      };
+      const link = anchored?.txid ? EXPLORER[c](anchored.txid) : null;
       return [c, {
         status: rt.chainState[c].status,
         // כשאין-txid והחוסם-הוא-מימון — הסטטוס-הכן "pending funding (armed)"
