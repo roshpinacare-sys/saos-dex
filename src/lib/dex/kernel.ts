@@ -236,8 +236,14 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (cross.ok) {
         // שחרור-אבק-רצפה: floor לא-אדיטיבי עלול להשאיר נעילה-עודפת בלי-פקודה
         // מאחוריה — מכוונים את הנעילה בדיוק לשארית (או-אפס אם-מולאה-כולה).
+        // FIX(escrow-units): שארית-הנעילה חייבת-להיות באותו-יחידות של-הנעילה-המקורית:
+        //  · sell → הנעילה היא בסיס-µ (lockMu=amt) → שארית = filledMu (לא-notional!)
+        //  · buy  → הנעילה היא ציטוט-µ (lockMu=notional) → שארית = notional(px,filledMu)
+        // הבאג-ההיסטורי: notional(px,filledMu) על-sell במחיר-px<1000 (WSTEEM) שחרר
+        // 1−px/1000 מהנעילה של-השארית → cancel מאוחר = escrow-underflow:cancel → HALT
+        // (נתפס-ע"י-ה-invariant — fail-fast עבד; השורש תוקן כאן).
         const filledMu = amt - (cross.events ? cross.events.reduce((a, e) => a + e.amountMu, 0) : 0);
-        const expectedLock = filledMu > 0 ? notional(px, filledMu) : 0;
+        const expectedLock = filledMu > 0 ? (op.side === "sell" ? filledMu : notional(px, filledMu)) : 0;
         const released = lockBefore - lockedOf(st, op.issuer, lockAsset);
         const dust = lockMu - released - expectedLock;
         if (dust > 0) addLock(st, op.issuer, lockAsset, -dust);
