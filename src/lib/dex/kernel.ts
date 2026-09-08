@@ -33,6 +33,7 @@ export const GAS_TABLE = {
   harvest: 20,
   attest: 50,
   heartbeat: 10,
+  refuel: 0, // THE-REFUEL: העברת-קרדיטים מהאוצר — אפס-גז (שירות-חיות כמו relay)
   relay: 0, // THE-DOOR: חוזה-חינם שכופה עבודה-אמת על רשת-מרוחקת
   relay_ack: 0,
 } as const;
@@ -40,6 +41,7 @@ export const GAS_TABLE = {
 export type OpKind = keyof typeof GAS_TABLE;
 export const FEE_BPS = 30; // עמלי-30bps כמו-הבריכה-הילידית (dex-facts)
 export const TREASURY_CUT_PCT = 30; // 30% מהעמלה → אוצר (רווח-מונוטוני, grid98)
+export const REFUEL_CAP = 100_000; // תקרת-עירוי-פר-פקודה — גם-אם-האוצר נחטף, הנזק מגודל
 
 export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM";
 
@@ -215,6 +217,22 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       addBal(st, op.to, a, amt);
       if (op.type === "pay") st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "pay", note: `→${op.to} ${amt}µ ${a}` });
       return { ok: true, gas };
+    }
+    case "refuel": {
+      // THE-REFUEL (114): חיות-כלכלית מתמדת — האוצר מעביר קרדיטים לסוכנים
+      // שאזל-המסלול-שלהם. **העברה-טהורה בלבד (אפס-הטבעה)**: Σcredits נשמר
+      // לכל-אורך, והאינווריאנטה הברזל Σcredits+gasUsed===ג'נזיס עומדת בדיוק
+      // כמו-קודם (האוצר מאבד-בדיוק מה שהסוכן מקבל). אוצר-בלבד, מדוד-תקרה.
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      const rAmt = op.amount ?? 0, rTo = String(op.to ?? "");
+      if (!rTo || rTo === issuer || !(rAmt > 0)) return { ok: false, err: "bad-refuel", gas: 0 };
+      if (rAmt > REFUEL_CAP) return { ok: false, err: "refuel-exceeds-cap", gas: 0 };
+      if ((st.credits[issuer] ?? 0) < rAmt) return { ok: false, err: "insufficient-credits", gas: 0 };
+      pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — כמו relay
+      st.credits[issuer] = (st.credits[issuer] ?? 0) - rAmt;
+      st.credits[rTo] = (st.credits[rTo] ?? 0) + rAmt;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "refuel", note: `→${rTo} ${rAmt}µ credits` });
+      return { ok: true, gas: 0 };
     }
     case "order": {
       // פקודת-לימיט מוסדית (סטנדרט-בורסות): חפיפה-מיידית כ-taker במחיר-המייקר,

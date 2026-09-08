@@ -7,7 +7,7 @@
  *  · בוטי-רעש: זרימה-חופשית שמגלה-מחיר (dex-facts: "עודף-מחיר נאכל מיד")
  */
 import type { DexState, Op, Asset } from "./kernel";
-import { FEE_BPS, poolKey, avail, notional } from "./kernel";
+import { FEE_BPS, REFUEL_CAP, poolKey, avail, notional } from "./kernel";
 import { sortBook } from "./book";
 import { poolMid, getPool } from "./amm";
 
@@ -147,6 +147,20 @@ export function arenaTick(
 
   // עמדת-הייצוב (סליקה): מנעול-בריכה + חגורת-סולם — לפני-הזרימה-החופשית
   pegkeeperTick(st, tick, pushOp);
+
+  // קצבת-חיות (THE-REFUEL): כל-16 טיקים — מי-שהקרדיטים-שלו מתחת-למסלול מקבל
+  // הזרמה מהאוצר. **העברה-טהורה (אפס-הטבעה)** — Σcredits נשמר. בלי-זה הגריד
+  // מת-מוות-מבני: gas יורד-מונוטונית, החיילים מפסיקים-לצטט, הספר מתרוקן,
+  // הספרד-נעלמת והשוק מפסיק-לשבת. תיקון-שורש לתשישות-הכלכלה-הסימולטיבית.
+  if (tick % 16 === 0) {
+    for (const ag of [...soldiers, "bot-a", "bot-b", "bot-c"]) {
+      const c = st.credits[ag] ?? 0;
+      if (c < 4_000) {
+        const amt = Math.min(30_000 - c, REFUEL_CAP);
+        if (amt > 0) pushOp({ type: "refuel", issuer: "treasury", nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
+      }
+    }
+  }
 
   // קצבת-בוטים (מורשת-rebalancing של עושי-שוק אמת): כל-24 טיקים ממלאים-מחדש
   // סוחרי-רעש שנדלדלו — בלי-זה הזרימה-החופשית מתה על-זוג-שלם (אפס-מילויים →
