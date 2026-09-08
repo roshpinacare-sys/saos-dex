@@ -27,8 +27,8 @@ export function Panel({ title, icon, children, className, action }: {
   );
 }
 
-export function Pill({ tone = "zinc", children, pulse }: {
-  tone?: "gold" | "green" | "red" | "zinc" | "amber" | "violet"; children: ReactNode; pulse?: boolean;
+export function Pill({ tone = "zinc", children, pulse, testid }: {
+  tone?: "gold" | "green" | "red" | "zinc" | "amber" | "violet"; children: ReactNode; pulse?: boolean; testid?: string;
 }) {
   const tones: Record<string, string> = {
     gold: "border-amber-500/40 bg-amber-500/10 text-amber-300",
@@ -39,7 +39,7 @@ export function Pill({ tone = "zinc", children, pulse }: {
     violet: "border-violet-500/40 bg-violet-500/10 text-violet-300",
   };
   return (
-    <span className={clsx("inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold", tones[tone], pulse && "animate-pulse-gold")}>
+    <span data-testid={testid} className={clsx("inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold", tones[tone], pulse && "animate-pulse-gold")}>
       {children}
     </span>
   );
