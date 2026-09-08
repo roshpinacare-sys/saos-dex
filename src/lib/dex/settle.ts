@@ -518,7 +518,8 @@ export function stabilityCheck(st: DexState): StabilityReport {
  * הוא-העברה-בלבד. המשמעות-הכנה: הדלק הכולל מתנקז-מונוטונית. המדידה-הזאת חושפת
  * את-קצב-השריפה-בפועל ואת-זמן-הטיסה הנותר — כנות-מלאה במקום-הפתעה. */
 export interface RunwayReport {
-  burnPerHeight: number;        // µ-קרדיטים שנשרפים-בממוצע-לבלוק (מדידה-חיה)
+  burnPerHeight: number;        // µ-קרדיטים שנשרפים-בממוצע-לבלוק (חלוני-אמת, SETTLE-5)
+  burnWindowBlocks?: number;    // רוחב-החלון-שנמדד; 0/חסר = ממוצע-חיים (חלון-צעיר)
   totalCredits: number;         // Σcredits — כל-הדלק שנותר במערכת
   systemRunwayBlocks: number;   // בלוקים-עד-ריקון-מלא (בקצב-הנוכחי)
   systemRunwayHours: number;    // שעות (בקצב-הפעימה בפועל)
@@ -529,9 +530,26 @@ export interface RunwayReport {
 
 const TICK_MS_EST = 3_000; // קצב-הפעימה המוסדי (chain.ts TICK_MS) — הערכה-תעבורתית
 
-export function runwayCheck(st: DexState, agents?: string[]): RunwayReport {
+export function runwayCheck(
+  st: DexState,
+  agents?: string[],
+  samples?: { h: number; gasUsed: number }[],
+): RunwayReport {
   const totalCredits = Object.values(st.credits).reduce((s, v) => s + (v ?? 0), 0);
-  const burnPerHeight = st.height > 0 ? st.gasUsed / st.height : 0;
+  // SETTLE-5: שריפה-חלונית-אמת (טבעת-דגימה ~400 בלוקים) — ממוצע-החיים (gasUsed/height)
+  // מציג-משטר-ישן אחרי-שינוי-תוכנה (נמדד-חי: 990µ/בלוק → 157µ/בלוק בעוד הממוצע
+  // המשיך-להציג ~1000). נופלים-בחזרה לממוצע-חיים רק-אם-החלון-קצר-מדי (<60 בלוקים).
+  let burnPerHeight = st.height > 0 ? st.gasUsed / st.height : 0;
+  let windowBlocks = 0;
+  if (samples && samples.length >= 2) {
+    const first = samples[0];
+    const last = samples[samples.length - 1];
+    const dh = last.h - first.h;
+    if (dh >= 60) {
+      burnPerHeight = (last.gasUsed - first.gasUsed) / dh;
+      windowBlocks = dh;
+    }
+  }
   const blocks = burnPerHeight > 0 ? totalCredits / burnPerHeight : Number.POSITIVE_INFINITY;
   const hours = (blocks * TICK_MS_EST) / 3_600_000;
   const names = agents ?? ["soldier-1", "soldier-2", "soldier-3", "soldier-4", "bot-a", "bot-b", "bot-c"];
@@ -545,6 +563,7 @@ export function runwayCheck(st: DexState, agents?: string[]): RunwayReport {
   const level = hours >= 24 ? "ok" : hours >= 6 ? "warn" : "crit";
   return {
     burnPerHeight: Math.round(burnPerHeight * 10) / 10,
+    burnWindowBlocks: windowBlocks, // 0 = נפל-בחזרה לממוצע-חיים (חלון-צעיר)
     totalCredits,
     systemRunwayBlocks: Math.floor(blocks),
     systemRunwayHours: Math.round(hours * 10) / 10,

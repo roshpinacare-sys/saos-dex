@@ -13,15 +13,20 @@ import { cancelOrder, matchBook, gcOrders, type BookOrder } from "./book";
 import { poolAdd, poolSwap, poolRm } from "./amm";
 
 // ─── טבלת-GAS (מפרט-הברזל + הרחבות 96–113 של kernel.cjs) ────────────────────
+// SETTLE-5 "לוח-זמנים-סיבולת": קיזוז-שריפה בפעולות-התדר-הגבוהות (סדר/ביטול/
+// מילוי/סוופ-בריכה) — ספר-סגור שורף 990µ/בלוק בעוד עמלות-נמדדות חוזרות ב-~3µ/
+// בלוק (ממצא-חי 2026-09: ארנה 1.7M→922k ב-11 דק׳). קיזוז-זה נותן לפונטיין
+// ולממנים לנשום: שריפה ~3× נמוכה = ריצה ~3× ארוכה, והעמלות מצטברות אל מעל
+// סף-הפונטיין. פעולות-נדירות (wrap/attest/harvest) לא-נוגעו — אין-טעם.
 export const GAS_TABLE = {
   transfer: 100,
   pay: 120,
-  order: 150,
-  cancel: 60,
-  fill: 200,
+  order: 60,
+  cancel: 15,
+  fill: 60,
   order_gc: 30,
   pool_add: 180,
-  pool_swap: 220,
+  pool_swap: 100,
   pool_rmw: 120,
   pool_xAdd: 180,
   pool_x: 220,
@@ -43,7 +48,7 @@ export type OpKind = keyof typeof GAS_TABLE;
 export const FEE_BPS = 30; // עמלי-30bps כמו-הבריכה-הילידית (dex-facts)
 export const TREASURY_CUT_PCT = 30; // 30% מהעמלה → אוצר (רווח-מונוטוני, grid98)
 export const REFUEL_CAP = 100_000; // תקרת-עירוי-פר-פקודה — גם-אם-האוצר נחטף, הנזק מגודל
-export const FUEL_FUNDERS = ["treasury", "arena"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor")
+export const FUEL_FUNDERS = ["treasury", "arena", "operator"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor") + המפעיל-האנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון, SETTLE-5)
 export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter≥8000 להרמה — המטבע לא ירעיב-אותו
 export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
 

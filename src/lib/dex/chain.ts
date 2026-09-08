@@ -29,6 +29,18 @@ const LADDER_EVERY = 24;
 const TAPE_CAP = 600;
 const CHART_CAP = 240;
 
+/** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
+ * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
+ * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
+export const CODE_VERSION = "saos-dex/1.5.1+settle5-endurance";
+
+/** טבעת-דגימת-הדלק (SETTLE-5): {גובה, גז-מצטבר} לכל-בלוק, חלון-~400 בלוקים.
+ * צריכת-השריפה-החלונית = (אחרון−ראשון)/(hאחרון−hראשון) — אמת-לרגע זה,
+ * בניגוד לממוצע-החיים (gasUsed/height) שדורד לאט ומציג-משטר-ישן. */
+export function getBurnWindow(): { h: number; gasUsed: number }[] {
+  return g.__saosDexChain?.fuelSamples ?? [];
+}
+
 export interface TapeEvent extends TradeEvent { h: number }
 export interface SealInfo { fromHeight: number; toHeight: number; root: string; stateRoot: string; leaves: number; at: number; digest: string }
 export interface ReceiptInfo { kind: string; digest: string; at: number }
@@ -46,6 +58,7 @@ interface ChainRT {
   tickCount: number;
   timer: ReturnType<typeof setInterval> | null;
   busy: boolean;
+  fuelSamples: { h: number; gasUsed: number }[]; // SETTLE-5: טבעת-דגימת-דלק (חוץ-מצב — לא-חלק-מה-DexState/שורש) לשריפה-חלונית-אמת
   buildMsRolling: number;
   opsPerSecRolling: number;
   startedAt: number;
@@ -256,6 +269,10 @@ async function tick(rt: ChainRT): Promise<void> {
       if (rt.mempool.length < 512) rt.mempool.push(op);
     });
     await buildBlock(rt);
+    // דגימת-דלק (SETTLE-5): כל-בלוק — טבעת-400 (≈20 דק׳) לשריפה-חלונית-אמת.
+    // חוץ-מצב בכוונה: ה-DexState/שורש-המצב נשארים-דטרמיניסטיים-לריפליי.
+    rt.fuelSamples.push({ h: rt.st.height, gasUsed: rt.st.gasUsed });
+    if (rt.fuelSamples.length > 400) rt.fuelSamples.splice(0, 100);
     if (rt.tickCount % SNAPSHOT_EVERY === 0) flushSnapshot(rt);
   } catch (e) {
     if (e instanceof InvariantViolation) {
@@ -281,6 +298,7 @@ export function ensureChain(): ChainRT {
     mempool: [], rt: new Map(), params: { ...DEFAULT_PARAMS },
     tape: [], blockHashes: [], seals: [], receipts: [],
     lastReceiptDigest: null, tickCount: 0, timer: null, busy: false,
+    fuelSamples: [],
     buildMsRolling: 0, opsPerSecRolling: 0, startedAt: Date.now(), lastBlockAt: 0,
     faucetAt: {}, dbOk: true, halted: false, haltReason: null, version: 1,
   };
