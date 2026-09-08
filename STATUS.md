@@ -1,6 +1,6 @@
 # STATUS — SAOS-DEX
 
-**גרסה:** טביעת-הקוד-החיה: `saos-dex/1.8.0+settle9-optimize` (CODE_VERSION, chain.ts) · **ענף:** main · **פורט:** 3010 מקושר-`127.0.0.1` (basePath `/saos-dex`) · **עודכן:** 2026-09-08 (SETTLE-9 — סבב-אופטימיזציה-ואימות-חוצה-סוכנים: stateRoot-חד-פעמי-פר-בלוק, cache-שורש-פר-גובה, dedupe-Set, minOut-fail-closed, אימות-נכסים-מפורש, funderFor-אחד, Math.random-האחרון-מוסר, F-04-endpointHost, restoreRecords-סימטרי, bind-מקומי, **U-01-נפתר: עוגני-SOL-על-mainnet-מאומת-RPC**; ראה §14 ב-PROOF)
+**גרסה:** טביעת-הקוד-החיה: `saos-dex/1.9.0+settle10-keys` (CODE_VERSION, chain.ts) · **ענף:** main · **פורט:** 3010 מקושר-`127.0.0.1` (basePath `/saos-dex`) · **עודכן:** 2026-09-08 (SETTLE-10 — חילוף-מפתחות-חי: זרע-חדש, המפתחות-הדלופים-מבוטלים-על-השרשרת (STEEM 8313cdcb… block 109,410,651 · HIVE 92654439… block 109,745,168), Relay-חי-מחדש-עם-הזהות-החדשה (STEEM 20d234ea… · HIVE a0c2bf30… h4920), שער-מפעיל-מחובר-לקונסולה (operatorAuth+UI), wic-ROTATED; ראה §15 ב-PROOF). (SETTLE-9 — סבב-אופטימיזציה-ואימות-חוצה-סוכנים: stateRoot-חד-פעמי-פר-בלוק, cache-שורש-פר-גובה, dedupe-Set, minOut-fail-closed, אימות-נכסים-מפורש, funderFor-אחד, Math.random-האחרון-מוסר, F-04-endpointHost, restoreRecords-סימטרי, bind-מקומי, **U-01-נפתר: עוגני-SOL-על-mainnet-מאומת-RPC**; ראה §14 ב-PROOF)
 > היסטורי: v1.0.0 (2026-09-07) — מסמך-זה-מתעדכן-כעת מטביעת-הקוד-החיה ולא-ממועד-העריכה.
 
 ## סטטוס-ריצה (נמדד)
@@ -18,13 +18,13 @@
 | dbOk | 🟢 ראיות נשמרות (BlockHeader/SealRecord/EvidenceReceipt) |
 | relay→Steem | 🟢 חי — custom_json סמכות-active על כל-חותם (id: saos-dex.anchor.v1) |
 | relay→Hive | 🟡 חי-מותנה-תקציב — עיגן בפועל (ראה ראיות); קצב נשלט-RC, ממתין-ריג'נרציה בכנות |
-| relay→TRON | 🟡 זהות נגזרת (TYVw…xTy) — הזרשרת חיה ונגישה; העיגון מותנה-מימון (0 TRX) |
+| relay→TRON | 🟡 זהות נגזרת-מהמפתח-החדש (TVN3vJhH…) — השרשרת חיה ונגישה; העיגון מותנה-מימון (0 TRX) |
 
 ## עיגון-רשת חי (Relay — "הדלת")
 
-- **מקור-מפתחות:** fleet_keys.enc (AES-256-GCM, תג אומת) → agent/.env + keys/vault.json של
-  steem-main; ה-WIF הפעיל הוכח קריפטוגרפית מול הרשות-החיה של @headcorner ב-Steem+Hive.
-  מפתחות ב-.env (gitignored-אומת) ובזיכרון-בלבד. אפס סודות בלוגים/פלט/ריפו.
+- **מקור-מפתחות (SETTLE-10, עדכני):** **זרע-חדש** (64-hex) → עץ-HMAC `SAOS-ROT1/<acct>/<chain>/<role>`.
+  המפתחות-הדלופים-הישנים **מבוטלים-על-השרשרת** (account_update ×2, txids ב-§15.2). המפתחות-החדשים
+  ב-.env (gitignored-אומת) ואצל-המפעיל-בלבד. אפס סודות בלוגים/פלט/ריפו. הרשאת-POSTING עדיפה (F-01).
 - **מנגנון:** seal() → relaySeal() → תור לא-חוסם; Steem: כל-חותם · Hive: החותם החדש-ביותר
   (תקציב-RC) · TRON: מותנה-מימון. rc-low/unfunded = המתנה-כלכלית (backoff, לא כישלון).
 - **ראיות על-השרשרת (נמדד, אימות-צד-שלישי ב-RPC):**

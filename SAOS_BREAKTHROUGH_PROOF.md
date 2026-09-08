@@ -471,3 +471,49 @@ Saosmartwallet מנוקה-ממפתחות, platform v18.1.0 נפתח-במקביל
 
 ---
 *SETTLE-9 · הדקס מהיר-פי-2-בבלוק, חף-Math.random, ממנה-אחד, מגן-minOut, מעיד-על-רשת · U-01-סגור-mainnet · אפס-סודות-במסמך.*
+
+## §15 — SETTLE-10: חילוף-מפתחות חי (The Keys Round — "תקים מפתחות חדשים")
+
+### 15.1 הבעיה (מה שהמפעיל שאל עליו "מה חסר")
+- מאז-SETTLE-6 כל-סבב-נסגר-עם "פתוח-למפעיל: מפתחות-חדשים" — בלי-הסבר. הסבר-מלא:
+  הזהות-הקודמת של @headcorner (עוגן-ה-DEX) הייתה מוגנת-במפתחות ש**דלפו-בגלוי** לריפו
+  (fleet_keys.meta.json החזיק passphrase-plaintext לצד fleet_keys.enc — מדיניות-Task-82).
+  kill-order-פורנזי (§F) אסר-שימוש-חוזר; אבל **חילוף-מפתחות = התרופה הקנונית** לדליפה.
+
+### 15.2 הביצוע (2026-09-08 21:17 UTC)
+1. פענוח-מבוקר של הכספת מ-steem@main (AES-256-GCM, תג אומת, /tmp בלבד, אפס-הדפסת-סודות)
+2. אימות-כפול: ה-WIF-הפעיל-הישן נגזר→pub == הרשות-החיה של @headcorner ב-Steem **וגם** ב-Hive (condenser_api)
+3. **זרע-חדש** (64-hex, crypto.randomBytes-32) → עץ-מפתחות HMAC-SHA256: `SAOS-ROT1/<account>/<chain>/<role>`
+4. שידור `account_update` (owner+active+posting+memo) חתום **במפתח-ה-owner-הישן — השימוש-החוקי-האחרון שלו**:
+   - **STEEM: tx 8313cdcb9da74ba0d63a5302b72e3d7e6dcc6c81 · block 109,410,651**
+   - **HIVE: tx 92654439d97f4cd30a70a5ced46b2bd93488b722 · block 109,745,168**
+5. אימות-חי: כל-8-הרשויות-החדשות (owner/active/posting/memo ×2-שרשראות) == חי-על-השרשרת
+6. **המפתחות-הדלופים: מבוטלים-על-השרשרת.** מי-שמור-אותם — לא-יכול-לעשות-בהם-דבר.
+
+### 15.3 ה-Relay-מתעורר עם הזהות-החדשה
+- .env חדש (mode-600, gitignored-אומת): STEEM_ACTIVE_WIF + STEEM_POSTING_WIF + HIVE_ACTIVE_WIF + HIVE_POSTING_WIF + DEX_OPERATOR_TOKEN (48-hex)
+- הדמון-הופעל-מחדש → relay-armed → **עיגון-חי-מאומת מיד**:
+  - STEEM: tx 20d234ea5f629332f9ff848239460c814992d5be (h4920, status=anchored, lastError=null)
+  - HIVE: tx a0c2bf30918959dbef9c6220da5a7fd9d22e5ada (h4920, verified=1, lastError=null)
+  - breakers closed ×2 · mismatches=0 · broadcasts זורמים · TRON-זהות-חדשה-נגזרת-אוטומטית (TVN3vJhH…, מותנה-מימון-כמקודם)
+
+### 15.4 הצי (11-חשבונות-חיילים) — כנות-מלאה
+- **wic: ROTATED** על-Steem (tx 9fd13d507c4c70276d71550ba3d0f4725eaaa7a2) — הוכחת-מנגנון
+- **9-חשבונות (cashmachine, haran, israelnews, lsa, macrame, siq, tov, wog, woq): לא-ניתנים-לחילוף-מאיתנו** —
+  המפתחות-החיים-שלהם לא-בכספת (הוחלפו-אחרי-האיטום / אבדו-עם-זרע-v1). השידור-נדחה-chain-side: `tx_missing_owner_auth`.
+  דרוש-מפעיל: המפתחות-החיים-שלהם (או-הצהרה-שהם-מוזנחים).
+- **ynet: אין-חומר-מפתח-בכלל** (operator-delegated) — כנה-ומתועד.
+- **Hive לחיילים: חסום-כלכלית** (0-vests → "payer has not enough RC mana") — לא-באג, שער-כלכלי.
+
+### 15.5 שער-המפעיל-מחובר-ל-UI (סגירת-P0 של agent-25-a)
+- הקומיט 7b79f3e הוסיף `operatorAuth` fail-closed ל-9-נתיבי-POST אך **הקונסולה-עצמה לא-שלחה-את-הכותרת** — נתיב-הזהב-נשבר-בפועל (401-על-כל-פעולה).
+- תוקן: ה-UI שומר טוקן-מקומית (localStorage, לעולם-לא-יוצא-מהדפדפן), שולח `x-saos-operator` על-כל-POST,
+  נעילה/חיול-ויזואלי בכותרת (OPERATOR LOCKED/ARMED), ופאנל-אימות-נפתח-אוטומטית-בפגישת-401/503. testids: operator-unlock/operator-panel/operator-token-input.
+
+### 15.6 אימות-חי-סופי (טביעת-קוד `saos-dex/1.9.0+settle10-keys`)
+- tsc נקי (EXIT=0) · eslint נקי · page.tsx-מסונכרן-byte-identical לעץ-החי
+- POST-בלי-כותרת→401 · POST-עם-הטוקן→200 (נמדד-חי על /api/dex/faucet)
+- גילוי-כלים: פלט-כלים-עלול-לבלוע-רצף-[m (artifact-תצוגה) — אומת-בספירת-בייטים שהקוד-שלם (אותו-דפוס-מ-UI-NUCLEAR-N1)
+- **אפס-סודות בריפו:** כל-המפתחות החדשים חיים ב-.env (gitignored) + אצל-המפעיל (סיכום-הצ'אט). הישנים-מתים-על-השרשרת.
+---
+*SETTLE-10 · הזהות-הריבונית-חודשה: זרע-חדש, מפתחות-דלופים-מתים, עיגון-חי-בשתי-השרשראות, שער-מפעיל-מחובר-לקונסולה.*

@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Crown, Layers, Landmark, List,
+  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Crown, Layers, Landmark, List, Lock,
   RefreshCcw, ShieldCheck, Wallet, Zap, Waves, GaugeCircle,
 } from "lucide-react";
 import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
@@ -30,6 +30,9 @@ import { PriceChart } from "@/components/dex/chart";
 /** קידומת-הגשר — כל-קריאת-רשת עוברת דרכה אל דמון-3010 */
 const BASE = "/saos-dex";
 const api = (p: string): string => `${BASE}${p}`;
+
+/** P0(25-a) — מפתח-אחסון-מקומי לטוקן-המפעיל: לעולם לא יוצא מהדפדפן (localStorage בלבד) */
+const OPERATOR_KEY = "saos-dex.operator-token";
 
 // ─── טיפוסים (מראה-API — זהה ל-server) ──────────────────────────────────────
 interface MarketView {
@@ -1157,6 +1160,20 @@ export default function DexTerminal() {
   const [marketKey, setMarketKey] = useState<string>("");
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // P0(25-a): טוקן-מפעיל לפעולות-מוטציה — נטען מ-localStorage (מקומי-בלבד) ונשלח בכותרת x-saos-operator
+  const [operatorToken, setOperatorToken] = useState<string>("");
+  const [opPanel, setOpPanel] = useState(false);
+  const opLoaded = useRef(false);
+  useEffect(() => {
+    if (opLoaded.current) return;
+    opLoaded.current = true;
+    try { setOperatorToken(window.localStorage.getItem(OPERATOR_KEY) ?? ""); } catch { /* אחסון-לא-זמין — כנות */ }
+  }, []);
+  const saveOperatorToken = useCallback((t: string) => {
+    setOperatorToken(t);
+    try { if (t) window.localStorage.setItem(OPERATOR_KEY, t); else window.localStorage.removeItem(OPERATOR_KEY); } catch { /* כנות */ }
+  }, []);
+  const opHeaders = useCallback((): Record<string, string> => (operatorToken ? { "x-saos-operator": operatorToken } : {}), [operatorToken]);
   const showcase = useShowcase();
   const settle = useSettleDesk();
   const [stabilizing, setStabilizing] = useState(false);
@@ -1169,9 +1186,10 @@ export default function DexTerminal() {
   const stabilizeNow = useCallback(async () => {
     setStabilizing(true);
     try {
-      const r = await fetch(api("/api/dex/settle"), { method: "POST", headers: { "x-saos-dex-console": "1" } });
-      const j = (await r.json()) as { ok: boolean; pushed?: { kind: string; detail: string }[] };
+      const r = await fetch(api("/api/dex/settle"), { method: "POST", headers: { "x-saos-dex-console": "1", ...opHeaders() } });
+      const j = (await r.json()) as { ok: boolean; error?: string; pushed?: { kind: string; detail: string }[] };
       if (j.ok) flash("ok", `ייצוב: ${j.pushed?.map((p) => p.detail).join(" · ") || "הפרמטרים הודקו"}`);
+      else if (j.error === "operator-unauthorized" || j.error === "operator-auth-unconfigured") { setOpPanel(true); flash("err", "נדרש אימות-מפעיל: הזן את DEX_OPERATOR_TOKEN דרך כפתור OPERATOR בכותרת"); }
       else flash("err", "פעולת-הייצוב נדחתה");
       void settle.refresh();
       void load();
@@ -1180,7 +1198,7 @@ export default function DexTerminal() {
     } finally {
       setStabilizing(false);
     }
-  }, [flash, load, settle]);
+  }, [flash, load, settle, opHeaders]);
 
   const relay = useRelayStream(world?.version);
   const myOrders = useMyOrders(world?.version);
@@ -1189,9 +1207,10 @@ export default function DexTerminal() {
     setBusy(true);
     try {
       // FIX(FOUNDRY top-bug): הקונסולה מזדהה-בכותרת-מנהלת (שער-CSRF בשרת)
-      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-saos-dex-console": "1" }, body: JSON.stringify(body ?? {}) });
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-saos-dex-console": "1", ...opHeaders() }, body: JSON.stringify(body ?? {}) });
       const j = (await r.json()) as { ok: boolean; error?: string; note?: string; reason?: string };
       if (j.ok) flash("ok", j.note ?? "נכנס לתור — ייכלל בבלוק הבא");
+      else if (j.error === "operator-unauthorized" || j.error === "operator-auth-unconfigured") { setOpPanel(true); flash("err", "נדרש אימות-מפעיל: הזן את DEX_OPERATOR_TOKEN דרך כפתור OPERATOR בכותרת"); }
       else flash("err", j.error ?? j.reason ?? "נדחה");
       void load();
     } catch (e) {
@@ -1199,7 +1218,7 @@ export default function DexTerminal() {
     } finally {
       setBusy(false);
     }
-  }, [flash, load]);
+  }, [flash, load, opHeaders]);
 
   const market = useMemo(() => {
     if (!world) return undefined;
@@ -1258,9 +1277,47 @@ export default function DexTerminal() {
               </Pill>
             )}
             <Pill tone="amber" testid="header-sim-pill">SIM book · REAL-money audited ×5</Pill>
+            <button
+              type="button"
+              onClick={() => setOpPanel((v) => !v)}
+              className={`flex h-7 items-center gap-1 rounded-full border px-3 font-mono text-[10px] font-bold ${operatorToken ? "border-green-500/40 bg-green-500/10 text-green-300" : "border-amber-500/40 bg-amber-500/10 text-amber-300"}`}
+              data-testid="operator-unlock"
+            >
+              <Lock className="h-3 w-3" aria-hidden />
+              {operatorToken ? "OPERATOR ARMED" : "OPERATOR LOCKED"}
+            </button>
           </div>
         </div>
       </header>
+
+      {/* פאנל אימות-מפעיל — נפתח בלחיצה או אוטומטית בפגישת 401/503 */}
+      {opPanel && (
+        <div className="mx-auto mt-3 w-full max-w-[1600px] px-4" data-testid="operator-panel">
+          <div className="rounded-lg border border-amber-500/30 bg-zinc-900/80 p-3">
+            <p className="text-xs font-bold text-amber-300">
+              אימות-מפעיל (P0): כל-פעולת-מוטציה דורשת את DEX_OPERATOR_TOKEN מה-.env של השרת, בכותרת x-saos-operator.
+              הטוקן נשמר אצלך-בלבד (localStorage) — אף-שרת שלישי לא רואה אותו.
+            </p>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                type="password"
+                value={operatorToken}
+                onChange={(e) => saveOperatorToken(e.target.value)}
+                placeholder="DEX_OPERATOR_TOKEN"
+                dir="ltr"
+                className="h-8 w-72 rounded border border-zinc-700 bg-zinc-950 px-2 font-mono text-xs text-zinc-100 outline-none focus:border-amber-500/60"
+                data-testid="operator-token-input"
+              />
+              <button type="button" onClick={() => setOpPanel(false)} className="h-8 rounded border border-zinc-700 px-3 text-xs font-bold text-zinc-200 hover:border-zinc-500">
+                סגור
+              </button>
+              {operatorToken
+                ? <span className="font-mono text-[10px] text-green-400" data-testid="operator-token-state">נשמר מקומית</span>
+                : <span className="font-mono text-[10px] text-amber-400" data-testid="operator-token-state">ריק — פעולות-מוטציה יידחו 401/503</span>}
+            </div>
+          </div>
+        </div>
+      )}
 
       {msg && (
         <div className="mx-auto mt-3 w-full max-w-[1600px] px-4">
