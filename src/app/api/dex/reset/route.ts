@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { resetChain } from "@/lib/dex/chain";
+import { consoleGuard } from "@/lib/dex/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,10 @@ export const dynamic = "force-dynamic";
  * { confirm: "WIPE" } — מקרה-מקרי/סקרי-בוט נדחה; מי-שמבקש-מפורש עובר.
  * reset גם-מעיר-שרשרת-מושהית (halted) — נתיב-ההתאוששות הרשמי. */
 export async function POST(req: Request) {
+  // FIX(FOUNDRY top-bug): שער-קונסולה — מוטציה-דורשת-כותרת-מנהלת
+  const g = consoleGuard(req);
+  if (g) return g;
+
   const body = (await req.json().catch(() => ({}))) as { confirm?: string };
   if (body.confirm !== "WIPE") {
     return NextResponse.json({

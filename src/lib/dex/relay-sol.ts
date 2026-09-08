@@ -151,17 +151,19 @@ export async function verifySolAnchor(
 ): Promise<{ ok: boolean; detail: string }> {
   const endpoint = SOL_RPCS[0];
   const st = await rpc<{ value: ({ err: unknown; slot: number; confirmationStatus?: string } | null)[] }>(
-    endpoint, "getSignatureStatuses", [[txid], { searchTransactionHistory: false }], 15000,
+    endpoint, "getSignatureStatuses", [[txid], { searchTransactionHistory: true }], 15000,
   ).catch(() => null);
   const v = st?.value?.[0] ?? null;
   // FIX(SETTLE-7 verify-hole): getSignatureStatuses בלי-searchTransactionHistory
   // מחזיר-null לכל-מה-שמעבר-לחלון-הסלוטים-האחרון — כל-העוגנים-הישנים קיבלו
   // "not indexed" לנצח (הסימפטום-החי: SOL 19-anchored/0-verified). מעכשיו:
   // null בסטטוס ≠ סוף-התשובה — מנסים getTransaction ישירות (עובד-גם-לעוגנים-ישנים).
+  // FIX(CROSS-F-02, saos-jummper): searchTransactionHistory:false נועד-רק-לחלון-הסלוטים —
+  // true אומת-נגד-הלדג'ר-המלא-בחינם (עוגנים-ישנים לא-מקבלים "unknown" נצחית).
   const tx0 = v
     ? null
     : await rpc<{ meta?: { logMessages?: string[] } | null }>(
-        endpoint, "getTransaction", [[txid, { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]], 15000,
+        endpoint, "getTransaction", [[txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }]], 15000,
       ).catch(() => null);
   if (!v && tx0?.meta?.logMessages?.length) {
     const logs0 = tx0.meta.logMessages.join(" ");
@@ -172,11 +174,16 @@ export async function verifySolAnchor(
   }
   if (!v) return { ok: false, detail: "not indexed: signature unknown to public node yet" };
   if (v.err !== null && v.err !== undefined) return { ok: false, detail: `mismatch: transaction failed on-chain (${JSON.stringify(v.err).slice(0, 80)})` };
+  // FIX(CROSS-F-08, saos-jummper): confirmed אינו-סופי — פיצול-פורק יכול-להפיל-אותו.
+  // עיגון-מוצג-כעובדה רק-על-finalized (המתנה-כנה במקום-טענה-שברירית).
+  if (v.confirmationStatus && v.confirmationStatus !== "finalized") {
+    return { ok: false, detail: `awaiting finalized block (now: ${v.confirmationStatus})` };
+  }
   const tx = await rpc<{ meta?: { logMessages?: string[] } | null }>(
-    endpoint, "getTransaction", [[txid, { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]], 15000,
+    endpoint, "getTransaction", [[txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }]], 15000,
   ).catch(() => null);
   const logs = (tx?.meta?.logMessages ?? []).join(" ");
-  if (!logs) return { ok: false, detail: "not indexed: awaiting confirmed block" };
+  if (!logs) return { ok: false, detail: "not indexed: awaiting finalized block" };
   if (!logs.includes(expected.stateRoot)) return { ok: false, detail: `mismatch: on-chain memo lacks local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
   if (!logs.includes(`"height":${expected.height}`)) return { ok: false, detail: `mismatch: on-chain memo height != local h${expected.height}` };
   return { ok: true, detail: `stateRoot verified on solana (slot ${v.slot})` };

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getQuote, submitOp, nextNonce } from "@/lib/dex/chain";
+import { consoleGuard } from "@/lib/dex/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,10 @@ export async function GET(req: Request) {
 
 /** POST swap — החלפה דרך בריכת 30bps (minOut fail-closed) */
 export async function POST(req: Request) {
+  // FIX(FOUNDRY top-bug): שער-קונסולה — מוטציה-דורשת-כותרת-מנהלת
+  const g = consoleGuard(req);
+  if (g) return g;
+
   const body = (await req.json().catch(() => ({}))) as {
     pair?: string; assetIn?: string; amount?: number; minOut?: number;
   };

@@ -1169,7 +1169,7 @@ export default function DexTerminal() {
   const stabilizeNow = useCallback(async () => {
     setStabilizing(true);
     try {
-      const r = await fetch(api("/api/dex/settle"), { method: "POST" });
+      const r = await fetch(api("/api/dex/settle"), { method: "POST", headers: { "x-saos-dex-console": "1" } });
       const j = (await r.json()) as { ok: boolean; pushed?: { kind: string; detail: string }[] };
       if (j.ok) flash("ok", `ייצוב: ${j.pushed?.map((p) => p.detail).join(" · ") || "הפרמטרים הודקו"}`);
       else flash("err", "פעולת-הייצוב נדחתה");
@@ -1188,7 +1188,8 @@ export default function DexTerminal() {
   const post = useCallback(async (url: string, body?: unknown) => {
     setBusy(true);
     try {
-      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+      // FIX(FOUNDRY top-bug): הקונסולה מזדהה-בכותרת-מנהלת (שער-CSRF בשרת)
+      const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-saos-dex-console": "1" }, body: JSON.stringify(body ?? {}) });
       const j = (await r.json()) as { ok: boolean; error?: string; note?: string; reason?: string };
       if (j.ok) flash("ok", j.note ?? "נכנס לתור — ייכלל בבלוק הבא");
       else flash("err", j.error ?? j.reason ?? "נדחה");

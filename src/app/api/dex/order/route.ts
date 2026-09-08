@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { submitOp, nextNonce } from "@/lib/dex/chain";
+import { consoleGuard } from "@/lib/dex/guard";
 
 export const dynamic = "force-dynamic";
 
 /** הצבת-הזמנת-לימיט (order) או מילוי-מיידי (fill) — חתום כ-operator על הספר הריבוני */
 export async function POST(req: Request) {
+  // FIX(FOUNDRY top-bug): שער-קונסולה — מוטציה-דורשת-כותרת-מנהלת
+  const g = consoleGuard(req);
+  if (g) return g;
+
   try {
     const body = (await req.json()) as {
       action?: "order" | "fill";
