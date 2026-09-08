@@ -38,7 +38,14 @@ export interface GenesisTotals {
   poolsLp: Record<string, number>; // lp-ג'נזיס לכל-בריכה
 }
 
+let _gtCache: GenesisTotals | null = null;
 export function genesisTotals(): GenesisTotals {
+  // FIX(SETTLE-9 perf): ג'נזיס-קבוע לגמרי — נבנה-מחדש בכל-קריאת-/metrics ו-/settle
+  // (אלפי-קריאות-ביום). ממוזכר-פעם-אחת (טהור: אפס-קלט חוץ, אפס-תלות במצב-חי).
+  if (!_gtCache) _gtCache = computeGenesisTotals();
+  return _gtCache;
+}
+function computeGenesisTotals(): GenesisTotals {
   const g = genesisState();
   const assets: Record<string, number> = {};
   const bump = (a: string, d: number): void => { assets[a] = (assets[a] ?? 0) + d; };

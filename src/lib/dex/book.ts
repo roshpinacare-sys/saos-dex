@@ -39,36 +39,10 @@ export function sortBook(st: DexState, base: string, quote: string, side: "buy" 
   return same;
 }
 
-export function placeOrder(
-  st: DexState, op: Op, nowMs: number,
-  consume: () => OpResult | null
-): OpResult {
-  const base = op.base, quote = op.quote, side = op.side;
-  const price = op.price ?? 0, amount = op.amount ?? 0;
-  if (!base || !quote || base === quote || (side !== "buy" && side !== "sell"))
-    return { ok: false, err: "bad-order", gas: 0 };
-  if (op.market) return { ok: false, err: "market-use-fill", gas: 0 };
-  if (!(price > 0) || !(amount > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
-  if (st.orders.filter((o) => o.live && o.owner === op.issuer).length >= 24)
-    return { ok: false, err: "order-cap", gas: 0 };
-
-  const lockAsset = side === "sell" ? base : quote;
-  const lockMu = side === "sell" ? amount : notional(price, amount);
-  if (!(lockMu > 0)) return { ok: false, err: "bad-notional", gas: 0 };
-  if (avail(st, op.issuer, lockAsset) < lockMu)
-    return { ok: false, err: "insufficient-escrow", gas: 0 };
-
-  const c = consume(); if (c) return c;
-
-  addLock(st, op.issuer, lockAsset, lockMu);
-  const seq = st.nextSeq++;
-  st.orders.push({
-    seq, id: seq, owner: op.issuer, base, quote, side,
-    price, amount, filled: 0, live: true, nonce: op.nonce, at: nowMs,
-    lockMu, // מד-הנעילה-הפרטי — מדויק מהרגע-הראשון
-  });
-  return { ok: true, gas: 0 };
-}
+/* FIX(SETTLE-9 dead-code): placeOrder הוסר — אפס-קוראים. הגרעין (kernel.ts case
+ * "order") מממש את ההצבה עם subtleties ש-placeOrder מעולם-לא-הכיר (preLocked,
+ * פיוס-אבק, fail-closed על-consume-אחרי-נעילה). קוד-מת-כאן = מלכודת-דריפט:
+ * עורך-עתידי "מתקן" פה ולא משנה-דבר. */
 
 export function cancelOrder(st: DexState, op: Op, consume: () => OpResult | null): OpResult {
   const o = st.orders.find((x) => x.id === op.orderId);

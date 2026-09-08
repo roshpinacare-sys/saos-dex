@@ -78,7 +78,8 @@ export function poolSwap(
   const poolIn = inAfterFee + lpFee;
   const out = Math.floor((rOut * inAfterFee) / (rIn + inAfterFee));
   if (out <= 0 || out >= rOut) return { ok: false, err: "bad-quote", gas: 0 };
-  if (op.minOut !== undefined && out < op.minOut) return { ok: false, err: "min-out", gas: 0 };
+  // FIX(SETTLE-9 fail-closed): `out < op.minOut` עם minOut=NaN הוא תמיד-false —\n  // קלט-זבל היה עוקף את מגן-ההחלקה בשכבת-הגרעין גם-כן. כעת: לא-סופי או קטן-מהיציאה = דחייה.
+  if (op.minOut !== undefined && !(Number.isFinite(op.minOut) && out >= op.minOut)) return { ok: false, err: "min-out", gas: 0 };
   // שימור-ערך: k לא יורד (ברזרבות-אחרי-החלפה כולל עמלת-LP)
   const kBefore = rIn * rOut;
   const kAfter = (rIn + poolIn) * (rOut - out);

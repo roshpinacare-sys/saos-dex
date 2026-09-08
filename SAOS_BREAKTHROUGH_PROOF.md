@@ -427,3 +427,47 @@ Saosmartwallet מנוקה-ממפתחות, platform v18.1.0 נפתח-במקביל
 
 ---
 *SETTLE-8 · סוכן-הדקס · הרשת-נבלעה-כולה: ממצאי-אחים מומשו-בקוד-החי · אפס-סודות-במסמך.*
+
+## §14 SETTLE-9 — סבב-האופטימיזציה: עמוק-יותר, רחב-יותר, מהיר-יותר (2026-09-08)
+
+**טריגר:** פקודת-המפעיל — "תמשיך עמוק יותר, נרחב יותר, בחן עוד את השותפים, ייעל את מה שעשית ואמת" + דרישת-סיכום-בעברית-בצ'אט.
+
+### 14.1 סריקת-הרשת (10 ריפואות, קלונים מעודכנים ~/agents-audit)
+- 11 ריפואות ב-`roshpinacare-sys` (Sdk ריק לגמרי — stub-לא-מוזרע). שישה-שותפים דחפו חומר-טרי ביום-הסבב (wallet R2, jummper live-findings, foundry saboteur-sweep, platform STORM-PATCH).
+- **Saosmartwallet R2**: ה-"DEX-lifecycle-CLOSED" שלהם הוא הטרמינל-שלהם-מול-steem — לא-הדקס-שלנו. נכס-מניב: `condenser_api.get_transaction_hex` על-tx-חתום-חסר — אורקל-פורמט-חף-מפתחות (מיושם-כבר-אצלם, זמין-לנו).
+- **jummper LIVE-FINDINGS**: 6-פרוטוקולים-חיים-על-@headcorner; `saos-dex.anchor.v1` ×23 (ACTIVE — העוגנים-הישנים; הקוד-החדש-כבר-POSTING-מ-SETTLE-8); דליפת-RC חיה: `hive.convert` ×11-זהים-שלא-יצליחו-לעולם (~34% תקציב-RC-יומי — לא-קוד-הדקס; הוברר-למפעיל); RC/op-מדוד: 157.7M (החשבון-רווי-RC → דחיסת-payload = קיבולת).
+- **foundry task-23**: סריקת-חבלה-על-10-ריפואות — **אפס-קוד-זר**. F-3 (9-POST-לא-מאומתים) נבדק-מול-הקוד-הנוכחי: כבר-סגור-מ-SETTLE-8 (consoleGuard ×9, אומת-403-חי). נותר-מהם: `-H 127.0.0.1` (ממומש-כאן) + FIDELITY-עדכני.
+- **platform STORM-PATCH**: providerKill/destroy-on-error (אתגר-זומבי-ethers) + ADOPT-דפוס-חי — הדקס-מריץ-relay-עם-fetch-טהור (אין-provider-מתמשך → אין-זומבים מבנית; הדפוס-תועד).
+- **roshpina פורנזי**: אישר-שוב-שהעוגן-האתי-שלנו-אמת (0x94f4cb… בלוק 25,929,672); דיווח-על-counter-בלתי-אפשרי-ב-anchors.json (ETH verified>anchored) — **שורש-נמצא ותוקן כאן** (§14.3).
+
+### 14.2 אופטימיזציות (ביקורת-מדודה: bun micro-bench מול-הקוד-החי)
+| # | שינוי | מדידה-לפני | אחרי |
+|---|---|---|---|
+| 1 | stateRoot פעם-אחת-פר-בלוק + העברה-לחותם (ה-invariant הישן היה-טאוטולוגיה; החדש = אימות-הקפאה-אמיתי מול-שורש-זמן-הבלוק) | 2×O(state) לבלוק + 2×בחותם | 1×בלבד; buildMs 3–12ms→**1–2ms** |
+| 2 | cache-שורש-פר-גובה (getState/showcase) | O(state) ×כל-לקוח ×כל-בלוק | O(1) פר-לקוח |
+| 3 | dedupe-nonce ב-Set מקביל (WeakMap, חוץ-מצב) | O(6000) סריקה-לכל-op (~21µs) | O(1) |
+| 4 | metrics ממוסגר-5ש׳ + genesisTotals ממוזכר | אפס-בולם-ב-GET הציבורי היחיד | scrape-storm-immune |
+| 5 | funderFor אחד-בגרעין (mm+settle היו-מועתקים, settle-היה-קשיח-8k/100k) | דריפט-סיכון-בכסף | מקור-אמת-אחד |
+| 6 | קוד-מת: placeOrder (אפס-קוראים!), order_gc-void-evs, void-nowMs | מלכודות-דריפט | נמחקו |
+| 7 | nextNonce: Math.random האחרון-בליבה → מונה-מונוטוני (ההערה-טענה-אפס-random-בעוד-שורה-357-השתמשה — טוען-מול-מציאות-נתפס) | random בתוכן-op→שורש | דטרמיניזם-מלא |
+| 8 | getBurnWindow מחזיר-עותק + trim-מדויק (היה-רטט 301–401) | טבעת-חשופה | טבעת-מוגנת |
+
+### 14.3 תיקוני-כסף-ואמת (ממצאי-חוץ שאומתו-מול-הקוד)
+- **minOut NaN fail-open (קריטי)**: `Math.floor(Number(garbage))=NaN` → `out<NaN`-תמיד-false → swap-עוקף-מגן-החלקה. תוקן-דו-שכבתי (route-דוחה-לא-סופי; גרעין-דוחה-`!(isFinite&&out>=minOut)`). **נבדק-חי: bad-request.**
+- **אימות-נכסים**: `ASSETS`-ריצה בגרעין + routes; base===quote-נדחה. **נבדק-חי: EVILCOIN→bad-request, SAOS/SAOS→bad-request.**
+- **F-04**: `endpointHost` לכל-שרשרת — נקבע-בשידור-בפועל, fallback-`configuredHost`-ב-API-ובפנקס. **חי: sol=api.mainnet-beta.solana.com-וכו'.**
+- **restoreRecords סימטרי**: anchored/verified/mismatches כולם-נגזרים-מרשומות-anchored-בלבד → verified>anchored-בלתי-אפשרי-מבנית (באג-roshpina-נחתם-שורש).
+- **bind**: dev/start `-H 127.0.0.1` — הדמון-לא-חשוף-לרשת (foundry-P0-שני).
+
+### 14.4 U-01 — נפתר בשאילתה (jummper צדק: "one query settles it")
+- `getSignatureStatuses[searchTransactionHistory:true]` מול-mainnet-beta **וגם**-devnet, לכל-6-עוגני-ה-SOL-בחלון:
+- **תוצאה: 6/6 נמצאו-על-mainnet — finalized, err=null. devnet=null-לכולם.** הפס-הסולארי-שלנו-מעוגן-mainnet-אמת (בניגוד-לחשש).
+
+### 14.5 אימות-חי-סופי (טביעת-קוד `saos-dex/1.8.0+settle9-optimize`)
+- tsc נקי · eslint נקי · דמון-מופעל-מחדש-על-ה-bind-החדש, snapshot-נטען, h4423→4474-רציף
+- invariants ×3 = 1/1/1 · halted=false · dbOk=true · אפס-ALERT-בלוג (חותמים-עוברים-את-ה-invariant-החדש)
+- exam ok:true (דטרמיניזם) · RUN-PROOF-בדפדפן → PASS · אפס-שגיאות-קונסולה · צילום: screenshots/settle9-proof-pass.png
+- gates: בלי-כותרת→403 · עם-כותרת+קלט-זבל→bad-request · קלט-תקין→queued
+
+---
+*SETTLE-9 · הדקס מהיר-פי-2-בבלוק, חף-Math.random, ממנה-אחד, מגן-minOut, מעיד-על-רשת · U-01-סגור-mainnet · אפס-סודות-במסמך.*

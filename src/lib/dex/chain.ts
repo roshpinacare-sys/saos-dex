@@ -32,13 +32,15 @@ const CHART_CAP = 240;
 /** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
  * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
  * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
-export const CODE_VERSION = "saos-dex/1.7.0+settle8-crossaudit";
+export const CODE_VERSION = "saos-dex/1.8.0+settle9-optimize";
 
 /** טבעת-דגימת-הדלק (SETTLE-5): {גובה, גז-מצטבר} לכל-בלוק, חלון-~400 בלוקים.
  * צריכת-השריפה-החלונית = (אחרון−ראשון)/(hאחרון−hראשון) — אמת-לרגע זה,
  * בניגוד לממוצע-החיים (gasUsed/height) שדורד לאט ומציג-משטר-ישן. */
 export function getBurnWindow(): { h: number; gasUsed: number }[] {
-  return g.__saosDexChain?.fuelSamples ?? [];
+  // FIX(SETTLE-9 hygiene): החזרת-המערך-הפנימי-החי אפשרה לקורא-עתידי למיין/לשנות
+  // ולשחות את הטבעת — עותק-בזול (החלון ≤400 דגימות) סוגר את-זה.
+  return (g.__saosDexChain?.fuelSamples ?? []).slice();
 }
 
 export interface TapeEvent extends TradeEvent { h: number }
@@ -68,6 +70,7 @@ interface ChainRT {
   halted: boolean; // fail-fast: הפרת-אינווריאנטה מעלה-את-השרשרת (לא בונה בלוקים נוספים)
   haltReason: string | null; // פורנזי — מה בדיוק נתפס (חשוף ב-API)
   version: number;
+  cachedRoot: { h: number; root: string } | null; // FIX(SETTLE-9 perf): stateRoot-פר-גובה — getState פר-לקוח לא מחשב-מחדש O(state)
 }
 
 const g = globalThis as unknown as { __saosDexChain?: ChainRT };
@@ -157,7 +160,7 @@ function flushSnapshot(rt: ChainRT): void {
  * הסדר קריטי: קבלה ל-DB → ואז relaySeal (לעולם לא-חוסם, לא-זורק — כשל-Relay
  * אינו רשאי להפיל את השרשרת, ואילו כשל-DB מסומן dbOk לתצפית).
  */
-async function seal(rt: ChainRT): Promise<void> {
+async function seal(rt: ChainRT, blockRoot: string): Promise<void> {
   const st = rt.st;
   if (rt.blockHashes.length === 0) return;
   const root = merkleRoot(rt.blockHashes);
@@ -179,8 +182,11 @@ async function seal(rt: ChainRT): Promise<void> {
   invariant(info.toHeight - info.fromHeight + 1 === rt.blockHashes.length, "seal-window-contiguity");
   // (2) שורש-המרקל אכן נגזר מhashי-הבלוקים שבחלון (עדות-מחייבת את הבלוקים עצמם)
   invariant(merkleRoot(rt.blockHashes) === root, "seal-merkle-root");
-  // (3) ה-stateRoot הקנוני מחייב את מצב-העולם הנוכחי במלואו
-  invariant(info.stateRoot === stateRoot(st), "seal-state-root");
+  // (3) FIX(SETTLE-9 perf): ה-stateRoot הקנוני מחייב את מצב-העולם שממנו נבנה הבלוק.
+  // היה-פה חישוב-O(state)-מלא שני (טאוטולוגיה — אותה-פונקציה טהורה על אותו-מצב)
+  // בכל-חותם. עכשיו: השוואה-מול-שורש-זמן-הבלוק שהועבר-מ-buildBlock —
+  // אימות-הקפאה אמיתי (מוטציה בין-בניית-הבלוק לחותם = נפילה) בעלות-אפס.
+  invariant(info.stateRoot === blockRoot, "seal-state-root");
   // (4) ה-digest אכן ההאש של תוכן-החותם עצמו (אימות-עצמי לפני-יציאה).
   // ה-digest חושב על canon(info) כאשר info.digest עוד היה "" — הבדיקה בונה
   // מחדש את אותה-צורה (בלי-ה-digest) ומשווה; הכללה-עצמית של ההאש בתוך עצמו
@@ -247,7 +253,12 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   applyOp(st, { type: "heartbeat", issuer: "treasury", nonce: sysNonce(st, "hb") }, t0);
 
   st.height++;
-  const bh = sha256(canon({ h: st.height, ops: applied, gas: st.gasUsed, root: stateRoot(st) }));
+  // FIX(SETTLE-9 perf): stateRoot חושב-פעמיים-פר-בלוק (hash בלוק + כתיבת-DB) —
+  // O(state) מלא כל-פעם (~3ms בתקרת-מצב). חישוב-אחד + העברה-לחותם (והחותם
+  // משתמש-בו כאימות-הקפאה: אם-המצב זז בין-בניית-הבלוק לחותם — ה-invariant נופל).
+  const root = stateRoot(st);
+  rt.cachedRoot = { h: st.height, root }; // אותו-גובה — מנצלים-את-החישוב-גם-ל-getState
+  const bh = sha256(canon({ h: st.height, ops: applied, gas: st.gasUsed, root }));
   rt.blockHashes.push(bh);
   const buildMs = Date.now() - t0;
   rt.buildMsRolling = Math.floor(rt.buildMsRolling * 0.8 + buildMs * 0.2);
@@ -257,12 +268,12 @@ async function buildBlock(rt: ChainRT): Promise<void> {
 
   try {
     await db.blockHeader.create({
-      data: { height: st.height, hash: bh, stateRoot: stateRoot(st), opsCount: applied, gasUsed: st.gasUsed, buildMs },
+      data: { height: st.height, hash: bh, stateRoot: root, opsCount: applied, gasUsed: st.gasUsed, buildMs },
     });
     rt.dbOk = true; // הצלחה מאשרת מחדש — הדגל לא נשאר דומם-לשלילה
   } catch { rt.dbOk = false; }
 
-  if (st.height % SEAL_EVERY === 0) await seal(rt);
+  if (st.height % SEAL_EVERY === 0) await seal(rt, root);
   if (st.height % GC_EVERY === 0) {
     rt.mempool.push({ type: "order_gc", issuer: "treasury", nonce: sysNonce(st, "gc") });
   }
@@ -275,14 +286,15 @@ async function tick(rt: ChainRT): Promise<void> {
   try {
     rt.tickCount++;
     // ארנה + בוטים → ממפול
-    arenaTick(rt.st, rt.tickCount, Date.now(), rt.params, rt.rt, (op) => {
+    arenaTick(rt.st, rt.tickCount, rt.params, rt.rt, (op) => {
       if (rt.mempool.length < 512) rt.mempool.push(op);
     });
     await buildBlock(rt);
     // דגימת-דלק (SETTLE-5): כל-בלוק — טבעת-400 (≈20 דק׳) לשריפה-חלונית-אמת.
     // חוץ-מצב בכוונה: ה-DexState/שורש-המצב נשארים-דטרמיניסטיים-לריפליי.
     rt.fuelSamples.push({ h: rt.st.height, gasUsed: rt.st.gasUsed });
-    if (rt.fuelSamples.length > 400) rt.fuelSamples.splice(0, 100);
+    // FIX(SETTLE-9): ה-trim הישן (splice(0,100)) רטט 301–401 דגימות — חיתוך-מדויק לתקרה
+    if (rt.fuelSamples.length > 400) rt.fuelSamples.splice(0, rt.fuelSamples.length - 400);
     if (rt.tickCount % SNAPSHOT_EVERY === 0) flushSnapshot(rt);
   } catch (e) {
     if (e instanceof InvariantViolation) {
@@ -311,6 +323,7 @@ export function ensureChain(): ChainRT {
     fuelSamples: [],
     buildMsRolling: 0, opsPerSecRolling: 0, startedAt: Date.now(), lastBlockAt: 0,
     faucetAt: {}, dbOk: true, halted: false, haltReason: null, version: 1,
+    cachedRoot: null,
   };
   g.__saosDexChain = rt;
   // אתחול-אסינכרוני: תמונת-מצב → אחרת ג'נזיס; אחר-כך טיימר
@@ -352,9 +365,14 @@ export function submitOp(op: Op): { queued: boolean; reason?: string } {
   return { queued: true };
 }
 
+// FIX(SETTLE-9 determinism): ה-Math.random האחרון בליבה — ה-nonce הוא תוכן-op
+// הנכנס ל-st.nonces ולכן ל-stateRoot. מונה-תהליך-מונוטוני = ייחודיות מלאה בלי-מקריות
+// (ה-uniqueness הוא כל-מה-ש-dedupe הגרעין צריך; אין-כאן קריפטו).
+let nonceSeq = 0;
 export function nextNonce(prefix: string): string {
   const rt = ensureChain();
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}-${rt.st.nonces.length}`;
+  nonceSeq = (nonceSeq + 1) % 1_000_000_000;
+  return `${prefix}-${Date.now().toString(36)}-${nonceSeq.toString(36)}-${rt.st.nonces.length}`;
 }
 
 export function operatorFaucet(): { ok: boolean; reason?: string } {
@@ -552,10 +570,16 @@ export function chainVersion(): number {
 export function getState() {
   const rt = ensureChain();
   const st = rt.st;
+  // FIX(SETTLE-9 perf): כל-קריאת-GET/state (poll-כל-לקוח, כל-בלוק) חישבה O(state) מלא.
+  // cache פר-גובה: המצב החי משתנה רק בתוך tick/buildBlock (מודל-כותב-יחיד).
+  const root = rt.cachedRoot && rt.cachedRoot.h === st.height
+    ? rt.cachedRoot.root
+    : stateRoot(st);
+  if (!rt.cachedRoot || rt.cachedRoot.h !== st.height) rt.cachedRoot = { h: st.height, root };
   return {
     height: st.height,
     tps: rt.opsPerSecRolling,
-    stateRoot: stateRoot(st),
+    stateRoot: root,
     gasUsed: st.gasUsed,
     opsTotal: st.stats.opsTotal,
     fills: st.stats.fills,
@@ -628,6 +652,7 @@ export async function resetChain(): Promise<void> {
   // בדיוק-מה-SETTLE-5 ריפא). וגם: chain-מושהית (halted) נשארה-מתה-אחרי-reset
   // (tick מסרב-מוקדם) — reset הוא נתיב-ההתאוששות והוא חייב להעיר.
   rt.fuelSamples = []; rt.buildMsRolling = 0; rt.opsPerSecRolling = 0;
+  rt.cachedRoot = null; // FIX(SETTLE-9): cache-השורש מת לפי-גובה — reset מתחיל-גובה-חדש
   rt.halted = false; rt.haltReason = null;
   try {
     await db.blockHeader.deleteMany({});

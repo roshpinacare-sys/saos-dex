@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { submitOp, nextNonce } from "@/lib/dex/chain";
+import { ASSETS } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,10 @@ export async function POST(req: Request) {
     };
     const action = body.action === "fill" ? "fill" : "order";
     const amount = Math.floor(Number(body.amount));
-    if (!body.base || !body.quote || (body.side !== "buy" && body.side !== "sell") || !(amount > 0)) {
+    // FIX(SETTLE-9 fail-closed): אימות-נכסים מפורש (הגרעין מאמת-גם — הגנה-לעומק)
+    if (!body.base || !body.quote || body.base === body.quote
+      || !ASSETS.includes(body.base as never) || !ASSETS.includes(body.quote as never)
+      || (body.side !== "buy" && body.side !== "sell") || !(amount > 0)) {
       return NextResponse.json({ ok: false, error: "bad-request" }, { status: 200 });
     }
     const price = body.price === undefined ? undefined : Math.floor(Number(body.price));

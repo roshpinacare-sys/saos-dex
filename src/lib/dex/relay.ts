@@ -109,6 +109,9 @@ export interface RelayChainState {
   verified: number;
   mismatches: number;
   breaker: BreakerView;
+  // FIX(CROSS-F-04, saos-jummper): הפנקס-הציבורי לא-העיד על-איזו-רשת/שער כל-עיגון
+  // פגע — devnet-מול-mainnet היו בלתי-נבדלים. עתה: host בפועל (בדידורג/עודכן בשידור).
+  endpointHost: string | null;
 }
 
 interface RelayMetrics {
@@ -426,6 +429,20 @@ function backoffMs(attempt: number): number {
   return Math.floor(base * (0.8 + Math.random() * 0.4));
 }
 
+/* FIX(CROSS-F-04): host-מקורת לכל-שרשרת — עדות-רשת גם-לפני-השידור-הראשון.
+ * ETH/SOL מה-env (עם-ברירות-המחדל המיושרות ל-verify) · TRON קבוע · hive/steem
+ * ה-node המועדף. היה-פה שער-לא-מוכרז = פנקס-עיגון שאינו-יכול להעיד על-רשת. */
+function hostOf(u: string | undefined): string | null {
+  if (!u) return null;
+  try { return new URL(u).host; } catch { return null; }
+}
+function configuredHost(chain: ChainName): string | null {
+  if (chain === "tron") return hostOf(TRON_RPC);
+  if (chain === "eth") return hostOf(process.env.ETH_RPC_URL ?? "https://eth.rpc.blxrbdn.com");
+  if (chain === "sol") return hostOf(process.env.SOL_RPC_URL ?? "https://api.mainnet-beta.solana.com");
+  return hostOf((chain === "steem" ? STEEM_NODES : HIVE_NODES)[0]);
+}
+
 /* ── רישום-ציבורי (state/anchors.json — הוכחות בלבד, אפס סודות) ── */
 function upsertRecord(rt: RelayRT, rec: AnchorRecord): void {
   const i = rt.records.findIndex((r) => r.chain === rec.chain && r.height === rec.height && r.at === rec.at);
@@ -460,6 +477,8 @@ function persist(rt: RelayRT): void {
         anchored: rt.chainState[c].anchored,
         verified: rt.chainState[c].verified,
         mismatches: rt.chainState[c].mismatches,
+        // FIX(CROSS-F-04): איזו רשת/שער — עדות-גלויה בפנקס הציבורי
+        endpointHost: rt.chainState[c].endpointHost ?? configuredHost(c),
         breaker: rt.chainState[c].breaker,
         explorer: link,
         lastError: rt.chainState[c].lastError,
@@ -632,6 +651,7 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
       }
       // payload מכווץ — RC-תודעתי (כל בייט = כ-580K RC על Hive)
       const r = await grapheneSealBroadcast(nodes[0], chainId, anchorAccount, payload, wif, auth);
+      rt.chainState[chain].endpointHost = hostOf(nodes[0]); // FIX(CROSS-F-04): השער בפועל — נרשם
       rec.txid = r.txid;
       rec.status = "anchored";
     }
@@ -741,16 +761,22 @@ function restoreRecords(rt: RelayRT): void {
       const recs = clean.filter((r) => r.chain === c);
       if (recs.length === 0) continue;
       const last = recs[0];
-      rt.chainState[c].anchored = recs.filter((r) => r.status === "anchored").length;
-      rt.chainState[c].verified = recs.filter((r) => r.verified === true).length;
-      rt.chainState[c].mismatches = recs.filter((r) => r.verified === false).length;
+      // FIX(roshpina-forensic): הספירה הייתה אסימטרית — anchored נספר מ-status
+      // אך verified/mismatches נספרו מכל-הרשומות (כולל-pending) — יצר מצב
+      // בלתי-אפשרי verified>anchored בפנקס הציבורי. עתה: הכל נגזר מתוך
+      // רשומות-ה-anchored בלבד → verified+mismatches ≤ anchored מבנית.
+      const anchoredRecs = recs.filter((r) => r.status === "anchored");
+      rt.chainState[c].anchored = anchoredRecs.length;
+      rt.chainState[c].verified = anchoredRecs.filter((r) => r.verified === true).length;
+      rt.chainState[c].mismatches = anchoredRecs.filter((r) => r.verified === false).length;
       rt.chainState[c].lastTxid = last.txid;
       rt.chainState[c].lastHeight = last.height;
       rt.chainState[c].lastAt = last.at;
       rt.chainState[c].status = last.status;
     }
-    rt.metrics.verified = clean.filter((r) => r.verified === true).length;
-    rt.metrics.mismatches = clean.filter((r) => r.verified === false).length;
+    const anchoredAll = clean.filter((r) => r.status === "anchored");
+    rt.metrics.verified = anchoredAll.filter((r) => r.verified === true).length;
+    rt.metrics.mismatches = anchoredAll.filter((r) => r.verified === false).length;
     console.info(`[saos-relay] restored ${clean.length} anchor records from prior run — reconcile queue re-armed`);
   } catch { /* אין-קובץ/פורמט-ישן — פתיחה-נקייה */ }
 }
@@ -765,6 +791,7 @@ function rtInit(): RelayRT {
     lastError: null, lastVerifyError: null,
     anchored: 0, verified: 0, mismatches: 0,
     breaker: mkBreaker(),
+    endpointHost: null,
   });
   const rt: RelayRT = {
     jobs: [], processing: false, records: [],
@@ -844,7 +871,10 @@ export function relayStatus(): Record<string, unknown> {
     identities: { eth: rt.ethAddress, sol: rt.solAddress },
     ethIntents: rt.ethIntents.slice(0, 3).map((i) => ({ height: i.height, intentHash: i.intentHash.slice(0, 18) + "…", signature: i.signature.slice(0, 12) + "…", address: i.address, verified: i.verified })),
     metrics: rt.metrics,
-    chains: rt.chainState,
+    // FIX(CROSS-F-04): גם-view ה-API מעיד על-הרשת (fallback לשער-המקורת כשאין-שידור-בפועל-עדיין)
+    chains: Object.fromEntries((ALL_CHAINS as ChainName[]).map((c) => [
+      c, { ...rt.chainState[c], endpointHost: rt.chainState[c].endpointHost ?? configuredHost(c) },
+    ])),
     records: rt.records.slice(0, 60).map((r) => ({
       chain: r.chain, height: r.height, status: r.status, txid: r.txid, at: r.at, attempt: r.attempt,
       stateRoot: r.stateRoot, // עדות-ציבורית — נדרשת לאימות-עיגון-טרי בעמדת-הסליקה
