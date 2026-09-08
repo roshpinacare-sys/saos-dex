@@ -20,6 +20,7 @@
  * אימות-עצמי fail-closed — כתובת-נגזרת חייבת להתאים לכתובת-הצפוי.
  */
 import { ed25519 } from "@noble/curves/ed25519";
+import { assertAllowedHost } from "./fence"; // FIX(SETTLE-11): גדר-ריבונית — שער-יוצא מקובע בלבד
 
 export const SOL_RPCS = (process.env.SOL_RPC_URL
   ? [process.env.SOL_RPC_URL]
@@ -70,6 +71,7 @@ function cu16(n: number): Buffer { // compact-u16 (Solana shortvec)
 
 /* ── JSON-RPC (אותו-היגיין-timeout) ── */
 async function rpc<T>(endpoint: string, method: string, params: unknown[], timeoutMs = 20000): Promise<T> {
+  assertAllowedHost(endpoint, "relay-sol.rpc"); // FIX(SETTLE-11): גדר-ריבונית fail-closed
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
