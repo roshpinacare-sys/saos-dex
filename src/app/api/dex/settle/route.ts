@@ -62,6 +62,21 @@ export async function POST() {
   const st = getLiveState();
   const pushed: { kind: string; detail: string }[] = [];
 
+  // (0) עירוי-חיות מיידי (THE-REFUEL): כל-סוכני-הבחינה/הגריד מקבלים-קרדיטים
+  // עוד-הטיק-הזה — העברה-טהורה מהאוצר (אפס-הטבעה, Σcredits נשמר). בלי-זה
+  // סוכנים-שאזל-קרדיטים-שלהם לא-מצטטים ולא-עוברים-בחינה (insufficient-credits).
+  const EXAM_AGENTS = ["soldier-1", "soldier-2", "soldier-3", "soldier-4", "bot-a", "bot-b", "bot-c"] as const;
+  for (const ag of EXAM_AGENTS) {
+    const c = st.credits[ag] ?? 0;
+    if (c < 8_000) {
+      const amt = Math.min(30_000 - c, 100_000);
+      if (amt > 0) {
+        const r = submitOp({ type: "refuel", issuer: "treasury", nonce: `settle-refuel-${ag}-${Date.now().toString(36)}`, to: ag, amount: amt });
+        pushed.push({ kind: "refuel", detail: r.queued ? `${ag} +${amt}µ credits (had ${c})` : `rejected: ${r.reason}` });
+      }
+    }
+  }
+
   const m = { base: "SAOS", quote: "USDS" } as const;
   const p = getPool(st, poolKey(m.base, m.quote));
   const fair = stabilityCheck(st).fair;
