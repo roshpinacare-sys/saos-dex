@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCensus, getLiveState, getState, setArenaParams, submitOp } from "@/lib/dex/chain";
+import { getCensus, getLiveState, getState, setArenaParams, submitOp, CODE_VERSION, getBurnWindow } from "@/lib/dex/chain";
 import {
   genesisTotals, ledgerAudit, runExam, realMoneyAudit, stabilityCheck, runwayCheck,
 } from "@/lib/dex/settle";
@@ -29,11 +29,13 @@ export async function GET() {
   const exam = runExam(st);
   const realMoney = await realMoneyAudit();
   const stability = stabilityCheck(st);
-  const runway = runwayCheck(st);
+  const runway = runwayCheck(st, undefined, getBurnWindow());
   const state = getState();
   const payload = {
     ok: true,
     at: new Date().toISOString(),
+    burnSamplesLen: getBurnWindow().length, // דיאגנוסטיקה (SETTLE-5) — אורך-טבעת-הדגימה שה-route רואה
+    codeVersion: CODE_VERSION, // טביעת-קוד: גילוי-דעיכת-תהליך (תהליך-ישן מריץ קוד-ישן — ממצא-חי 2026-09)
     height: state.height,
     stateRoot: state.stateRoot,
     halted: state.halted,
@@ -85,8 +87,10 @@ export async function POST() {
     if (c < 8_000) {
       const amt = Math.min(30_000 - c, 100_000);
       if (amt > 0) {
-        // ממנה-ראשון: הארנה (רזרבה-עמוקה); האוצר-גיבוי (עמלות-בלבד — THE-FOUNTAIN)
-        const funder = (st.credits["arena"] ?? 0) >= amt + 10_000 ? "arena" : "treasury";
+        // ממנה-מדורג (SETTLE-5): ארנה → אוצר (עמלות — THE-FOUNTAIN) → מפעיל-אנושי
+        // (רזרבת-ג'נזיס — קו-הגנה-האחרון; העברה-טהורה, אפס-הטבעה)
+        const cr = (n: string) => st.credits[n] ?? 0;
+        const funder = cr("arena") >= amt + 10_000 ? "arena" : cr("treasury") >= amt ? "treasury" : "operator";
         const r = submitOp({ type: "refuel", issuer: funder, nonce: `settle-refuel-${ag}-${Date.now().toString(36)}`, to: ag, amount: amt });
         pushed.push({ kind: "refuel", detail: r.queued ? `${ag} +${amt}µ credits ← ${funder} (had ${c})` : `rejected: ${r.reason}` });
       }

@@ -267,4 +267,35 @@ curl -s http://127.0.0.1:3010/saos-dex/api/dex/proofs
 
 ---
 
-*נוצר: 2026-02 (שלב-12) · עודכן: 2026-09 (שלב-13, §8 REFUEL · §9 FOUNTAIN) · דמון-חי · מסמך-זה-נבנה-מהקוד-בריפו עצמו.*
+
+## §10 — 第三次耗竭复发与耐久经济学（SETTLE-5, 2026-09）
+
+**症状（活体发现）**：FOUNTAIN后约1小时——treasury 0µ、arena 1.7M→569k（~70k/min
+ drains）、喷泉按设计**干涸**（未兑现费用9.7kµ<20k门槛，正确拒绝）、跑道遥测12.2h
+ WARN。REFUEL/FOUNTAIN救了agents与treasury，但**转移只能重分配、不能创造**——
+ 燃烧990µ/blk vs 费用回流~2.7µ/blk，系统级死亡只是被推迟。
+
+**四修复（全部file:line入repo）**：
+1. **耐久gas表**（kernel.ts:21-29 "לוח-זמנים-סיבולת"）：高频op削价——order 150→60、
+   cancel 60→15、fill 200→60、pool_swap 220→100；稀有op（wrap/attest/harvest）不动。
+   燃烧实测990→~110-160µ/blk（**8.1×降**）。
+2. **三级出资人**（kernel.ts:51 FUEL_FUNDERS + mm.ts:170-173 + settle/route.ts:89-92）：
+   arena（深储备）→ treasury（费用背书——THE-FOUNTAIN）→ **operator**（人类genesis
+   储备~10M，最后防线；纯转移零增发——出资本身烧不到，等于主权者亲手给电网供电）。
+3. **窗口化跑道遥测**（chain.ts fuelSamples环+getBurnWindow + settle.ts:532-551）：
+   生涯均值gasUsed/height在政权切换后长期说谎（实测122µ/blk时仍显示~1000）——改为
+   ~400块滑动窗口+burnWindowBlocks诚实标注，<60块回退生涯均值。
+4. **CODE_VERSION戳**（chain.ts:35 + settle/route.ts:38）：settle GET自报代码版本——
+   "旧进程跑旧代码"（本round差点误诊、且历史上真实发生过）从此可检测。
+
+**活体恢复证据**（2026-09-08）：allSettled=true×5 · spread 15bps（较此前30bps更紧）·
+深度±1% 780k/920k µ · 7/7 agents考试PASS · 铁审计YES（Σcredits+gas−feeMinted===
+genesis；pools===meter+profit+minted）· UI跑道面板实测`@ 108µ/blk → ~112.3h · OK`
+（settle5-desktop.png / settle5-mobile.png）。
+
+**诚实边界不变**：封闭经济仍有限（当前~112h）；喷泉需未兑现费用>20k才自铸（13.2kµ
+且持续累积中）；ETH gas 0.0001将尽、TRON/Hive诚实等待融资（阶段11悬置）。
+
+---
+
+*נוצר: 2026-02 (שלב-12) · עודכן: 2026-09 (שלב-13, §8 REFUEL · §9 FOUNTAIN · §10 ENDURANCE) · דמון-חי · מסמך-זה-נבנה-מהקוד-בריפו עצמו.*

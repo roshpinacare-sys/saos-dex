@@ -167,9 +167,10 @@ export function arenaTick(
       if (c < 4_000) {
         const amt = Math.min(30_000 - c, REFUEL_CAP);
         if (amt <= 0) continue;
-        // ממנה-ראשון: הארנה (רזרבה-עמוקה — "arena funds the floor"); האוצר-גיבוי
-        // (הקרדיטים-שלו מגיעים-מעמלות-בלבד — THE-FOUNTAIN).
-        const funder = (st.credits["arena"] ?? 0) >= amt + 10_000 ? "arena" : "treasury";
+        // ממנה-מדורג (SETTLE-5): ארנה (רזרבה-עמוקה) → אוצר (עמלות — THE-FOUNTAIN)
+        // → מפעיל-אנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון; העברה-טהורה, אפס-הטבעה).
+        const cr = (n: string) => st.credits[n] ?? 0;
+        const funder = cr("arena") >= amt + 10_000 ? "arena" : cr("treasury") >= amt ? "treasury" : "operator";
         pushOp({ type: "refuel", issuer: funder, nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
       }
     }
