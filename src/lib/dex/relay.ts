@@ -608,7 +608,10 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
     }
   } catch (e) {
     const msg = String((e as Error)?.message || e).slice(0, 180);
-    const economic = /rc-low|has not enough RC|unfunded/i.test(msg);
+    // סיווג-כנות: חוסר-תקציב (RC/unfunded) **וגם-הגבלת-סביבה** (rate-limit/quota/429
+    // מ-RPC-ציבורי) אינם כשל-מערכת — הם המתנה-כלכלית כנה. ספירתם ככשל-קשי
+    // יצרה-מעגל-שבירה: breaker נפתח ×7 על-רכבת-בריאה שרק-מוגבלת-תדר.
+    const economic = /rc-low|has not enough RC|unfunded|rate limit|too many requests|quota|\b429\b/i.test(msg);
     if (economic) {
       // חוסר-תקציב = המתנה כלכלית כנה — לא כשל-מערכת (לא נספר ל-breaker); בדיקה-מחדש תקופתית
       cs.attempts = 0;

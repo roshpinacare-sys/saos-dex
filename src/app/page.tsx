@@ -133,7 +133,7 @@ interface SettleResp {
   census: { agents: CensusAgent[] };
   ledger: {
     ok: boolean;
-    credits: { sum: number; gasUsed: number; expected: number; ok: boolean };
+    credits: { sum: number; gasUsed: number; expected: number; minted?: number; ok: boolean };
     assets: { asset: string; live: number; expected: number; ok: boolean; kind: string }[];
     escrow: { accounts: number; lockedSum: number; ordersSum: number; exact: boolean; availOk: boolean; ok: boolean };
     fees: { poolsTreasury: number; feeMeterPlusProfit: number; ok: boolean };
@@ -153,6 +153,11 @@ interface SettleResp {
     dissonanceBps: { poolVsFair: number; bookVsRef: number; fairVsRef: number };
     spreadBps: number; depth1pct: { bidMu: number; askMu: number }; topImbalanceBps: number;
     sitting: boolean; reasons: string[];
+  };
+  runway?: {
+    burnPerHeight: number; totalCredits: number; systemRunwayBlocks: number; systemRunwayHours: number;
+    perAgent: { agent: string; credits: number; shareHours: number }[];
+    level: "ok" | "warn" | "crit"; note: string;
   };
   verdict: { ledgerOk: boolean; examOk: boolean; realMoneyOk: boolean; marketSitting: boolean; allSettled: boolean };
 }
@@ -562,8 +567,16 @@ function SettlementDeskPanel({ report, loading, refresh, stabilize, stabilizing 
             <div className="mt-2 space-y-0.5 font-mono text-[9px] text-zinc-500" dir="ltr">
               <div>ledger conservation: <span className={s.ledger.ok ? "text-emerald-300" : "text-red-300"}>{s.ledger.ok ? "EXACT" : "VIOLATION"}</span>
                 {s.ledger.ok ? "" : ` · ${s.ledger.errors[0] ?? ""}`}</div>
-              <div>escrow: {fmtInt(s.ledger.escrow.lockedSum)}µ locked === {fmtInt(s.ledger.escrow.ordersSum)}µ orders · credits Σ+gas === genesis: {s.ledger.credits.ok ? "YES" : "NO"}</div>
-              <div>fees measured: {fmtInt(s.ledger.fees.poolsTreasury)}µ === feeMeter+profit: {s.ledger.fees.ok ? "YES" : "NO"}</div>
+              <div>escrow: {fmtInt(s.ledger.escrow.lockedSum)}µ locked === {fmtInt(s.ledger.escrow.ordersSum)}µ orders · credits Σ+gas−minted({fmtInt(s.ledger.credits.minted ?? 0)}) === genesis: {s.ledger.credits.ok ? "YES" : "NO"}</div>
+              <div>fees measured: {fmtInt(s.ledger.fees.poolsTreasury)}µ === meter+profit+minted(fuel): {s.ledger.fees.ok ? "YES" : "NO"}</div>
+              {s.runway && (
+                <div data-testid="sim-runway">
+                  FUEL RUNWAY · Σcredits {fmtInt(s.runway.totalCredits)}µ @ {fmtInt(Math.round(s.runway.burnPerHeight))}µ/blk
+                  → ~{s.runway.systemRunwayHours.toFixed(1)}h ({fmtInt(s.runway.systemRunwayBlocks)} blocks)
+                  · <span className={s.runway.level === "ok" ? "text-emerald-300" : s.runway.level === "warn" ? "text-amber-300" : "text-red-300"}>{s.runway.level.toUpperCase()}</span>
+                  <span className="text-zinc-600"> · closed SIM economy — refuel is transfer-only</span>
+                </div>
+              )}
             </div>
           </div>
 

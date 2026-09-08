@@ -7,7 +7,7 @@
  *  · בוטי-רעש: זרימה-חופשית שמגלה-מחיר (dex-facts: "עודף-מחיר נאכל מיד")
  */
 import type { DexState, Op, Asset } from "./kernel";
-import { FEE_BPS, REFUEL_CAP, poolKey, avail, notional } from "./kernel";
+import { FEE_BPS, LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, poolKey, avail, notional } from "./kernel";
 import { sortBook } from "./book";
 import { poolMid, getPool } from "./amm";
 
@@ -32,11 +32,11 @@ export const DEFAULT_PARAMS: ArenaParams = {
   enabled: true,
   spreadBps: 32,   // מהדורת-ייצוב: ספרד-צמודה (היתה 40)
   stepBps: 20,     // רמות-צפופות (היה 25)
-  levels: 3,       // עומק-גריד 3-רמות (היו 2)
+  levels: 2,       // גריד 2-רמות — מהדורת-דלק: חצי-שריפת-ריקוט (היו 3)
   sizeMu: 80_000, // 80 SAOS
   maxInventoryMu: 2_400_000,
   minEdgeBps: 15,
-  requoteBps: 12,
+  requoteBps: 24,  // סבלנות-ריקוט — פחות-צ'רנוב-גז (היה 12; מהדורת-דלק)
   noise: true,
 };
 
@@ -153,26 +153,40 @@ export function arenaTick(
   // מת-מוות-מבני: gas יורד-מונוטונית, החיילים מפסיקים-לצטט, הספר מתרוקן,
   // הספרד-נעלמת והשוק מפסיק-לשבת. תיקון-שורש לתשישות-הכלכלה-הסימולטיבית.
   if (tick % 16 === 0) {
+    // THE-FOUNTAIN: אוצר-ריק? הטבעה-עצמית מגובה-עמלות-מדודות (profit-שהוכר +
+    // feeMeter-מעל-רצפת-הסולם, מדוד-תקרה) — המסחר-עצמו מחזיר-את-הדלק-ששרף.
+    // קודם-ההטבעה, אחר-כך העירוי.
+    const trCr = st.credits["treasury"] ?? 0;
+    const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, Math.floor(((st.feeMeter ?? 0) - LADDER_FUEL_FLOOR) / 2));
+    if (trCr < 10_000 && fuelAvail > 20_000) {
+      const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
+      if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-${tick}`, to: "treasury", amount: mint });
+    }
     for (const ag of [...soldiers, "bot-a", "bot-b", "bot-c"]) {
       const c = st.credits[ag] ?? 0;
       if (c < 4_000) {
         const amt = Math.min(30_000 - c, REFUEL_CAP);
-        if (amt > 0) pushOp({ type: "refuel", issuer: "treasury", nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
+        if (amt <= 0) continue;
+        // ממנה-ראשון: הארנה (רזרבה-עמוקה — "arena funds the floor"); האוצר-גיבוי
+        // (הקרדיטים-שלו מגיעים-מעמלות-בלבד — THE-FOUNTAIN).
+        const funder = (st.credits["arena"] ?? 0) >= amt + 10_000 ? "arena" : "treasury";
+        pushOp({ type: "refuel", issuer: funder, nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
       }
     }
   }
 
-  // קצבת-בוטים (מורשת-rebalancing של עושי-שוק אמת): כל-24 טיקים ממלאים-מחדש
-  // סוחרי-רעש שנדלדלו — בלי-זה הזרימה-החופשית מתה על-זוג-שלם (אפס-מילויים →
-  // אפס-גילוי-מחיר). מסד-הגבול: סכומים-קטנים מהאוצר, שקוף-על-הספר (transfer מדוד-GAS).
+  // קצבת-בוטים: כל-24 טיקים ממלאים-מחדש סוחרי-רעש שנדלדלו — בלי-זה הזרימה-
+  // החופשית מתה (אפס-מילויים → אפס-גילוי-מחיר). **המפעיל-הנדיב: הארנה**
+  // (המייצבת-עם-המלאי-העמוק) — לא-האוצר: לאוצר יש רק-את-קיזוז-העמלות,
+  // והקצבה-ממנו-רוקנה-אותו-עד-ריק (ממצא-חי 2026-09). מדידה-על-**avail** (כולל
+  // נעילות-ספר) ולא-יתרה-גולמית — פקודות-מנוחות של-בוט לא-ימנעו-מימון-חדש.
   if (params.noise && tick % 24 === 0) {
     for (const bot of ["bot-a", "bot-b", "bot-c"]) {
-      const b = st.balances[bot] ?? {};
-      if ((b["USDS"] ?? 0) < 15_000) {
-        pushOp({ type: "transfer", issuer: "treasury", nonce: `botseed-u${tick}-${bot}`, to: bot, asset: "USDS", amount: 40_000 });
+      if (avail(st, bot, "USDS") < 100_000) {
+        pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-u${tick}-${bot}`, to: bot, asset: "USDS", amount: 400_000 });
       }
-      if ((b["SAOS"] ?? 0) < 30_000) {
-        pushOp({ type: "transfer", issuer: "treasury", nonce: `botseed-s${tick}-${bot}`, to: bot, asset: "SAOS", amount: 30_000 });
+      if (avail(st, bot, "SAOS") < 100_000) {
+        pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-s${tick}-${bot}`, to: bot, asset: "SAOS", amount: 200_000 });
       }
     }
   }

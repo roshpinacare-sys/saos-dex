@@ -34,6 +34,7 @@ export const GAS_TABLE = {
   attest: 50,
   heartbeat: 10,
   refuel: 0, // THE-REFUEL: העברת-קרדיטים מהאוצר — אפס-גז (שירות-חיות כמו relay)
+  mint_fuel: 0, // THE-FOUNTAIN: הטבעת-דלק מגובה-עמלות-מדודות — אפס-גז, אוצר-בלבד
   relay: 0, // THE-DOOR: חוזה-חינם שכופה עבודה-אמת על רשת-מרוחקת
   relay_ack: 0,
 } as const;
@@ -42,6 +43,9 @@ export type OpKind = keyof typeof GAS_TABLE;
 export const FEE_BPS = 30; // עמלי-30bps כמו-הבריכה-הילידית (dex-facts)
 export const TREASURY_CUT_PCT = 30; // 30% מהעמלה → אוצר (רווח-מונוטוני, grid98)
 export const REFUEL_CAP = 100_000; // תקרת-עירוי-פר-פקודה — גם-אם-האוצר נחטף, הנזק מגודל
+export const FUEL_FUNDERS = ["treasury", "arena"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor")
+export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter≥8000 להרמה — המטבע לא ירעיב-אותו
+export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
 
 export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM";
 
@@ -70,6 +74,7 @@ export interface DexState {
   backing: Record<string, number>; // גיבוי נעול 1:1 לנכסים-עטופים
   treasuryProfit: number; // רווח-אוצר מצטבר-מונוטוני (µ)
   feeMeter: number; // עמלות-שנצברו-שטרם-נקצרו (מדידה-כנה)
+  feeMinted?: number; // THE-FOUNTAIN: Σקרדיטים-שהוטבעו-מעמלות-מדודות — מנוכה-באינווריאנטה (רשות: תמונות-מצב-ישנות)
   ladder: { refPrice: number; stepCostMu: number; lifts: number; lastLiftHeight: number; spentMu: number };
   journal: JournalEntry[];
   gasUsed: number;
@@ -219,11 +224,11 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       return { ok: true, gas };
     }
     case "refuel": {
-      // THE-REFUEL (114): חיות-כלכלית מתמדת — האוצר מעביר קרדיטים לסוכנים
-      // שאזל-המסלול-שלהם. **העברה-טהורה בלבד (אפס-הטבעה)**: Σcredits נשמר
-      // לכל-אורך, והאינווריאנטה הברזל Σcredits+gasUsed===ג'נזיס עומדת בדיוק
-      // כמו-קודם (האוצר מאבד-בדיוק מה שהסוכן מקבל). אוצר-בלבד, מדוד-תקרה.
-      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      // THE-REFUEL (114): חיות-כלכלית מתמדת — ממני-הדלק (FUEL_FUNDERS: אוצר +
+      // ארנה-המייצבת) מעבירים קרדיטים לסוכנים שאזל-המסלול-שלהם. **העברה-טהורה
+      // בלבד (אפס-הטבעה)**: Σcredits נשמר לכל-אורך (המממן מאבד-בדיוק מה-שהסוכן
+      // מקבל). מדוד-תקרה.
+      if (!(FUEL_FUNDERS as readonly string[]).includes(issuer)) return { ok: false, err: "funder-only", gas: 0 };
       const rAmt = op.amount ?? 0, rTo = String(op.to ?? "");
       if (!rTo || rTo === issuer || !(rAmt > 0)) return { ok: false, err: "bad-refuel", gas: 0 };
       if (rAmt > REFUEL_CAP) return { ok: false, err: "refuel-exceeds-cap", gas: 0 };
@@ -232,6 +237,30 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       st.credits[issuer] = (st.credits[issuer] ?? 0) - rAmt;
       st.credits[rTo] = (st.credits[rTo] ?? 0) + rAmt;
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "refuel", note: `→${rTo} ${rAmt}µ credits` });
+      return { ok: true, gas: 0 };
+    }
+    case "mint_fuel": {
+      // THE-FOUNTAIN (115): מיחזור-דלק — עמלות-שנמדדו-בפועל הופכות-חזרה לקרדיטים.
+      // בכלכלה-אמת העמלות משלמות-גז לוולידטורים; בספר-הריבוני הן מחזירות-את-הדלק
+      // שהמסחר-עצמו שרף. **גיבוי-כפול-וחד-פעמי**: treasuryProfit (עמלות-שהוכרו,
+      // נצרך-ראשון) + feeMeter-מעל-רצפת-הסולם (לא-מרעיב-את-מנוע-הערך). כל-µ
+      // מוטבע-נגרע-בדיוק-פעם-אחת מהמדידה (אין-הטבעה-כפולה של-אותה-עמלה) —
+      // ביקורת-העמלות (pools===feeMeter+profit) והאינווריאנטה
+      // Σcredits+gasUsed−feeMinted===ג'נזיס ממשיכות-לעמוד-בדיוק.
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      const fAmt = op.amount ?? 0, fTo = String(op.to ?? issuer);
+      if (!(fAmt > 0) || !fTo) return { ok: false, err: "bad-amount", gas: 0 };
+      if (fAmt > MINT_FUEL_CAP) return { ok: false, err: "mint-exceeds-cap", gas: 0 };
+      const fromProfit = Math.min(fAmt, Math.max(0, st.treasuryProfit));
+      const fromMeter = fAmt - fromProfit;
+      const meterAvail = Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
+      if (fromMeter > meterAvail) return { ok: false, err: "mint-exceeds-measured-fees", gas: 0 };
+      pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — כמו relay
+      st.treasuryProfit -= fromProfit;
+      st.feeMeter -= fromMeter;
+      st.feeMinted = (st.feeMinted ?? 0) + fAmt;
+      st.credits[fTo] = (st.credits[fTo] ?? 0) + fAmt;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "mint_fuel", note: `+${fAmt}µ credits →${fTo} (fees-backed: profit ${fromProfit} + meter ${fromMeter})` });
       return { ok: true, gas: 0 };
     }
     case "order": {
