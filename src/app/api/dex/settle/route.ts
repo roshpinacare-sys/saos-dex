@@ -7,6 +7,7 @@ import { DEFAULT_PARAMS } from "@/lib/dex/mm";
 import { poolMid, getPool } from "@/lib/dex/amm";
 import { poolKey, avail, funderFor, LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
+import { operatorAuth } from "@/lib/operator-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -63,6 +64,10 @@ export async function GET() {
  * 2) מנעול-בריכה-חד-פעמי: סוגרים-את-הפער-המלא בין-הבריכה לפייר (עד-250k µ)
  * ממפול-רגיל בלבד — כל-הפעולות מאושרות-על-הספר, אפס-עקיפות. */
 export async function POST(req: Request) {
+  // P0(25-a): שער-מפעיל — מוטציה דורשת טוקן x-saos-operator (בלי DEX_OPERATOR_TOKEN: 503 fail-closed)
+  const oa = operatorAuth(req);
+  if (oa) return oa;
+
   // FIX(FOUNDRY top-bug): שער-קונסולה — מוטציה-דורשת-כותרת-מנהלת
   const g = consoleGuard(req);
   if (g) return g;

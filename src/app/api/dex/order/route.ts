@@ -2,11 +2,16 @@ import { NextResponse } from "next/server";
 import { submitOp, nextNonce } from "@/lib/dex/chain";
 import { ASSETS } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
+import { operatorAuth } from "@/lib/operator-auth";
 
 export const dynamic = "force-dynamic";
 
 /** הצבת-הזמנת-לימיט (order) או מילוי-מיידי (fill) — חתום כ-operator על הספר הריבוני */
 export async function POST(req: Request) {
+  // P0(25-a): שער-מפעיל — מוטציה דורשת טוקן x-saos-operator (בלי DEX_OPERATOR_TOKEN: 503 fail-closed)
+  const oa = operatorAuth(req);
+  if (oa) return oa;
+
   // FIX(FOUNDRY top-bug): שער-קונסולה — מוטציה-דורשת-כותרת-מנהלת
   const g = consoleGuard(req);
   if (g) return g;
