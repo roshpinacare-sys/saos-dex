@@ -24,7 +24,7 @@ flowchart LR
     end
 
     subgraph CORE["Kernel — deterministic (sha256 stateRoot)"]
-        K["applyOp · 21 ops<br/>GAS table · integers-only"]
+        K["applyOp · 23 ops<br/>GAS table · integers-only"]
         B["book.ts — escrow orderbook<br/>crossing-at-placement"]
         AMM["amm.ts — x·y=k<br/>30bps (70% LP / 30% treasury)"]
         MM["mm.ts — soldier arena<br/>makers + budget-sized takers"]
@@ -40,6 +40,8 @@ flowchart LR
         S["Steem<br/>custom_json (active)"]
         H["Hive<br/>custom_json (active)"]
         T["TRON<br/>extra_data (funding-gated)"]
+        E["ETH<br/>EIP-1559 raw (funding-gated)"]
+        SL["SOL<br/>SPL-memo (funding-gated)"]
     end
 
     DB[("SQLite evidence<br/>blocks · seals · receipts")]
@@ -79,7 +81,7 @@ chain.ts חותם מרקל כל-12 בלוקים → Relay משדר ואז **קו
 
 | רכיב | מימוש | מורשת |
 |---|---|---|
-| **גרעין דטרמיניסטי** | 21 ops, טבלת-GAS מהמפרט, dedupe קשיח, stateRoot=sha256(canon) | kernel.cjs · CHAIN_SPEC |
+| **גרעין דטרמיניסטי** | 23 ops (כולל REFUEL/FOUNTAIN), טבלת-GAS מהמפרט, dedupe קשיח, stateRoot=sha256(canon) | kernel.cjs · CHAIN_SPEC |
 | **ספר-הזמנות** | escrow מלא (sell נועל בסיס · buy נועל ציטוט), מילוי במחיר-מייקר, partial fills | saos-dex.ts |
 | **בריכות AMM** | x·y=k שלמים, עמלי-30bps (70% LP · 30% אוצר), שימור-ערך בכל-swap | dex-facts · grid98 |
 | **ארנה אוטונומית** | 4 חיילים עושי-שוק + טייק-מסתובב + שער-שוליים (edge ≥ עמלה+מינ') + בוטי-רעש | grid98 "זאן-חיילים" |
@@ -97,8 +99,9 @@ bun run db:push
 bun run dev        # פורט 3010
 ```
 
-- טרמינל: `http://localhost:3010` (RTL עברית, זהות מוסדית zinc-950 · lightweight-charts · long-poll)
-- API: `/api/dex/state (long-poll ?v=) · markets · order · cancel · swap · pool · wrap · faucet · arena · wallets · proofs · bench · reset · my-orders · relay`
+- טרמינל: `http://localhost:3010` (basePath `/saos-dex`) (RTL עברית, זהות מוסדית zinc-950 · lightweight-charts · long-poll)
+- API: `/api/dex/state (long-poll ?v=) · settle (עמדת-הסליקה) · showcase (מעבדת-התקפות) · order (order/fill) · cancel · swap · pool · wrap · faucet · arena · wallets · proofs · bench (מקורר-60ש׳) · metrics (Prometheus-text — SETTLE-7) · reset (דורש {"confirm":"WIPE"}) · my-orders · relay`
+  (רשימת-השוק החיה היא שדה `markets` ב-`/api/dex/state` — אין-נתיב-`/api/dex/markets` נפרד)
 - הוכחת-יכולת: `GET /api/dex/bench?ops=30000` (מדידה-אמת על מצב-טרי)
 
 ## כנות-מלאה (העיקרון שלא נוגעים)

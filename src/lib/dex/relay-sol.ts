@@ -23,7 +23,10 @@ import { ed25519 } from "@noble/curves/ed25519";
 
 export const SOL_RPCS = (process.env.SOL_RPC_URL
   ? [process.env.SOL_RPC_URL]
-  : ["https://api.devnet.solana.com"]);
+  // FIX(SETTLE-7 rail-alignment): היה-devnet-כברירת-מחדל בעוד settle.ts-מאזין
+  // mainnet-beta — שידור-וביקורת קראו-לשתי-רשתות-שונות. ברירת-המחדל מיושרת
+  // ל-mainnet-beta (השידור עדיין fail-closed: בלי SOL_EXPECTED_ADDRESS אין-שידור).
+  : ["https://api.mainnet-beta.solana.com"]);
 
 export const SOL_MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"; // SPL Memo v2
 const BALANCE_FLOOR = 10_000;  // חסם-מימון: עמלת-חתימה (5000) + מרווח
@@ -151,6 +154,22 @@ export async function verifySolAnchor(
     endpoint, "getSignatureStatuses", [[txid], { searchTransactionHistory: false }], 15000,
   ).catch(() => null);
   const v = st?.value?.[0] ?? null;
+  // FIX(SETTLE-7 verify-hole): getSignatureStatuses בלי-searchTransactionHistory
+  // מחזיר-null לכל-מה-שמעבר-לחלון-הסלוטים-האחרון — כל-העוגנים-הישנים קיבלו
+  // "not indexed" לנצח (הסימפטום-החי: SOL 19-anchored/0-verified). מעכשיו:
+  // null בסטטוס ≠ סוף-התשובה — מנסים getTransaction ישירות (עובד-גם-לעוגנים-ישנים).
+  const tx0 = v
+    ? null
+    : await rpc<{ meta?: { logMessages?: string[] } | null }>(
+        endpoint, "getTransaction", [[txid, { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]], 15000,
+      ).catch(() => null);
+  if (!v && tx0?.meta?.logMessages?.length) {
+    const logs0 = tx0.meta.logMessages.join(" ");
+    if (logs0.includes(expected.stateRoot) && logs0.includes(`"height":${expected.height}`)) {
+      return { ok: true, detail: "stateRoot verified on solana (via getTransaction fallback — history window)" };
+    }
+    if (!logs0.includes(expected.stateRoot)) return { ok: false, detail: `mismatch: on-chain memo lacks local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
+  }
   if (!v) return { ok: false, detail: "not indexed: signature unknown to public node yet" };
   if (v.err !== null && v.err !== undefined) return { ok: false, detail: `mismatch: transaction failed on-chain (${JSON.stringify(v.err).slice(0, 80)})` };
   const tx = await rpc<{ meta?: { logMessages?: string[] } | null }>(

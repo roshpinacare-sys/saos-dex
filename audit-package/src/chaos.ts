@@ -43,9 +43,11 @@ export function chaosPartitioned(target: ChaosTarget): boolean {
   return true;
 }
 
-/** תצפית-ציבורית על-מצב-ההזרקות (לכלי-בדיקה ולתיעוד) */
+/** תצפית-ציבורית על-מצב-ההזרקות (לכלי-בדיקה ולתיעוד)
+ * FIX(SETTLE-7): כל-חמשת-היעדים — eth/sol נוספו (היו-בטיפוס-בלבד; מחיצה-מוזרקת
+ * עליהם הייתה-בלתי-נראית לתצפית). */
 export function chaosView(): { target: ChaosTarget; partitioned: boolean; remainingMs: number }[] {
-  return (["steem", "hive", "tron"] as ChaosTarget[]).map((target) => {
+  return (["steem", "hive", "tron", "eth", "sol"] as ChaosTarget[]).map((target) => {
     const until = armMap().get(target);
     const remainingMs = until === undefined ? 0 : Math.max(0, until - Date.now());
     return { target, partitioned: remainingMs > 0, remainingMs };

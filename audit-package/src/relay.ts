@@ -268,8 +268,8 @@ async function grapheneSealBroadcast(node: string, chainId: string, account: str
   throw new Error("sync-broadcast answered without id (honest)");
 }
 
-/* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = digest) ── */
-async function tronSealBroadcast(tronAddress: string, digest: string, wif: string): Promise<{ txid: string }> {
+/* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = stateRoot) ── */
+async function tronSealBroadcast(tronAddress: string, stateRoot: string, wif: string): Promise<{ txid: string }> {
   const acc = await fetch(`${TRON_RPC}/v1/accounts/${tronAddress}`, { signal: AbortSignal.timeout(12000) }).then((r) => r.json()) as { data: { balance?: number }[] };
   const balance = acc?.data?.[0]?.balance ?? 0;
   if (balance < 300_000) throw new Error(`unfunded: ${balance} sun (<0.3 TRX bandwidth floor) — queued honestly`);
@@ -278,7 +278,10 @@ async function tronSealBroadcast(tronAddress: string, digest: string, wif: strin
   const raw58 = Buffer.from(b58.decode(tronAddress));
   const hex20 = raw58.subarray(1, 21).toString("hex");
   const built = await rpc<{ txID?: string; raw_data_hex?: string }>(`${TRON_RPC}/wallet/createtransaction`, {
-    to_address: hex20, owner_address: hex20, amount: 1, extra_data: Buffer.from(digest, "utf8").toString("hex"),
+    // FIX(SETTLE-7 self-verify): אנחנו משדרים את מה-ש-verifyOnChain קורא-חזרה.
+    // ההיסטורי: שידור-דייג'סט ב-extra_data אך המאמת בודק stateRoot → כל-עוגן
+    // TRON ממומן היה-מאומת כ-"mismatch" לנצח (סתירה-עצמית → allSettled=false).
+    to_address: hex20, owner_address: hex20, amount: 1, extra_data: Buffer.from(stateRoot, "utf8").toString("hex"),
   }, 15000);
   if (!built?.txID || !built?.raw_data_hex) throw new Error("createtransaction answered without txID/raw_data_hex");
 
@@ -417,9 +420,14 @@ function persist(rt: RelayRT): void {
     const chainOut = (ALL_CHAINS as ChainName[]).map((c) => {
       const last = rt.records.find((r) => r.chain === c);
       const anchored = rt.records.find((r) => r.chain === c && r.status === "anchored");
-      const link = anchored?.txid
-        ? (c === "steem" ? `https://steemworld.org/tx/${anchored.txid}` : c === "hive" ? `https://hiveblocks.com/tx/${anchored.txid}` : `https://tronscan.org/#/transaction/${anchored.txid}`)
-        : null;
+      const EXPLORER: Record<ChainName, (id: string) => string> = {
+        steem: (id) => `https://steemworld.org/tx/${id}`,
+        hive: (id) => `https://hiveblocks.com/tx/${id}`,
+        tron: (id) => `https://tronscan.org/#/transaction/${id}`,
+        eth: (id) => `https://etherscan.io/tx/${id}`,
+        sol: (id) => `https://solscan.io/tx/${id}`,
+      };
+      const link = anchored?.txid ? EXPLORER[c](anchored.txid) : null;
       return [c, {
         status: rt.chainState[c].status,
         // כשאין-txid והחוסם-הוא-מימון — הסטטוס-הכן "pending funding (armed)"
@@ -552,7 +560,7 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
     if (chain === "tron") {
       if (!rt.tronAddress) rt.tronAddress = await tronIdentity(keys.steemWif);
       if (!rt.tronAddress) throw new Error("tron identity derivation failed");
-      const r = await tronSealBroadcast(rt.tronAddress, job.info.digest, keys.steemWif);
+      const r = await tronSealBroadcast(rt.tronAddress, job.info.stateRoot, keys.steemWif);
       rec.txid = r.txid;
       rec.status = "anchored";
     } else if (chain === "eth") {
@@ -603,7 +611,10 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
     }
   } catch (e) {
     const msg = String((e as Error)?.message || e).slice(0, 180);
-    const economic = /rc-low|has not enough RC|unfunded/i.test(msg);
+    // סיווג-כנות: חוסר-תקציב (RC/unfunded) **וגם-הגבלת-סביבה** (rate-limit/quota/429
+    // מ-RPC-ציבורי) אינם כשל-מערכת — הם המתנה-כלכלית כנה. ספירתם ככשל-קשי
+    // יצרה-מעגל-שבירה: breaker נפתח ×7 על-רכבת-בריאה שרק-מוגבלת-תדר.
+    const economic = /rc-low|has not enough RC|unfunded|rate limit|too many requests|quota|\b429\b/i.test(msg);
     if (economic) {
       // חוסר-תקציב = המתנה כלכלית כנה — לא כשל-מערכת (לא נספר ל-breaker); בדיקה-מחדש תקופתית
       cs.attempts = 0;
@@ -798,8 +809,9 @@ export function relayStatus(): Record<string, unknown> {
     ethIntents: rt.ethIntents.slice(0, 3).map((i) => ({ height: i.height, intentHash: i.intentHash.slice(0, 18) + "…", signature: i.signature.slice(0, 12) + "…", address: i.address, verified: i.verified })),
     metrics: rt.metrics,
     chains: rt.chainState,
-    records: rt.records.slice(0, 12).map((r) => ({
+    records: rt.records.slice(0, 60).map((r) => ({
       chain: r.chain, height: r.height, status: r.status, txid: r.txid, at: r.at, attempt: r.attempt,
+      stateRoot: r.stateRoot, // עדות-ציבורית — נדרשת לאימות-עיגון-טרי בעמדת-הסליקה
       verified: typeof r.verified === "boolean" ? r.verified : null, verifiedAt: r.verifiedAt ?? null,
       error: r.error ? r.error.slice(0, 90) : undefined,
     })),

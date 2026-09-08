@@ -13,15 +13,20 @@ import { cancelOrder, matchBook, gcOrders, type BookOrder } from "./book";
 import { poolAdd, poolSwap, poolRm } from "./amm";
 
 // ─── טבלת-GAS (מפרט-הברזל + הרחבות 96–113 של kernel.cjs) ────────────────────
+// SETTLE-5 "לוח-זמנים-סיבולת": קיזוז-שריפה בפעולות-התדר-הגבוהות (סדר/ביטול/
+// מילוי/סוופ-בריכה) — ספר-סגור שורף 990µ/בלוק בעוד עמלות-נמדדות חוזרות ב-~3µ/
+// בלוק (ממצא-חי 2026-09: ארנה 1.7M→922k ב-11 דק׳). קיזוז-זה נותן לפונטיין
+// ולממנים לנשום: שריפה ~3× נמוכה = ריצה ~3× ארוכה, והעמלות מצטברות אל מעל
+// סף-הפונטיין. פעולות-נדירות (wrap/attest/harvest) לא-נוגעו — אין-טעם.
 export const GAS_TABLE = {
   transfer: 100,
   pay: 120,
-  order: 150,
-  cancel: 60,
-  fill: 200,
+  order: 60,
+  cancel: 15,
+  fill: 60,
   order_gc: 30,
   pool_add: 180,
-  pool_swap: 220,
+  pool_swap: 100,
   pool_rmw: 120,
   pool_xAdd: 180,
   pool_x: 220,
@@ -33,6 +38,8 @@ export const GAS_TABLE = {
   harvest: 20,
   attest: 50,
   heartbeat: 10,
+  refuel: 0, // THE-REFUEL: העברת-קרדיטים מהאוצר — אפס-גז (שירות-חיות כמו relay)
+  mint_fuel: 0, // THE-FOUNTAIN: הטבעת-דלק מגובה-עמלות-מדודות — אפס-גז, אוצר-בלבד
   relay: 0, // THE-DOOR: חוזה-חינם שכופה עבודה-אמת על רשת-מרוחקת
   relay_ack: 0,
 } as const;
@@ -40,6 +47,10 @@ export const GAS_TABLE = {
 export type OpKind = keyof typeof GAS_TABLE;
 export const FEE_BPS = 30; // עמלי-30bps כמו-הבריכה-הילידית (dex-facts)
 export const TREASURY_CUT_PCT = 30; // 30% מהעמלה → אוצר (רווח-מונוטוני, grid98)
+export const REFUEL_CAP = 100_000; // תקרת-עירוי-פר-פקודה — גם-אם-האוצר נחטף, הנזק מגודל
+export const FUEL_FUNDERS = ["treasury", "arena", "operator"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor") + המפעיל-האנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון, SETTLE-5)
+export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter≥8000 להרמה — המטבע לא ירעיב-אותו
+export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
 
 export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM";
 
@@ -68,6 +79,7 @@ export interface DexState {
   backing: Record<string, number>; // גיבוי נעול 1:1 לנכסים-עטופים
   treasuryProfit: number; // רווח-אוצר מצטבר-מונוטוני (µ)
   feeMeter: number; // עמלות-שנצברו-שטרם-נקצרו (מדידה-כנה)
+  feeMinted?: number; // THE-FOUNTAIN: Σקרדיטים-שהוטבעו-מעמלות-מדודות — מנוכה-באינווריאנטה (רשות: תמונות-מצב-ישנות)
   ladder: { refPrice: number; stepCostMu: number; lifts: number; lastLiftHeight: number; spentMu: number };
   journal: JournalEntry[];
   gasUsed: number;
@@ -194,6 +206,11 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
   if (gas === undefined) return { ok: false, err: "unknown-op", gas: 0 };
   const issuer = String(op.issuer ?? "").toLowerCase();
   if (!issuer || !op.nonce) return { ok: false, err: "issuer+nonce-required", gas: 0 };
+  // FIX(SETTLE-7 authz-split): נרמול-פעם-אחת בכניסה — כל-הנתיבים (יתרות/נעילות/
+  // order-cap/ספר/בריכות) חייבים-לראות את אותו-מזהה. החור-ההיסטורי: issuer-גולמי
+  // ("TREASURY") עבר בדיקת-funder-only במנוע-המנורמל אך נגע ביתרות-של-מזהה-אחר.
+  op.issuer = issuer;
+  if (typeof op.to === "string") op.to = op.to.toLowerCase(); // אותו-עיקרון לנמענים — אין-חשבונות-רפאים בגלל-רישוי
   const dedupeKey = `${issuer}:${op.nonce}`;
   if (st.nonces.includes(dedupeKey)) return { ok: false, err: "replay-rejected", gas: 0 };
 
@@ -216,6 +233,46 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (op.type === "pay") st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "pay", note: `→${op.to} ${amt}µ ${a}` });
       return { ok: true, gas };
     }
+    case "refuel": {
+      // THE-REFUEL (114): חיות-כלכלית מתמדת — ממני-הדלק (FUEL_FUNDERS: אוצר +
+      // ארנה-המייצבת) מעבירים קרדיטים לסוכנים שאזל-המסלול-שלהם. **העברה-טהורה
+      // בלבד (אפס-הטבעה)**: Σcredits נשמר לכל-אורך (המממן מאבד-בדיוק מה-שהסוכן
+      // מקבל). מדוד-תקרה.
+      if (!(FUEL_FUNDERS as readonly string[]).includes(issuer)) return { ok: false, err: "funder-only", gas: 0 };
+      const rAmt = op.amount ?? 0, rTo = String(op.to ?? "");
+      if (!rTo || rTo === issuer || !(rAmt > 0)) return { ok: false, err: "bad-refuel", gas: 0 };
+      if (rAmt > REFUEL_CAP) return { ok: false, err: "refuel-exceeds-cap", gas: 0 };
+      if ((st.credits[issuer] ?? 0) < rAmt) return { ok: false, err: "insufficient-credits", gas: 0 };
+      pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — כמו relay
+      st.credits[issuer] = (st.credits[issuer] ?? 0) - rAmt;
+      st.credits[rTo] = (st.credits[rTo] ?? 0) + rAmt;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "refuel", note: `→${rTo} ${rAmt}µ credits` });
+      return { ok: true, gas: 0 };
+    }
+    case "mint_fuel": {
+      // THE-FOUNTAIN (115): מיחזור-דלק — עמלות-שנמדדו-בפועל הופכות-חזרה לקרדיטים.
+      // בכלכלה-אמת העמלות משלמות-גז לוולידטורים; בספר-הריבוני הן מחזירות-את-הדלק
+      // שהמסחר-עצמו שרף. **גיבוי-כפול-וחד-פעמי**: treasuryProfit (עמלות-שהוכרו,
+      // נצרך-ראשון) + feeMeter-מעל-רצפת-הסולם (לא-מרעיב-את-מנוע-הערך). כל-µ
+      // מוטבע-נגרע-בדיוק-פעם-אחת מהמדידה (אין-הטבעה-כפולה של-אותה-עמלה) —
+      // ביקורת-העמלות (pools===feeMeter+profit) והאינווריאנטה
+      // Σcredits+gasUsed−feeMinted===ג'נזיס ממשיכות-לעמוד-בדיוק.
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      const fAmt = op.amount ?? 0, fTo = String(op.to ?? issuer);
+      if (!(fAmt > 0) || !fTo) return { ok: false, err: "bad-amount", gas: 0 };
+      if (fAmt > MINT_FUEL_CAP) return { ok: false, err: "mint-exceeds-cap", gas: 0 };
+      const fromProfit = Math.min(fAmt, Math.max(0, st.treasuryProfit));
+      const fromMeter = fAmt - fromProfit;
+      const meterAvail = Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
+      if (fromMeter > meterAvail) return { ok: false, err: "mint-exceeds-measured-fees", gas: 0 };
+      pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — כמו relay
+      st.treasuryProfit -= fromProfit;
+      st.feeMeter -= fromMeter;
+      st.feeMinted = (st.feeMinted ?? 0) + fAmt;
+      st.credits[fTo] = (st.credits[fTo] ?? 0) + fAmt;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "mint_fuel", note: `+${fAmt}µ credits →${fTo} (fees-backed: profit ${fromProfit} + meter ${fromMeter})` });
+      return { ok: true, gas: 0 };
+    }
     case "order": {
       // פקודת-לימיט מוסדית (סטנדרט-בורסות): חפיפה-מיידית כ-taker במחיר-המייקר,
       // ושארית נחה בספר. אין-חפיפה כלל → מנוחה-מלאה. נעילה-מראש על מלוא-הכמות;
@@ -232,12 +289,23 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (avail(st, op.issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
       addLock(st, op.issuer, lockAsset, lockMu);
       const lockBefore = lockedOf(st, op.issuer, lockAsset);
-      const cross = matchBook(st, op, nowMs, consume);
+      // FIX(SETTLE-7 double-escrow): הנעילה כבר-על-הספר (שורה למעלה) — מעבירים
+      // preLocked=true כדי-ש-matchBook לא-ידרוש שוב avail ≥ lockMu (הזמין כבר-ירד
+      // בגובה-הנעילה!). החור-ההיסטורי: חשבון-עם **בדיוק** הערבות-הנדרשת קיבל
+      // "insufficient-taker" — כל-פקודת-לימיט חייבה 2× ערבות, והדחייה הייתה שקטה
+      // (ה-route מדווח "queued", buildBlock מוריד-את-ה-op בלי-עדה).
+      const cross = matchBook(st, op, nowMs, consume, true);
       if (cross.ok) {
         // שחרור-אבק-רצפה: floor לא-אדיטיבי עלול להשאיר נעילה-עודפת בלי-פקודה
         // מאחוריה — מכוונים את הנעילה בדיוק לשארית (או-אפס אם-מולאה-כולה).
+        // FIX(escrow-units): שארית-הנעילה חייבת-להיות באותו-יחידות של-הנעילה-המקורית:
+        //  · sell → הנעילה היא בסיס-µ (lockMu=amt) → שארית = filledMu (לא-notional!)
+        //  · buy  → הנעילה היא ציטוט-µ (lockMu=notional) → שארית = notional(px,filledMu)
+        // הבאג-ההיסטורי: notional(px,filledMu) על-sell במחיר-px<1000 (WSTEEM) שחרר
+        // 1−px/1000 מהנעילה של-השארית → cancel מאוחר = escrow-underflow:cancel → HALT
+        // (נתפס-ע"י-ה-invariant — fail-fast עבד; השורש תוקן כאן).
         const filledMu = amt - (cross.events ? cross.events.reduce((a, e) => a + e.amountMu, 0) : 0);
-        const expectedLock = filledMu > 0 ? notional(px, filledMu) : 0;
+        const expectedLock = filledMu > 0 ? (op.side === "sell" ? filledMu : notional(px, filledMu)) : 0;
         const released = lockBefore - lockedOf(st, op.issuer, lockAsset);
         const dust = lockMu - released - expectedLock;
         if (dust > 0) addLock(st, op.issuer, lockAsset, -dust);
@@ -262,11 +330,17 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       st.orders.push({
         seq, id: seq, owner: op.issuer, base: op.base as string, quote: op.quote as string, side: op.side as "buy" | "sell",
         price: px, amount: amt, filled: 0, live: true, nonce: op.nonce, at: nowMs,
+        lockMu: lockMu, // מד-הנעילה-הפרטי — הפקודה נחה עם-הנעילה-המלאה שלה
       });
       return { ok: true, gas: 0 };
     }
     case "fill": {
-      // טייק-מיידי: חוצה את הספר לפי מחיר-מייקר (saos-dex) — market או limit-חוצה
+      // טייק-מיידי: חוצה את הספר לפי מחיר-מייקר (saos-dex).
+      // FIX(SETTLE-7): fill הוא **market-בלבד** — fill-limit עובר את matchBook כ-taker
+      // limit בלי-נעילת-מראע, ומשחרר-נעילות שלא-הוצבו (addLock שלילי →
+      // escrow-underflow → HALT של-השרשרת כולה). דחייה-מפורשת fail-closed:
+      // מי-שרוצה limit חוצה — משתמש ב-"order" (נועל-מראע בגרעין).
+      if (!op.market) return { ok: false, err: "limit-fill-unsupported", gas: 0 };
       const r = matchBook(st, op, nowMs, consume);
       return r;
     }
