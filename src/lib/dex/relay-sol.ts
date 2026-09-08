@@ -70,7 +70,7 @@ async function rpc<T>(endpoint: string, method: string, params: unknown[], timeo
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: ctrl.signal });
+    const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", "User-Agent": "saos-relay/1.0" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: ctrl.signal });
     const json = (await res.json()) as { result?: T; error?: { message?: string } };
     if (json.error) throw new Error(String(json.error.message || "sol rpc error").slice(0, 120));
     return json.result as T;
@@ -105,11 +105,10 @@ export async function solSealBroadcast(
   payload: unknown,
   secretHex: string,
 ): Promise<{ txid: string; address: string }> {
-  /* שער-מדיניות (המפעיל): אפס שידור-חי כברירת-מחדל — אפילו על devnet.
-   * החתימה-עצמה חיה (מסר נבנה ונחתם על-כל-חותם בשידור-מדומה-מדיניות);
-   * השידור נשאר נעול עד-שהמפעיל יחמש אותו מפורשות (SOL_BROADCAST_ENABLED=1)
-   * ואז עדיין חוסם-היתרה קודם (fee floor). */
-  if (process.env.SOL_BROADCAST_ENABLED !== "1") {
+  /* שער-מדיניות (המפעיל): מקבל "1" או "true" — SOL_BROADCAST_ENABLED=true
+   * מפעיל שידור-חי אמת (5000 lamports לחתימה, חוסם-היתרה קודם). */
+  const solGate = process.env.SOL_BROADCAST_ENABLED?.trim().toLowerCase();
+  if (solGate !== "1" && solGate !== "true") {
     throw new Error("unfunded-policy: live SOL broadcast disabled by operator gate (SOL_BROADCAST_ENABLED) — armed, memos signed (zero cost)");
   }
   const endpoint = SOL_RPCS[0];
