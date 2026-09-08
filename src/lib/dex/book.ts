@@ -24,6 +24,11 @@ export interface BookOrder {
   live: boolean;
   nonce: string;
   at: number;
+  /** FIX(escrow-dust): מד-הנעילה-הפרטי של-הפקודה (µ, יחידות-נעילה).
+   * notional-floor אינו-אדיטיבי → שחרור-פר-רגל השאיר אבק-נעול-פנטום
+   * (נתפס-ע"י ביקורת-הסליקה: locked > Σפקודות). מעכשיו: רגל-אחרונה/ביטול
+   * משחררים את-מלוא-המד — Σ lockMu של-פקודות-חיות === locked, בדיוק. */
+  lockMu: number;
 }
 
 const remaining = (o: BookOrder): number => o.amount - o.filled;
@@ -60,6 +65,7 @@ export function placeOrder(
   st.orders.push({
     seq, id: seq, owner: op.issuer, base, quote, side,
     price, amount, filled: 0, live: true, nonce: op.nonce, at: nowMs,
+    lockMu, // מד-הנעילה-הפרטי — מדויק מהרגע-הראשון
   });
   return { ok: true, gas: 0 };
 }
@@ -69,10 +75,12 @@ export function cancelOrder(st: DexState, op: Op, consume: () => OpResult | null
   if (!o || !o.live) return { ok: false, err: "order-not-found", gas: 0 };
   if (o.owner !== op.issuer) return { ok: false, err: "not-owner", gas: 0 };
   const c = consume(); if (c) return c;
-  const remBase = remaining(o);
-  const remQuote = notional(o.price, remBase);
-  if (o.side === "sell") addLock(st, o.owner, o.base, -remBase);
-  else addLock(st, o.owner, o.quote, -remQuote);
+  // FIX(escrow-dust): משחררים את-מד-הנעילה-הפרטי של-הפקודה — לא נגזרת-מחודשת
+  // (הנגזרת notional(px,rem) השאירה-אבק כשהפקודה מילאה-רגליים במחירים-שונים)
+  const rem = remaining(o);
+  const held = typeof o.lockMu === "number" && o.lockMu >= 0 ? o.lockMu : (o.side === "sell" ? rem : notional(o.price, rem));
+  o.lockMu = 0;
+  addLock(st, o.owner, o.side === "sell" ? o.base : o.quote, -held);
   // Formal Assertion: ביטול משחרר רק-נעילה שקיימת — נעילה שלילית = שחיתות-מצב
   invariant(lockedOf(st, o.owner, o.side === "sell" ? o.base : o.quote) >= 0, "escrow-underflow:cancel");
   o.live = false;
@@ -130,6 +138,15 @@ export function matchBook(
   const events: TradeEvent[] = [];
   let takerRem = amount;
 
+  // FIX(escrow-dust): שחרור-נעילת-מייקר במדויק — רגל-אחרונה משחררת את-מלוא-מד-הנעילה
+  // (כולל-אבק-floor שנצבר ברגליים-קודמות) — Σ lockMu חי === locked נשמר-בדיוק.
+  const releaseMakerLock = (maker: BookOrder, qty: number, legMu: number): void => {
+    const isFinal = remaining(maker) - qty <= 0;
+    const rel = isFinal ? maker.lockMu : Math.min(legMu, maker.lockMu);
+    maker.lockMu = Math.max(0, maker.lockMu - rel);
+    addLock(st, maker.owner, maker.side === "sell" ? maker.base : maker.quote, -rel);
+  };
+
   for (const maker of opp) {
     if (takerRem <= 0) break;
     if (!crosses(maker.price)) break;
@@ -147,8 +164,10 @@ export function matchBook(
     invariant(remaining(maker) >= qty, "maker-overfill");
     if (side === "buy") {
       if (isLimit) {
-        // שחרור-הערבות של הכמות-הזאת (במחיר-הגבול) + תשלום-בפועל במחיר-המייקר
-        addLock(st, op.issuer, quote, -notional(limitPx!, qty));
+        // FIX(escrow-dust): שחרור-טייקר-לימיט בשיטה-טלסקופית —
+        // notional(px,cum+qty) − notional(px,cum) מצטמצם-בדיוק ל-notional(px, filled_total)
+        const cumFilled = amount - takerRem;
+        addLock(st, op.issuer, quote, -(notional(limitPx!, cumFilled + qty) - notional(limitPx!, cumFilled)));
         addBal(st, op.issuer, quote, -qMu);
       } else {
         if (avail(st, op.issuer, quote) < qMu) break; // נגמר-הציטוט
@@ -157,7 +176,7 @@ export function matchBook(
       addBal(st, op.issuer, base, qty);
       // מייקר-מוכר: בסיס-נעול יוצא, ציטוט נכנס
       addBal(st, maker.owner, base, -qty);
-      addLock(st, maker.owner, base, -qty);
+      releaseMakerLock(maker, qty, qty); // נעילת-מכירה = בסיס-µ — מדויק
       addBal(st, maker.owner, quote, qMu);
       // (3) חוקי-אי-התחייבות-חריגה: אף-חיוב לא יורד מתחת-לאפס — לא יתרה ולא נעילה
       invariant(lockedOf(st, op.issuer, quote) >= 0, "escrow-underflow:taker-quote");
@@ -175,7 +194,7 @@ export function matchBook(
       addBal(st, op.issuer, quote, qMu);
       // מייקר-קונה: ציטוט-נעול יוצא, בסיס נכנס
       addBal(st, maker.owner, quote, -qMu);
-      addLock(st, maker.owner, quote, -qMu);
+      releaseMakerLock(maker, qty, qMu); // FIX(escrow-dust): רגל-אחרונה משחררת-אבק-floor
       addBal(st, maker.owner, base, qty);
       // (3) סימטריית-מכירה: אותם-חוקי אי-התחייבות-חריגה
       invariant(lockedOf(st, op.issuer, base) >= 0, "escrow-underflow:taker-base");
@@ -201,6 +220,7 @@ export function matchBook(
       seq, id: seq, owner: op.issuer, base, quote, side,
       price: limitPx!, amount: takerRem, filled: 0, live: true,
       nonce: op.nonce + ":r", at: nowMs,
+      lockMu: side === "sell" ? takerRem : notional(limitPx!, takerRem), // מד-הנעילה-של-השארית
     });
   }
   st.orders = st.orders.filter((o) => o.live);

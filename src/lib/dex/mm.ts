@@ -30,9 +30,9 @@ export interface ArenaParams {
 
 export const DEFAULT_PARAMS: ArenaParams = {
   enabled: true,
-  spreadBps: 40,
-  stepBps: 25,
-  levels: 2,
+  spreadBps: 32,   // מהדורת-ייצוב: ספרד-צמודה (היתה 40)
+  stepBps: 20,     // רמות-צפופות (היה 25)
+  levels: 3,       // עומק-גריד 3-רמות (היו 2)
   sizeMu: 80_000, // 80 SAOS
   maxInventoryMu: 2_400_000,
   minEdgeBps: 15,
@@ -79,6 +79,63 @@ function submit(rt: Map<string, SoldierRT>, soldier: string, op: Omit<Op, "issue
   pushOp({ ...op, issuer: soldier, nonce: `a${r.nonceSeq}` } as Op);
 }
 
+/**
+ * pegkeeperTick — עמדת-הייצוב (מהדורת-סליקה): "שהכל ישב".
+ *  · מנעול-בריכה: כשהבריכה סוטה מהפייר ≥50bps — הארנה מארביטרג'ת אותה חזרה
+ *    (הזרימה-החופשית יוצרת-תנועה; המנעול מחזיר-אותה לספר). העמלה-שהארנה משלמת
+ *    נמדדת ב-feeMeter — דווקא מזינה את סולם-הערך (ייצוב-מממן-את-הרצפה).
+ *  · חגורת-סולם: כשמחיר-הספר חורג ±400bps מ-refPrice הריבוני — הארנה סוחבת
+ *    את המחיר בחזרה-לחגורה (מכירה-לתוך-הבידים מעל / קנייה-מהאסקים מתחת).
+ * כל-הפעולות: ממפול רגיל, מאושרות-על-הספר, מדודות-GAS, מכסה-גודל ותדר.
+ */
+export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void {
+  const m = MARKETS[0]; // SAOS/USDS — הזוג-הריבוני
+  const fair = fairPrice(st, m.base, m.quote);
+  if (fair <= 0) return;
+
+  // (1) מנעול-בריכה: poolMid → fair
+  const p = getPool(st, poolKey(m.base, m.quote));
+  if (p) {
+    const pm = poolMid(p);
+    const gapBps = Math.floor(((pm - fair) / fair) * 10_000);
+    if (Math.abs(gapBps) >= 50 && tick % 2 === 0) {
+      const assetIn = gapBps > 0 ? m.base : m.quote; // יקר-בבריכה → מזרימים-בסיס-פנימה (מוריד-mid)
+      const rIn = assetIn === p.a ? p.ra : p.rb;
+      // גודל-לסגירת-חצי-פער (ליניאריזציה), מדורג: 10k..150k µ, ולא-יותר-מהזמין
+      const halfGap = Math.floor(Math.abs(Math.floor((rIn * gapBps) / 10_000)) / 2);
+      const size = Math.min(Math.max(halfGap, 10_000), 150_000, avail(st, "arena", assetIn));
+      if (size >= 5_000) {
+        pushOp({ type: "pool_swap", issuer: "arena", nonce: `pk-pool-${tick}`, pair: poolKey(m.base, m.quote), assetIn, amount: size });
+      }
+    }
+  }
+
+  // (2) חגורת-סולם: bookMid ∈ ref±400bps
+  const ref = st.assets[m.base]?.refPrice ?? 0;
+  if (ref > 0 && tick % 4 === 0) {
+    const bb = sortBook(st, m.base, m.quote, "buy")[0]?.price ?? 0;
+    const ba = sortBook(st, m.base, m.quote, "sell")[0]?.price ?? 0;
+    const mid = bb > 0 && ba > 0 ? Math.floor((bb + ba) / 2) : (bb || ba);
+    if (mid > 0) {
+      const devBps = Math.floor(((mid - ref) / ref) * 10_000);
+      if (devBps > 400) {
+        // יקר-מדי-מול-הסולם → הארנה מוכרת-לתוך-הבידים (מורידה-את-המגע)
+        const qty = Math.min(80_000, avail(st, "arena", m.base));
+        if (qty >= 5_000) {
+          pushOp({ type: "fill", issuer: "arena", nonce: `pk-band-${tick}`, base: m.base, quote: m.quote, side: "sell", amount: qty, market: true });
+        }
+      } else if (devBps < -400) {
+        // זול-מדי → הארנה קונה-מהאסקים (מרימה-את-המגע)
+        const px = ba > 0 ? ba : ref;
+        const qty = Math.min(80_000, Math.floor((avail(st, "arena", m.quote) * 900) / (px * 10)));
+        if (qty >= 5_000) {
+          pushOp({ type: "fill", issuer: "arena", nonce: `pk-band-${tick}`, base: m.base, quote: m.quote, side: "buy", amount: qty, market: true });
+        }
+      }
+    }
+  }
+}
+
 /** טיק-ארנה: ריקוט-גריד לכל-חייל + טייק-מסתובב עם-שער-שוליים + בוטי-רעש */
 export function arenaTick(
   st: DexState, tick: number, nowMs: number,
@@ -87,6 +144,9 @@ export function arenaTick(
   pushOp: PushOp,
 ): void {
   const soldiers = ["soldier-1", "soldier-2", "soldier-3", "soldier-4"];
+
+  // עמדת-הייצוב (סליקה): מנעול-בריכה + חגורת-סולם — לפני-הזרימה-החופשית
+  pegkeeperTick(st, tick, pushOp);
 
   // קצבת-בוטים (מורשת-rebalancing של עושי-שוק אמת): כל-24 טיקים ממלאים-מחדש
   // סוחרי-רעש שנדלדלו — בלי-זה הזרימה-החופשית מתה על-זוג-שלם (אפס-מילויים →

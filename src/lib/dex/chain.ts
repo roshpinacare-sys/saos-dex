@@ -83,6 +83,38 @@ async function loadSnapshot(rt: ChainRT): Promise<boolean> {
     const raw = JSON.parse(fs.readFileSync(SNAPSHOT_FILE, "utf8")) as { version: number; state: DexState };
     if (raw?.version === rt.version && raw?.state?.height > 0 && raw.state.pools && raw.state.balances) {
       rt.st = raw.state;
+      // ── FIX(escrow-dust) — פיוס-ערבות בעת-טעינה ──
+      // (1) נרמול: פקודות-ישנות בלי מד-נעילה מקבלות מד-נגזר (rem/notional(rem))
+      for (const o of rt.st.orders) {
+        if (typeof o.lockMu !== "number" || !Number.isSafeInteger(o.lockMu) || o.lockMu < 0) {
+          const rem = o.amount - o.filled;
+          o.lockMu = o.side === "sell" ? rem : notional(o.price, rem);
+        }
+      }
+      // (2) פיוס: locked := Σ מדי-הנעילה של-פקודות-חיות — מחיקת-אבק-רצפה
+      // היסטורי (נתפס-ע"י ביקורת-הסליקה; notional-floor אינו-אדיטיבי). האבק
+      // חוזר-לזמין — הוא-מעולם לא היה מובטח-לאף-אחד. נרשם-כראיה.
+      const orderLocks: Record<string, Record<string, number>> = {};
+      for (const o of rt.st.orders) {
+        if (!o.live) continue;
+        const a = o.side === "sell" ? o.base : o.quote;
+        const w = (orderLocks[o.owner] = orderLocks[o.owner] ?? {});
+        w[a] = (w[a] ?? 0) + o.lockMu;
+      }
+      const reconciled: string[] = [];
+      for (const [who, wallet] of Object.entries(rt.st.locked)) {
+        for (const a of Object.keys(wallet)) {
+          const target = orderLocks[who]?.[a] ?? 0;
+          if (wallet[a] !== target) {
+            reconciled.push(`${who}.${a}:${wallet[a]}→${target}`);
+            wallet[a] = target;
+          }
+        }
+      }
+      if (reconciled.length > 0) {
+        console.info(`[saos-dex] escrow reconcile on load: ${reconciled.join(", ")}`);
+        pushReceipt(rt, "escrow-reconcile", { fixed: reconciled, at: Date.now() });
+      }
       return true;
     }
   } catch { /* אין-תמונת-מצב — ג'נזיס */ }
@@ -382,6 +414,29 @@ export function getWallets() {
     balances: st.balances[n] ?? {},
     locked: st.locked[n] ?? {},
   })).filter((w) => Object.keys(w.balances).length > 0 || w.credits > 0);
+}
+
+/** מפקד-הסוכנים (עמדת-הסליקה): תפקיד · הון-סימולציה · פקודות-חיות לכל-סוכן */
+export function getCensus(): { name: string; role: string; credits: number; equity: number; liveOrders: number; balances: Record<string, number>; locked: Record<string, number> }[] {
+  const st = ensureChain().st;
+  const fair = fairPrice(st, "SAOS", "USDS") || (st.assets["SAOS"]?.refPrice ?? 0);
+  const role = (n: string): string =>
+    n === "treasury" ? "central-bank" : n === "operator" ? "human" : n === "arena" ? "pegkeeper" : n.startsWith("soldier") ? "grid-mm" : "noise";
+  return getWallets().map((w) => {
+    const equity =
+      (w.balances["USDS"] ?? 0) +
+      Math.floor(((w.balances["SAOS"] ?? 0) * fair) / 1000) +
+      Object.entries(w.balances)
+        .filter(([a]) => a !== "USDS" && a !== "SAOS")
+        .reduce((s, [a, v]) => s + Math.floor((v * (st.assets[a]?.refPrice ?? 0)) / 1000), 0);
+    const liveOrders = st.orders.filter((o) => o.live && o.owner === w.name).length;
+    return { name: w.name, role: role(w.name), credits: w.credits, equity, liveOrders, balances: w.balances, locked: w.locked };
+  });
+}
+
+/** מצב-חי לעמדת-הסליקה (קריאה-בלבד — המבחנים עובדים על-שיבוטים) */
+export function getLiveState(): DexState {
+  return ensureChain().st;
 }
 
 export function getArena() {
