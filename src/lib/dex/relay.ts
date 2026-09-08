@@ -152,10 +152,19 @@ const STATE_DIR = process.env.SAOS_DEX_STATE_DIR
 const ANCHORS_FILE = path.join(STATE_DIR, "anchors.json");
 
 /* ── מפתחות: זיכרון-בלבד מ-.env (Next טוען אוטומטית; הקובץ gitignored-אומת) ── */
-function loadKeys(): { account: string; steemWif: string; hiveAccount: string; hiveWif: string; ethKey: string | null; solKey: string | null; ethExpected: string | null; solExpected: string | null } | null {
+function loadKeys(): { account: string; steemWif: string; steemAuth: "posting" | "active"; hiveAccount: string; hiveWif: string; hiveAuth: "posting" | "active"; ethKey: string | null; solKey: string | null; ethExpected: string | null; solExpected: string | null } | null {
   const account = (process.env.SAOS_RELAY_AGENT_ACCOUNT || "").toLowerCase().trim();
-  const steemWif = (process.env.STEEM_ACTIVE_WIF || "").trim();
-  const hiveWif = (process.env.HIVE_ACTIVE_WIF || "").trim();
+  // FIX(CROSS-F-01, saos-jummper מדוד): עדיפות-מפתח-פרסום (POSTING) על-פני-ACTIVE.
+  // עיגון-custom_json אינו-צריך-סמכות-כספים: ACTIVE יכולה-להעביר-כל-נכס-בחשבון;
+  // POSTING רק-מפרסמת. זהה-במשאבים-וב-RC, ומוריד-יכולת-העברה-מהשידור-האוטומטי.
+  // בלי-מפתח-פרסום (STEEM_POSTING_WIF/HIVE_POSTING_WIF) — נשארים-על ACTIVE-ההיסטורי
+  // (כנות, לא-שבירה; כל-21-העוגנים-החיים-הוגשו-על-ACTIVE).
+  const steemPost = (process.env.STEEM_POSTING_WIF || "").trim();
+  const hivePost = (process.env.HIVE_POSTING_WIF || "").trim();
+  const steemWif = steemPost || (process.env.STEEM_ACTIVE_WIF || "").trim();
+  const hiveWif = hivePost || (process.env.HIVE_ACTIVE_WIF || "").trim();
+  const steemAuth: "posting" | "active" = steemPost ? "posting" : "active";
+  const hiveAuth: "posting" | "active" = hivePost ? "posting" : "active";
   if (!account || !steemWif || !hiveWif) return null;
   // אפשרות-עוגן-Hive נפרד (חשבון-צבא עם RC גבוה) — ברירת-מחדל: אותה זהות
   const hiveAccount = (process.env.HIVE_ANCHOR_ACCOUNT || account).toLowerCase().trim();
@@ -165,7 +174,7 @@ function loadKeys(): { account: string; steemWif: string; hiveAccount: string; h
   const solKey = (process.env.SOL_PRIVATE_KEY || "").trim() || null;
   const ethExpected = (process.env.ETH_EXPECTED_ADDRESS || "").trim() || null;
   const solExpected = (process.env.SOL_EXPECTED_ADDRESS || "").trim() || null;
-  return { account, steemWif, hiveAccount, hiveWif, ethKey, solKey, ethExpected, solExpected };
+  return { account, steemWif, steemAuth, hiveAccount, hiveWif, hiveAuth, ethKey, solKey, ethExpected, solExpected };
 }
 
 async function bs58lib(): Promise<{ decode(s: string): Uint8Array; encode(b: Uint8Array): string }> {
@@ -224,33 +233,44 @@ async function dgp(endpoint: string) {
 
 async function rcMana(endpoint: string, account: string): Promise<number | null> {
   try {
-    const r = await rpc<{ rc_accounts: { rc_manabar: { current_mana: string } }[] }>(endpoint, {
+    const r = await rpc<{ rc_accounts: { rc_manabar: { current_mana: string; last_update_time: number }; max_rc: string }[] }>(endpoint, {
       jsonrpc: "2.0", method: "rc_api.find_rc_accounts", params: { accounts: [account] }, id: 1,
     }, 12000);
-    return Number(r.rc_accounts?.[0]?.rc_manabar?.current_mana) || 0;
+    const a = r.rc_accounts?.[0];
+    if (!a) return 0;
+    // FIX(CROSS-F-05, saos-jummper מדוד-mainnet): rc_manabar.current_mana הוא-תמונת-מצב
+    // מאז-last_update_time — לא-יתרה. קריאה-ישירה דיווחה 1.39M מול-אפקטיבי 73.3M
+    // (52.6x-חסר) והשער-סגר-עיגון-חינם-בשקר ("דורש-הון"). הקרנה-קנונית:
+    // effective = min(max_rc, current + (max_rc/432000) * (now − last_update_time))
+    const cur = Number(a.rc_manabar?.current_mana) || 0;
+    const max = Number(a.max_rc) || 0;
+    const last = Number(a.rc_manabar?.last_update_time) || 0;
+    const elapsed = Math.max(0, Math.floor(Date.now() / 1000) - last);
+    return Math.min(max, cur + (max / 432000) * elapsed);
   } catch {
     return null; // צומת-לא זמין — לא חוסם (שער רק כשיש מדידה)
   }
 }
 
 /* ── op טרי לכל שידור (signTransaction מוטט את האובייקט — מורשת anchor.cjs) ── */
-function buildOp(account: string, payload: unknown): [string, Record<string, unknown>] {
+function buildOp(account: string, payload: unknown, auth: "posting" | "active"): [string, Record<string, unknown>] {
   return ["custom_json", {
-    required_auths: [account],
-    required_posting_auths: [],
+    // FIX(CROSS-F-01): POSTING כשיש-מפתח-פרסום — יכולת-העברת-כספים מוסרת-מהשידור-האוטומטי
+    required_auths: auth === "active" ? [account] : [],
+    required_posting_auths: auth === "posting" ? [account] : [],
     id: ANCHOR_ID,
     json: JSON.stringify(payload),
   }];
 }
 
 /* ── שידור-גרפני אחיד: build ← sign(chain_id) ← broadcast_transaction_synchronous ── */
-async function grapheneSealBroadcast(node: string, chainId: string, account: string, payload: unknown, wif: string) {
+async function grapheneSealBroadcast(node: string, chainId: string, account: string, payload: unknown, wif: string, auth: "posting" | "active") {
   const d = await dgp(node);
   const tx: GrapheneTx = {
     ref_block_num: d.head_block_number & 0xffff,
     ref_block_prefix: Buffer.from(d.head_block_id, "hex").readUInt32LE(4),
     expiration: new Date(new Date(d.time + "Z").getTime() + 60000).toISOString().slice(0, 19),
-    operations: [buildOp(account, payload)],
+    operations: [buildOp(account, payload, auth)],
     extensions: [],
   };
   const prev = steem.config.get("chain_id");
@@ -459,6 +479,9 @@ function persist(rt: RelayRT): void {
         records: rt.records.length,
       },
       records: rt.records.slice(0, 30),
+      // FIX(P0-5): כוונות-EIP-191 נשמרות-לדיסק — בלי-זה החתימות היו-זיכרון-בלבד
+      // ואבדו-בכל-הפעלה-מחדש (החסרון-היחיד שנותר מה-SETTLE-7 P0)
+      ethIntents: rt.ethIntents,
     };
     const tmp = ANCHORS_FILE + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(out, null, 2) + "\n");
@@ -578,6 +601,8 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
       const intent = signEthAnchor(payload, keys.ethKey);
       rt.ethIntents.unshift({ height: job.info.toHeight, intentHash: intent.intentHash, signature: intent.signature, address: intent.address, verified: intent.verified });
       rt.ethIntents = rt.ethIntents.slice(0, 12);
+      // FIX(P0-5): עמידות-מיידית — החתימה על-דיסק לפני-כל-ניסיון-שידור (ראיה-תמידית גם-אחרי-restart)
+      persist(rt);
       // טירה-2: שידור-חי — נעול-מימון עד-שהכתובת תמומן (unfunded → המתנה-כלכלית כנה)
       const r = await ethSealBroadcast(payload, keys.ethKey);
       rec.txid = r.txid;
@@ -600,12 +625,13 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
       const nodes = chain === "steem" ? STEEM_NODES : HIVE_NODES;
       const chainId = chain === "steem" ? ZERO_CHAIN_ID : HIVE_CHAIN_ID;
       const wif = chain === "steem" ? keys.steemWif : keys.hiveWif;
+      const auth = chain === "steem" ? keys.steemAuth : keys.hiveAuth;
       if (cs.attempts === 1) {
         const mana = await rcMana(nodes[0], anchorAccount);
         if (mana !== null && mana < RC_MIN) throw new Error(`rc-low: ${mana} < ${RC_MIN} — waiting (honest retry)`);
       }
       // payload מכווץ — RC-תודעתי (כל בייט = כ-580K RC על Hive)
-      const r = await grapheneSealBroadcast(nodes[0], chainId, anchorAccount, payload, wif);
+      const r = await grapheneSealBroadcast(nodes[0], chainId, anchorAccount, payload, wif, auth);
       rec.txid = r.txid;
       rec.status = "anchored";
     }
@@ -683,7 +709,17 @@ async function processQueue(rt: RelayRT): Promise<void> {
  * ששודר וטרם-אומת נכנס אוטומטית לתור-הפיוס. */
 function restoreRecords(rt: RelayRT): void {
   try {
-    const raw = JSON.parse(fs.readFileSync(ANCHORS_FILE, "utf8")) as { records?: Partial<AnchorRecord>[] };
+    const raw = JSON.parse(fs.readFileSync(ANCHORS_FILE, "utf8")) as { records?: Partial<AnchorRecord>[]; ethIntents?: { height: number; intentHash: string; signature: string; address: string; verified: boolean }[] };
+    // FIX(P0-5): שחזור-כוונות-EIP-191 — ראיות-החתימה שורדות-הפעלות (לפני-ה-return-המוקדם)
+    if (Array.isArray(raw.ethIntents)) {
+      const cleanIntents = raw.ethIntents
+        .filter((i) => i && typeof i.intentHash === "string" && typeof i.signature === "string" && typeof i.address === "string" && typeof i.height === "number")
+        .slice(0, 12);
+      if (cleanIntents.length > 0) {
+        rt.ethIntents = cleanIntents;
+        console.info(`[saos-relay] restored ${cleanIntents.length} EIP-191 intents from anchors.json (evidence survives restart)`);
+      }
+    }
     if (!Array.isArray(raw.records)) return;
     const clean: AnchorRecord[] = [];
     for (const r of raw.records.slice(0, 60)) {

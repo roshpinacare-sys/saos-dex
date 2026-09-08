@@ -6,6 +6,7 @@ import {
 import { DEFAULT_PARAMS } from "@/lib/dex/mm";
 import { poolMid, getPool } from "@/lib/dex/amm";
 import { poolKey, avail } from "@/lib/dex/kernel";
+import { consoleGuard } from "@/lib/dex/guard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -61,7 +62,11 @@ export async function GET() {
  * 1) הדקת-פרמטרים: הארנה עוברת לתצורת-הסליקה (ספרד-32bps, 3-רמות, צעד-20bps)
  * 2) מנעול-בריכה-חד-פעמי: סוגרים-את-הפער-המלא בין-הבריכה לפייר (עד-250k µ)
  * ממפול-רגיל בלבד — כל-הפעולות מאושרות-על-הספר, אפס-עקיפות. */
-export async function POST() {
+export async function POST(req: Request) {
+  // FIX(FOUNDRY top-bug): שער-קונסולה — מוטציה-דורשת-כותרת-מנהלת
+  const g = consoleGuard(req);
+  if (g) return g;
+
   const params = setArenaParams({ ...DEFAULT_PARAMS });
   const st = getLiveState();
   const pushed: { kind: string; detail: string }[] = [];

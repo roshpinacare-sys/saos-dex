@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { submitOp, nextNonce } from "@/lib/dex/chain";
+import { consoleGuard } from "@/lib/dex/guard";
 
 export const dynamic = "force-dynamic";
 
 /** ניהול-בריכות: add נזילות (פרופורציונלי) או remove (pro-rata LP) */
 export async function POST(req: Request) {
+  // FIX(FOUNDRY top-bug): שער-קונסולה — מוטציה-דורשת-כותרת-מנהלת
+  const g = consoleGuard(req);
+  if (g) return g;
+
   const body = (await req.json().catch(() => ({}))) as {
     action?: "add" | "remove";
     pair?: string; amountA?: number; lp?: number;

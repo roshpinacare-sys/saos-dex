@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { ensureChain, submitOp, nextNonce } from "@/lib/dex/chain";
+import { consoleGuard } from "@/lib/dex/guard";
 
 export const dynamic = "force-dynamic";
 
 /** ביטול-הזמנה — בעלים-בלבד (operator על שלו) */
 export async function POST(req: Request) {
+  // FIX(FOUNDRY top-bug): שער-קונסולה — מוטציה-דורשת-כותרת-מנהלת
+  const g = consoleGuard(req);
+  if (g) return g;
+
   const body = (await req.json().catch(() => ({}))) as { orderId?: number };
   const orderId = Math.floor(Number(body.orderId));
   if (!(orderId > 0)) return NextResponse.json({ ok: false, error: "bad-order-id" }, { status: 200 });
