@@ -25,8 +25,9 @@ import type { SealInfo } from "./chain";
 import { chaosPartitioned } from "./chaos";
 
 import steemLib from "steem";
-import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor } from "./relay-eth";
+import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor, ETH_RPCS } from "./relay-eth";
 import { solSealBroadcast, verifySolAnchor, solIdentity } from "./relay-sol";
+import { assertAllowedHost } from "./fence";
 
 type GrapheneTx = {
   ref_block_num: number;
@@ -38,7 +39,7 @@ type GrapheneTx = {
 
 type SteemLib = {
   config: { get(k: string): string | null; set(k: string, v: string): void };
-  auth: { signTransaction(tx: GrapheneTx, keys: string[]): GrapheneTx & { signatures?: string[] } };
+  auth: { signTransaction(tx: GrapheneTx, keys: string[]): GrapheneTx & { signatures?: string[] }; wifToPublic(wif: string): string };
 };
 
 const steem = steemLib as unknown as SteemLib;
@@ -154,8 +155,52 @@ const STATE_DIR = process.env.SAOS_DEX_STATE_DIR
   : path.join(process.cwd(), "state");
 const ANCHORS_FILE = path.join(STATE_DIR, "anchors.json");
 
-/* ── מפתחות: זיכרון-בלבד מ-.env (Next טוען אוטומטית; הקובץ gitignored-אומת) ── */
-function loadKeys(): { account: string; steemWif: string; steemAuth: "posting" | "active"; hiveAccount: string; hiveWif: string; hiveAuth: "posting" | "active"; ethKey: string | null; solKey: string | null; ethExpected: string | null; solExpected: string | null } | null {
+/* ── חוזה-מפתחות-מנורמל (SETTLE-11) ── */
+type RelayKeys = {
+  account: string; steemWif: string; steemAuth: "posting" | "active";
+  hiveAccount: string; hiveWif: string; hiveAuth: "posting" | "active";
+  ethKey: string | null; solKey: string | null;
+  ethExpected: string | null; solExpected: string | null;
+};
+
+/* ── FIX(SETTLE-11) נרמול-WIF: דחוס (38 בייטים, סיומת 0x01) → לא-דחוס קנוני (37) ──
+ * רוטציית SETTLE-10 כתבה ל-.env WIF-ים דחוסים (K/L, 52 תווים); steem.auth.signTransaction
+ * דוחה אותם ("Expecting 32 bytes, instead got 33") → HIVE מת בעודו-חי, ו-STEEM היה
+ * על-פצצת-זמן (רץ על עותק-זיכרון ישן — כל אתחול-מחדש היה הורג את העיגון).
+ * הנרמול טהור-מקומי: base58check-decode → אימות-checksum → השלכת 0x01 → קידוד-מחדש.
+ * fail-closed: פליטה-פסולה = null (relay מושהה בכנות — לא ניחושים, לא לולאת-שידורים). */
+async function normalizeWif(wif: string): Promise<string | null> {
+  try {
+    const b58 = await bs58lib();
+    const raw = Buffer.from(b58.decode(wif.trim()));
+    if (raw.length < 34 || raw[0] !== 0x80) return null;
+    const data = raw.subarray(0, raw.length - 4);
+    const chk = raw.subarray(raw.length - 4);
+    const calc = createHash("sha256").update(createHash("sha256").update(data).digest()).digest().subarray(0, 4);
+    if (!chk.equals(calc)) return null;
+    const body = data.subarray(1);
+    const scalar = body.length === 33 && body[32] === 0x01 ? body.subarray(0, 32) : body;
+    if (scalar.length !== 32) return null;
+    const payload = Buffer.concat([Buffer.from([0x80]), scalar]);
+    const chk2 = createHash("sha256").update(createHash("sha256").update(payload).digest()).digest().subarray(0, 4);
+    return b58.encode(Buffer.concat([payload, chk2]));
+  } catch { return null; }
+}
+
+/* WIF-מנורמל-בזיכרון (cache — המפתחות כבר בזיכרון דרך process.env) */
+const wifCache = new Map<string, string>();
+async function wifNormalized(wif: string): Promise<string | null> {
+  const hit = wifCache.get(wif);
+  if (hit !== undefined) return hit;
+  const n = await normalizeWif(wif);
+  if (n) wifCache.set(wif, n);
+  return n;
+}
+
+/* ── מפתחות: זיכרון-בלבד מ-.env (Next טוען אוטומטית; הקובץ gitignored-אומת) ──
+ * FIX(SETTLE-11): WIF-ים מנורמלים בטעינה לפורמט-גרפני (לא-דחוס) — שני הפורמטים
+ * (51/52 תווים) נתמכים; פליטה-פסולה → null + ALERT כנה (fail-closed). */
+async function loadKeys(): Promise<RelayKeys | null> {
   const account = (process.env.SAOS_RELAY_AGENT_ACCOUNT || "").toLowerCase().trim();
   // FIX(CROSS-F-01, saos-jummper מדוד): עדיפות-מפתח-פרסום (POSTING) על-פני-ACTIVE.
   // עיגון-custom_json אינו-צריך-סמכות-כספים: ACTIVE יכולה-להעביר-כל-נכס-בחשבון;
@@ -164,11 +209,17 @@ function loadKeys(): { account: string; steemWif: string; steemAuth: "posting" |
   // (כנות, לא-שבירה; כל-21-העוגנים-החיים-הוגשו-על-ACTIVE).
   const steemPost = (process.env.STEEM_POSTING_WIF || "").trim();
   const hivePost = (process.env.HIVE_POSTING_WIF || "").trim();
-  const steemWif = steemPost || (process.env.STEEM_ACTIVE_WIF || "").trim();
-  const hiveWif = hivePost || (process.env.HIVE_ACTIVE_WIF || "").trim();
+  const steemRaw = steemPost || (process.env.STEEM_ACTIVE_WIF || "").trim();
+  const hiveRaw = hivePost || (process.env.HIVE_ACTIVE_WIF || "").trim();
+  if (!account || !steemRaw || !hiveRaw) return null;
+  const steemWif = await wifNormalized(steemRaw);
+  const hiveWif = await wifNormalized(hiveRaw);
+  if (!steemWif || !hiveWif) {
+    console.error("[saos-relay][ALERT] wif-invalid: מפתח-ב-.env אינו WIF תקין (base58check) — relay מושהה fail-closed (לא-לולאת-ניסיונות)");
+    return null;
+  }
   const steemAuth: "posting" | "active" = steemPost ? "posting" : "active";
   const hiveAuth: "posting" | "active" = hivePost ? "posting" : "active";
-  if (!account || !steemWif || !hiveWif) return null;
   // אפשרות-עוגן-Hive נפרד (חשבון-צבא עם RC גבוה) — ברירת-מחדל: אותה זהות
   const hiveAccount = (process.env.HIVE_ANCHOR_ACCOUNT || account).toLowerCase().trim();
   // ETH/SOL: זהויות-צי (wallets-registry) — אופציונליות; כשקיימות, ה-Relay חמוש
@@ -178,6 +229,19 @@ function loadKeys(): { account: string; steemWif: string; steemAuth: "posting" |
   const ethExpected = (process.env.ETH_EXPECTED_ADDRESS || "").trim() || null;
   const solExpected = (process.env.SOL_EXPECTED_ADDRESS || "").trim() || null;
   return { account, steemWif, steemAuth, hiveAccount, hiveWif, hiveAuth, ethKey, solKey, ethExpected, solExpected };
+}
+
+/* בדיקת-נוכחות-סינכרונית (ל-rtInit — בלי-פענוח) */
+function keysConfigured(): { main: boolean; eth: boolean; sol: boolean; account: string | null } {
+  const account = (process.env.SAOS_RELAY_AGENT_ACCOUNT || "").toLowerCase().trim() || null;
+  const steemWif = (process.env.STEEM_POSTING_WIF || process.env.STEEM_ACTIVE_WIF || "").trim();
+  const hiveWif = (process.env.HIVE_POSTING_WIF || process.env.HIVE_ACTIVE_WIF || "").trim();
+  return {
+    main: !!(account && steemWif && hiveWif),
+    eth: !!(process.env.ETH_PRIVATE_KEY || "").trim(),
+    sol: !!(process.env.SOL_PRIVATE_KEY || "").trim(),
+    account,
+  };
 }
 
 async function bs58lib(): Promise<{ decode(s: string): Uint8Array; encode(b: Uint8Array): string }> {
@@ -216,6 +280,7 @@ async function scalarOf(wif: string): Promise<Uint8Array> {
 
 /* ── JSON-RPC ── */
 async function rpc<T>(endpoint: string, body: unknown, timeoutMs = 20000): Promise<T> {
+  assertAllowedHost(endpoint, "relay.rpc"); // FIX(SETTLE-11): גדר-ריבונית — שער-לא-מקובע = חסימה fail-closed
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -293,6 +358,7 @@ async function grapheneSealBroadcast(node: string, chainId: string, account: str
 
 /* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = stateRoot) ── */
 async function tronSealBroadcast(tronAddress: string, stateRoot: string, wif: string): Promise<{ txid: string }> {
+  assertAllowedHost(TRON_RPC, "relay.tron"); // FIX(SETTLE-11): גדר-ריבונית
   const acc = await fetch(`${TRON_RPC}/v1/accounts/${tronAddress}`, { signal: AbortSignal.timeout(12000) }).then((r) => r.json()) as { data: { balance?: number }[] };
   const balance = acc?.data?.[0]?.balance ?? 0;
   if (balance < 300_000) throw new Error(`unfunded: ${balance} sun (<0.3 TRX bandwidth floor) — queued honestly`);
@@ -438,7 +504,7 @@ function hostOf(u: string | undefined): string | null {
 }
 function configuredHost(chain: ChainName): string | null {
   if (chain === "tron") return hostOf(TRON_RPC);
-  if (chain === "eth") return hostOf(process.env.ETH_RPC_URL ?? "https://eth.rpc.blxrbdn.com");
+  if (chain === "eth") return hostOf(process.env.ETH_RPC_URL ?? ETH_RPCS[0]); // FIX(SETTLE-11): fallback = ברירת-המחדל האמתית (הישנה הייתה-שער-לא-מקובע)
   if (chain === "sol") return hostOf(process.env.SOL_RPC_URL ?? "https://api.mainnet-beta.solana.com");
   return hostOf((chain === "steem" ? STEEM_NODES : HIVE_NODES)[0]);
 }
@@ -469,7 +535,7 @@ function persist(rt: RelayRT): void {
         status: rt.chainState[c].status,
         // כשאין-txid והחוסם-הוא-מימון — הסטטוס-הכן "pending funding (armed)"
         pendingFunding: rt.chainState[c].enabled && /unfunded/i.test(rt.chainState[c].lastError ?? ""),
-        account: c === "steem" ? rt.account : c === "eth" ? rt.ethAddress : c === "sol" ? rt.solAddress : (loadKeys()?.hiveAccount ?? rt.account),
+        account: c === "steem" ? rt.account : c === "eth" ? rt.ethAddress : c === "sol" ? rt.solAddress : (((process.env.HIVE_ANCHOR_ACCOUNT || process.env.SAOS_RELAY_AGENT_ACCOUNT || "") as string).toLowerCase().trim() || rt.account),
         lastTxid: last?.txid ?? null,
         lastHeight: last?.height ?? null,
         lastAt: last?.at ?? null,
@@ -572,8 +638,57 @@ function startReconciler(rt: RelayRT): void {
 }
 
 /* ── עיבוד-תור (לא-חוסם; breaker + backoff-עם-jitter; מצב per-chain) ── */
-async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loadKeys>>, job: SealJob, chain: ChainName): Promise<void> {
+/* ── FIX(SETTLE-11) טיסה-מקדימה של רשויות: המפתח-ב-.env חייב-להיות רשות-חיה על-השרשרת ──
+ * ההיסטוריה: מפתחות-פגומים-ב-.env (בליעת-פלט-כלים — תופעה-מתועדת §15) גרמו לדחיות
+ * "Missing Posting Authority" בכל-חותם → breaker-פתוח-בשווא + רעש. עתה: גזירת-מפתח-ציבורי
+ * מקומית + השוואה מול-רשות-החשבון ב-RPC ציבורי — אי-התאמה = השבתה-כנה fail-closed.
+ * אין-מדידה (צומת-לא-זמין) = לא-חוסם — נבדק-בשידור (אותו-עיקרון rcMana). */
+const authChecked = new Map<"steem" | "hive", boolean>();
+async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"): Promise<boolean> {
+  const hit = authChecked.get(chain);
+  if (hit !== undefined) return hit;
+  try {
+    const node = (chain === "steem" ? STEEM_NODES : HIVE_NODES)[0];
+    const account = chain === "steem" ? keys.account : keys.hiveAccount;
+    const wif = chain === "steem" ? keys.steemWif : keys.hiveWif;
+    const auth = chain === "steem" ? keys.steemAuth : keys.hiveAuth;
+    const pub = steem.auth.wifToPublic(wif); // מפתח-ציבורי בלבד — אפס-סודות בפלט
+    const r = await rpc<{ posting: { key_auths: [string, number][] }; active: { key_auths: [string, number][] } }[]>(node, {
+      jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [[account]], id: 1,
+    }, 12000);
+    const a = r?.[0];
+    const want = (auth === "posting" ? a?.posting?.key_auths?.[0]?.[0] : a?.active?.key_auths?.[0]?.[0]) ?? null;
+    const ok = !!want && want === pub;
+    authChecked.set(chain, ok);
+    if (!ok) {
+      console.error(`[saos-relay][ALERT] authority-mismatch on ${chain}: המפתח-ב-.env אינו רשות-${auth} בשרשרת עבור ${account} — disabled fail-closed (נדרשת רוטציה/ייבוא-מפתח-נכון)`);
+    }
+    return ok;
+  } catch {
+    return true;
+  }
+}
+
+async function attemptChain(rt: RelayRT, keys: RelayKeys, job: SealJob, chain: ChainName): Promise<void> {
+  // FIX(SETTLE-11): שרשרת-ללא-מפתח = מושבתת-שקטה. ההיסטוריה: "eth/sol key missing"
+  // נספר ככשל-קשה ×15 בכל-חותם → breakers-נפתחו-בשווא + רעש-לוג + זיהום-מדדים.
+  if ((chain === "eth" && !keys.ethKey) || (chain === "sol" && !keys.solKey)) {
+    job.chains[chain].done = true;
+    rt.chainState[chain].enabled = false;
+    rt.chainState[chain].status = "disabled";
+    rt.chainState[chain].lastError = `${chain} key missing — quiet-disabled (no record, no breaker, no retry)`;
+    return;
+  }
   const cs = job.chains[chain];
+  // FIX(SETTLE-11): טיסה-מקדימה — מפתח-שאינו-רשות-על-השרשרת = השבתה-כנה (בלי-רכבת-דחיות)
+  // הערה: הבדיקה לפני cs.attempts += 1 — לכן התנאי הוא ===0 (הניסיון-הראשון)
+  if ((chain === "steem" || chain === "hive") && cs.attempts === 0 && !(await authorityOk(rt, keys, chain))) {
+    cs.done = true;
+    rt.chainState[chain].enabled = false;
+    rt.chainState[chain].status = "disabled";
+    rt.chainState[chain].lastError = `authority-mismatch: המפתח-ב-.env אינו רשות-השרשרת של ${chain === "steem" ? keys.account : keys.hiveAccount} — disabled (fail-closed, נדרשת רוטציה/ייבוא-מפתח-נכון)`;
+    return;
+  }
   const b = rt.chainState[chain].breaker;
   if (!breakerAllows(b)) {
     cs.nextTryAt = (b.openedAt ?? Date.now()) + BREAKER_COOLDOWN_MS + 1000; // ה-breaker סגור — נחכה-לפרובה
@@ -672,6 +787,13 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
       if (cs.rcWaits > 48) { rec.status = "failed"; cs.done = true; rec.error = msg + " · budget-wait expired (honest)"; }
       else rec.error = msg;
       rt.chainState[chain].lastError = msg;
+    } else if (/expecting 32 bytes|invalid (wif|private|key)|bad (wif|base58)|checksum/i.test(msg)) {
+      // FIX(SETTLE-11): שגיאת-תצורה (מפתח-פסול) היא קבועה — אין-טעם-בניסיונות-חוזרים;
+      // לא-נספרת-ל-breaker (לא-רכבת-כשלים-אמיתית), סימון-כנה וסיום.
+      rec.status = "failed";
+      cs.done = true;
+      rec.error = "config-permanent: " + msg;
+      rt.chainState[chain].lastError = rec.error;
     } else {
       breakerOnFailure(rt, chain); // כשל-קשי — נספר ל-breaker (עלול לפתוח אותו)
       if (cs.attempts >= RETRY_MAX) {
@@ -704,7 +826,7 @@ async function attemptChain(rt: RelayRT, keys: NonNullable<ReturnType<typeof loa
 
 async function processQueue(rt: RelayRT): Promise<void> {
   if (rt.processing) return;
-  const keys = loadKeys();
+  const keys = await loadKeys();
   rt.processing = true;
   try {
     if (!keys) return;
@@ -784,7 +906,7 @@ function restoreRecords(rt: RelayRT): void {
 /* ── אתחול-זמן-ריצה (שורד HMR דרך globalThis) ── */
 function rtInit(): RelayRT {
   if (g.__saosDexRelay) return g.__saosDexRelay;
-  const keys = loadKeys();
+  const cfg = keysConfigured();
   const mk = (on: boolean): RelayChainState => ({
     enabled: on, status: on ? "idle" : "disabled",
     lastTxid: null, lastHeight: null, lastAt: null,
@@ -795,9 +917,9 @@ function rtInit(): RelayRT {
   });
   const rt: RelayRT = {
     jobs: [], processing: false, records: [],
-    chainState: { steem: mk(!!keys), hive: mk(!!keys), tron: mk(!!keys), eth: mk(!!keys?.ethKey), sol: mk(!!keys?.solKey) },
+    chainState: { steem: mk(cfg.main), hive: mk(cfg.main), tron: mk(cfg.main), eth: mk(cfg.eth), sol: mk(cfg.sol) },
     metrics: { broadcasts: 0, verified: 0, mismatches: 0, breakerTrips: 0, economicWaits: 0, lastVerifyLatencyMs: null },
-    account: keys?.account ?? null,
+    account: cfg.account,
     tronAddress: null,
     ethAddress: null,
     solAddress: null,
@@ -808,7 +930,7 @@ function rtInit(): RelayRT {
   };
   g.__saosDexRelay = rt;
   restoreRecords(rt); // ראיות-העיגון מהריצה-הקודמת חוזרות לפני-תחילת-הפיוס
-  if (keys) startReconciler(rt); // לולאת-פיוס — רק-כשה-Relay חי
+  if (cfg.main) startReconciler(rt); // לולאת-פיוס — רק-כשה-Relay חי
   return rt;
 }
 

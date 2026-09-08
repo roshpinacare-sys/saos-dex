@@ -23,6 +23,7 @@
  */
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
+import { assertAllowedHost } from "./fence"; // FIX(SETTLE-11): גדר-ריבונית — שער-יוצא מקובע בלבד
 
 /* RPC ציבוריים (ללא-מפתח) — ניתנים לעקיפה דרך ETH_RPC_URL */
 export const ETH_RPCS = (process.env.ETH_RPC_URL
@@ -89,6 +90,7 @@ export function signEthAnchor(payload: unknown, privHex: string): EthAnchorInten
 
 /* ── JSON-RPC מינימלי (אותו-היגיין-timeout כמו relay.ts) ── */
 async function rpc<T>(endpoint: string, method: string, params: unknown[], timeoutMs = 20000): Promise<T> {
+  assertAllowedHost(endpoint, "relay-eth.rpc"); // FIX(SETTLE-11): גדר-ריבונית fail-closed
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
