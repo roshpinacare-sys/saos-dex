@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCensus, getLiveState, getState, setArenaParams, submitOp } from "@/lib/dex/chain";
 import {
-  genesisTotals, ledgerAudit, runExam, realMoneyAudit, stabilityCheck,
+  genesisTotals, ledgerAudit, runExam, realMoneyAudit, stabilityCheck, runwayCheck,
 } from "@/lib/dex/settle";
 import { DEFAULT_PARAMS } from "@/lib/dex/mm";
 import { poolMid, getPool } from "@/lib/dex/amm";
@@ -29,6 +29,7 @@ export async function GET() {
   const exam = runExam(st);
   const realMoney = await realMoneyAudit();
   const stability = stabilityCheck(st);
+  const runway = runwayCheck(st);
   const state = getState();
   const payload = {
     ok: true,
@@ -41,6 +42,7 @@ export async function GET() {
     exam,
     realMoney,
     stability,
+    runway,
     verdict: {
       ledgerOk: ledger.ok,
       examOk: exam.ok,
@@ -62,17 +64,31 @@ export async function POST() {
   const st = getLiveState();
   const pushed: { kind: string; detail: string }[] = [];
 
-  // (0) עירוי-חיות מיידי (THE-REFUEL): כל-סוכני-הבחינה/הגריד מקבלים-קרדיטים
-  // עוד-הטיק-הזה — העברה-טהורה מהאוצר (אפס-הטבעה, Σcredits נשמר). בלי-זה
-  // סוכנים-שאזל-קרדיטים-שלהם לא-מצטטים ולא-עוברים-בחינה (insufficient-credits).
+  // (0) עירוי-חיות מיידי (THE-REFUEL + THE-FOUNTAIN): אוצר-ריק? הטבעה-עצמית
+  // מגובה-עמלות-מדודות (profit-שהוכר + feeMeter-מעל-רצפת-הסולם) קודם — ואז כל-
+  // סוכני-הבחינה/הגריד מקבלים-קרדיטים. הטבעה-מגובה-וחד-פעמית: האינווריאנטה
+  // Σcredits+gas−minted===ג'נזיס וביקורת-העמלות עומדות.
+  {
+    const trCr = st.credits["treasury"] ?? 0;
+    const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, Math.floor(((st.feeMeter ?? 0) - 8_000) / 2));
+    if (trCr < 60_000 && fuelAvail > 20_000) {
+      const mint = Math.min(100_000, fuelAvail);
+      if (mint > 0) {
+        const r = submitOp({ type: "mint_fuel", issuer: "treasury", nonce: `settle-fountain-${Date.now().toString(36)}`, to: "treasury", amount: mint });
+        pushed.push({ kind: "mint-fuel", detail: r.queued ? `treasury self-mint +${mint}µ credits (fees-backed: profit ${st.treasuryProfit} + meter ${st.feeMeter})` : `rejected: ${r.reason}` });
+      }
+    }
+  }
   const EXAM_AGENTS = ["soldier-1", "soldier-2", "soldier-3", "soldier-4", "bot-a", "bot-b", "bot-c"] as const;
   for (const ag of EXAM_AGENTS) {
     const c = st.credits[ag] ?? 0;
     if (c < 8_000) {
       const amt = Math.min(30_000 - c, 100_000);
       if (amt > 0) {
-        const r = submitOp({ type: "refuel", issuer: "treasury", nonce: `settle-refuel-${ag}-${Date.now().toString(36)}`, to: ag, amount: amt });
-        pushed.push({ kind: "refuel", detail: r.queued ? `${ag} +${amt}µ credits (had ${c})` : `rejected: ${r.reason}` });
+        // ממנה-ראשון: הארנה (רזרבה-עמוקה); האוצר-גיבוי (עמלות-בלבד — THE-FOUNTAIN)
+        const funder = (st.credits["arena"] ?? 0) >= amt + 10_000 ? "arena" : "treasury";
+        const r = submitOp({ type: "refuel", issuer: funder, nonce: `settle-refuel-${ag}-${Date.now().toString(36)}`, to: ag, amount: amt });
+        pushed.push({ kind: "refuel", detail: r.queued ? `${ag} +${amt}µ credits ← ${funder} (had ${c})` : `rejected: ${r.reason}` });
       }
     }
   }

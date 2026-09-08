@@ -53,7 +53,7 @@ export function genesisTotals(): GenesisTotals {
 /* ── 1. ביקורת-חשבונאות-ברזל על מצב-חי (או שיבוט) ──────────────────────────── */
 export interface LedgerAudit {
   ok: boolean;
-  credits: { sum: number; gasUsed: number; expected: number; ok: boolean };
+  credits: { sum: number; gasUsed: number; expected: number; minted: number; ok: boolean };
   assets: { asset: string; live: number; expected: number; ok: boolean; kind: "native" | "wrapped" | "lp" }[];
   escrow: { accounts: number; lockedSum: number; ordersSum: number; exact: boolean; availOk: boolean; ok: boolean };
   fees: { poolsTreasury: number; feeMeterPlusProfit: number; ok: boolean };
@@ -65,10 +65,12 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
   const errors: string[] = [];
   const negatives: string[] = [];
 
-  // (a) קרדיטים: אפס-הטבעה מחוץ-לג'נזיס — Σcredits + gasUsed === ג'נזיס
+  // (a) קרדיטים: אפס-הטבעה-שאינה-מגובה-עמלות — Σcredits + gasUsed − feeMinted === ג'נזיס
+  // (THE-FOUNTAIN: הטבעת-דלק מותרת-רק-מגובה-עמלות-מדודות; feeMinted הוא-הרישום-המצטבר)
+  const minted = st.feeMinted ?? 0;
   const creditSum = Object.values(st.credits).reduce((s, v) => s + v, 0);
-  const creditsOk = creditSum + st.gasUsed === totals.credits;
-  if (!creditsOk) errors.push(`credits: Σ${creditSum}+gas${st.gasUsed} ≠ genesis ${totals.credits}`);
+  const creditsOk = creditSum + st.gasUsed - minted === totals.credits;
+  if (!creditsOk) errors.push(`credits: Σ${creditSum}+gas${st.gasUsed}−minted${minted} ≠ genesis ${totals.credits}`);
 
   // (b) נכסים: Σbalances + Σpool-reserves + backing-עטוף === ג'נזיס (לכל-נכס)
   const liveAssets: Record<string, number> = {};
@@ -155,15 +157,17 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
 
   // (d) עמלות: מדידה-כנה — Σpools.feeAccruedTreasury === feeMeter + treasuryProfit
   const poolsTreasury = Object.values(st.pools).reduce((s, p) => s + p.feeAccruedTreasury, 0);
-  const feesOk = poolsTreasury === st.feeMeter + st.treasuryProfit;
-  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit ${st.feeMeter + st.treasuryProfit}`);
+  // (d) עמלות: כל-מה-שהבריכות-מדדו === מד-שלא-הוכר + רווח-שהוכר + דלק-שמוחזר
+  // (THE-FOUNTAIN: feeMinted הוא-עמלות-שהפכו-קרדיטים — נצרך-מהמדידה, לא-נעלם)
+  const feesOk = poolsTreasury === st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0);
+  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted ${st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0)}`);
 
   return {
     ok: errors.length === 0 && negatives.length === 0,
-    credits: { sum: creditSum, gasUsed: st.gasUsed, expected: totals.credits, ok: creditsOk },
+    credits: { sum: creditSum, gasUsed: st.gasUsed, expected: totals.credits, minted, ok: creditsOk },
     assets: assetRows,
     escrow: { accounts, lockedSum, ordersSum, exact: errors.filter((e) => e.startsWith("escrow")).length === 0, availOk, ok: errors.filter((e) => e.startsWith("escrow") || e.startsWith("escrow-shadow")).length === 0 && negatives.length === 0 },
-    fees: { poolsTreasury, feeMeterPlusProfit: st.feeMeter + st.treasuryProfit, ok: feesOk },
+    fees: { poolsTreasury, feeMeterPlusProfit: st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0), ok: feesOk },
     negatives,
     errors,
   };
@@ -506,5 +510,46 @@ export function stabilityCheck(st: DexState): StabilityReport {
     pair: "SAOS/USDS", refPrice: ref, fair, poolMid: pm, bookMid,
     dissonanceBps: d, spreadBps, depth1pct: { bidMu, askMu }, topImbalanceBps,
     sitting, reasons,
+  };
+}
+
+/* ── 5. טלמטריית-מסלול (THE-REFUEL follow-up): דלק-הכלכלה-הסימולטיבית ─────────
+ * הכלכלה-סגורה-ושומרת-על-עצמה: Σcredits+gasUsed===ג'נזיס (אפס-הטבעה), וה-refuel
+ * הוא-העברה-בלבד. המשמעות-הכנה: הדלק הכולל מתנקז-מונוטונית. המדידה-הזאת חושפת
+ * את-קצב-השריפה-בפועל ואת-זמן-הטיסה הנותר — כנות-מלאה במקום-הפתעה. */
+export interface RunwayReport {
+  burnPerHeight: number;        // µ-קרדיטים שנשרפים-בממוצע-לבלוק (מדידה-חיה)
+  totalCredits: number;         // Σcredits — כל-הדלק שנותר במערכת
+  systemRunwayBlocks: number;   // בלוקים-עד-ריקון-מלא (בקצב-הנוכחי)
+  systemRunwayHours: number;    // שעות (בקצב-הפעימה בפועל)
+  perAgent: { agent: string; credits: number; shareHours: number }[];
+  level: "ok" | "warn" | "crit";
+  note: string;
+}
+
+const TICK_MS_EST = 3_000; // קצב-הפעימה המוסדי (chain.ts TICK_MS) — הערכה-תעבורתית
+
+export function runwayCheck(st: DexState, agents?: string[]): RunwayReport {
+  const totalCredits = Object.values(st.credits).reduce((s, v) => s + (v ?? 0), 0);
+  const burnPerHeight = st.height > 0 ? st.gasUsed / st.height : 0;
+  const blocks = burnPerHeight > 0 ? totalCredits / burnPerHeight : Number.POSITIVE_INFINITY;
+  const hours = (blocks * TICK_MS_EST) / 3_600_000;
+  const names = agents ?? ["soldier-1", "soldier-2", "soldier-3", "soldier-4", "bot-a", "bot-b", "bot-c"];
+  // הנחת-מניות-שוות (כנות: שריפה-אנדוגנית — מי-שפעיל-שורף-יותר; מדד-גס-לצורך-הצגה)
+  const share = names.length > 0 ? hours / names.length : 0;
+  const perAgent = names.map((a) => ({
+    agent: a,
+    credits: st.credits[a] ?? 0,
+    shareHours: Math.round(share * 10) / 10,
+  }));
+  const level = hours >= 24 ? "ok" : hours >= 6 ? "warn" : "crit";
+  return {
+    burnPerHeight: Math.round(burnPerHeight * 10) / 10,
+    totalCredits,
+    systemRunwayBlocks: Math.floor(blocks),
+    systemRunwayHours: Math.round(hours * 10) / 10,
+    perAgent,
+    level,
+    note: "closed SIM economy — refuel is transfer-only (Σcredits+gas===genesis); runway is finite by design and reported honestly",
   };
 }
