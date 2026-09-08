@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Layers, Landmark, List,
+  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Crown, Layers, Landmark, List,
   RefreshCcw, ShieldCheck, Wallet, Zap, Waves, GaugeCircle,
 } from "lucide-react";
 import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
@@ -79,6 +79,52 @@ interface RelayView {
   records: RelayRecord[];
 }
 interface MyOrder { id: number; base: string; quote: string; side: "buy" | "sell"; price: number; amount: number; filled: number }
+
+/* ══ משטח-הוכחת-הפריצה (Breakthrough Showcase) — מה-API הציבורי ══════════════ */
+interface ExecRowView {
+  sizeMu: number; bookCostMu: number; bookAvgPx: number; bookSlipBps: number; covered: boolean;
+  poolCostMu: number | null; poolEffPx: number | null; poolSlipBps: number | null;
+  savingsMu: number | null; savingsBps: number | null;
+}
+interface ShowcaseResp {
+  ok: boolean;
+  sovereignPair: { mid: number; poolMid: number; bookDepthMu: number; liveOrders: number; height: number; stateRoot: string };
+  A: ExecRowView[];
+  A2: ExecRowView[];
+  B: {
+    replay: { ops: number; okCount: number; roots: string[]; identical: boolean };
+    poolSandwich: { attackerPnlMu: number; victimOutClean: number; victimOutSandwiched: number; victimHarmMu: number };
+    bookSandwich: { attackerPnlMu: number; victimExtraCostMu: number; topLevelMu: number; bestBidPx: number; note: string };
+  };
+  C: {
+    fillsWindow: number; gridSharePct: number;
+    restingOrdersTotal: number; restingOrdersGrid: number;
+    restingLiquidityMu: number; restingLiquidityGridMu: number; restingGridPct: number;
+    lifetimeFills: number; fillsPerMin: number;
+  };
+  sovereignty: {
+    verified: number; broadcasts: number; mismatches: number; breakerTrips: number;
+    rails: number; bridgesRequired: number;
+    perChain: Record<string, { anchored: number; verified: number; status: string; lastTxid: string | null }>;
+  };
+}
+
+function useShowcase(): { data: ShowcaseResp | null; loading: boolean; rerun: () => void } {
+  const [data, setData] = useState<ShowcaseResp | null>(null);
+  const [loading, setLoading] = useState(false);
+  const run = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(api("/api/dex/showcase"), { cache: "no-store" });
+      const j = (await r.json()) as ShowcaseResp;
+      if (j.ok) setData(j);
+    } catch { /* הדמון עוד קם */ } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { void run(); }, [run]);
+  return { data, loading, rerun: () => void run() };
+}
 
 /* ══ מנוע-זרימה: long-polling מבוסס-אירוע + AbortController ══════════════════
  * הלקוח תולה בקשה עם הגרסה-המקומית; השרת משיב רק כשהשרשרת התקדמה (או keepalive
@@ -202,28 +248,49 @@ function changePct(fair: number, ref: number): number {
 function Watchlist({ markets, selected, onSelect }: {
   markets: MarketView[]; selected: string | undefined; onSelect: (key: string) => void;
 }) {
+  const ordered = useMemo(
+    () => [...markets].sort((a, b) => (a.key === "SAOS/USDS" ? -1 : b.key === "SAOS/USDS" ? 1 : 0)),
+    [markets]
+  );
   return (
     <div className="space-y-2" data-testid="watchlist-panel">
-      {markets.map((m) => {
+      {ordered.map((m) => {
         const chg = changePct(m.fair, m.refPrice);
         const up = chg >= 0;
         const active = m.key === selected;
+        const sovereign = m.key === "SAOS/USDS";
         return (
           <button
             key={m.key} type="button" onClick={() => onSelect(m.key)}
-            className={`block w-full rounded-lg border px-3 py-2 text-right transition-colors ${active ? "border-amber-500/60 bg-zinc-800/70" : "border-zinc-800 bg-zinc-900/40 hover:border-zinc-700"}`}
+            className={`block w-full rounded-lg border px-3 py-2 text-right transition-colors ${
+              active
+                ? "border-amber-500/60 bg-zinc-800/70"
+                : sovereign
+                  ? "border-amber-500/40 bg-amber-500/[0.06] hover:border-amber-500/50"
+                  : "border-zinc-800 bg-zinc-900/40 hover:border-zinc-700"
+            }`}
+            data-testid={sovereign ? "watchlist-sovereign-pair" : undefined}
           >
             <div className="flex items-center justify-between gap-2" dir="ltr">
-              <span className="font-mono text-xs font-black text-zinc-100">{m.key}</span>
+              <span className="flex items-center gap-1.5 font-mono text-xs font-black text-zinc-100">
+                {sovereign && <Crown className="h-3 w-3 text-amber-400" aria-hidden />}
+                {m.key}
+              </span>
               <span className={`font-mono text-xs font-bold ${up ? "text-green-400" : "text-red-400"}`} data-testid="watchlist-change">
                 {up ? "+" : ""}{chg.toFixed(2)}%
               </span>
             </div>
             <div className="mt-0.5 flex items-center justify-between gap-2" dir="ltr">
               <span className="font-mono text-sm font-bold text-amber-400">{m.fair > 0 ? fmt(m.fair, 2) : "—"}</span>
-              <span className={`font-mono text-[10px] ${m.spreadBps > 0 ? "text-zinc-500" : "text-red-400"}`}>
-                spread {m.spreadBps}bps
-              </span>
+              {sovereign ? (
+                <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[8px] font-black uppercase tracking-widest text-amber-300">
+                  sovereign pair
+                </span>
+              ) : (
+                <span className={`font-mono text-[10px] ${m.spreadBps > 0 ? "text-zinc-500" : "text-red-400"}`}>
+                  spread {m.spreadBps}bps
+                </span>
+              )}
             </div>
           </button>
         );
@@ -235,6 +302,130 @@ function Watchlist({ markets, selected, onSelect }: {
         שינוי% מחושב מול מחיר-הייחוס של סולם-הערך. הזמנה = לחיצה על שוק.
       </p>
     </div>
+  );
+}
+
+// ─── פאנל-הכתר: SAOS SOVEREIGN METRICS (testid=saos-sovereign-metrics) ──────
+// המוקד-הבלעדי: הוכחה-חיה שהערך-הבלעדי של SAOS נובע-מהקוד — מדידה, לא שיווק.
+function SovereignMetricsPanel({ showcase, loading, rerun }: {
+  showcase: ShowcaseResp | null; loading: boolean; rerun: () => void;
+}) {
+  const sc = showcase;
+  const biggestSave = useMemo(() => {
+    if (!sc?.A.length) return null;
+    return sc.A.reduce((best, r) => ((r.savingsBps ?? -1) > (best.savingsBps ?? -1) ? r : best), sc.A[0]!);
+  }, [sc]);
+  const clean = useMemo(() => {
+    if (!sc?.A2.length) return null;
+    return sc.A2.reduce((best, r) => ((r.savingsBps ?? -1) > (best.savingsBps ?? -1) ? r : best), sc.A2[0]!);
+  }, [sc]);
+
+  return (
+    <section
+      data-testid="saos-sovereign-metrics"
+      className="rounded-xl border border-amber-500/30 bg-gradient-to-l from-amber-500/[0.05] via-zinc-900/60 to-zinc-900/60 p-4"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="flex items-center gap-2 text-sm font-black tracking-wide text-amber-200">
+          <Crown className="h-4 w-4 text-amber-400" aria-hidden />
+          SAOS SOVEREIGN METRICS
+          <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[9px] font-black uppercase tracking-widest text-amber-300">
+            the sovereign pair · SAOS/USDS
+          </span>
+        </h2>
+        <GoldButton tone="ghost" onClick={rerun} disabled={loading} testid="showcase-rerun" className="px-2.5 py-1 text-[11px]">
+          <RefreshCcw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} /> RUN PROOF
+        </GoldButton>
+      </div>
+
+      {!sc && (
+        <p className="py-6 text-center font-mono text-[11px] text-zinc-500" data-testid="showcase-loading">
+          {loading ? "מריץ משטח-הוכחה על המצב-החי…" : "מנוע-ההוכחה מתחבר לדמון…"}
+        </p>
+      )}
+
+      {sc && (
+        <>
+          {/* 4 עדויות-ראש */}
+          <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
+            <div className="rounded-lg border border-green-500/30 bg-green-500/[0.05] px-3 py-2" data-testid="metric-mev">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">MEV EXTRACTED (BOOK)</div>
+              <div className="mt-0.5 font-mono text-lg font-black text-green-300" dir="ltr">
+                {sc.B.bookSandwich.attackerPnlMu <= 0 ? fmt(sc.B.bookSandwich.attackerPnlMu, 0) : `+${fmt(sc.B.bookSandwich.attackerPnlMu, 0)}`} µ
+              </div>
+              <div className="mt-0.5 text-[10px] leading-snug text-zinc-500">
+                תוקף-כריך על הספר מפסיד את הספרד · על AMM היה מרוויח <span className="font-mono text-red-300" dir="ltr">+{fmtInt(sc.B.poolSandwich.attackerPnlMu)}µ</span>
+              </div>
+            </div>
+            <div className="rounded-lg border border-violet-500/30 bg-violet-500/[0.05] px-3 py-2" data-testid="metric-determinism">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">REPLAY DETERMINISM</div>
+              <div className={`mt-0.5 font-mono text-lg font-black ${sc.B.replay.identical ? "text-violet-300" : "text-red-300"}`} dir="ltr">
+                {sc.B.replay.identical ? "PASS 3/3" : "FAIL"}
+              </div>
+              <div className="mt-0.5 font-mono text-[10px] text-zinc-500" dir="ltr">
+                {fmtInt(sc.B.replay.ops)} ops · root {shortHash(sc.B.replay.roots[0] ?? "", 8)}
+              </div>
+            </div>
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-3 py-2" data-testid="metric-grid-liquidity">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">GRID-MADE LIQUIDITY</div>
+              <div className="mt-0.5 font-mono text-lg font-black text-amber-300" dir="ltr">{sc.C.restingGridPct}%</div>
+              <div className="mt-0.5 font-mono text-[10px] text-zinc-500" dir="ltr">
+                {sc.C.restingOrdersGrid}/{sc.C.restingOrdersTotal} orders · {sc.C.fillsPerMin}/min fills
+              </div>
+            </div>
+            <div className="rounded-lg border border-purple-500/30 bg-purple-500/[0.05] px-3 py-2" data-testid="metric-anchors">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">SOVEREIGN ANCHORS</div>
+              <div className="mt-0.5 font-mono text-lg font-black text-purple-400" dir="ltr">{fmtInt(sc.sovereignty.verified)}</div>
+              <div className="mt-0.5 font-mono text-[10px] text-zinc-500" dir="ltr">
+                {sc.sovereignty.rails} rails · {fmtInt(sc.sovereignty.mismatches)} mismatches · 0 bridges
+              </div>
+            </div>
+          </div>
+
+          {/* טבלת-הוכחה A: אותו-פלט, מי-משלם-פחות */}
+          <div className="mt-3 overflow-x-auto" dir="ltr" data-testid="showcase-exec-table">
+            <table className="w-full min-w-[560px] border-separate border-spacing-0 font-mono text-[11px]">
+              <thead>
+                <tr className="text-[9px] uppercase tracking-wider text-zinc-500">
+                  <th className="px-2 py-1 text-left font-semibold">buy size (SAOS)</th>
+                  <th className="px-2 py-1 text-left font-semibold">book slip</th>
+                  <th className="px-2 py-1 text-left font-semibold">pool slip (live)</th>
+                  <th className="px-2 py-1 text-left font-semibold">pool slip (clean)</th>
+                  <th className="px-2 py-1 text-left font-semibold">savings on book</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sc.A.map((r, i) => {
+                  const c = sc.A2[i];
+                  return (
+                    <tr key={r.sizeMu} className="border-t border-zinc-800/60">
+                      <td className="px-2 py-1.5 text-zinc-200">{fmt(r.sizeMu, 0)}</td>
+                      <td className="px-2 py-1.5 font-bold text-green-300">{r.bookSlipBps} bps</td>
+                      <td className="px-2 py-1.5 text-red-300">{r.poolSlipBps !== null ? `${r.poolSlipBps} bps` : "—"}</td>
+                      <td className="px-2 py-1.5 text-zinc-400">{c?.poolSlipBps !== null && c?.poolSlipBps !== undefined ? `${c.poolSlipBps} bps` : "—"}</td>
+                      <td className="px-2 py-1.5 text-amber-300">
+                        {r.savingsMu !== null ? `${fmt(r.savingsMu, 0)} µ (${r.savingsBps ?? 0} bps)` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-2 text-[10px] leading-snug text-zinc-500">
+            מדידה-חיה על הזוג-הריבוני: הספר ממלא תמיד במחיר-המייקר המדויק (book.ts · matchBook) — אפס-סליפ,
+            אפס-עמלת-טייקר; הבריכה (x*y=k + 30bps) סופגת כל-עסקה לתוך-הרזרבות וגובה גם-בבריכה-צודקה
+            (clean = reserves aligned to fair). הנזילות-המנוחה נוצרת-אוטונומית ע"י גריד-החיילים (mm.ts · arenaTick)
+            — אפס-LP-חיצוני, אפס-Impermanent-Loss קלאסי.
+          </p>
+          {biggestSave && biggestSave.savingsBps !== null && (
+            <p className="mt-1 font-mono text-[10px] text-amber-300/90" dir="ltr" data-testid="showcase-headline">
+              headline: at {fmt(biggestSave.sizeMu, 0)} SAOS — book is {biggestSave.savingsBps} bps cheaper ({fmt(biggestSave.savingsMu ?? 0, 0)} µ saved) vs live pool · {clean?.savingsBps ?? 0} bps vs clean pool
+            </p>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -730,6 +921,7 @@ export default function DexTerminal() {
   const [marketKey, setMarketKey] = useState<string>("");
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const showcase = useShowcase();
 
   const relay = useRelayStream(world?.version);
   const myOrders = useMyOrders(world?.version);
@@ -758,7 +950,8 @@ export default function DexTerminal() {
     if (!world) return undefined;
     const picked = world.markets.find((m) => m.key === marketKey);
     if (picked) return picked;
-    return [...world.markets].sort((a, b) => b.chart.length - a.chart.length)[0] ?? world.markets[0];
+    // הזוג-הריבוני הוא ברירת-המחדל-הבלעדית — SAOS הוא המלך
+    return world.markets.find((m) => m.key === "SAOS/USDS") ?? world.markets[0];
   }, [world, marketKey]);
 
   const opWallet = world?.wallets.find((w) => w.name === "operator");
@@ -780,7 +973,7 @@ export default function DexTerminal() {
               <h1 className="text-base font-black tracking-tight text-zinc-50">
                 SAOS-DEX <span className="font-mono text-amber-400">SOVEREIGN TERMINAL</span>
               </h1>
-              <p className="text-[10px] text-zinc-500">ספר-הזמנות דטרמיניסטי · בריכות 30bps · עיגון-חי Steem/Hive/TRON</p>
+              <p className="text-[10px] text-zinc-500">ספר-דטרמיניסטי · ארנה-אוטונומית · עיגון-ריבוני ×5 רשתות · SAOS במרכז</p>
             </div>
           </div>
 
@@ -804,6 +997,11 @@ export default function DexTerminal() {
             </Pill>
             <Pill tone="violet">TPS {st ? fmtInt(st.tps) : "…"}</Pill>
             <Pill tone="zinc">root {st ? shortHash(st.stateRoot, 8) : "…"}</Pill>
+            {market?.key === "SAOS/USDS" && (
+              <Pill tone="gold" testid="header-sovereign-pill">
+                <Crown className="h-3 w-3" aria-hidden /> SOVEREIGN MARKET
+              </Pill>
+            )}
             <Pill tone="amber">SIM — ספר-ריבוני, אין כסף-אמת</Pill>
           </div>
         </div>
@@ -818,6 +1016,9 @@ export default function DexTerminal() {
       )}
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4">
+        {/* ═════ פאנל-הכתר: SAOS SOVEREIGN METRICS — ההוכחה החיה בראש-המסך ═════ */}
+        <SovereignMetricsPanel showcase={showcase.data} loading={showcase.loading} rerun={showcase.rerun} />
+
         {/* ═════ מבנה 3-טורי מחייב: 20% Watchlist · 50% גרף+ספר · 30% מסחר+בריאות ═════ */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-10">
           {/* ─── טור-שמאל (20%): רשימת-שווקים ─── */}
