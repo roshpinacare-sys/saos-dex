@@ -1155,6 +1155,125 @@ function Tape({ tape }: { tape: TapeEv[] }) {
 }
 
 // ═══════════════════════════════ הטרמינל ════════════════════════════════════
+/* ══ SETTLE-12: תיקיית-המטבעות הריבונית + הגשר-הדו-כיווני ═══════════════════
+ * שני-ספרים (core + portfolio-b) בהערכת-שווי-חיה ממחירי-בריכות · escrow-הגשר
+ * עם כוונות IN/OUT · זהויות-חוץ כנות. GET-ציבורי — תצפית-בלבד. */
+interface PortfolioLine { asset: string; amountMu: number; price: number; valueUsdsMu: number }
+interface PortfolioBook { name: string; role: string; balances: Record<string, number>; credits: number; valueUsdsMu: number; lines: PortfolioLine[] }
+interface PortfolioResp { ok: boolean; portfolio: { generatedAt: number; prices: Record<string, number>; books: PortfolioBook[]; totalUsdsMu: number; external: { chain: string; address: string; status: string; note: string }[]; honesty: string } }
+interface BridgeIntent { id: string; dir: "in" | "out"; chain: string; asset: string; amountMu: number; party: string; farAddress?: string; proofRef?: string; status: string; ourTxRef?: string; at: number; updatedAt: number }
+interface BridgeResp { ok: boolean; bridge: { escrow: Record<string, number>; intents: BridgeIntent[]; caps: { claimMu: number }; farContract: { chain: string; name: string; address: string; note: string }; chains: string[]; honesty: string } }
+
+function intentTone(status: string): "green" | "amber" | "zinc" {
+  if (status === "paid" || status === "released") return "green";
+  if (status === "pending" || status === "locked") return "amber";
+  return "zinc";
+}
+
+function PortfolioBridgePanel() {
+  const [pf, setPf] = useState<PortfolioResp | null>(null);
+  const [br, setBr] = useState<BridgeResp | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => {
+      fetch(api("/api/dex/portfolio")).then((r) => r.json()).then((j) => { if (live) setPf(j); }).catch(() => { /* כנות: התצוגה מציגה ריק */ });
+      fetch(api("/api/dex/bridge")).then((r) => r.json()).then((j) => { if (live) setBr(j); }).catch(() => { /* כנות */ });
+    };
+    load();
+    const t = setInterval(load, 6000);
+    return () => { live = false; clearInterval(t); };
+  }, []);
+  const p = pf?.portfolio;
+  const b = br?.bridge;
+  return (
+    <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3" data-testid="portfolio-bridge">
+      <Panel title="תיקיית-מטבעות · BOOKS" icon={<Wallet className="h-4 w-4 text-amber-400" />}
+        action={p && <span className="font-mono text-[10px] text-zinc-500" dir="ltr">total {fmtInt(p.totalUsdsMu)}µ USDS</span>}>
+        {!p ? (
+          <p className="py-2 text-center font-mono text-[11px] text-zinc-600">טוען תיקייה…</p>
+        ) : (
+          <div className="space-y-2">
+            {p.books.map((bk) => (
+              <div key={bk.name} className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3" data-testid={`book-${bk.name}`}>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="font-mono text-xs font-bold text-amber-300" dir="ltr">{bk.name}</span>
+                  <span className="font-mono text-xs text-zinc-200" dir="ltr">{fmtInt(bk.valueUsdsMu)}µ</span>
+                </div>
+                <p className="text-[9px] text-zinc-600">{bk.role}</p>
+                <div className="mt-1.5 space-y-0.5 font-mono text-[10px]" dir="ltr">
+                  {bk.lines.slice(0, 4).map((ln) => (
+                    <div key={ln.asset} className="flex items-center justify-between gap-2">
+                      <span className="text-zinc-400">{ln.asset}</span>
+                      <span className="text-zinc-500">{fmtInt(ln.amountMu)}µ @ {fmtInt(ln.price)}</span>
+                      <span className="text-zinc-200">{fmtInt(ln.valueUsdsMu)}µ</span>
+                    </div>
+                  ))}
+                  {bk.lines.length === 0 && <p className="text-zinc-600">ריק — טרם-מומן</p>}
+                  {bk.credits > 0 && (
+                    <div className="flex items-center justify-between gap-2 border-t border-zinc-800 pt-0.5">
+                      <span className="text-zinc-500">credits (gas)</span><span className="text-violet-300">{fmtInt(bk.credits)}µ</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            <p className="text-[9px] leading-snug text-zinc-600">{p.honesty}</p>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="גשר-ריבוני · ESCROW" icon={<Layers className="h-4 w-4 text-violet-300" />}
+        action={b && <span className="font-mono text-[10px] text-zinc-500" dir="ltr">{b.chains.length} chains</span>}>
+        {!b ? (
+          <p className="py-2 text-center font-mono text-[11px] text-zinc-600">טוען גשר…</p>
+        ) : (
+          <div className="space-y-2">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 font-mono text-[10px]" dir="ltr">
+              <div className="flex items-center justify-between"><span className="text-zinc-500">escrow balances</span><span className="text-zinc-200">{Object.entries(b.escrow).map(([a, m]) => `${a} ${fmtInt(m)}µ`).join(" · ") || "ריק"}</span></div>
+              <div className="mt-1 flex items-center justify-between"><span className="text-zinc-500">far contract ({b.farContract.chain})</span><span className="text-zinc-300">{b.farContract.name} {shortHash(b.farContract.address, 10)}</span></div>
+            </div>
+            <div className="space-y-1" data-testid="bridge-intents">
+              {b.intents.slice(0, 5).map((i) => (
+                <div key={i.id} className="flex items-center justify-between gap-2 rounded-md border border-zinc-800 bg-zinc-900/70 px-2.5 py-1.5 font-mono text-[10px]" dir="ltr">
+                  <span className={i.dir === "in" ? "text-green-400" : "text-red-400"}>{i.dir === "in" ? "IN" : "OUT"}</span>
+                  <span className="text-zinc-400">{i.chain}</span>
+                  <span className="text-zinc-200">{i.asset} {fmtInt(i.amountMu)}µ</span>
+                  <Pill tone={intentTone(i.status)}>{i.status}</Pill>
+                </div>
+              ))}
+              {b.intents.length === 0 && <p className="py-1 text-center font-mono text-[10px] text-zinc-600">אין-כוונות-פתוחות</p>}
+            </div>
+            <p className="text-[9px] leading-snug text-zinc-600">{b.honesty}</p>
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="זהויות-חוץ · כנות" icon={<Anchor className="h-4 w-4 text-amber-400" />}>
+        {!p ? (
+          <p className="py-2 text-center font-mono text-[11px] text-zinc-600">טוען…</p>
+        ) : (
+          <div className="space-y-1.5">
+            {p.external.map((e) => (
+              <div key={`${e.chain}:${e.address}`} className="rounded-md border border-zinc-800 bg-zinc-900/70 px-2.5 py-1.5">
+                <div className="flex items-center justify-between gap-2 font-mono text-[10px]" dir="ltr">
+                  <span className="text-zinc-400">{e.chain}</span>
+                  <span className="text-zinc-200">{shortHash(e.address, 16)}</span>
+                  <Pill tone={e.status === "ok" || e.status === "identity" ? "green" : e.status === "pending" ? "amber" : "zinc"}>{e.status}</Pill>
+                </div>
+                <p className="mt-0.5 text-[9px] leading-snug text-zinc-600">{e.note}</p>
+              </div>
+            ))}
+            {p.external.length === 0 && <p className="py-1 text-center font-mono text-[10px] text-zinc-600">אין-זהויות-רשומות בפנקס</p>}
+            <p className="text-[9px] leading-snug text-zinc-600">
+              עקרון-הזהירות: אפס-מפתחות במודול-זה · יתרות-חוץ אינן-מדודות עד-מימון · כל-הערכה מוצגת-רק מה שנמדד על-הספר-שלנו.
+            </p>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
 export default function DexTerminal() {
   const { world, load } = useWorldStream();
   const [marketKey, setMarketKey] = useState<string>("");
@@ -1441,6 +1560,9 @@ export default function DexTerminal() {
             })()}
           </Panel>
         </div>
+
+        {/* ═════ SETTLE-12: תיקיית-המטבעות + הגשר-הריבוני ═════ */}
+        <PortfolioBridgePanel />
       </main>
 
       {/* ─── Footer דביק (mt-auto) — כנות-כלכלית ─── */}

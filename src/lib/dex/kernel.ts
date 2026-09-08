@@ -42,6 +42,8 @@ export const GAS_TABLE = {
   mint_fuel: 0, // THE-FOUNTAIN: הטבעת-דלק מגובה-עמלות-מדודות — אפס-גז, אוצר-בלבד
   relay: 0, // THE-DOOR: חוזה-חינם שכופה עבודה-אמת על רשת-מרוחקת
   relay_ack: 0,
+  xfer_free: 0, // THE-SWEEP (SETTLE-12): העברה-חופשית על הרשת-הריבונית — אפס-גז, תקרה-מדודה (FREE_XFER_CAP), העברה-טהורה בין-יתרות (אפס-נגיעה בקרדיטים → האינווריאנטה נשמרת מעצמה)
+  batch: 0, // דבר-גורר-דבר (SETTLE-12): אטומיות — סדרת-ops שכולה מתבצעת או שכולה נדחית. גז-0 למעטפת; תתי-ה-ops משלמים גז משלהם. עומק-1 בלבד (אין-מקוננים)
 } as const;
 
 export type OpKind = keyof typeof GAS_TABLE;
@@ -51,6 +53,8 @@ export const REFUEL_CAP = 100_000; // תקרת-עירוי-פר-פקודה — ג
 export const FUEL_FUNDERS = ["treasury", "arena", "operator"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor") + המפעיל-האנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון, SETTLE-5)
 export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter≥8000 להרמה — המטבע לא ירעיב-אותו
 export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
+export const FREE_XFER_CAP = 2_000_000; // THE-SWEEP (SETTLE-12): תקרת-העברה-חינם-פר-פקודה (2,000 יחידות) — החינם הוא המוצר, התקרה היא גבול-הנזק
+export const BATCH_MAX_OPS = 8; // דבר-גורר-דבר: תקרת-תתי-ops-פר-batch — אטומיות לא משלמת עליית-זיכרון בלתי-חסומה (structuredClone לכל-batch)
 
 export type FuelFunder = (typeof FUEL_FUNDERS)[number];
 /** ממנה-דלק מדורג (SETTLE-5/9): arena → treasury → operator.
@@ -227,6 +231,8 @@ export interface Op {
   // עטיפות/רשימות/עדים/דלתות
   wrapAsset?: Asset; name?: string; refPrice?: number; claim?: string; memo?: string;
   at?: number;
+  // דבר-גורר-דבר (SETTLE-12): תתי-ops של batch — כל-תת-op חייב-issuer זהה למנפיק-ה-batch
+  ops?: Op[];
 }
 
 export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
@@ -261,6 +267,51 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       addBal(st, op.to, a, amt);
       if (op.type === "pay") st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "pay", note: `→${op.to} ${amt}µ ${a}` });
       return { ok: true, gas };
+    }
+    case "xfer_free": {
+      // THE-SWEEP (SETTLE-12): העברה-חופשית על הרשת-הריבונית. מה שמיישם את דבר-המפעיל:
+      // "שנוכל להעביר חופשי ללא עלות של גז ותלות — על הרשת שלנו". כללים:
+      //  · אפס-גז (מפרט-האופקודה למעלה) · העברה-טהורה בין-יתרות-נכסים בלבד —
+      //    אפס-נגיעה ב-credits → Σcredits נשמר מעצמו והאינווריאנטה עומדת.
+      //  · תקרת-FREE_XFER_CAP-פר-פקודה (גבול-נזק) · נכס-מרשימת-ASSETS בלבד
+      //    (fail-closed — אין-יצירת-נכסים-רפאים דרך-החינם) · dedupe קשיח כרגיל.
+      const a = op.asset, amt = op.amount ?? 0;
+      if (!a || !ASSETS.includes(a)) return { ok: false, err: "bad-asset", gas: 0 };
+      if (!op.to || op.to === issuer || !(amt > 0)) return { ok: false, err: "bad-xfer", gas: 0 };
+      if (amt > FREE_XFER_CAP) return { ok: false, err: "xfer-exceeds-cap", gas: 0 };
+      if (avail(st, issuer, a) < amt) return { ok: false, err: "insufficient", gas: 0 };
+      pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — החינם הוא היתרון
+      addBal(st, issuer, a, -amt);
+      addBal(st, op.to, a, amt);
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "xfer_free", note: `→${op.to} ${amt}µ ${a}` });
+      return { ok: true, gas: 0 };
+    }
+    case "batch": {
+      // דבר-גורר-דבר (SETTLE-12): אטומיות-קבוצתית. הכל-או-כלום: תתי-ה-ops מיושמים
+      // על-עותק-צל (structuredClone) — רק-אם-כולם-עברו מאומץ-העותק כולו. כישלון
+      // יחיד (מגן-minOut בקפיצה-2 של-המרה, למשל) מוחק את-כולה — אין-ביצוע-חלקי
+      // שמשאיר נכס-תלוש-באמצע-שרשרת. תתי-ops חייבים issuer==מנפיק-ה-batch
+      // (אין-הסעה-בין-חשבונות-בעטיפה-אחת) ואסורים-מקוננים (עומק-1).
+      const sub = Array.isArray(op.ops) ? op.ops : null;
+      if (!sub || sub.length === 0 || sub.length > BATCH_MAX_OPS) return { ok: false, err: "bad-batch", gas: 0 };
+      if (sub.some((s) => !s || s.type === "batch" || Array.isArray(s.ops))) return { ok: false, err: "batch-nesting-forbidden", gas: 0 };
+      const trial = structuredClone(st) as DexState;
+      let failedAt = -1; let failErr = "";
+      for (let i = 0; i < sub.length; i++) {
+        const r = applyOp(trial, { ...sub[i], issuer }, nowMs); // issuer-pinned — הזהות של-החותם
+        if (!r.ok) { failedAt = i; failErr = r.err; break; }
+      }
+      if (failedAt >= 0) return { ok: false, err: `batch-atomic-fail@${failedAt}:${failErr}`, gas: 0 };
+      // בדיקת-התעשרות-עצמית — על-העותק, לפני-האימוץ (fail-closed נקי: דחייה
+      // בלי-נגיעה במצב-החי). תתי-ה-ops נחתמו-על-העותק כולל-גז-שלהם — החותם
+      // משלם-בעצמו; אסור-שה-batch יעשיר את-חותמו (למשל transfer-עצמי-כפול-תוך-העטיפה).
+      const selfBefore = st.credits[issuer] ?? 0;
+      if ((trial.credits[issuer] ?? 0) > selfBefore) return { ok: false, err: "batch-self-enrich-forbidden", gas: 0 };
+      pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז-למעטפת — תתי-ה-ops שילמו על-העותק
+      Object.assign(st, trial); // אימוץ-אטומי — אותו-אובייקט-זהות (ה-WeakMap של-ה-nonces נשאר-מכוון)
+      nonceSets.set(st, new Set(st.nonces)); // סנכרון-מדד-ה-dedupe-מול-ה-nonces-המאומצים
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "batch", note: `${sub.length} ops atomic` });
+      return { ok: true, gas: 0 };
     }
     case "refuel": {
       // THE-REFUEL (114): חיות-כלכלית מתמדת — ממני-הדלק (FUEL_FUNDERS: אוצר +

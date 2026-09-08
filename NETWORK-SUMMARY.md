@@ -107,3 +107,30 @@
 2. **P1 — F-06/F-07 (דחיסת-עיגון)**: payload 250B→51B + עד-154-שורשים-ל-op — **תיאום-חוצה-סוכנים-חובה** (jummper-מנתח-את-ה-`saos-dex.anchor.v1` — שינוי-פורמט-חד-צדדי-ישבור-את-המאמת-שלהם). דרוש-ראש-גשר-משותף.
 3. **P1 — טבעת-אפס-עוגנים-ישנים**: 27-עוגני-SOL-ישנים-מעל-החלון-לא-אומתו-אישית (ה-6-בחלון-mainnet-מוכח); אותה-שאילתה-חוזרת-עליהם-בהזדמנות.
 4. **P2**: DB-retention (blockHeader-צומח ~28.8k-שורות/יום) · persist-t0-לבלוק (ריפליי-מלא-מג'נזיס) · WS/OHLC.
+
+---
+
+## עדכון SETTLE-12 (2026-09-09) — סבב-הריבונות-המלאה
+
+**בדיקת-כל-תיקיות-הסוכנים (×10, קריאה-בלבד, שני-סוכני-ביקורת-מקבילים):**
+
+| ריפו | מצב | מסקנה-עיקרית-לרשת |
+|---|---|---|
+| Saosmartwallet | חי (NET-AUDIT R2, +2-קומיטים) | M3 unified keys: WIF-אחד→STM/ETH/SOL · זהויות-headcorner-הפוכות: 0x2767…(funded) ≠ 0xF723…(identity) — אין-לבלבל |
+| saos-sovereign-platform | v20.1.0, נקי-מסודות | **SAOSRelay 0xa52D…78E6 על ETH-mainnet — החוזה-שלנו-שם** · fleet-arm policy מוקפא-בקוד |
+| saos-sovereign-foundry | task-23, אפס-מפתחות | SignRequest (payload+digestToSign+txid-public) — תחליף-מוכן לפער-ה-WIF של-headcorner |
+| saos-jummper | 137/137-ירוק | tier-E-חיסכון 79.6% + multi-root 154-שורשים/op (F-06/F-07 — פתוחים-חוצי-סוכנים) |
+| steem | h61,075-ריבוני | wallets-public.json (12×4-שרשראות) + THE-DEPOSITS (120-כתובות-קבלה→wrap_mint) · **שני-דיממי-RC: he_genesis step-3-loop (~34%) + weave ללא-idempotency (~28%) — לתיקון-שם** |
+| roshpina | e87623c | roshpina-bridge.cjs — התבנית-הקנונית: validate-fail-closed+quarantine+idempotent-לפי-headHash |
+| Adsmarket | bd01413 | fact-sheet-v2-טרייה; README-מיושן (מסמך-שקר-קטן) |
+| Project-files | סטטי | המעטפת-השרופה-עדיין-בתוך steem-main.zip (מפתחות-מתים-על-השרשרת; לנקות-מה-snapshot) |
+| Sdk / anchor-baseline | ריקים | placeholder-בלי-תוכן |
+
+**מה-נבנה-הסבב (ב-saos-dex בלבד — כלל-התיקייה-שלי):** xfer_free (העברה-חינם) ·
+batch (אטומיות) · portfolio (תיקייה-שנייה-חיה) · גשר-דו-כיווני-עם-escrow ·
+פאנל-UI. הפעלה-חיה-מלאה + אימות-שלילי-אטומי + שערי-מפעיל.
+
+**צעדים-הבאים-מדורגים:**
+- P0 (ממתין-מפעיל/אחים): מימון-TRX לזהות-TRON → עיגון-שלישי-חי · תיקון-דיממי-ה-RC ב-steem (שם) · ייבוא-WIF-האמיתיים-של-headcorner (אצל-keyrelay).
+- P1 (שלנו): צריכת `saos-dex.anchor.v1` מהצי-כערוץ-עיגון-שני · port-של-tier-E+packing (F-06/F-07) — מכפיל-קיבולת ~6.5× · wallets-public.json-כרשימת-היתר-סוכנים.
+- P2: SAOSRelay-עיגון-ממומן-כשיש-gas · זהויות-Ed25519-ניידות (roshpina key-ring).
