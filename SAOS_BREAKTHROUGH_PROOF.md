@@ -550,3 +550,62 @@ minOut **חובה** (fail-closed מול תמרון-מחיר), שערי operator+
 **16.6 קוד:** `saos-dex/1.10.0+settle11-fence-convert` · tsc נקי · fence-check נקי.
 ---
 *SETTLE-11 · הרשת-מגודרת: שער-יוצא-לא-מקובע=חסימה, קוד-זר=אסור-ונסרק, המרות-ריבוניות-על-הגרעין, פצצת-ה-WIF-נוטרלה.*
+
+## §17 — SETTLE-12: העברות-חינם · דבר-גורר-דבר · תיקיית-מטבעות · גשר-דו-כיווני (2026-09-09)
+
+דבר-המפעיל: "רשאי להשתמש במפתחות כדי ליישם מתיקיה אחרת — בזהירות · הכל על המערכת שלנו
+ובחינם · העברות חופשי ללא גז ובלי תלות · להתממשק עם רשתות אחרות ולהישאר עם גישה
+לחוזים שלנו שם — דבר-גורר-דבר וגשרים · תבדוק את כל תיקיות-הסוכנים ותפיק מסקנות".
+
+**שתי אופקודות גרעין חדשות (GAS_TABLE):**
+- `xfer_free: 0` (THE-SWEEP) — העברה-חופשית על הרשת-הריבונית: אפס-גז, העברה-טהורה
+  בין-יתרות (אפס-נגיעה ב-credits → האינווריאנטה Σcredits+gasUsed−feeMinted===genesis
+  נשמרת מעצמה), תקרת FREE_XFER_CAP=2Mµ/פקודה, נכסים-מרשימת-ASSETS בלבד (fail-closed).
+- `batch: 0` (דבר-גורר-דבר) — אטומיות-קבוצתית: תתי-ops על עותק-צל (structuredClone);
+  הכל-או-כלום; issuer-pinned; עומק-1; בדיקת-התעשרות-עצמית על-העותק לפני-האימוץ;
+  ≤BATCH_MAX_OPS=8; המדד-המקביל של-ה-nonces נבנה-מחדש באימוץ (sync WeakMap).
+
+**מודולי-רשת חדשים:**
+- `portfolio.ts` — תיקיית-המטבעות: BOOK core (treasury+operator+arena) + BOOK
+  portfolio-b (התיקייה-השנייה, הופעלה-בפועל בהעברה-חופשית); הערכת-שווי במספרים-
+  שלמים ממחירי-בריכות-חיים (ישיר→דרך-SAOS→refPrice); זהויות-חוץ כנות מתוך
+  anchors.json בלבד (אפס-מפתחות, אפס-יתרות-מדומות עד-מימון).
+- `bridge.ts` — גשר-דו-כיווני: escrow-ריבוני (חשבון `bridge`), כוונות IN (רישום
+  הפקדה-חוץ לפי proofRef-64hex + אנטי-כפילות → claim משלם מה-escrow ב-xfer_free
+  אפס-גז) ו-OUT (lock→escrow → release עם farTxid); פנקס state/bridge.json
+  (כתיבה-אטומית tmp+rename); החוזה-שלנו-שם מתועד: SAOSRelay
+  0xa52D85cAa4C04C15cE60d0c582e8C138d16678E6 (ETH-mainnet, מבוקר חי בסבב-12-a).
+
+**מסלולי-API חדשים (כולם שער-מפעיל+קונסולה למוטציות):** POST /api/dex/transfer ·
+POST /api/dex/batch · GET+POST /api/dex/bridge (register-in|claim|lock-out|release) ·
+GET /api/dex/portfolio. UI: פאנל PORTFOLIO+BRIDGE בקונסולה (byte-identical בשני-העצים).
+
+**אימות-חי (כל-הראיות-בדמון-חי 1.11.0):**
+1. portfolio-b מומן בפועל: 750k SAOS + 1.5M USDS + 300k WSTEEM (xfer_free, גז-0).
+2. escrow מומן: 500k SAOS + 500k USDS; IN-demo נרשם→paid (50k SAOS מה-escrow);
+   OUT-demo locked→released (100k SAOS, farTxid-64hex); מתמטיקת-escrow מדויקת:
+   500k−50k+100k=550k ✓ (מוצג-חי ב-/api/dex/bridge וב-UI).
+3. אטומיות-מוכחת-שלילית: batch [xfer_free 50k + pool_swap minOut=999,999,999] →
+   נדחה כולו; יתרת portfolio-b זהה לפני/אחרי (750,000===750,000).
+4. batch-חיובי: treasury קבע refPrice STEEM=360 דרך-batch (dogfood) — המחיר-חי
+   ב-/api/dex/portfolio קפץ מ-0 ל-360.
+5. שער-מפעיל חי: POST-בלי-טוקן → operator-unauthorized (401).
+6. כשל-כנה-מתועד: העברת-300k-WSTEEM מ-operator נדחתה-בשקט (אין-WSTEEM-בג'נזיס-שלו
+   — fail-closed עבד); תוקן-בהפעלה-מהאוצר. הדמון-הופעל-מחדש (HMR split-brain:
+   routes-חדשים+kernel-ישן באותו-תהליך → "unknown-op" בשקט; guardian_boot-מחזאות
+   = גרף-מודול אחד — תיעוד-תפעולי לסבבים-הבאים).
+7. verdict: ledgerOk=true · examOk=true · realMoneyOk=true · halted=false;
+   tsc+eslint-נקיים ×2-עצים; fence-check נקי (48 קבצים); סריקת-סודות-נקייה;
+   דפדפן: פאנל-חי + footer-דביק + מובייל-תקין (צילום settle12-portfolio-bridge.png).
+
+**מסקנות-רשת (סבב-12-a/12-b, ×10 תיקיות, קריאה-בלבד):**
+- החוזה-שלנו-שם: SAOSRelay על ETH-mainnet — עוגן-events-only; אינטראקציה-ממומשת
+  דורשת gas (כנות: מגודר עד-מימון).
+- נכסי-חיבור-מדורגים: custom_json id `saos-dex.anchor.v1` (הצי-כבר-מעגן-תחתיו — S);
+  רשימת-ה-12-סוכנים wallets-public.json (S); foundry SignRequest (חתימה-חוצה,
+  תחליף-לפער-ה-WIF — M); jummper tier-E+packing (F-06/F-07 — מכפיל-קיבולת-עיגון ~6.5×);
+  roshpina-bridge (validate/quarantine/idempotency — התבנית-לקליטת-עוגנים-חוצים).
+- דיממים-שנמצאו-אצל-אחרים (לא-שלנו-לתקן — מדווח): steem he_genesis.cjs step-3
+  convert-loop (~34% מ-RC-היומי) + weave-sealer ללא-idempotency (~28%) — שני-טיפולים-
+  חד-שורתיים שיקנו קיבולת-עיגון-אמת; 3 קלוני-ביקורת-מקומיים עם token-ב-.git/config
+  — חוטאו-מקומית בסבב-זה.

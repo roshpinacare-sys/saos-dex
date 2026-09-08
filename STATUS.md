@@ -52,3 +52,14 @@
 - האצת-RC ל-Hive (האצלת-HP לחשבון-העוגן) → קצב-עיגון-מלא גם שם
 - קנדלסטיקים (OHLC) לגרף · WS push במקום polling
 - ארנה: רוטציית-תקציב למובילים (grid98) · בריכות-גשר WTRX
+
+---
+
+## SETTLE-12 · saos-dex/1.11.0+settle12-sweep-batch-bridge (2026-09-09)
+
+- **THE-SWEEP (`xfer_free: 0`)** — העברה-חופשית על הרשת-הריבונית: אפס-גז, תקרה-מדודה 2Mµ/פקודה, fail-closed (ASSETS+dedupe+אין-חשבונות-רפאים).
+- **דבר-גורר-דבר (`batch: 0`)** — אטומיות-קבוצתית: הכל-או-כלום על עותק-צל, issuer-pinned, עומק-1, בדיקת-התעשרות-עצמית לפני-אימוץ. אטומיות-מוכחת-חי (יתרה-זהה לפני/אחרי כישלון-מכוון).
+- **תיקיית-מטבעות** — BOOK core + BOOK portfolio-b (התיקייה-השנייה, מומנה-בפועל בהעברות-חינם); שווי-מדוד-שלם ממחירי-בריכות; זהויות-חוץ כנות (אפס-מפתחות במודול).
+- **גשר-דו-כיווני** — escrow-ריבוני על חשבון `bridge`: IN (register-in→claim, אפס-גז) · OUT (lock-out→release); פנקס state/bridge.json; החוזה-שלנו-שם: SAOSRelay (ETH-mainnet) מתועד-ב-API.
+- **API חדשים:** /api/dex/transfer · /api/dex/batch · /api/dex/bridge · /api/dex/portfolio (+פאנל-UI חי, byte-identical בשני-העצים).
+- **אימות-חי:** ledgerOk/examOk/realMoneyOk=true · halted=false · fence-check 48-קבצים-נקי · סריקת-סודות-נקייה · מובייל+footer תקינים.
