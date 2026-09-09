@@ -22,6 +22,7 @@
 import type { DexState } from "./kernel";
 import { getPool } from "./amm";
 import { aleTick } from "./ale";
+import { launchpadTick } from "./launchpad";
 import {
   BLOCKS_PER_WEEK, VE_MAX_WEEKS, EPOCH_BLOCKS, ROUTER_EVERY, REV_FLOOR,
   REV_BURN_PCT, REV_VE_PCT, ROUTER_USDS_FLOOR, REV_MIN_CYCLE, VE_POT,
@@ -50,17 +51,22 @@ export function economyTick(st: DexState): void {
   if (h <= 0) return;
   if (h % ROUTER_EVERY === 0) revenueCycle(st, h);
   if (h % EPOCH_BLOCKS === 0) epochFlip(st, h);
+  launchpadTick(st); // Task 57/58 · הגירות-אוטומטיות של מסילת-ההשקות (גיוס-הסף → בריכה)
   aleTick(st); // Task 55 · ALE: הזרעת-POL-אוטונומית כל-ALE_EVERY-בלוקים
 }
 
 /** (2) REVENUE-ROUTER: רווח-אוצר מדוד → 40% burn (קנייה-מהבריכה + השמדה) ·
  * 40% → קרן-ve · 20% נשאר. מקור-הכסף: יתרת-USDS-אמת של האוצר (שהגיעה-מעמלות),
- * מקורזל לרווח-המדוד — הראוטר לעולם לא חורג מההכנסה-שנמדדה. */
+ * מקורזל לרווח-המדוד — הראוטר לעולם לא חורג מההכנסה-שנמדדה.
+ * Task 58 · סדר-צריכה: **revAux-ראשון** — הכנסה-נלווית-מדודה (ארב-ProtoRev +
+ * עמלות-השקות) נצרכת-לפני-רווח-עמלות-הסוואפ (שמוגן-ברצפת-REV_FLOOR). כך
+ * הפלאיהול סגור: ארב+השקות → שריפה/ve → ALE-זורע → עומק → עמלות. */
 function revenueCycle(st: DexState, h: number): void {
+  const aux = Math.max(0, (st.revAux?.protorevMu ?? 0) + (st.revAux?.launchpadMu ?? 0));
   const treasuryUsds = st.balances["treasury"]?.["USDS"] ?? 0;
   const usableProfit = Math.max(0, st.treasuryProfit - REV_FLOOR);
   const usableBalance = Math.max(0, treasuryUsds - ROUTER_USDS_FLOOR);
-  const take = Math.min(usableProfit, usableBalance);
+  const take = Math.min(usableProfit + aux, usableBalance);
   if (take < REV_MIN_CYCLE) return;
   const pool = getPool(st, "SAOS/USDS");
   if (!pool || pool.ra <= 0) return;
@@ -87,7 +93,18 @@ function revenueCycle(st: DexState, h: number): void {
       st.journal.push({ h, t: 0, soldier: "router", action: "ve_fund", profitMu: veUsds, note: `ve pot +${veUsds}µ USDS` });
     }
   }
-  st.treasuryProfit -= take; // המדידה שנצרכה — האינווריאנטה (d) נשמרת (רווח-20%+רצפה נשארים)
+  // צריכת-המדידה: revAux-ראשון (protorev → launchpad, סדר-קנוני), ואז-רווח-העמלות
+  const auxTake = Math.min(take, aux);
+  let rem = auxTake;
+  if (rem > 0) {
+    const pr = Math.min(st.revAux?.protorevMu ?? 0, rem);
+    if (pr > 0) { st.revAux = { ...(st.revAux ?? { protorevMu: 0, launchpadMu: 0 }), protorevMu: (st.revAux?.protorevMu ?? 0) - pr }; rem -= pr; }
+    const lp = Math.min(st.revAux?.launchpadMu ?? 0, rem);
+    if (lp > 0) { st.revAux = { ...(st.revAux ?? { protorevMu: 0, launchpadMu: 0 }), launchpadMu: (st.revAux?.launchpadMu ?? 0) - lp }; rem -= lp; }
+    st.treasuryProfit -= (take - auxTake); // השארית — מרווח-עמלות-הסוואפ-המדוד
+  } else {
+    st.treasuryProfit -= take;
+  }
   st.rev = {
     lastH: h,
     cycles: (st.rev?.cycles ?? 0) + 1,

@@ -54,6 +54,13 @@ export const GAS_TABLE = {
   dca_cancel: 15,  // ביטול-תוכנית + שחרור-יתרה-נעולה
   trig_order: 60,  // פקודת-טריגר (stop/take): נחתמת-עצמאית-מול-המחיר-הקנוני
   trig_cancel: 15, // ביטול-טריגר + שחרור-ערבות
+  // ── Task 57/58 · מסילת-ההשקות (עקומת-pump.fun + LBP) — פתוחה-לכל-אזרח-רשת ──
+  launch_create: 60, // השקת-טוקן-חדש על-העקומה (אזרחי-הרשת — לא-רק-המפעיל)
+  launch_buy: 80,    // קנייה-מהעקומה — כסף-אמת-בלבד (הגיוס נעול-בחשבון-ההשקה)
+  launch_sell: 80,   // מכירה-חזרה-לעקומה — clamp fail-closed לגיוס-האמת
+  // ── Task 58 · CoW-אצווה (מחקר R-56 #7): מכירות-אצווה-פר-בלוק במחיר-אחיד ──
+  cow_order: 60,   // הזמנת-אצווה: נעולה-מראש, נסגרת-במחיר-שווק-אחיד בסוף-הבלוק
+  cow_cancel: 15,  // ביטול-הזמנת-אצווה + שחרור-ערבות
 } as const;
 
 export type OpKind = keyof typeof GAS_TABLE;
@@ -92,6 +99,22 @@ export const ALE_EVERY = 100;           // מחזור-הזרעה-כל-100-בלו
 export const ALE_SEED_PCT = 25;         // % מהחופשי-מעל-הרצפה שיוזרע-כ-POL
 export const ALE_MIN_SEED = 5_000;      // מתחת-לזה — אין-הזרעה (אבק)
 export const ALE_MAX_PER_CYCLE = 500_000; // תקרת-הזרעה-פר-מחזור — גם-אם-האוצר נשפך, הנזק חסום
+// ── Task 57/58 · מסילת-ההשקות (מחקר R-56 #4 pump.fun/LaunchLab + #8 Balancer-LBP) ──
+export const LPAD_FEE_BPS = 150;        // עמלת-השקה: 40% יוצר-חי-פר-מסחר · 60% פלטפורמה→revAux
+export const LPAD_CREATOR_PCT = 40;
+export const LPAD_GRAD_MIN_USDS = 2_000_000; // סף-הגירה: גיוס-2Mµ → בריכת-AMM אמת
+export const LPAD_MAX_RAISE = 20_000_000;    // תקרת-גיוס-כוללת-פר-השקה (גבול-נזק)
+export const LPAD_LBP_BLOCKS = 1200;    // משך-דצ'י-אוקציה (שעה בטיק-3s)
+export const LPAD_MIN_SUPPLY = 50_000_000;
+export const LPAD_MAX_SUPPLY = 1_000_000_000;
+export const LPAD_VQ_DIV = 100;         // vq0 = supply/100 — מחיר-פתיחה-שטוח (תמחור-וירטואלי)
+export const LPAD_MAX_PER_OWNER = 2;    // השקות-חיות-מקבילות-פר-בעלים
+export const LPAD_MAX_ACTIVE = 8;       // השקות-חיות-מקבילות-ברשת-כולה
+export const LPAD_CODE_PREFIX = "LB|";  // קוד-נכס-מוגר: LB|TICKER
+export const LPAD_TRADE_CAP = 2_000_000; // תקרת-קנייה-פר-פקודה (גבול-נזק)
+// ── Task 58 · CoW-אצווה (מחקר R-56 #7 CoW-Swap): מחיר-אחיד-פר-בלוק ──
+export const COW_MAX_PENDING_PER_ISSUER = 16; // הזמנות-אצווה-פתוחות-פר-חשבון
+export const COW_FALLBACK_MIN_OUT_BPS = 200;  // מגן-minOut לברירת-המחדל של המסלול (2%)
 
 export type FuelFunder = (typeof FUEL_FUNDERS)[number];
 /** ממנה-דלק מדורג (SETTLE-5/9): arena → treasury → operator.
@@ -158,6 +181,42 @@ export interface DexState {
   trig?: Record<string, TrigOrder>;   // פקודות-טריגר חיות
   dcaSeq?: number;                    // מונה-תוכניות
   trigSeq?: number;                   // מונה-טריגרים
+  // ── Task 57/58 · מסילת-ההשקות + ProtoRev + CoW (רשויות: תמונות-ישנות-בלעדיהן) ──
+  launch?: Record<string, Launch>;    // השקות חיות/שהוגרו
+  launchSeq?: number;                 // מונה-השקות
+  revAux?: { protorevMu: number; launchpadMu: number; runs?: number; cycles?: number; rejections?: number; lastH?: number }; // פנקס-הכנסה-נלווית (מחוץ-לאינווריאנטה-d — הרווח אינו עמלת-סוואפ)
+  cow?: CowOrder[];                   // הזמנות-אצווה-פתוחות (נסגרות-בסוף-הבלוק)
+  cowSeq?: number;                    // מונה-הזמנות-אצווה
+  cowStats?: { matched: number; batches: number; surplusMu: number; fallbackPool: number; fallbackBook: number }; // מדידת-CoW
+}
+
+/** Task 57/58 · השקה-על-מסילת-ההשקות: עקומת-מחיר-וירטואלית (pump.fun) או
+ * דצ'י-אוקציה (LBP), בגיוס-הסף → הגירה-אוטומטית-לבריכת-AMM אמת + LP-100%-לאוצר.
+ * כסף-אמת-בלבד: הגיוס נעול-בחשבון-ההשקה; הוירטואלי משמש-תמחור-בלבד —
+ * מכירות clamp fail-closed לגיוס-האמת (הוירטואלי-תמחור, האמת-תשלום). */
+export interface Launch {
+  id: string; owner: string; ticker: string; name: string; code: string;
+  mode: "curve" | "lbp";
+  supplyMu: number;      // היצע-כולל (µ-טוקן)
+  soldMu: number;        // מחזור-נוכחי (µ-טוקן בידי-קונים)
+  vqAccumMu: number;     // צבירת-הציטוט-הווירטואלי (רשומת-עקומה; לא-דועך)
+  feesCreatorMu: number; feesPlatformMu: number;
+  atH: number; endH: number; // endH=0 → עקומה-טהורה (ללא-תפוגה)
+  graduated: boolean; gradH: number; poolKey: string;
+}
+
+/** Task 58 · הזמנת-אצווה (CoW): נעולה-מראש כמו-פקודת-לימיט; בסוף-הבלוק
+ * נסגרת-מול-הצד-השני במחיר-שווק-אחיד (uniform-clearing) — עודף-המחיר נשאר
+ * אצל-הסוחרים; שארית-חוצה-ברירת-מחדל: בריכה-ואז-ספר. סנדוויץ'-בלתי-אפשרי
+ * מבנית: הסליקה בתוך-בונה-הבלוקים, מחיר-אחיד-לכולם. */
+export interface CowOrder {
+  seq: number; id: number; owner: string;
+  base: string; quote: string;
+  side: "buy" | "sell";
+  price: number;  // מחיר-גבול (µ-ציטוט ל-1µ-בסיס ×1000) — הגבול-להצטרפות
+  amount: number; // µ בסיס
+  atH: number; at: number;
+  lockMu: number; // מד-הנעילה-הפרטי (יחידות-נעילה)
 }
 
 /** Task 56 · תוכנית-DCA (Jupiter/Brink): הפקדה-מלאה-מראש (נעולה), פרוסה-אוטומטית
@@ -233,6 +292,20 @@ export const poolKey = (x: string, y: string): string => [x, y].sort().join("/")
 export const notional = (price: number, amountMu: number): number =>
   Math.floor((price * amountMu) / 1000); // price=µ-ציטוט/יחידה · amount=µ-בסיס
 
+/** Task 57/58 · הציטוט-הווירטואלי הנוכחי של-השקה (µ-ציטוט ×1000-סקאלה):
+ * בסיס-וירטואלי (vq0 = supply/100; ב-LBP דועך-לינארית מ-atH עד-endH — דצ'י-אוקציה)
+ * + צבירת-הכסף-האמת (vqAccumMu — קניות-מרימות, מכירות-מורידות).
+ * הוירטואלי משמש תמחור בלבד; התשלום תמיד מהגיוס-האמת הנעול-בחשבון-ההשקה. */
+export function launchVq(st: DexState, l: Launch): number {
+  const vq0 = Math.floor(l.supplyMu / LPAD_VQ_DIV);
+  let base = vq0;
+  if (l.mode === "lbp" && l.endH > l.atH) {
+    const left = Math.max(0, l.endH - st.height);
+    base = Math.floor((vq0 * left) / (l.endH - l.atH));
+  }
+  return base + (l.vqAccumMu ?? 0);
+}
+
 // ─── ג'נזיס ─────────────────────────────────────────────────────────────────
 export const GENESIS_ACCOUNTS = [
   "treasury", "operator", "arena", "soldier-1", "soldier-2", "soldier-3", "soldier-4",
@@ -255,6 +328,10 @@ export function genesisState(): DexState {
     bond: { soldSaosMu: 0, usdsInMu: 0, count: 0 },
     bondUserH: {},
     dca: {}, trig: {}, dcaSeq: 1, trigSeq: 1,
+    launch: {}, launchSeq: 1,
+    revAux: { protorevMu: 0, launchpadMu: 0 },
+    cow: [], cowSeq: 1,
+    cowStats: { matched: 0, batches: 0, surplusMu: 0, fallbackPool: 0, fallbackBook: 0 },
   };
   // ארנקי-ג'נזיס (סימולציה ריבונית — כסף-ספר בלבד, כנות מלאה)
   const seed: Record<string, Record<string, number>> = {
@@ -325,8 +402,16 @@ export interface Op {
   progId?: string;      // dca_cancel
   everyK?: number; perSlice?: number; slicesMax?: number; minOutBps?: number; // dca_create
   triggerPx?: number; limitPx?: number; expiresH?: number;                    // trig_order
+  // Task 57/58 · מסילת-ההשקות
+  ticker?: string; lmode?: "curve" | "lbp"; supply?: number;
   // דבר-גורר-דבר (SETTLE-12): תתי-ops של batch — כל-תת-op חייב-issuer זהה למנפיק-ה-batch
   ops?: Op[];
+}
+
+/** נכס-מוכר לגרעין: רשימת-הריצה הקבועה או נכס-רשום (השקות-שהוגרו, asset_list). */
+export function knownAsset(st: DexState, a: string | undefined): boolean {
+  if (!a) return false;
+  return (ASSETS as string[]).includes(a) || !!st.assets[a];
 }
 
 export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
@@ -524,6 +609,142 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       addLock(st, issuer, lockAsset, -(trg.side === "sell" ? trg.amountMu : notional(effPx, trg.amountMu)));
       const trigMap = { ...(st.trig ?? {}) }; delete trigMap[tid]; st.trig = trigMap;
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "trig_cancel", note: `${tid} בוטל, ערבה שוחררה` });
+      return { ok: true, gas };
+    }
+    case "launch_create": {
+      // Task 57/58 · מסילת-ההשקות — פתוחה-לכל-אזרח-רשת (לא רק המפעיל): השקת-טוקן
+      // על עקומת-מחיר וירטואלית (pump.fun) או דצ'י-אוקציה (LBP). אפס-כסף-ביצירה —
+      // ההון נכנס רק בקניות אמת; ההגירה (launchpadTick) היא הרגע שבו נבראת הבריכה.
+      const ticker = String(op.ticker ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const lmode: "curve" | "lbp" = op.lmode === "lbp" ? "lbp" : "curve";
+      const supply = Math.floor(op.supply ?? 0);
+      if (ticker.length < 2 || ticker.length > 8) return { ok: false, err: "bad-ticker", gas: 0 };
+      if (!(supply >= LPAD_MIN_SUPPLY && supply <= LPAD_MAX_SUPPLY)) return { ok: false, err: "bad-supply", gas: 0 };
+      const code = LPAD_CODE_PREFIX + ticker;
+      if (st.assets[code]) return { ok: false, err: "ticker-taken", gas: 0 };
+      const active = Object.values(st.launch ?? {});
+      if (active.length >= LPAD_MAX_ACTIVE) return { ok: false, err: "launch-cap", gas: 0 };
+      if (active.filter((l) => l.owner === issuer && !l.graduated).length >= LPAD_MAX_PER_OWNER)
+        return { ok: false, err: "launch-owner-cap", gas: 0 };
+      if (active.some((l) => l.ticker === ticker)) return { ok: false, err: "ticker-active", gas: 0 };
+      const c = consume(); if (c) return c;
+      const id = `lp-${st.launchSeq ?? 1}`;
+      st.launchSeq = (st.launchSeq ?? 1) + 1;
+      st.launch = {
+        ...(st.launch ?? {}),
+        [id]: {
+          id, owner: issuer, ticker, name: String(op.name ?? ticker).slice(0, 24), code,
+          mode: lmode, supplyMu: supply, soldMu: 0, vqAccumMu: 0,
+          feesCreatorMu: 0, feesPlatformMu: 0,
+          atH: st.height, endH: lmode === "lbp" ? st.height + LPAD_LBP_BLOCKS : 0,
+          graduated: false, gradH: 0, poolKey: "",
+        },
+      };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "launch_create", note: `${code} (${lmode}) supply ${supply}µ` });
+      return { ok: true, gas };
+    }
+    case "launch_buy": {
+      // קנייה-מהעקומה — כסף-אמת-בלבד: הנטו נכנס-לחשבון-ההשקה (נעול-עד-הגירה),
+      // העמלה מתפצלת-חי: 40% יוצר · 60% פלטפורמה→revAux. הוירטואלי = תמחור-בלבד.
+      const l = Object.values(st.launch ?? {}).find((x) => x.ticker === String(op.ticker ?? "").toUpperCase() && !x.graduated);
+      if (!l) return { ok: false, err: "launch-not-found", gas: 0 };
+      if (l.mode === "lbp" && l.endH > 0 && st.height >= l.endH) return { ok: false, err: "launch-ended", gas: 0 };
+      const usdsIn = Math.floor(op.amount ?? 0);
+      if (!(usdsIn > 0) || usdsIn > LPAD_TRADE_CAP) return { ok: false, err: "bad-amount", gas: 0 };
+      if (avail(st, issuer, "USDS") < usdsIn) return { ok: false, err: "insufficient", gas: 0 };
+      const launchAcc = `launch:${l.id}`;
+      if ((bal(st, launchAcc, "USDS")) + usdsIn > LPAD_MAX_RAISE) return { ok: false, err: "raise-cap", gas: 0 };
+      const c = consume(); if (c) return c;
+      const feeIn = Math.floor((usdsIn * LPAD_FEE_BPS) / 10_000);
+      const netIn = usdsIn - feeIn;
+      const creatorFee = Math.floor((feeIn * LPAD_CREATOR_PCT) / 100);
+      const platFee = feeIn - creatorFee;
+      const vq = launchVq(st, l) + netIn; // הווירטואלי: בסיס-דועך (LBP) + צבירה-אמת
+      const vb = l.supplyMu - l.soldMu;
+      const tokensOut = vb > 0 ? Math.floor((vb * netIn) / (vq + netIn)) : 0;
+      if (!(tokensOut > 0)) return { ok: false, err: "bad-quote", gas: 0 };
+      addBal(st, issuer, "USDS", -usdsIn);
+      addBal(st, issuer, l.code, tokensOut);
+      addBal(st, launchAcc, "USDS", netIn);
+      if (creatorFee > 0) addBal(st, l.owner, "USDS", creatorFee);
+      if (platFee > 0) {
+        addBal(st, "treasury", "USDS", platFee);
+        st.revAux = { protorevMu: st.revAux?.protorevMu ?? 0, launchpadMu: (st.revAux?.launchpadMu ?? 0) + platFee };
+      }
+      l.soldMu += tokensOut;
+      l.vqAccumMu += netIn;
+      l.feesCreatorMu += creatorFee;
+      l.feesPlatformMu += platFee;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "launch_buy", note: `${l.code}: ${usdsIn}µ USDS → ${tokensOut}µ (${l.soldMu}/${l.supplyMu} מוחזק)` });
+      return { ok: true, gas };
+    }
+    case "launch_sell": {
+      // מכירה-חזרה-לעקומה — clamp fail-closed לגיוס-האמת: הוירטואלי מתמחר,
+      // התשלום מוגבל-לכספת-ההשקה-האמתית (הוירטואלי-תמחור, האמת-תשלום).
+      const l = Object.values(st.launch ?? {}).find((x) => x.ticker === String(op.ticker ?? "").toUpperCase() && !x.graduated);
+      if (!l) return { ok: false, err: "launch-not-found", gas: 0 };
+      const t = Math.floor(op.amount ?? 0);
+      if (!(t > 0)) return { ok: false, err: "bad-amount", gas: 0 };
+      if (avail(st, issuer, l.code) < t) return { ok: false, err: "insufficient", gas: 0 };
+      const c = consume(); if (c) return c;
+      const launchAcc = `launch:${l.id}`;
+      const vq = launchVq(st, l);
+      const vb = l.supplyMu - l.soldMu;
+      let gross = vb + t > 0 ? Math.floor((vq * t) / (vb + t)) : 0;
+      const real = bal(st, launchAcc, "USDS");
+      if (gross > real) gross = real; // clamp fail-closed — הגיוס-האמת הוא-התקרה
+      if (!(gross > 0)) return { ok: false, err: "no-raise-backing", gas: 0 };
+      const feeOut = Math.floor((gross * LPAD_FEE_BPS) / 10_000);
+      const netOut = gross - feeOut;
+      const creatorFee = Math.floor((feeOut * LPAD_CREATOR_PCT) / 100);
+      const platFee = feeOut - creatorFee;
+      addBal(st, issuer, l.code, -t);
+      l.soldMu -= t;
+      addBal(st, launchAcc, "USDS", -gross);
+      l.vqAccumMu -= gross; // העקומה משלמת-בפועל gross — הצבירה יורדת
+      addBal(st, issuer, "USDS", netOut);
+      if (creatorFee > 0) addBal(st, l.owner, "USDS", creatorFee);
+      if (platFee > 0) {
+        addBal(st, "treasury", "USDS", platFee);
+        st.revAux = { protorevMu: st.revAux?.protorevMu ?? 0, launchpadMu: (st.revAux?.launchpadMu ?? 0) + platFee };
+      }
+      l.feesCreatorMu += creatorFee;
+      l.feesPlatformMu += platFee;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "launch_sell", note: `${l.code}: ${t}µ → ${netOut}µ USDS (clamp ${gross}/${vq > 0 ? "vq" : "0"})` });
+      return { ok: true, gas };
+    }
+    case "cow_order": {
+      // Task 58 · הזמנת-אצווה (CoW): נעילה-מלאה-מראע כמו-פקודת-לימיט; נסגרת
+      // בסוף-הבלוק במחיר-אחיד מול-הצד-השני, ובלי-הצלבה — ברירת-מחדל: בריכה→ספר.
+      const side = op.side;
+      const base = op.base, quote = op.quote;
+      const px = op.price ?? 0, amt = op.amount ?? 0;
+      if ((side !== "buy" && side !== "sell") || !knownAsset(st, base) || !knownAsset(st, quote) || base === quote)
+        return { ok: false, err: "bad-order-params", gas: 0 };
+      if (!(px > 0) || !(amt > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
+      const lockAsset = (side === "sell" ? base : quote) as string;
+      const lockMu = side === "sell" ? amt : notional(px, amt);
+      if (!(lockMu > 0)) return { ok: false, err: "bad-lock", gas: 0 };
+      if ((st.cow ?? []).filter((o) => o.owner === issuer).length >= COW_MAX_PENDING_PER_ISSUER)
+        return { ok: false, err: "cow-cap", gas: 0 };
+      if (avail(st, issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
+      const c = consume(); if (c) return c;
+      addLock(st, issuer, lockAsset, lockMu);
+      const seq = st.nextSeq++;
+      st.cow = [...(st.cow ?? []), { seq, id: seq, owner: issuer, base: base as string, quote: quote as string, side, price: px, amount: amt, atH: st.height, at: nowMs, lockMu }];
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "cow_order", note: `${side} ${amt}µ ${base}/${quote} @${px} — אצווה-הבלוק` });
+      return { ok: true, gas };
+    }
+    case "cow_cancel": {
+      const cid = Math.floor(op.orderId ?? 0);
+      const idx = (st.cow ?? []).findIndex((o) => o.id === cid);
+      if (idx < 0) return { ok: false, err: "cow-not-found", gas: 0 };
+      const o = st.cow![idx];
+      if (o.owner !== issuer) return { ok: false, err: "not-owner", gas: 0 };
+      const c = consume(); if (c) return c;
+      addLock(st, issuer, o.side === "sell" ? o.base : o.quote, -o.lockMu);
+      st.cow = st.cow!.filter((x) => x.id !== cid);
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "cow_cancel", note: `cow-${cid} בוטל, ערבה שוחררה` });
       return { ok: true, gas };
     }
     case "transfer":

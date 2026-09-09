@@ -28,8 +28,9 @@ type Leg = { kind: "pool" | "wrap"; venue: string; from: string; to: string; inM
 
 /** המרת-לג-ראוטר לתת-op ביצוע (pool_swap / wrap_mint / wrap_burn) — עם מגן-minOut.
  * FIX(Task 56): תתי-ops נדרשים-issuer+nonce מלאים (הגרעין דוחה מחרוזת-ריקה)
- * והנונסים-המאומצים-נכנסים-לשורש — נונס-ייחודי-דטרמיניסטי לכל-רגל. */
-function legToOp(leg: Leg, minOutBps: number, nonce: string): Op | null {
+ * והנונסים-המאומצים-נכנסים-לשורש — נונס-ייחודי-דטרמיניסטי לכל-רגל.
+ * Task 58: מיוצא-לשימוש-חוזר-ב-CoW-fallback (אותה-מתמטיקה, מקור-אמת-אחד). */
+export function legToOp(leg: Leg, minOutBps: number, nonce: string): Op | null {
   const minOut = Math.floor((leg.outMu * (10_000 - minOutBps)) / 10_000);
   if (leg.kind === "pool") {
     // venue = "POOL:SAOS/USDS"
