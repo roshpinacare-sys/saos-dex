@@ -29,6 +29,8 @@ const PINNED_HOSTS = new Set<string>([
   "api.hive-engine.com",
   /* Task 56 · פידי-מחיר-אמת — שוק-ציבורי-חסר-מפתחות (price-proof.ts) */
   "api.coingecko.com",
+  /* Task 58 · שרשרת-הפידים-העמידה — מקורות-גיבוי-ציבוריים (מיזוג-פר-נכס) */
+  "api.coinpaprika.com", "min-api.cryptocompare.com", "api.binance.com",
   /* Task 4 · BLURT — הרשת-השלישית (blurtHead חי ב-price-proof) */
   "blurt-rpc.saboin.com",
   /* TRON */

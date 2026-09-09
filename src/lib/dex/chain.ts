@@ -24,6 +24,8 @@ import { milestoneSummary } from "./milestone";
 import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX } from "./amm";
 import { sortBook } from "./book";
 import { dcaTick, trigTick } from "./triggers";
+import { protoRevTick } from "./protorev";
+import { cowSettle } from "./cow";
 
 export const TICK_MS = 3_000;
 const SEAL_EVERY = 12;   // checkpoint כל-12 בלוקים (CHAIN_SPEC)
@@ -37,7 +39,7 @@ const CHART_CAP = 240;
 /** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
  * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
  * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
-export const CODE_VERSION = "saos-dex/1.16.0+settle17-milestone-onramp";
+export const CODE_VERSION = "saos-dex/1.17.0+task58-protorev-launchpad-cow";
 
 // THE-MICRORAIL: קישור-מצב-חי-למסילה (מניעת-ייבוא-מעגלי chain⇄rail — הזרקה)
 bindLiveState(() => ensureChain().st);
@@ -348,12 +350,14 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   // Task 56 · מסחר-אוטומטי-חסר-קיפרים: DCA-פריסה + טריגרים (stop/take) —
   // בונה-הבלוקים הוא ה-keper: הטיקים מבצעים applyOp ישירות-על-המצב (אטומי,
   // סינכרוני, ללא-ממפול) והמסחר-שנוצר נכנס לטייפ ולעדות-המחיר-אמת.
+  // Task 58 · ProtoRev (ארב-סוף-בלוק) + CoW (סליקת-אצווה-מחיר-אחיד) —
+  // אותו-חוק: בונה-הבלוקים הוא ה-keeper/solver — אפס-תשתית-חוץ, ריפליי-אמת.
   {
     const exec = (op: Op) => applyOp(st, op, t0);
-    const progEvents = [...dcaTick(st, exec), ...trigTick(st, exec)];
-    for (const ev of progEvents) rt.tape.unshift({ ...ev, h: st.height });
-    feedPriceOracle(rt, progEvents.length > 0 ? progEvents : undefined, st.height);
-    if (progEvents.length > 0) rt.tape = rt.tape.slice(0, TAPE_CAP);
+    const tickEvents = [...dcaTick(st, exec), ...trigTick(st, exec), ...protoRevTick(st, exec), ...cowSettle(st, exec, t0)];
+    for (const ev of tickEvents) rt.tape.unshift({ ...ev, h: st.height });
+    feedPriceOracle(rt, tickEvents.length > 0 ? tickEvents : undefined, st.height);
+    if (tickEvents.length > 0) rt.tape = rt.tape.slice(0, TAPE_CAP);
   }
 
   // Task 56 · חותם-אמינות-מחיר (price-credibility seal): כל-400-בלוקים —

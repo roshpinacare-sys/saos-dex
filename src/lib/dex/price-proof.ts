@@ -1,18 +1,21 @@
 /**
- * price-proof.ts — מנוע-הוכחת-המחיר (Task 56) · Price-Proof Engine
+ * price-proof.ts — מנוע-הוכחת-המחיר (Task 56, פידים-מאוחדים-ב-58) · Price-Proof Engine
  * ═════════════════════════════════════════════════════════════════════════════
  * דבר-המפעיל: "חייב לפתוח כמה שיותר ולאמת את המחיר האמיתי של SAOS — הרי אין
  * לנו באמת יתרות כאלה". התשובה: שרשרת-הוכחה גלויה מקצה-לקצה, בלי-מספר-יחיד-
  * סמכותי-שאי-אפשר-לבדוק:
  *
  *  1. שרשרת-נגזרת (דטרמיניסטית, מהמצב-החי): mid SAOS/USDS ÷ mid WSTEEM/USDS
- *     → SAOS/WSTEEM → ×מחיר-STEEM-אמת (CoinGecko, שוק-ציבורי) → **SAOS-ב-$-אמת**.
+ *     → SAOS/WSTEEM → ×מחיר-STEEM-אמת (שוק-ציבורי) → **SAOS-ב-$-אמת**.
  *     ה-WSTEEM מגובה-1:1 ב-STEEM אמת (backing) — העיגון הוא הראיה.
- *  2. עומק-אמת (depth profile): סימולציית-שלמים של פגיעה במחיר עבור מסחרות
+ *  2. פידים-עמידים (Task 58): שרשרת-מקורות-ממוינת — CoinGecko → CoinPaprika →
+ *     CryptoCompare → Binance; לכל-נכס המקור-הראשון-שענה זוכה, שדה-מקור-גלוי,
+ *     קאש-last-good-עד-שעה עם דגל-STALE כנה — אין-עוד-NO-FEED בגלל-מקור-אחד.
+ *  3. עומק-אמת (depth profile): סימולציית-שלמים של פגיעה במחיר עבור מסחרות
  *     של 0.5%..10% מהרזרבות — "מה המחיר באמת" = כמה אפשר לממש ובאיזה מחיר.
- *  3. הצלבה-חוץ (cross-venue): מחיר-הבריכה של WSTEEM/USDS מול STEEM/USD ציבורי
- *     → סטייה ב-bps + פס-דין (CONVERGED/DRIFT/DIVERGENT) — זה ה-MAD הכנה שלנו.
- *  4. אוצר-אמת (כמה יש לנו באמת): יתרות-השרשראות החיות (STEEM/SBD מ-api.steemit.com,
+ *  4. הצלבה-חוץ (cross-venue): מחיר-הבריכה של WSTEEM/USDS מול STEEM/USD ציבורי
+ *     → סטייה ב-bps + פס-דין (CONVERGED/DRIFT/DIVERGENT/STALE) — ה-MAD הכנה שלנו.
+ *  5. אוצר-אמת (כמה יש לנו באמת): יתרות-השרשראות החיות (STEEM/SBD מ-api.steemit.com,
  *     HIVE/HBD מ-api.hive.blog, BLURT מ-blurt-rpc.saboin.com) × מחירי-שוק-אמת
  *     = שווי-הכספת-החוץ-ב-$ — המספרים הקטנים-והאמיתיים, מוצגים-כמו-שהם.
  *
@@ -24,17 +27,79 @@ import { sortBook } from "./book";
 import { assertAllowedHost } from "./fence";
 import { onrampSnapshot } from "@/lib/onramp";
 
-// ─── פידים-חוץ-אמת (CoinGecko — שוק-ציבורי, חסר-מפתחות) ─────────────────────
+// ─── פידים-חוץ-אמת — שרשרת-מקורות-ממוינת (Task 58: עמידות-ל-429/השבתות) ───────
 const CG_URL = "https://api.coingecko.com/api/v3/simple/price?ids=steem,hive,hive_dollar,blurt&vs_currencies=usd";
 const BLURT_NODE = "https://blurt-rpc.saboin.com";
 const HEAD_ACCOUNT = "headcorner";
 const FEED_TTL_MS = 5 * 60_000;
+const FEED_STALE_OK_MS = 60 * 60_000; // last-good-חוקי עד-שעה — מעבר-לזה: NO-FEED כנה
+
+type FeedKey = "steem" | "hive" | "hbd" | "blurt";
+type FeedVal = { v: number | null; src: string | null };
+type FeedMap = Record<FeedKey, FeedVal>;
+
+interface FeedSource { name: string; url: string; where: string; parse: (j: unknown) => Partial<Record<FeedKey, number | null>> }
+
+const FEED_SOURCES: FeedSource[] = [
+  {
+    name: "coingecko",
+    url: CG_URL,
+    where: "price-proof/coingecko",
+    parse: (j) => {
+      const o = j as Record<string, { usd?: number }>;
+      const p = (id: string): number | null => (typeof o[id]?.usd === "number" && o[id].usd > 0 ? o[id].usd : null);
+      return { steem: p("steem"), hive: p("hive"), hbd: p("hive_dollar"), blurt: p("blurt") };
+    },
+  },
+  {
+    name: "coinpaprika",
+    url: "https://api.coinpaprika.com/v1/tickers?quotes=USD",
+    where: "price-proof/coinpaprika",
+    parse: (j) => {
+      const arr = Array.isArray(j) ? (j as { id?: string; quotes?: { USD?: { price?: number } } }[]) : [];
+      const p = (id: string): number | null => {
+        const row = arr.find((x) => x.id === id);
+        const v = row?.quotes?.USD?.price;
+        return typeof v === "number" && v > 0 ? v : null;
+      };
+      return { steem: p("steem-steem"), hive: p("hive-hive"), blurt: p("blurt-blurt") };
+    },
+  },
+  {
+    name: "cryptocompare",
+    url: "https://min-api.cryptocompare.com/data/pricemulti?fsyms=STEEM,HIVE,HBD,BLURT&tsyms=USD",
+    where: "price-proof/cryptocompare",
+    parse: (j) => {
+      const o = j as Record<string, Record<string, number>>;
+      const p = (sym: string): number | null => {
+        const v = o[sym]?.USD;
+        return typeof v === "number" && v > 0 ? v : null;
+      };
+      return { steem: p("STEEM"), hive: p("HIVE"), hbd: p("HBD"), blurt: p("BLURT") };
+    },
+  },
+  {
+    name: "binance",
+    url: "https://api.binance.com/api/v3/ticker/price?symbols=%5B%22STEEMUSDT%22,%22HIVEUSDT%22%5D",
+    where: "price-proof/binance",
+    parse: (j) => {
+      const arr = Array.isArray(j) ? (j as { symbol?: string; price?: string }[]) : [];
+      const p = (sym: string): number | null => {
+        const row = arr.find((x) => x.symbol === sym);
+        const v = parseFloat(String(row?.price ?? ""));
+        return Number.isFinite(v) && v > 0 ? v : null;
+      };
+      return { steem: p("STEEMUSDT"), hive: p("HIVEUSDT") };
+    },
+  },
+];
 
 export interface ExtFeeds {
   ok: boolean;
   at: number;
   stale: boolean;
   usd: { steem: number | null; hive: number | null; hbd: number | null; blurt: number | null };
+  src: { steem?: string | null; hive?: string | null; hbd?: string | null; blurt?: string | null };
   error?: string;
 }
 
@@ -45,39 +110,70 @@ function feedRt(): FeedRT {
   return g.__saosPriceFeeds;
 }
 
-async function fetchFeeds(): Promise<ExtFeeds> {
-  assertAllowedHost(CG_URL, "price-proof/coingecko");
+async function fetchOne(s: FeedSource): Promise<Partial<Record<FeedKey, number | null>>> {
+  assertAllowedHost(s.url, s.where);
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 10_000);
+  const t = setTimeout(() => ac.abort(), 8_000);
   try {
-    const r = await fetch(CG_URL, { signal: ac.signal, cache: "no-store", headers: { accept: "application/json" } });
-    if (!r.ok) throw new Error(`coingecko ${r.status}`);
-    const j = (await r.json()) as Record<string, { usd?: number }>;
-    const pick = (id: string): number | null => (typeof j[id]?.usd === "number" && j[id].usd > 0 ? j[id].usd : null);
-    return {
-      ok: true, at: Date.now(), stale: false,
-      usd: { steem: pick("steem"), hive: pick("hive"), hbd: pick("hive_dollar"), blurt: pick("blurt") },
-    };
-  } catch (e) {
-    // fail-כנה: אין-פיד = אין-מחיר-חוץ (לא מאולף, לא מוחזק-ישן-בלי-סימון)
-    return { ok: false, at: Date.now(), stale: false, usd: { steem: null, hive: null, hbd: null, blurt: null }, error: e instanceof Error ? e.message : "feed-error" };
+    const r = await fetch(s.url, { signal: ac.signal, cache: "no-store", headers: { accept: "application/json" } });
+    if (!r.ok) throw new Error(`${s.name} ${r.status}`);
+    return s.parse(await r.json());
   } finally {
     clearTimeout(t);
   }
 }
 
+async function fetchFeeds(): Promise<ExtFeeds> {
+  const merged: FeedMap = { steem: { v: null, src: null }, hive: { v: null, src: null }, hbd: { v: null, src: null }, blurt: { v: null, src: null } };
+  const errs: string[] = [];
+  // בסדר-קנוני: הראשון-שענה-לנכס זוכה (סדר-קבוע = דטרמיניזם-קריאה)
+  for (const s of FEED_SOURCES) {
+    try {
+      const vals = await fetchOne(s);
+      for (const k of Object.keys(merged) as FeedKey[]) {
+        if (merged[k].v === null && typeof vals[k] === "number" && vals[k] > 0) {
+          merged[k] = { v: vals[k] as number, src: s.name };
+        }
+      }
+    } catch (e) {
+      errs.push(`${s.name}: ${e instanceof Error ? e.message : "err"}`);
+    }
+  }
+  const any = (Object.keys(merged) as FeedKey[]).some((k) => merged[k].v !== null);
+  if (any) {
+    return {
+      ok: true, at: Date.now(), stale: false,
+      usd: { steem: merged.steem.v, hive: merged.hive.v, hbd: merged.hbd.v, blurt: merged.blurt.v },
+      src: { steem: merged.steem.src, hive: merged.hive.src, hbd: merged.hbd.src, blurt: merged.blurt.src },
+      error: errs.length > 0 ? errs.join("; ") : undefined, // כנות: מקורות-שנפלו נראים
+    };
+  }
+  // fail-כנה: אין-מקור-חי = אין-מחיר-חוץ (לא מאולף)
+  return { ok: false, at: Date.now(), stale: false, usd: { steem: null, hive: null, hbd: null, blurt: null }, src: {}, error: errs.join("; ") || "all-sources-down" };
+}
+
 export async function extFeeds(force = false): Promise<ExtFeeds> {
   const m = feedRt();
-  if (!force && m.data && Date.now() - m.at < FEED_TTL_MS) return { ...m.data, stale: false };
+  if (!force && m.data?.ok && Date.now() - m.at < FEED_TTL_MS) return { ...m.data, stale: false };
   if (m.inflight) return m.inflight;
   m.inflight = fetchFeeds().then((d) => {
-    m.at = d.ok ? Date.now() : m.at;
-    m.data = d;
     m.inflight = null;
+    if (d.ok) {
+      m.at = Date.now();
+      m.data = d;
+      return d;
+    }
+    // אין-מקור-חי — last-good-עד-שעה עם דגל-STALE כנה (ומקור-המחיר-המקורי-שמור)
+    if (m.data?.ok && Date.now() - m.at < FEED_STALE_OK_MS) {
+      return { ...m.data, stale: true, error: d.error };
+    }
     return d;
   }).catch(() => {
     m.inflight = null;
-    return { ok: false, at: Date.now(), stale: false, usd: { steem: null, hive: null, hbd: null, blurt: null }, error: "feed-crash" } as ExtFeeds;
+    if (m.data?.ok && Date.now() - m.at < FEED_STALE_OK_MS) {
+      return { ...m.data, stale: true, error: "feed-crash" } as ExtFeeds;
+    }
+    return { ok: false, at: Date.now(), stale: false, usd: { steem: null, hive: null, hbd: null, blurt: null }, src: {}, error: "feed-crash" } as ExtFeeds;
   });
   return m.inflight;
 }
@@ -173,13 +269,15 @@ export interface PriceProof {
     hbdUsd: number | null;
     blurtUsd: number | null;
     feedOk: boolean;
+    feedStale: boolean;
+    feedSrc: { steem?: string | null; hive?: string | null; hbd?: string | null; blurt?: string | null };
     feedError?: string;
   };
   derived: {
     saosUsdMicro: number | null;   // SAOS ב-$-אמת (µ$ = 10⁻⁶ $)
     saosUsdText: string | null;
     wsteemDivBps: number | null;   // סטיית-הבריכה מול-השוק-הציבורי
-    verdict: "CONVERGED" | "DRIFT" | "DIVERGENT" | "NO-FEED";
+    verdict: "CONVERGED" | "DRIFT" | "DIVERGENT" | "NO-FEED" | "STALE";
   };
   depth: {
     saosUsds: { rows: DepthRow[]; midMu: number } | null;
@@ -226,7 +324,7 @@ export async function priceProof(st: DexState): Promise<PriceProof> {
     ? Math.floor(((wsteemPoolUsd - steemUsd) / steemUsd) * 10_000)
     : null;
   const verdict: PriceProof["derived"]["verdict"] =
-    wsteemDivBps === null ? "NO-FEED" : Math.abs(wsteemDivBps) < 300 ? "CONVERGED" : Math.abs(wsteemDivBps) < 1_500 ? "DRIFT" : "DIVERGENT";
+    wsteemDivBps === null ? "NO-FEED" : feeds.stale ? "STALE" : Math.abs(wsteemDivBps) < 300 ? "CONVERGED" : Math.abs(wsteemDivBps) < 1_500 ? "DRIFT" : "DIVERGENT";
 
   // אוצר-אמת: הכסף-החוץ-החי × מחירי-שוק-אמת
   const steemHead = onramp?.steemHead ?? null;
@@ -252,6 +350,8 @@ export async function priceProof(st: DexState): Promise<PriceProof> {
     external: {
       steemUsd, hiveUsd, hbdUsd, blurtUsd,
       feedOk: feeds.ok,
+      feedStale: feeds.stale,
+      feedSrc: feeds.src,
       feedError: feeds.error,
     },
     derived: {

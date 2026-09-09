@@ -88,10 +88,13 @@ export function quoteRoute(assetIn: string, assetOut: string, amountInMu: number
 interface Walk { to: string; inMu: number; legs: RouteLeg[] }
 
 /** פסיעה-על-גרף-הבריכות+מסדרון-העיגון: כל-המסלולים-עד-MAX_LEGS, סימולציה-שלמים.
- * מופשט-מכאן-כדי-ש-quoteRoute ו-quoteSplit ישתמשו-באותה-מתמטיקה-בדיוק. */
+ * מופשט-מכאן-כדי-ש-quoteRoute ו-quoteSplit ישתמשו-באותה-מתמטיקה-בדיוק.
+ * Task 58: נכסים-מוכרים = רשימת-הריצה ∪ נכסים-רשומים (השקות-שהוגרו) —
+ * הראוטר נפתח-אוטומטית לבריכות-שנולדו-מההשקות (fail-closed לנכסי-פנטום). */
 export function walkRoutes(assetIn: string, assetOut: string, amountInMu: number): Walk[] {
   const st = getLiveState();
-  if (!(amountInMu > 0) || !ASSETS.includes(assetIn as never) || !ASSETS.includes(assetOut as never) || assetIn === assetOut) return [];
+  const known = (a: string): boolean => (ASSETS as string[]).includes(a) || !!st.assets[a];
+  if (!(amountInMu > 0) || !known(assetIn) || !known(assetOut) || assetIn === assetOut) return [];
 
   // בניית-גרף: שכנויות-בריכה + שכנויות-עטיפה
   const pools: { key: string; p: Pool }[] = Object.entries(st.pools).map(([key, p]) => ({ key, p }));
@@ -221,7 +224,8 @@ function poolDepthUsdsMu(p: Pool, priceOf: (a: string) => number): number {
 export function routableMap(): RoutableEntry[] {
   const st = getLiveState();
   const out: RoutableEntry[] = [];
-  for (const a of ASSETS) {
+  const all = Array.from(new Set([...ASSETS, ...Object.keys(st.assets)])); // Task 58: כולל-מוגרים
+  for (const a of all) {
     if (a === ROUTE_HUB) {
       out.push({ asset: a, tier: "hub", priceUsdsMu: 1000, routeDesc: "HUB — יחידת-החשבון", depthUsdsMu: 0 });
       continue;
