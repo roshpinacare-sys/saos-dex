@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Crown, Layers, Landmark, List, Lock,
-  RefreshCcw, ShieldCheck, Wallet, Zap, Waves, GaugeCircle,
+  RefreshCcw, Route as RouteIcon, ShieldCheck, Wallet, Zap, Waves, GaugeCircle, Droplets, Scale,
 } from "lucide-react";
 import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
 import { PriceChart } from "@/components/dex/chart";
@@ -87,6 +87,26 @@ interface RelayView {
   fleet?: FleetView;
 }
 interface MyOrder { id: number; base: string; quote: string; side: "buy" | "sell"; price: number; amount: number; filled: number }
+
+/* ══ SETTLE-15: THE-ROUTER — מקור-הנזיל-שמכניס-מהכל (טיפוסי-תצוגה) ═══════════ */
+type RouteTierView = "hub" | "deep" | "micro" | "rail" | "none";
+interface RoutableView { asset: string; tier: RouteTierView; priceUsdsMu: number; routeDesc: string; depthUsdsMu: number }
+interface RouteLegView { kind: "pool" | "wrap"; venue: string; from: string; to: string; inMu: number; outMu: number; priceMu: number }
+interface QuoteView { assetIn: string; assetOut: string; amountInMu: number; amountOutMu: number; effPriceMu: number; legs: RouteLegView[]; alternatives: { amountOutMu: number; path: string[] }[] }
+interface RouterResp {
+  ok: boolean; quote: QuoteView | null; routable: RoutableView[];
+  wrapRail: { wrapped: string; native: string; backingMu: number }[];
+  lpValuations: { lpAsset: string; poolKey: string; lpMu: number; valueUsdsMuPer1000: number; totalPoolValueUsdsMu: number }[];
+  honesty: string;
+}
+interface IncomeView { poolFeesMu: number; feeMeterMu: number; treasuryProfitMu: number; ladderSpentMu: number; backingWsteemMu: number; hub: string }
+interface MicroMeasure { pair: string; a: string; b: string; ra: number; rb: number; mid: number; swaps: number; feeAccruedTreasury: number; impactAtoB: { ok: boolean; priceMu: number; impactBps: number }; impactBtoA: { ok: boolean; priceMu: number; impactBps: number }; stdTradeMu: number }
+interface RepegView {
+  ok: boolean; pool: { key: string; ra: number; rb: number; mid: number } | null;
+  peg: { refPriceMu: number; bandBps: number; targetMidMu: number };
+  premiumPct: number | null; bagHolderBalanceMu: number;
+  plan: { sellTotalMu: number; chunks: number; onTarget: boolean };
+}
 
 /* ══ משטח-הוכחת-הפריצה (Breakthrough Showcase) — מה-API הציבורי ══════════════ */
 interface ExecRowView {
@@ -1174,7 +1194,7 @@ function Tape({ tape }: { tape: TapeEv[] }) {
 /* ══ SETTLE-12: תיקיית-המטבעות הריבונית + הגשר-הדו-כיווני ═══════════════════
  * שני-ספרים (core + portfolio-b) בהערכת-שווי-חיה ממחירי-בריכות · escrow-הגשר
  * עם כוונות IN/OUT · זהויות-חוץ כנות. GET-ציבורי — תצפית-בלבד. */
-interface PortfolioLine { asset: string; amountMu: number; price: number; valueUsdsMu: number }
+interface PortfolioLine { asset: string; amountMu: number; price: number; valueUsdsMu: number; tier: RouteTierView | "lp"; tierNote: string }
 interface PortfolioBook { name: string; role: string; balances: Record<string, number>; credits: number; valueUsdsMu: number; lines: PortfolioLine[] }
 interface PortfolioResp { ok: boolean; portfolio: { generatedAt: number; prices: Record<string, number>; books: PortfolioBook[]; totalUsdsMu: number; external: { chain: string; address: string; status: string; note: string }[]; honesty: string } }
 interface BridgeIntent { id: string; dir: "in" | "out"; chain: string; asset: string; amountMu: number; party: string; farAddress?: string; proofRef?: string; status: string; ourTxRef?: string; at: number; updatedAt: number }
@@ -1292,6 +1312,205 @@ function FleetPanel() {
   );
 }
 
+/* ══ SETTLE-15: THE-ROUTER + THE-REPEG + THE-MICRODOSE ═══════════════════════
+ * הפאנל-שמחבר-הכל: מפת-נזילות כנה (מי-ראוטר-ביל), ציטוט-רב-רגלי עם-ביצוע
+ * אטומי, מסדרון-עיגון חי (wrap 1:1), תוכנית-הארב-שמשפשפת-את-הפרמיה-אל-האמת,
+ * מדידת-יעילות-המיקרו, ופנקס-ההכנסה — מקור-הנזיל-שמכניס-מהכל. */
+const tierTone = (t: RouteTierView | "lp"): "gold" | "green" | "amber" | "violet" | "zinc" =>
+  t === "hub" ? "gold" : t === "deep" ? "green" : t === "micro" ? "amber" : t === "rail" || t === "lp" ? "violet" : "zinc";
+const tierLabel = (t: RouteTierView | "lp"): string =>
+  t === "hub" ? "HUB" : t === "deep" ? "DEEP" : t === "micro" ? "MICRO" : t === "rail" ? "RAIL" : t === "lp" ? "LP" : "NO-ROUTE";
+
+function RouterPanel() {
+  const [rr, setRr] = useState<RouterResp | null>(null);
+  const [income, setIncome] = useState<IncomeView | null>(null);
+  const [rp, setRp] = useState<RepegView | null>(null);
+  const [md, setMd] = useState<MicroMeasure | null>(null);
+  const [assetIn, setAssetIn] = useState("ENERGY");
+  const [assetOut, setAssetOut] = useState("USDS");
+  const [amount, setAmount] = useState("20000");
+  const [quote, setQuote] = useState<QuoteView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  const loadAll = useCallback(() => {
+    fetch(api("/api/dex/route")).then((r) => r.json()).then((j) => { if (j?.ok) setRr(j as RouterResp); }).catch(() => { /* כנות */ });
+    fetch(api("/api/dex/state")).then((r) => r.json()).then((j) => { if (j?.state?.income) setIncome(j.state.income as IncomeView); }).catch(() => { /* כנות */ });
+    fetch(api("/api/dex/repeg")).then((r) => r.json()).then((j) => { if (j?.ok) setRp(j as RepegView); }).catch(() => { /* כנות */ });
+    fetch(api("/api/dex/microdose?pair=ENERGY/SAOS")).then((r) => r.json()).then((j) => { if (j?.ok) setMd(j.pool as MicroMeasure); }).catch(() => { /* כנות */ });
+  }, []);
+  useEffect(() => {
+    loadAll();
+    const t = setInterval(loadAll, 8000);
+    return () => clearInterval(t);
+  }, [loadAll]);
+
+  const opHeaders = (): Record<string, string> => {
+    const token = (() => { try { return window.localStorage.getItem(OPERATOR_KEY) ?? ""; } catch { return ""; } })();
+    return { "content-type": "application/json", "x-saos-dex-console": "1", ...(token ? { "x-saos-operator": token } : {}) };
+  };
+  const doPost = async (url: string, body: unknown): Promise<Record<string, unknown>> => {
+    const r = await fetch(api(url), { method: "POST", headers: opHeaders(), body: JSON.stringify(body) });
+    return (await r.json()) as Record<string, unknown>;
+  };
+
+  const getQuote = async () => {
+    setBusy(true); setMsg(null); setQuote(null);
+    try {
+      const j = await fetch(api(`/api/dex/route?assetIn=${assetIn}&assetOut=${assetOut}&amount=${Math.max(1, Math.floor(Number(amount) || 0))}`)).then((x) => x.json());
+      if (j?.ok && j.quote) setQuote(j.quote as QuoteView);
+      else setMsg({ tone: "err", text: "אין-מסלול-מבצע בין-הנכסים (ראה מפת-הנזילות)" });
+    } catch { setMsg({ tone: "err", text: "שער-לא-זמין" }); } finally { setBusy(false); }
+  };
+  const execRoute = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const j = await doPost("/api/dex/route", { assetIn, assetOut, amount: Math.floor(Number(amount) || 0) });
+      if (j.ok) {
+        const legs = (j.route as string[]) ?? [];
+        setMsg({ tone: "ok", text: `הוגש-batch-אטומי: ${legs.join(" → ")} · צפי-יציאה ${fmtInt(Number(j.expectOutMu))}µ` });
+      } else setMsg({ tone: "err", text: String(j.error ?? "נכשל") });
+    } catch { setMsg({ tone: "err", text: "שער-לא-זמין" }); } finally { setBusy(false); setTimeout(loadAll, 3500); }
+  };
+  const runRepeg = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const j = await doPost("/api/dex/repeg", {});
+      if (j.ok) {
+        const lines = ((j.queued as string[]) ?? []).join(" · ") || String(j.note ?? "");
+        setMsg({ tone: "ok", text: j.onTarget ? String(j.note ?? "על-המסדרון") : lines || "מנת-ארב הוגשה" });
+      } else setMsg({ tone: "err", text: String(j.error ?? "נכשל") });
+    } catch { setMsg({ tone: "err", text: "שער-לא-זמין" }); } finally { setBusy(false); setTimeout(loadAll, 3500); }
+  };
+  const runMicrodose = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const j = await doPost("/api/dex/microdose", { pair: "ENERGY/SAOS", amountA: 20000 });
+      if (j.ok) setMsg({ tone: "ok", text: `מנת-מיקרו 20kµ ENERGY (+${fmtInt(Number((j.dose as { projectedAmountB: number }).projectedAmountB))}µ SAOS) הוגשה — אפס-הזזת-mid` });
+      else setMsg({ tone: "err", text: String(j.error ?? "נכשל") });
+    } catch { setMsg({ tone: "err", text: "שער-לא-זמין" }); } finally { setBusy(false); setTimeout(loadAll, 3500); }
+  };
+
+  const assets = rr?.routable ?? [];
+  return (
+    <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3" data-testid="router-panel">
+      <div className="lg:col-span-2">
+        <Panel title="THE-ROUTER · מקור-הנזיל-שמכניס-מהכל" icon={<RouteIcon className="h-4 w-4 text-amber-400" />}
+          action={income && <span className="font-mono text-[10px] text-zinc-500" dir="ltr">fees {fmtInt(income.poolFeesMu)}µ · profit {fmtInt(income.treasuryProfitMu)}µ</span>}>
+          {/* מפת-הנזילות: מי-ראוטר-ביל — כנות-מלאה */}
+          <div className="mb-3 flex flex-wrap gap-1.5" data-testid="routable-map">
+            {assets.map((a) => (
+              <span key={a.asset} title={a.routeDesc}
+                className="flex items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900/70 px-2 py-1 font-mono text-[10px]" dir="ltr">
+                <span className="font-bold text-zinc-200">{a.asset}</span>
+                <Pill tone={tierTone(a.tier)}>{tierLabel(a.tier)}</Pill>
+                <span className="text-zinc-500">{fmtInt(a.priceUsdsMu)}µ</span>
+              </span>
+            ))}
+          </div>
+          {/* טופס-ראוטר */}
+          <div className="flex flex-wrap items-center gap-2" dir="ltr">
+            <select value={assetIn} onChange={(e) => setAssetIn(e.target.value)}
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-amber-300 outline-none">
+              {assets.map((a) => <option key={a.asset} value={a.asset}>{a.asset}</option>)}
+            </select>
+            <span className="text-zinc-600">→</span>
+            <select value={assetOut} onChange={(e) => setAssetOut(e.target.value)}
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-amber-300 outline-none">
+              {assets.map((a) => <option key={a.asset} value={a.asset}>{a.asset}</option>)}
+            </select>
+            <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="numeric" dir="ltr"
+              className="w-28 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-zinc-100 outline-none" placeholder="µ" />
+            <GoldButton tone="gold" onClick={() => void getQuote()} disabled={busy} className="!px-3 !py-1.5 text-xs">ציטוט</GoldButton>
+            {quote && <GoldButton tone="green" onClick={() => void execRoute()} disabled={busy} className="!px-3 !py-1.5 text-xs">בצע אטומי</GoldButton>}
+          </div>
+          {quote && (
+            <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3 font-mono text-[10px]" dir="ltr" data-testid="router-quote">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-zinc-300">{quote.legs.map((l) => l.venue).join(" → ")}</span>
+                <span className="text-amber-300">out {fmtInt(quote.amountOutMu)}µ · eff {fmtInt(quote.effPriceMu)}µ/unit</span>
+              </div>
+              <div className="mt-1 space-y-0.5 text-zinc-500">
+                {quote.legs.map((l, i) => (
+                  <div key={i}>{l.venue}: {fmtInt(l.inMu)}µ {l.from} → {fmtInt(l.outMu)}µ {l.to} @ {fmtInt(l.priceMu)}</div>
+                ))}
+                {quote.alternatives.length > 1 && (
+                  <div className="text-zinc-600">חלופות: {quote.alternatives.slice(1).map((x) => `${x.path.join(">")}=${fmtInt(x.amountOutMu)}µ`).join(" · ")}</div>
+                )}
+              </div>
+            </div>
+          )}
+          {/* פנקס-ההכנסה — מקור-הנזיל-שמכניס-מהכל */}
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="income-strip">
+            <Stat label="עמלות-בריכות" value={`${fmtInt(income?.poolFeesMu ?? 0)}µ`} sub="30bps · 30% לאוצר" />
+            <Stat label="מד-עמלות" value={`${fmtInt(income?.feeMeterMu ?? 0)}µ`} sub="שטרם-נקצר" />
+            <Stat label="רווח-אוצר" value={`${fmtInt(income?.treasuryProfitMu ?? 0)}µ`} sub="מונוטוני" />
+            <Stat label="גיבוי-WSTEEM" value={`${fmtInt(income?.backingWsteemMu ?? 0)}µ`} sub="עטיפה 1:1 נעולה" />
+          </div>
+          {msg && <p className={`mt-2 font-mono text-[10px] ${msg.tone === "ok" ? "text-green-400" : "text-red-400"}`}>{msg.text}</p>}
+          <p className="mt-1.5 text-[9px] leading-snug text-zinc-600">{rr?.honesty}</p>
+        </Panel>
+      </div>
+
+      <Panel title="REPEG + MICRODOSE · נזילות-חוץ" icon={<Scale className="h-4 w-4 text-violet-300" />}>
+        {/* THE-REPEG: שפשוף-הפרמיה-אל-מסדרון-העיגון */}
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+          <div className="flex items-center justify-between font-mono text-[10px]" dir="ltr">
+            <span className="text-zinc-400">WSTEEM premium</span>
+            <span className={rp && (rp.premiumPct ?? 0) > 10 ? "text-red-400" : "text-green-400"}>
+              {rp?.premiumPct !== null && rp?.premiumPct !== undefined ? `+${rp.premiumPct}%` : "—"}
+            </span>
+          </div>
+          <div className="mt-1 flex items-center justify-between font-mono text-[10px]" dir="ltr">
+            <span className="text-zinc-500">mid {fmtInt(rp?.pool?.mid ?? 0)} · target {fmtInt(rp?.peg?.targetMidMu ?? 0)} (peg {fmtInt(rp?.peg?.refPriceMu ?? 0)})</span>
+          </div>
+          <div className="mt-1 flex items-center justify-between font-mono text-[10px]" dir="ltr">
+            <span className="text-zinc-500">arb bag {fmtInt(rp?.bagHolderBalanceMu ?? 0)}µ · plan {fmtInt(rp?.plan?.sellTotalMu ?? 0)}µ</span>
+            {rp?.plan?.onTarget ? <Pill tone="green">ON-TARGET</Pill> : <Pill tone="amber">PREMIUM</Pill>}
+          </div>
+          <GoldButton tone="gold" onClick={() => void runRepeg()} disabled={busy} className="mt-2 w-full !py-1.5 text-xs">
+            הרץ מנת-ארב-חוץ (sweep→sell)
+          </GoldButton>
+          <p className="mt-1 text-[9px] leading-snug text-zinc-600">
+            נזילות-חוץ (arb-ext) שוחקת-את-הפרמיה-אל-מסדרון-העיגון: מכירות-מדודות minOut-fail-closed · אפס-הטבעה · הכל-על-הספר.
+          </p>
+        </div>
+        {/* THE-MICRODOSE: יעילות-המיקרו-מדודה */}
+        <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+          <div className="flex items-center justify-between font-mono text-[10px]" dir="ltr">
+            <span className="text-zinc-400">ENERGY/SAOS micro</span>
+            {md && <span className={md.impactAtoB.impactBps > 500 ? "text-red-400" : "text-green-400"}>impact {md.impactAtoB.impactBps}bps</span>}
+          </div>
+          <div className="mt-1 font-mono text-[10px] text-zinc-500" dir="ltr">
+            {md ? `ra ${fmtInt(md.ra)} · rb ${fmtInt(md.rb)} · mid ${fmtInt(md.mid)} · swaps ${md.swaps} · fees ${fmtInt(md.feeAccruedTreasury)}µ` : "טוען…"}
+          </div>
+          <GoldButton tone="gold" onClick={() => void runMicrodose()} disabled={busy} className="mt-2 w-full !py-1.5 text-xs">
+            הזרק מנת-מיקרו 20kµ (אוצר)
+          </GoldButton>
+          <p className="mt-1 text-[9px] leading-snug text-zinc-600">
+            סכום-קטן-אבל-מדויק: מנה-פרופורציונלית (אפס-הזזת-mid) → עומק-עולה → השפעת-מחיר-יורדת; מדדו-שוב אחרי-הבלוק.
+          </p>
+        </div>
+        {/* טוקני-LP — התועלת-ממה-שנראה-חסר-שווי */}
+        {rr && rr.lpValuations.length > 0 && (
+          <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3">
+            <div className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-400" dir="ltr"><Droplets className="h-3 w-3" /> LP tokens — שווי-אמת</div>
+            <div className="mt-1 space-y-0.5 font-mono text-[10px]" dir="ltr">
+              {rr.lpValuations.map((v) => (
+                <div key={v.lpAsset} className="flex items-center justify-between">
+                  <span className="text-zinc-400">{v.lpAsset}</span>
+                  <span className="text-zinc-200">{fmtInt(v.valueUsdsMuPer1000)}µ/1k-LP</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-1 text-[9px] text-zinc-600">הצמודים-"המוזרים"-בתיקייה-השנייה מתומחרים-עכשיו-באמת (חלק-יחסי-מרזרבות).</p>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
 function PortfolioBridgePanel() {
   const [pf, setPf] = useState<PortfolioResp | null>(null);
   const [br, setBr] = useState<BridgeResp | null>(null);
@@ -1324,8 +1543,11 @@ function PortfolioBridgePanel() {
                 <p className="text-[9px] text-zinc-600">{bk.role}</p>
                 <div className="mt-1.5 space-y-0.5 font-mono text-[10px]" dir="ltr">
                   {bk.lines.slice(0, 4).map((ln) => (
-                    <div key={ln.asset} className="flex items-center justify-between gap-2">
-                      <span className="text-zinc-400">{ln.asset}</span>
+                    <div key={ln.asset} className="flex items-center justify-between gap-2" title={ln.tierNote}>
+                      <span className="flex items-center gap-1 text-zinc-400">
+                        {ln.asset}
+                        <Pill tone={tierTone(ln.tier)}>{tierLabel(ln.tier)}</Pill>
+                      </span>
                       <span className="text-zinc-500">{fmtInt(ln.amountMu)}µ @ {fmtInt(ln.price)}</span>
                       <span className="text-zinc-200">{fmtInt(ln.valueUsdsMu)}µ</span>
                     </div>
@@ -1682,6 +1904,9 @@ export default function DexTerminal() {
             })()}
           </Panel>
         </div>
+
+        {/* ═════ SETTLE-15: THE-ROUTER — מקור-הנזיל-שמכניס-מהכל ═════ */}
+        <RouterPanel />
 
         {/* ═════ SETTLE-12: תיקיית-המטבעות + הגשר-הריבוני ═════ */}
         <PortfolioBridgePanel />

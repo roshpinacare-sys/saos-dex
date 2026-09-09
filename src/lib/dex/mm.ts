@@ -248,7 +248,11 @@ export function arenaTick(
     }
     for (const ag of [...soldiers, "arena", "bot-a", "bot-b", "bot-c"]) {
       const c = st.credits[ag] ?? 0;
-      if (c < 4_000) {
+      // FIX(SETTLE-15 fuel-oscillation, נתפס-בלוג-הדחיות): סף-4k עם-חלון-16-טיק
+      // איפשר לחיילים-פעילים להגיע-ל-0-בין-הבדיקות (נמדד: 23-27-דחיות/בלוק
+      // insufficient-credits בשיא). סף-10k = מילוי-מוקדם-בחלון-אחד, אפס-דחיות;
+      // זו-העברה-טהורה (אפס-הטבעה) — השריפה-הכוללת-לא-משתנה, רק-התזמון-מוקדם.
+      if (c < 10_000) {
         const amt = Math.min(30_000 - c, REFUEL_CAP);
         if (amt <= 0) continue;
         // ממנה-מדורג (SETTLE-5/9 — funderFor אחד בגרעין): ארנה (רזרבה-עמוקה) → אוצר
