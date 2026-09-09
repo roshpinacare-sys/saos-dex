@@ -107,6 +107,13 @@ interface RepegView {
   premiumPct: number | null; bagHolderBalanceMu: number;
   plan: { sellTotalMu: number; chunks: number; onTarget: boolean };
 }
+interface RailView {
+  enabled: boolean; equityMu: number; fundedMu: number; netMu: number; doses: number;
+  doseLog: { tick: number; pair: string; side: "sell" | "buy"; inMu: number; midMu: number; anchorMu: number; premBps: number }[];
+  premiums: { id: string; pair: string; mid: number; anchor: number; premBps: number; active: boolean }[];
+  budget: { credits: number; usdsMu: number; wsteemMu: number; energyMu: number; saosMu: number };
+  note: string;
+}
 
 /* ══ משטח-הוכחת-הפריצה (Breakthrough Showcase) — מה-API הציבורי ══════════════ */
 interface ExecRowView {
@@ -1326,6 +1333,7 @@ function RouterPanel() {
   const [income, setIncome] = useState<IncomeView | null>(null);
   const [rp, setRp] = useState<RepegView | null>(null);
   const [md, setMd] = useState<MicroMeasure | null>(null);
+  const [rail, setRail] = useState<RailView | null>(null);
   const [assetIn, setAssetIn] = useState("ENERGY");
   const [assetOut, setAssetOut] = useState("USDS");
   const [amount, setAmount] = useState("20000");
@@ -1335,7 +1343,7 @@ function RouterPanel() {
 
   const loadAll = useCallback(() => {
     fetch(api("/api/dex/route")).then((r) => r.json()).then((j) => { if (j?.ok) setRr(j as RouterResp); }).catch(() => { /* כנות */ });
-    fetch(api("/api/dex/state")).then((r) => r.json()).then((j) => { if (j?.state?.income) setIncome(j.state.income as IncomeView); }).catch(() => { /* כנות */ });
+    fetch(api("/api/dex/state")).then((r) => r.json()).then((j) => { if (j?.state?.income) setIncome(j.state.income as IncomeView); if (j?.state?.rail) setRail(j.state.rail as RailView); }).catch(() => { /* כנות */ });
     fetch(api("/api/dex/repeg")).then((r) => r.json()).then((j) => { if (j?.ok) setRp(j as RepegView); }).catch(() => { /* כנות */ });
     fetch(api("/api/dex/microdose?pair=ENERGY/SAOS")).then((r) => r.json()).then((j) => { if (j?.ok) setMd(j.pool as MicroMeasure); }).catch(() => { /* כנות */ });
   }, []);
@@ -1449,6 +1457,54 @@ function RouterPanel() {
           </div>
           {msg && <p className={`mt-2 font-mono text-[10px] ${msg.tone === "ok" ? "text-green-400" : "text-red-400"}`}>{msg.text}</p>}
           <p className="mt-1.5 text-[9px] leading-snug text-zinc-600">{rr?.honesty}</p>
+          {/* ══ SETTLE-16: THE-MICRORAIL — המסילה-הריבונית-למיקרו ══ */}
+          <div className="mt-4 rounded-lg border border-amber-500/20 bg-zinc-900/70 p-3" data-testid="microrail-block">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-amber-300" dir="ltr">
+                <Zap className="h-3 w-3" /> MICRO-RAIL · מסילת-המיקרו-הריבונית
+              </div>
+              <span className="font-mono text-[10px] text-zinc-500" dir="ltr">
+                net {rail && rail.netMu >= 0 ? "+" : ""}{fmtInt(rail?.netMu ?? 0)}µ · {rail?.doses ?? 0} doses
+              </span>
+            </div>
+            {/* פרמיות-חיות מעל-העוגן — המסילה שוחקת-אותן מנה-אחר-מנה */}
+            <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {(rail?.premiums ?? []).map((pm) => (
+                <div key={pm.id} className="flex items-center justify-between rounded-md border border-zinc-800 bg-zinc-900/80 px-2.5 py-1.5 font-mono text-[10px]" dir="ltr">
+                  <span className="text-zinc-300">{pm.pair}</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-zinc-500">{fmtInt(pm.mid)} vs {fmtInt(pm.anchor)}</span>
+                    <Pill tone={Math.abs(pm.premBps) < 200 ? "green" : pm.active ? "red" : "zinc"}>
+                      {pm.premBps >= 0 ? "+" : ""}{Math.floor(pm.premBps / 100)}%
+                    </Pill>
+                  </span>
+                </div>
+              ))}
+            </div>
+            {/* תקציב-המסילה — התקציב-שנמצא-בתיקיות (אפס-הטבעה) */}
+            <div className="mt-2 grid grid-cols-3 gap-1.5 font-mono text-[10px] sm:grid-cols-5" dir="ltr" data-testid="rail-budget">
+              <Stat label="USDS" value={fmtInt(rail?.budget.usdsMu ?? 0)} sub="הון-עובד" />
+              <Stat label="WSTEEM" value={fmtInt(rail?.budget.wsteemMu ?? 0)} sub="מלאי-מכירה" />
+              <Stat label="ENERGY" value={fmtInt(rail?.budget.energyMu ?? 0)} sub="צד-מיקרו" />
+              <Stat label="SAOS" value={fmtInt(rail?.budget.saosMu ?? 0)} sub="צד-קנייה" />
+              <Stat label="equity" value={`${fmtInt(rail?.equityMu ?? 0)}µ`} sub="מסומן-לעוגן" />
+            </div>
+            {/* יומן-המנות — שפשוף-TWAP חי */}
+            {(rail?.doseLog.length ?? 0) > 0 && (
+              <div className="mt-2 max-h-24 space-y-0.5 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900/80 p-2 font-mono text-[9px]" dir="ltr">
+                {rail?.doseLog.map((d, i) => (
+                  <div key={`${d.tick}-${i}`} className="flex items-center justify-between text-zinc-500">
+                    <span>t{d.tick} · {d.pair}</span>
+                    <span className={d.side === "sell" ? "text-green-400" : "text-red-400"}>{d.side.toUpperCase()} {fmtInt(d.inMu)}µ @ mid {fmtInt(d.midMu)} vs anchor {fmtInt(d.anchorMu)} ({d.premBps >= 0 ? "+" : ""}{Math.floor(d.premBps / 100)}%)</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="mt-1.5 text-[9px] leading-snug text-zinc-600">
+              היתרון-שלנו: אפס-עמלת-רשת (גז 100µ-למנה = 0.067%) · תקשורת-חוזים-ישירה (אין-MEV/סנדוויץ') · אטומיות · מסדרון-עיגון 1:1.
+              התקציב — הנכסים-הישנים-שבתיקיות (שקית-bot-a + תוצרי-REPEG) בהעברות-חינם. הפרמיות-נשחקות-מנה-אחר-מנה עד-העוגן.
+            </p>
+          </div>
         </Panel>
       </div>
 

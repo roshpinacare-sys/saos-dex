@@ -18,6 +18,7 @@ import {
 import { merkleRoot, sha256, canon } from "./canonical";
 import { invariant, InvariantViolation } from "./invariant";
 import { arenaTick, fairPrice, DEFAULT_PARAMS, type ArenaParams, type SoldierRT, MARKETS } from "./mm";
+import { railSummary, bindLiveState } from "./rail";
 import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX } from "./amm";
 import { sortBook } from "./book";
 
@@ -32,7 +33,10 @@ const CHART_CAP = 240;
 /** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
  * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
  * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
-export const CODE_VERSION = "saos-dex/1.14.0+settle15-liquidity-hub";
+export const CODE_VERSION = "saos-dex/1.15.0+settle16-microrail";
+
+// THE-MICRORAIL: קישור-מצב-חי-למסילה (מניעת-ייבוא-מעגלי chain⇄rail — הזרקה)
+bindLiveState(() => ensureChain().st);
 
 /** טבעת-דגימת-הדלק (SETTLE-5): {גובה, גז-מצטבר} לכל-בלוק, חלון-~400 בלוקים.
  * צריכת-השריפה-החלונית = (אחרון−ראשון)/(hאחרון−hראשון) — אמת-לרגע זה,
@@ -685,6 +689,8 @@ export function getState() {
       backingWsteemMu: st.backing["WSTEEM"] ?? 0,
       hub: "USDS", // כל-ראוטר-דרך-האב משלם 30bps → 30% לאוצר
     },
+    // SETTLE-16 THE-MICRORAIL: המסילה-הריבונית-למיקרו — תקציב, מנות, פרמיות, P&L
+    rail: railSummary(),
   };
 }
 

@@ -1,0 +1,281 @@
+/**
+ * rail.ts — THE-MICRORAIL (SETTLE-16): המסילה הריבונית-למיקרו.
+ *
+ * דבר-המפעיל: "תמצא תקציב ותפעיל את המסילה גם למיקרו — ברשת שלנו אין עמלה על
+ * עסקאות ויש לנו תקשורת ייחודית עם חוזים חכמים, אז אפשר למצוא יתרון במיקרו-
+ * טריידים רווחיים. מצא עוד יתרונות. תפעל היטב את המיקרו על התקציב הקיים בתיקיות
+ * בריפו. טפל בכל החסמים. פתרונות ריבוניים על הרשת שלנו כדי לגשר."
+ *
+ * ── היתרון-המדוד (למה מיקרו מרוויח דווקא פה) ────────────────────────────────
+ *  · אפס-עמלת-רשת: מנת-מסילה 150kµ שורפת גז 100µ = 0.067% — על-רשת-ציבורית
+ *    (ETH-mainnet gas $1-5/tx) מנה-כזאת חדלת-כדאיות; עלינו היא רווחית-מכל-גודל.
+ *  · תקשורת-חוזים-ישירה: ה-op נכנס לגרעין באותו-טיק — אין-RPC-latency, אין-
+ *    mempool-ציבורי (אין-sandwich/MEV), סדר-דטרמיניסטי על הספר.
+ *  · אטומיות: pool_swap בודד עם minOut fail-closed; רב-רגליים דרך batch
+ *    (SETTLE-12) — אין-ביצוע-חלקי.
+ *  · מסדרון-העיגון (wrap 1:1): המלאי לא נתקע — STEEM⇄WSTEEM חינם.
+ *  · עיגון-צי חינם (SETTLE-13): אבני-דרך של ה-P&L נעוגנות-ל-Hive ב-RC (26/יום).
+ *
+ * ── התקציב (מה שכבר-קיים בתיקיות — אפס-הטבעה) ──────────────────────────────
+ *  · USDS 2.6Mµ יושב-ישן ב-arb-ext (תוצרי-הסוויפ של THE-REPEG) → הון-עובד.
+ *  · WSTEEM 2.0Mµ יושב-ישן ב-bot-a (שקית-העידן-המוטה) → מלאי-מכירה (בסיס-עלות
+ *    = העיגון — כל-מכירה-מעליו היא לכידת-פרמיה אמת).
+ *  · ENERGY 100kµ אצל bot-c → מלאי-צד-המיקרו.
+ *  · הכל בהעברות-חינם (xfer_free) על הרשת-הריבונית — הריבונות היא המוצר.
+ *
+ * ── המנוע ───────────────────────────────────────────────────────────────────
+ *  · שוקי-המסילה (עוגני-אמת, לא-פייר-צף):
+ *     1. USDS/WSTEEM — עוגן refPrice(WSTEEM)=360µ ≡ STEEM 1:1 (גיבוי-נעול).
+ *     2. ENERGY/SAOS — עוגן צולב: refPrice(ENERGY) ביחס למחיר-החי של SAOS.
+ *  · כל-8-טיקים (הפרדה-בין-השוקים): מדידת-פרמיה; |פרמיה| ≥ 200bps (מכסה
+ *    עמלת-30bps+גז+השפעה) → מנת-מיקרו-מדודה לכיוון-העוגן, minOut fail-closed
+ *    (4% — השיעור-מ-SETTLE-15), גודל-לינארי-חצי-פער בתקרת-מנה.
+ *  · זהו-שפשוף-TWAP: מנות-קטנות-חוזרות שוחקות-את-הפרמיה-אל-העוגן בלי-לרסק-
+ *    את-הבריכה — ומכניסות-חיים-מתמדת-לבריכה-המיקרו (עמלות-לאוצר כל-מנה).
+ *  · העקירה-המוסדית: pegkeeper (mm.ts) מוותר-על-נעילת-USDS/WSTEEM — המסילה
+ *    היא בעלת-המשמעת-שלו (מנוע-אחד-לעוגן, אפס-מלחמת-סוכנים).
+ *  · P&L כנה: סימון-לעוגן (MTM) — הון-המסילה במחירי-עוגן מול-סך-המימון
+ *    (בסיס-האתחול+הזרמות). אפס-הטבעה — Σ שומר על-ידי העברות-טהורות בלבד.
+ *
+ * אפס-float במצב · אפס-מפתחות · קריאה-על-המצב-החי בלבד.
+ */
+import type { DexState, Op, Asset } from "./kernel";
+import { getPool, quoteOut, poolMidFor } from "./amm";
+import { poolKey, avail } from "./kernel";
+
+export const RAIL = "rail";
+export const RAIL_MIN_EDGE_BPS = 200; // מתחת-לזה המנה לא משלמת (עמלה+גז+השפעה)
+export const RAIL_SLIP_BAND = 96; // minOut = 96% מהציטוט — fail-closed (SETTLE-15)
+export const RAIL_OWNED_POOLS = new Set([poolKey("WSTEEM", "USDS")]); // נשלפים מנעילת-pegkeeper
+
+interface RailMarket {
+  id: string;
+  base: Asset;
+  quote: Asset;
+  pair: string;
+  minDoseMu: number;
+  maxDoseMu: number;
+  tickPhase: number; // tick % 8 === phase
+}
+
+const RAIL_MARKETS: RailMarket[] = [
+  { id: "wsteem", base: "WSTEEM", quote: "USDS", pair: poolKey("WSTEEM", "USDS"), minDoseMu: 5_000, maxDoseMu: 200_000, tickPhase: 0 },
+  { id: "energy", base: "ENERGY", quote: "SAOS", pair: poolKey("ENERGY", "SAOS"), minDoseMu: 1_000, maxDoseMu: 20_000, tickPhase: 4 },
+];
+
+// ── עוגני-אמת ────────────────────────────────────────────────────────────────
+
+/** מחיר-עוגן של SAOS (µ-USDS ל-1-SAOS): mid-בריכת-SAOS/USDS, נפילה-לספר. */
+function saosPxMu(st: DexState): number {
+  const p = getPool(st, poolKey("SAOS", "USDS"));
+  const mid = p ? poolMidFor(p, "SAOS", "USDS") : 0;
+  return mid > 0 ? mid : st.assets["SAOS"]?.refPrice ?? 0;
+}
+
+/** עוגן-הבסיס בµ-quote ל-1-יחידת-בסיס (לא µ-quote ל-µ — סקאלת-היחידות של הספר). */
+export function railAnchorMu(st: DexState, m: RailMarket): number {
+  if (m.id === "wsteem") return st.assets["WSTEEM"]?.refPrice ?? 0; // ≡STEEM 1:1
+  if (m.id === "energy") {
+    const eRef = st.assets["ENERGY"]?.refPrice ?? 0; // µ-USDS ל-1-ENERGY
+    const sPx = saosPxMu(st); // µ-USDS ל-1-SAOS
+    if (eRef <= 0 || sPx <= 0) return 0;
+    return Math.max(1, Math.floor((eRef * 1000) / sPx)); // µ-SAOS ל-1-ENERGY
+  }
+  return 0;
+}
+
+/** פרמיית-בריכה מעל-העוגן בbps (חיוב = בריכה-יקרה). */
+export function railPremiumBps(st: DexState, m: RailMarket): { mid: number; anchor: number; premBps: number } {
+  const p = getPool(st, m.pair);
+  const mid = p ? poolMidFor(p, m.base, m.quote) : 0;
+  const anchor = railAnchorMu(st, m);
+  const premBps = mid > 0 && anchor > 0 ? Math.floor(((mid - anchor) * 10_000) / anchor) : 0;
+  return { mid, anchor, premBps };
+}
+
+// ── טלמטריה (חוץ-מצב — בדיוק-כמו arenaRearm/botSeedCaps) ────────────────────
+
+export interface RailDoseRec {
+  tick: number;
+  pair: string;
+  side: "sell" | "buy";
+  inMu: number;
+  midMu: number;
+  anchorMu: number;
+  premBps: number;
+}
+
+interface RailRT {
+  baseEquityMu: number | null; // הון-עוגן באתחול-התהליך (נטו-מתאפס-פר-ריצה — כנות)
+  inflowMu: number; // הזרמות-מימון-מאז-האתחול (בשווי-עוגן µ-USDS)
+  doses: number;
+  doseLog: RailDoseRec[];
+}
+// FIX(SETTLE-16 split-brain, הלקה-מ-SETTLE-12): RT-ברמת-מודול שוכפל-בין-מופעי-
+// מודול-שונים-של-dev-server (instrumentation מול-route) — הטלמטריה-הראתה-0-מנות
+// בזמן-שהמסילה-סחרה. globalThis = מופע-אחד-לכל-הבאנדלים (אותו-דפוס של ensureChain).
+const g = globalThis as unknown as { __saosRailRT?: RailRT; __saosRailLife?: Record<string, number> };
+const railRt: RailRT = g.__saosRailRT ?? (g.__saosRailRT = { baseEquityMu: null, inflowMu: 0, doses: 0, doseLog: [] });
+
+/** מחיר-עוגן לסימון-הון (µ-USDS ל-1-יחידה; credits ו-USDS = 1000). */
+function markMu(st: DexState, a: string): number {
+  if (a === "USDS") return 1000;
+  if (a === "WSTEEM" || a === "STEEM") return st.assets["WSTEEM"]?.refPrice ?? st.assets["STEEM"]?.refPrice ?? 0;
+  if (a === "ENERGY") return st.assets["ENERGY"]?.refPrice ?? 0;
+  if (a === "SAOS") return saosPxMu(st);
+  const ref = st.assets[a]?.refPrice ?? 0; // WSBD/PHIVE — רצפת-ספר (כנות)
+  return ref;
+}
+
+/** הון-המסילה מסומן-לעוגן (µ-USDS). */
+export function railEquityMu(st: DexState): number {
+  let eq = st.credits[RAIL] ?? 0; // credits = µ-USDS
+  const b = st.balances[RAIL] ?? {};
+  for (const [a, amt] of Object.entries(b)) {
+    if (!(amt > 0)) continue;
+    const px = markMu(st, a);
+    if (px <= 0) continue; // LP/נכסים-ללא-עוגן — לא-מדומים (כנות)
+    eq += Math.floor((amt * px) / 1000);
+  }
+  return eq;
+}
+
+export interface RailSummary {
+  enabled: true;
+  equityMu: number;
+  fundedMu: number;
+  netMu: number;
+  doses: number;
+  doseLog: RailDoseRec[];
+  premiums: { id: string; pair: string; mid: number; anchor: number; premBps: number; active: boolean }[];
+  budget: { credits: number; usdsMu: number; wsteemMu: number; energyMu: number; saosMu: number };
+  note: string;
+}
+
+export function railSummary(): RailSummary {
+  const st = getLiveStateRef();
+  if (railRt.baseEquityMu === null) railRt.baseEquityMu = railEquityMu(st);
+  const premiums = RAIL_MARKETS.map((m) => {
+    const r = railPremiumBps(st, m);
+    return { id: m.id, pair: m.pair, mid: r.mid, anchor: r.anchor, premBps: r.premBps, active: Math.abs(r.premBps) >= RAIL_MIN_EDGE_BPS };
+  });
+  const b = st.balances[RAIL] ?? {};
+  const eq = railEquityMu(st);
+  const funded = (railRt.baseEquityMu ?? 0) + railRt.inflowMu;
+  return {
+    enabled: true,
+    equityMu: eq,
+    fundedMu: funded,
+    netMu: eq - funded,
+    doses: railRt.doses,
+    doseLog: railRt.doseLog.slice(-8).reverse(),
+    premiums,
+    budget: {
+      credits: st.credits[RAIL] ?? 0,
+      usdsMu: b["USDS"] ?? 0,
+      wsteemMu: b["WSTEEM"] ?? 0,
+      energyMu: b["ENERGY"] ?? 0,
+      saosMu: b["SAOS"] ?? 0,
+    },
+    note: "מסילת-המיקרו הריבונית: אפס-עמלת-רשת · מנות-מדודות-לעוגן minOut-fail-closed · P&L מסומן-לעוגן (MTM, אתחול-פר-ריצה) · אפס-הטבעה",
+  };
+}
+
+// קישור-מצב-חי — מוזרק-מ-chain.ts (מניעת-ייבוא-מעגלי chain⇄rail)
+let liveStateRef: (() => DexState) | null = null;
+export function bindLiveState(fn: () => DexState): void { liveStateRef = fn; }
+function getLiveStateRef(): DexState {
+  if (!liveStateRef) throw new Error("rail: live-state-not-bound");
+  return liveStateRef();
+}
+
+// ── מימון-המסילה (התקציב-מהתיקיות — העברות-טהורות, אפס-הטבעה) ────────────────
+
+const FLOOR_USDS = 250_000;
+const FLOOR_WSTEEM = 100_000;
+const FLOOR_ENERGY = 5_000;
+const FLOOR_SAOS = 100_000; // צד-קנייה-לבריכת-המיקרו (ENERGY/SAOS)
+const TRANCHE_USDS = 500_000;
+const TRANCHE_WSTEEM = 300_000;
+const TRANCHE_ENERGY = 30_000;
+const TRANCHE_SAOS = 200_000;
+const LIFETIME_USDS = 6_000_000; // arb-ext 2.6M + גיבוי-אוצר/מפעיל — תקרה-כנה
+const LIFETIME_WSTEEM = 5_000_000; // שקיות-הבוטים 4.2M + שאריות-אוצר — תקרה-כנה
+const LIFETIME_ENERGY = 300_000; // bot-c 100k + רכישות-חוזרות — תקרה-כנה
+const LIFETIME_SAOS = 2_000_000; // הארנה/האוצר שופעים-SAOS — תקרה-כנה-לכל-חיי-התהליך
+const railLifetime: Record<string, number> = g.__saosRailLife ?? (g.__saosRailLife = { usds: 0, wsteem: 0, energy: 0, saos: 0 });
+
+/** מקור-מימון: התיק-הקיים-הגדול קודם (דבר-גורר-דבר), אוצר-גיבוי. */
+function fundingSource(st: DexState, asset: "USDS" | "WSTEEM" | "ENERGY" | "SAOS"): string | null {
+  const pools: Record<string, string[]> = {
+    USDS: ["arb-ext", "treasury", "operator"],
+    WSTEEM: ["bot-a", "bot-b", "bot-c", "treasury", "operator"],
+    ENERGY: ["bot-c", "treasury", "operator"],
+    SAOS: ["arena", "treasury", "operator"],
+  };
+  for (const src of pools[asset]) {
+    if (avail(st, src, asset) >= 10_000) return src; // ≥10kµ — יש-מה להזרים
+  }
+  return null;
+}
+
+function pushFunding(st: DexState, tick: number, pushOp: (op: Op) => void, asset: "USDS" | "WSTEEM" | "ENERGY" | "SAOS", floorMu: number, trancheMu: number, lifetimeKey: "usds" | "wsteem" | "energy" | "saos", lifetimeCap: number): void {
+  if (avail(st, RAIL, asset) >= floorMu) return;
+  if (railLifetime[lifetimeKey] + trancheMu > lifetimeCap) return;
+  const src = fundingSource(st, asset);
+  if (!src) return;
+  const amt = Math.min(trancheMu, lifetimeCap - railLifetime[lifetimeKey], avail(st, src, asset));
+  if (amt < floorMu / 5) return; // מנה-שווה-שמה (אפס-רעש-ממפול)
+  // מימון-בהעברה-חינם (xfer_free — אפס-גז, תקרה-2M); האוצר/מפעיל ב-transfer רגיל.
+  if (src === "treasury" || src === "operator") {
+    if ((st.credits[src] ?? 0) < 100) return; // דלק-להעברה
+    pushOp({ type: "transfer", issuer: src, nonce: `rail-fund-${asset}-${tick}`, to: RAIL, asset, amount: amt });
+  } else {
+    pushOp({ type: "xfer_free", issuer: src, nonce: `rail-fund-${asset}-${tick}`, to: RAIL, asset, amount: amt });
+  }
+  railLifetime[lifetimeKey] += amt;
+  // רישום-ההזרמה ל-P&L: המנה מוערכת-בעוגן בעת-הדחיפה (בלוק-אחד-קדימה — סטייה-זניחה)
+  const px = markMu(st, asset);
+  if (px > 0) railRt.inflowMu += Math.floor((amt * px) / 1000);
+}
+
+// ── הטיק ─────────────────────────────────────────────────────────────────────
+
+/** railTick — מריץ-מתוך arenaTick (mm.ts) אחרי-pegkeeper. כל-ההחלטות מהמצב-החי. */
+export function railTick(st: DexState, tick: number, pushOp: (op: Op) => void): void {
+  // (1) מימון-רצפות — כל-16-טיק
+  if (tick % 16 === 0) {
+    pushFunding(st, tick, pushOp, "USDS", FLOOR_USDS, TRANCHE_USDS, "usds", LIFETIME_USDS);
+    pushFunding(st, tick, pushOp, "WSTEEM", FLOOR_WSTEEM, TRANCHE_WSTEEM, "wsteem", LIFETIME_WSTEEM);
+    pushFunding(st, tick, pushOp, "ENERGY", FLOOR_ENERGY, TRANCHE_ENERGY, "energy", LIFETIME_ENERGY);
+    pushFunding(st, tick, pushOp, "SAOS", FLOOR_SAOS, TRANCHE_SAOS, "saos", LIFETIME_SAOS);
+  }
+
+  // (2) מנות-שפשוף — כל-שוק בפאזה-משלו (כל-8-טיקים, מופרדים)
+  for (const m of RAIL_MARKETS) {
+    if (tick % 8 !== m.tickPhase) continue;
+    const { mid, anchor, premBps } = railPremiumBps(st, m);
+    if (mid <= 0 || anchor <= 0) continue;
+    if (Math.abs(premBps) < RAIL_MIN_EDGE_BPS) continue;
+
+    const sell = premBps > 0; // בריכה-יקרה → מוכרים-בסיס-פנימה (מורידים-לעוגן)
+    const assetIn = (sell ? m.base : m.quote) as Asset;
+    const p = getPool(st, m.pair);
+    if (!p) continue;
+    const rIn = assetIn === p.a ? p.ra : p.rb;
+    // גודל-לינארי-חצי-פער (אותה-ליניאריזציה של pegkeeper) בתקרת-מנה,
+    // ותקרת-ריכוז 25%-מעתודת-הקלט (הבריכה-המיקרו צרה — מנה-ענקית = סליפאג')
+    const halfGap = Math.floor(Math.abs(Math.floor((rIn * premBps) / 10_000)) / 2);
+    const size = Math.min(Math.max(halfGap, m.minDoseMu), m.maxDoseMu, Math.floor(rIn / 4), avail(st, RAIL, assetIn));
+    if (size < m.minDoseMu) continue;
+
+    // minOut fail-closed על-ציטוט-חי (4% — רוחב-SETTLE-15)
+    const q = quoteOut(p, assetIn, size);
+    if (!q || q.out <= 0) continue;
+    const rec: RailDoseRec = { tick, pair: m.pair, side: sell ? "sell" : "buy", inMu: size, midMu: mid, anchorMu: anchor, premBps };
+    pushOp({ type: "pool_swap", issuer: RAIL, nonce: `rail-${m.id}-${tick}`, pair: m.pair, assetIn, amount: size, minOut: Math.floor((q.out * RAIL_SLIP_BAND) / 100) });
+    railRt.doses++;
+    railRt.doseLog.push(rec);
+    if (railRt.doseLog.length > 32) railRt.doseLog.splice(0, railRt.doseLog.length - 32);
+  }
+}
