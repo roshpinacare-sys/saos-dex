@@ -115,6 +115,26 @@ interface RailView {
   note: string;
 }
 
+/* ══ SETTLE-17: THE-MILESTONE + THE-ONRAMP — עדות-P&L-על-Hive · נזילות-חוץ-אמת ══ */
+interface MilestoneView {
+  enabled: boolean; anchored: number; skippedNoRc: number; skippedGap: number; errors: number;
+  lastAnchorAt: string | null; lastNetMu: number | null; lastHeight: number | null;
+  lastTxid: string | null; lastAccount: string | null;
+  log: { at: string; height: number; netMu: number; txid: string; account: string }[];
+  note: string;
+}
+interface OnrampAccountView {
+  account: string; role: string; liquidHive: number; hbd: number; hp: number;
+  rcEffective: number | null; anchorCapacityPerDay: number; movableNow: boolean; why: string;
+}
+interface OnrampView {
+  at: string; accounts: OnrampAccountView[];
+  tokens: { account: string; symbol: string; balance: number; stake: number }[];
+  totals: { liquidHive: number; hbd: number; hp: number; swapHive: number; anchorCapacityPerDay: number };
+  needsOperator: { what: string; why: string }[];
+  note: string;
+}
+
 /* ══ משטח-הוכחת-הפריצה (Breakthrough Showcase) — מה-API הציבורי ══════════════ */
 interface ExecRowView {
   sizeMu: number; bookCostMu: number; bookAvgPx: number; bookSlipBps: number; covered: boolean;
@@ -1334,6 +1354,8 @@ function RouterPanel() {
   const [rp, setRp] = useState<RepegView | null>(null);
   const [md, setMd] = useState<MicroMeasure | null>(null);
   const [rail, setRail] = useState<RailView | null>(null);
+  const [milestone, setMilestone] = useState<MilestoneView | null>(null);
+  const [onramp, setOnramp] = useState<OnrampView | null>(null);
   const [assetIn, setAssetIn] = useState("ENERGY");
   const [assetOut, setAssetOut] = useState("USDS");
   const [amount, setAmount] = useState("20000");
@@ -1343,7 +1365,8 @@ function RouterPanel() {
 
   const loadAll = useCallback(() => {
     fetch(api("/api/dex/route")).then((r) => r.json()).then((j) => { if (j?.ok) setRr(j as RouterResp); }).catch(() => { /* כנות */ });
-    fetch(api("/api/dex/state")).then((r) => r.json()).then((j) => { if (j?.state?.income) setIncome(j.state.income as IncomeView); if (j?.state?.rail) setRail(j.state.rail as RailView); }).catch(() => { /* כנות */ });
+    fetch(api("/api/dex/state")).then((r) => r.json()).then((j) => { if (j?.state?.income) setIncome(j.state.income as IncomeView); if (j?.state?.rail) setRail(j.state.rail as RailView); if (j?.state?.milestone) setMilestone(j.state.milestone as MilestoneView); }).catch(() => { /* כנות */ });
+    fetch(api("/api/dex/onramp")).then((r) => r.json()).then((j) => { if (j?.ok) setOnramp(j.onramp as OnrampView); }).catch(() => { /* כנות */ });
     fetch(api("/api/dex/repeg")).then((r) => r.json()).then((j) => { if (j?.ok) setRp(j as RepegView); }).catch(() => { /* כנות */ });
     fetch(api("/api/dex/microdose?pair=ENERGY/SAOS")).then((r) => r.json()).then((j) => { if (j?.ok) setMd(j.pool as MicroMeasure); }).catch(() => { /* כנות */ });
   }, []);
@@ -1503,6 +1526,78 @@ function RouterPanel() {
             <p className="mt-1.5 text-[9px] leading-snug text-zinc-600">
               היתרון-שלנו: אפס-עמלת-רשת (גז 100µ-למנה = 0.067%) · תקשורת-חוזים-ישירה (אין-MEV/סנדוויץ') · אטומיות · מסדרון-עיגון 1:1.
               התקציב — הנכסים-הישנים-שבתיקיות (שקית-bot-a + תוצרי-REPEG) בהעברות-חינם. הפרמיות-נשחקות-מנה-אחר-מנה עד-העוגן.
+            </p>
+            {/* ══ SETTLE-17: THE-MILESTONE — עדות-ה-P&L-על-Hive-באוטומט ══ */}
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/20 bg-zinc-900/80 px-2.5 py-1.5" data-testid="milestone-row">
+              <span className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-emerald-300" dir="ltr">
+                <Anchor className="h-3 w-3" /> MILESTONE · עדות-P&L-על-Hive
+              </span>
+              <span className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-zinc-400" dir="ltr">
+                <Pill tone={(milestone?.anchored ?? 0) > 0 ? "green" : "zinc"}>{milestone?.anchored ?? 0} anchored</Pill>
+                {milestone?.lastNetMu != null && <span>net@anchor {milestone.lastNetMu >= 0 ? "+" : ""}{fmtInt(milestone.lastNetMu)}µ</span>}
+                {milestone?.lastHeight != null && <span>h{fmtInt(milestone.lastHeight)}</span>}
+                {milestone?.lastAccount && <span className="text-zinc-500">via {milestone.lastAccount}</span>}
+                {milestone?.lastTxid && (
+                  <a className="text-emerald-400 underline" href={`https://hiveblocks.com/tx/${milestone.lastTxid}`} target="_blank" rel="noreferrer">tx↗</a>
+                )}
+              </span>
+            </div>
+            {(milestone?.log.length ?? 0) > 0 && (
+              <div className="mt-1.5 max-h-20 space-y-0.5 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900/80 p-2 font-mono text-[9px]" dir="ltr" data-testid="milestone-log">
+                {milestone?.log.map((l, i) => (
+                  <div key={`${l.txid}-${i}`} className="flex items-center justify-between text-zinc-500">
+                    <span>h{fmtInt(l.height)} · {l.account}</span>
+                    <span className="text-emerald-400">net {l.netMu >= 0 ? "+" : ""}{fmtInt(l.netMu)}µ
+                      <a className="ml-1.5 underline" href={`https://hiveblocks.com/tx/${l.txid}`} target="_blank" rel="noreferrer">tx</a>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          {/* ══ SETTLE-17: THE-ONRAMP — מפת-הנזילות-החוץ-האמתית (חי על Hive-RPC) ══ */}
+          <div className="mt-4 rounded-lg border border-emerald-500/20 bg-zinc-900/70 p-3" data-testid="onramp-block">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-emerald-300" dir="ltr">
+                <Waves className="h-3 w-3" /> ONRAMP · נזילות-חוץ-אמת · מדידה-חיה-על-Hive-RPC
+              </div>
+              <button
+                type="button"
+                onClick={() => { fetch(api("/api/dex/onramp?force=1")).then((r) => r.json()).then((j) => { if (j?.ok) setOnramp(j.onramp as OnrampView); }).catch(() => { /* כנות */ }); }}
+                className="flex items-center gap-1 rounded-md border border-emerald-500/30 px-2 py-0.5 font-mono text-[10px] text-emerald-300 hover:bg-emerald-500/10"
+              >
+                <RefreshCcw className="h-3 w-3" /> מדידה-חיה
+              </button>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-1.5 font-mono text-[10px] sm:grid-cols-4" dir="ltr" data-testid="onramp-totals">
+              <Stat label="liquid HIVE" value={onramp ? onramp.totals.liquidHive.toFixed(3) : "—"} sub={`${onramp?.accounts.length ?? 0} חשבונות-חיים`} />
+              <Stat label="HBD" value={onramp ? onramp.totals.hbd.toFixed(3) : "—"} sub="מאזני-חוץ" />
+              <Stat label="SWAP.HIVE" value={onramp ? onramp.totals.swapHive.toFixed(4) : "—"} sub="Hive-Engine" />
+              <Stat label="anchor/day" value={onramp ? `~${onramp.totals.anchorCapacityPerDay}` : "—"} sub="RC-regen-ריבוני" />
+            </div>
+            {(onramp?.accounts.length ?? 0) > 0 && (
+              <div className="mt-2 max-h-40 space-y-0.5 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-900/80 p-2 font-mono text-[9px]" dir="ltr">
+                {onramp?.accounts.map((a) => (
+                  <div key={a.account} className="flex items-center justify-between gap-2 text-zinc-500">
+                    <span className={a.role === "relay-head" ? "text-amber-300" : "text-zinc-400"}>{a.account}</span>
+                    <span className="flex items-center gap-2">
+                      <span>{a.liquidHive.toFixed(3)} HIVE</span>
+                      <span className="text-zinc-600">RC {a.rcEffective != null ? `${Math.floor(a.rcEffective / 1e6)}M` : "—"}</span>
+                      {a.anchorCapacityPerDay > 0 && <Pill tone="green">~{a.anchorCapacityPerDay}/d</Pill>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(onramp?.needsOperator.length ?? 0) > 0 && (
+              <div className="mt-1.5 space-y-1">
+                {onramp?.needsOperator.map((n, i) => (
+                  <p key={i} className="text-[9px] leading-snug text-amber-400/90"><span className="font-bold">דרוש-החלטת-בעלים:</span> {n.what} — {n.why}</p>
+                ))}
+              </div>
+            )}
+            <p className="mt-1.5 text-[9px] leading-snug text-zinc-600">
+              {onramp?.note ?? "קריאה-ציבורית-חסרת-מפתחות-מה-RPC-המקובע — אפס-סודות, אפס-כתיבה."}
             </p>
           </div>
         </Panel>

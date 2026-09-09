@@ -19,6 +19,7 @@ import { merkleRoot, sha256, canon } from "./canonical";
 import { invariant, InvariantViolation } from "./invariant";
 import { arenaTick, fairPrice, DEFAULT_PARAMS, type ArenaParams, type SoldierRT, MARKETS } from "./mm";
 import { railSummary, bindLiveState } from "./rail";
+import { milestoneSummary } from "./milestone";
 import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX } from "./amm";
 import { sortBook } from "./book";
 
@@ -33,7 +34,7 @@ const CHART_CAP = 240;
 /** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
  * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
  * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
-export const CODE_VERSION = "saos-dex/1.15.0+settle16-microrail";
+export const CODE_VERSION = "saos-dex/1.16.0+settle17-milestone-onramp";
 
 // THE-MICRORAIL: קישור-מצב-חי-למסילה (מניעת-ייבוא-מעגלי chain⇄rail — הזרקה)
 bindLiveState(() => ensureChain().st);
@@ -691,6 +692,7 @@ export function getState() {
     },
     // SETTLE-16 THE-MICRORAIL: המסילה-הריבונית-למיקרו — תקציב, מנות, פרמיות, P&L
     rail: railSummary(),
+    milestone: milestoneSummary(),
   };
 }
 

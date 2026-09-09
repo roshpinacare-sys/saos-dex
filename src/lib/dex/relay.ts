@@ -521,6 +521,26 @@ function upsertRecord(rt: RelayRT, rec: AnchorRecord): void {
   rt.records = rt.records.slice(0, 60);
 }
 
+/* ── SETTLE-17: סגירת-פער-הכנות — עיגוני-צי-ידניים/אבני-דרך-P&L נרשמים-בפנקס ──
+ * ההיסטוריה: 3-עיגוני-SETTLE-13-החיים (h8424/wic · h8436/haran · h8508/wog —
+ * txid-אמת-על-Hive) מעולם-לא-נרשמו-בפנקס-הציבורי-כי-נתיב-ה-route-עקף-את-rt.records.
+ * עתה: כל-עיגון-צי-מוצלח (ידני-או-אוטומטי-מ-milestone.ts) נרשם-כ-anchored,
+ * נשמר-בדיסק, ונכנס-לפיוס-האוטומטי (קריאה-חוזרת-get_transaction-מאמתת-על-Hive). */
+export function recordFleetAnchor(
+  height: number, stateRoot: string, digest: string, txid: string, account: string,
+): void {
+  const rt = rtInit();
+  const rec: AnchorRecord = {
+    chain: "fleet", height, stateRoot, digest, txid, status: "anchored",
+    at: new Date().toISOString(), attempt: 1, account,
+    verified: null, verifiedAt: null,
+  };
+  upsertRecord(rt, rec);
+  rt.chainState.fleet.endpointHost = rt.chainState.fleet.endpointHost ?? hostOf(HIVE_NODES[0]);
+  persist(rt);
+  scheduleVerification(rt, rec);
+}
+
 function persist(rt: RelayRT): void {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
