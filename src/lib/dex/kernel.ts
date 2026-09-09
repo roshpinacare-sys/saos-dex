@@ -44,6 +44,11 @@ export const GAS_TABLE = {
   relay_ack: 0,
   xfer_free: 0, // THE-SWEEP (SETTLE-12): העברה-חופשית על הרשת-הריבונית — אפס-גז, תקרה-מדודה (FREE_XFER_CAP), העברה-טהורה בין-יתרות (אפס-נגיעה בקרדיטים → האינווריאנטה נשמרת מעצמה)
   batch: 0, // דבר-גורר-דבר (SETTLE-12): אטומיות — סדרת-ops שכולה מתבצעת או שכולה נדחית. גז-0 למעטפת; תתי-ה-ops משלמים גז משלהם. עומק-1 בלבד (אין-מקוננים)
+  // ── Task 54 · כלכלה-מטורפת (ve(3,3) + POL-bonds — מחקר-מפעיל "הכי מטורפות") ──
+  ve_lock: 40,   // נעילת-SAOS→veSAOS (Aerodrome vote-escrow, 1..208 שבועות)
+  ve_unlock: 30, // פריקה-אחרי-תום-התקופה
+  ve_vote: 20,   // הצבעת-גייג' — לאיזו בריכה זורמת קרן-התגמולים
+  bond_buy: 80,  // BONDS-2.0 — קניית-SAOS-בהנחה-3%, נעול-ve-12שב' (Olympus-POL בלי-מלכודת-ההדפסה)
 } as const;
 
 export type OpKind = keyof typeof GAS_TABLE;
@@ -55,6 +60,28 @@ export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter�
 export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
 export const FREE_XFER_CAP = 2_000_000; // THE-SWEEP (SETTLE-12): תקרת-העברה-חינם-פר-פקודה (2,000 יחידות) — החינם הוא המוצר, התקרה היא גבול-הנזק
 export const BATCH_MAX_OPS = 8; // דבר-גורר-דבר: תקרת-תתי-ops-פר-batch — אטומיות לא משלמת עליית-זיכרון בלתי-חסומה (structuredClone לכל-batch)
+
+// ── Task 54 · קבועי-כלכלה (חיים-בגרעין כדי-למנוע-יבוא-מעגלי: kernel ← economy) ──
+export const BLOCKS_PER_WEEK = 201_600; // טיק 3s → 7 ימים מדויק
+export const VE_MAX_WEEKS = 208;        // 4 שנים — מעטפת-Aerodrome בדיוק
+export const VE_MIN_WEEKS = 1;
+export const VE_VAULT = "ve-vault";     // כספת-SAOS-הנעולים (חשבון-עד)
+export const VE_POT = "ve-pot";         // קרן-התגמולים-למצביעים
+export const BOND_DISC_BPS = 300;       // הנחת-בונד 3% מעל-מחיר-בריכה-חי
+export const BOND_VE_WEEKS = 12;        // SAOS-של-בונד נעול 12שב' (≈90 יום)
+export const BOND_MIN_USDS = 50_000;    // תקרה-תחתונה-פר-בונד (µ)
+export const BOND_MAX_USDS = 2_000_000; // תקרת-בונד-פר-פקודה (2000 USDS)
+export const BOND_COOLDOWN = 10;        // בלוקים-בין-בונדים-פר-חשבון
+export const EPOCH_BLOCKS = 1_200;      // אפוק-פליפ כל-שעה (טיק 3s) — נראה-חי
+export const ROUTER_EVERY = 600;        // מחזור-קנייה-ושריפה כל-30 דק'
+export const REV_FLOOR = 200_000;       // רצפת-רווח-אוצר שהראוטר לא נוגע בה (µ)
+export const REV_BURN_PCT = 40;         // → קנייה-מהבריכה-ושריפה
+export const REV_VE_PCT = 40;           // → קרן-veSAOS
+export const ROUTER_USDS_FLOOR = 1_000_000; // רצפת-USDS-אוצר — הראוטר לא מרוקן
+export const REV_MIN_CYCLE = 10_000;    // מתחת-לזה — אין-מחזור (עמלות-אבק נשארות)
+export const DYN_FEE_MIN_BPS = 4;       // עמלה-דינמית: רצפה
+export const DYN_FEE_MAX_BPS = 1_500;   // עמלה-דינמית: תקרה
+export const DYN_FEE_K = 4;             // fee = base + vol/4 (0.25bps-ל-bps-תנודה)
 
 export type FuelFunder = (typeof FUEL_FUNDERS)[number];
 /** ממנה-דלק מדורג (SETTLE-5/9): arena → treasury → operator.
@@ -78,6 +105,10 @@ export interface Pool {
   lp: number; // היצע µlp
   feeAccruedTreasury: number; // מדידה
   swaps: number;
+  // Task 54 · עמלים-דינמיים (V4-hooks/Bunni am-AMM): EWMA-תנודתיות-פר-בריכה
+  // + עמלה-מסתגלת 4..1500bps — מגן-LP מ-LVR. רשויות: תמונות-מצב-ישנות-בלעדיהן.
+  volBpsEwma?: number;
+  dynFeeBps?: number;
 }
 
 export interface JournalEntry {
@@ -103,6 +134,14 @@ export interface DexState {
   gasUsed: number;
   nextSeq: number;
   stats: { fills: number; swaps: number; opsTotal: number; ladders: number };
+  // ── Task 54 · כלכלה (רשויות-כולן: תמונות-מצב-ישנות-בלעדיהן = undefined) ──
+  ve?: Record<string, { amt: number; unlockH: number; weeks: number; atH: number }>; // עמדת-veSAOS-פר-חשבון
+  veVotes?: Record<string, string>;     // חשבון → בריכה-מוצבעת
+  veEpoch?: number;                     // מונה-אפוקים (עולה בפליפ)
+  rev?: { lastH: number; cycles: number; burnedMu: number; vePaidMu: number }; // מדידת-ראוטר
+  burnedSaos?: number;                  // ΣSAOS-שנשרף (דפלציוני-אמת)
+  bond?: { soldSaosMu: number; usdsInMu: number; count: number };
+  bondUserH?: Record<string, number>;   // cooldown-בונד-פר-חשבון
 }
 
 // ─── עזרי-מצב (שלמים-בלבד) ──────────────────────────────────────────────────
@@ -167,6 +206,11 @@ export function genesisState(): DexState {
     ladder: { refPrice: 2500, stepCostMu: 8_000, lifts: 0, lastLiftHeight: 0, spentMu: 0 },
     journal: [], gasUsed: 0, nextSeq: 1,
     stats: { fills: 0, swaps: 0, opsTotal: 0, ladders: 0 },
+    ve: {}, veVotes: {}, veEpoch: 0,
+    rev: { lastH: 0, cycles: 0, burnedMu: 0, vePaidMu: 0 },
+    burnedSaos: 0,
+    bond: { soldSaosMu: 0, usdsInMu: 0, count: 0 },
+    bondUserH: {},
   };
   // ארנקי-ג'נזיס (סימולציה ריבונית — כסף-ספר בלבד, כנות מלאה)
   const seed: Record<string, Record<string, number>> = {
@@ -228,6 +272,8 @@ export interface Op {
   orderId?: number;
   // בריכות
   pair?: string; assetIn?: Asset; minOut?: number; lp?: number; kind?: "x";
+  // veSAOS (Task 54)
+  weeks?: number;
   // עטיפות/רשימות/עדים/דלתות
   wrapAsset?: Asset; name?: string; refPrice?: number; claim?: string; memo?: string;
   at?: number;
@@ -257,6 +303,99 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
   };
 
   switch (op.type) {
+    case "ve_lock": {
+      // Task 54 · veSAOS (Aerodrome ve(3,3)): SAOS→כספת-ve, עמדה-אחת-פר-חשבון;
+      // הצטברות = מיזוג-עמדה + הארכת-unlock למקסימום. כוח-ve דועך-לינארית.
+      const a = op.asset, amt = op.amount ?? 0, weeks = Math.floor(op.weeks ?? 0);
+      if (a !== "SAOS") return { ok: false, err: "ve-saos-only", gas: 0 };
+      if (!(amt > 0)) return { ok: false, err: "bad-amount", gas: 0 };
+      if (!Number.isInteger(weeks) || weeks < VE_MIN_WEEKS || weeks > VE_MAX_WEEKS)
+        return { ok: false, err: "bad-weeks", gas: 0 };
+      if (avail(st, issuer, "SAOS") < amt) return { ok: false, err: "insufficient", gas };
+      const c = consume(); if (c) return c;
+      addBal(st, issuer, "SAOS", -amt);
+      addBal(st, VE_VAULT, "SAOS", amt);
+      const prev = st.ve?.[issuer];
+      const unlockFromWeeks = st.height + weeks * BLOCKS_PER_WEEK;
+      st.ve = {
+        ...(st.ve ?? {}),
+        [issuer]: {
+          amt: (prev?.amt ?? 0) + amt,
+          unlockH: Math.max(prev?.unlockH ?? 0, unlockFromWeeks),
+          weeks: Math.max(prev?.weeks ?? 0, weeks),
+          atH: st.height,
+        },
+      };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "ve_lock", note: `${amt}µ SAOS × ${weeks}w → ve` });
+      return { ok: true, gas };
+    }
+    case "ve_unlock": {
+      // פריקה — רק-אחרי-תום-הנעילה (fail-closed: הגובה הוא-החוק)
+      const pos = st.ve?.[issuer];
+      if (!pos) return { ok: false, err: "no-ve-position", gas: 0 };
+      if (st.height < pos.unlockH) return { ok: false, err: "ve-still-locked", gas: 0 };
+      const c = consume(); if (c) return c;
+      addBal(st, VE_VAULT, "SAOS", -pos.amt);
+      addBal(st, issuer, "SAOS", pos.amt);
+      const votes = { ...(st.veVotes ?? {}) }; delete votes[issuer];
+      st.veVotes = votes;
+      const veMap = { ...(st.ve ?? {}) }; delete veMap[issuer];
+      st.ve = veMap;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "ve_unlock", note: `${pos.amt}µ SAOS → free` });
+      return { ok: true, gas };
+    }
+    case "ve_vote": {
+      // הצבעת-גייג': קרן-התגמולים זורמת-לבריכות-שמוצבות (Aerodrome: 100%-דמי-הסוואפ
+      // למצביעים). משקל = כוח-ve-בשעת-הפליפ; הצבעה-חדשה דורסת-ישנה (עדכון-חופשי).
+      const pair = String(op.pair ?? "");
+      if (!st.pools[pair]) return { ok: false, err: "pool-not-found", gas: 0 };
+      if (!st.ve?.[issuer] || st.ve[issuer].amt <= 0) return { ok: false, err: "no-ve-position", gas: 0 };
+      const c = consume(); if (c) return c;
+      st.veVotes = { ...(st.veVotes ?? {}), [issuer]: pair };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "ve_vote", note: `→ ${pair}` });
+      return { ok: true, gas };
+    }
+    case "bond_buy": {
+      // Task 54 · BONDS-2.0 (Olympus-POL, נלמד-מהכשל): SAOS-אוצר בהנחת-3% מול-USDS;
+      // התמורה יורדת-לאוצר, ה-SAOS נכנס-ve-נעול-12שב' לקונה — נזילות-אוצר
+      // שאי-אפשר-למשוך + אפס-הדפסה (נמכר-רק-מהיתרה-האמת של-האוצר).
+      const usdsIn = Math.floor(op.amount ?? 0);
+      if (!(usdsIn >= BOND_MIN_USDS && usdsIn <= BOND_MAX_USDS)) return { ok: false, err: "bond-size", gas: 0 };
+      if (avail(st, issuer, "USDS") < usdsIn) return { ok: false, err: "insufficient", gas };
+      const last = st.bondUserH?.[issuer] ?? 0;
+      if (st.height - last < BOND_COOLDOWN) return { ok: false, err: "bond-cooldown", gas: 0 };
+      const pool = st.pools["SAOS/USDS"];
+      if (!pool || pool.ra <= 0) return { ok: false, err: "no-ref-pool", gas: 0 };
+      const price = Math.floor((pool.rb * 1000) / pool.ra); // µ-USDS ל-1µ-SAOS (×1000-סקאלה)
+      if (!(price > 0)) return { ok: false, err: "no-price", gas: 0 };
+      const saosOut = Math.floor((usdsIn * 1000 * 10_000) / (price * (10_000 - BOND_DISC_BPS)));
+      if (!(saosOut > 0)) return { ok: false, err: "bad-quote", gas: 0 };
+      if (bal(st, "treasury", "SAOS") < saosOut) return { ok: false, err: "treasury-empty", gas: 0 };
+      const c = consume(); if (c) return c;
+      addBal(st, issuer, "USDS", -usdsIn);
+      addBal(st, "treasury", "USDS", usdsIn);
+      addBal(st, "treasury", "SAOS", -saosOut);
+      addBal(st, VE_VAULT, "SAOS", saosOut);
+      const prev = st.ve?.[issuer];
+      const unlockFromWeeks = st.height + BOND_VE_WEEKS * BLOCKS_PER_WEEK;
+      st.ve = {
+        ...(st.ve ?? {}),
+        [issuer]: {
+          amt: (prev?.amt ?? 0) + saosOut,
+          unlockH: Math.max(prev?.unlockH ?? 0, unlockFromWeeks),
+          weeks: Math.max(prev?.weeks ?? 0, BOND_VE_WEEKS),
+          atH: st.height,
+        },
+      };
+      st.bond = {
+        soldSaosMu: (st.bond?.soldSaosMu ?? 0) + saosOut,
+        usdsInMu: (st.bond?.usdsInMu ?? 0) + usdsIn,
+        count: (st.bond?.count ?? 0) + 1,
+      };
+      st.bondUserH = { ...(st.bondUserH ?? {}), [issuer]: st.height };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "bond_buy", note: `${usdsIn}µ USDS → ${saosOut}µ SAOS (-3%, ve ${BOND_VE_WEEKS}w)` });
+      return { ok: true, gas };
+    }
     case "transfer":
     case "pay": {
       const a = op.asset, amt = op.amount ?? 0;
