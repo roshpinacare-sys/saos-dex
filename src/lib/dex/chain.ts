@@ -32,7 +32,7 @@ const CHART_CAP = 240;
 /** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
  * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
  * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
-export const CODE_VERSION = "saos-dex/1.13.0+settle14-price-truth";
+export const CODE_VERSION = "saos-dex/1.14.0+settle15-liquidity-hub";
 
 /** טבעת-דגימת-הדלק (SETTLE-5): {גובה, גז-מצטבר} לכל-בלוק, חלון-~400 בלוקים.
  * צריכת-השריפה-החלונית = (אחרון−ראשון)/(hאחרון−hראשון) — אמת-לרגע זה,
@@ -72,6 +72,7 @@ interface ChainRT {
   haltReason: string | null; // פורנזי — מה בדיוק נתפס (חשוף ב-API)
   version: number;
   cachedRoot: { h: number; root: string } | null; // FIX(SETTLE-9 perf): stateRoot-פר-גובה — getState פר-לקוח לא מחשב-מחדש O(state)
+  rejectedLast: { h: number; count: number; sample: string[] } | null; // FIX(SETTLE-15 silent-drop): ראית-דחיות-חיה
 }
 
 const g = globalThis as unknown as { __saosDexChain?: ChainRT };
@@ -287,13 +288,25 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   const st = rt.st;
   const ops = rt.mempool.splice(0, 160);
   let applied = 0;
+  let rejected = 0;
+  const rejSample: string[] = [];
   for (const op of ops) {
     const r = applyOp(st, op, t0);
     if (r.ok) {
       applied++;
       for (const ev of r.events ?? []) rt.tape.unshift({ ...ev, h: st.height });
       feedPriceOracle(rt, r.events, st.height); // SETTLE-14: עדות-מחיר-אמת מכל-מסחר
+    } else {
+      // FIX(SETTLE-15 silent-drop): דחייה-שקטה הייתה-חור-תפעולי-ישן ("queued" אך-
+      // נופלת-בבלוק-בלי-עדה). עכשיו: לוג-מדוד (דגימה-עד-5-פר-בלוק) — כל-דחייה
+      // נראית ב-dev.log עם-הסיבה, והמונה-החי-חשוף ב-getState.rejectedLast.
+      rejected++;
+      if (rejSample.length < 5) rejSample.push(`${op.type}(${(op as { issuer?: string }).issuer ?? "?"}):${r.err}`);
     }
+  }
+  if (rejected > 0) {
+    rt.rejectedLast = { h: st.height, count: rejected, sample: rejSample };
+    console.warn(`[saos-dex] block h${st.height}: ${rejected}/${ops.length} ops rejected — ${rejSample.join(" · ")}`);
   }
   rt.tape = rt.tape.slice(0, TAPE_CAP);
   // FIX(SETTLE-7 journal-bleed): st.journal הוא חלק-מה-DexState (ולכן מוטבע
@@ -378,6 +391,7 @@ export function ensureChain(): ChainRT {
     buildMsRolling: 0, opsPerSecRolling: 0, startedAt: Date.now(), lastBlockAt: 0,
     faucetAt: {}, dbOk: true, halted: false, haltReason: null, version: 1,
     cachedRoot: null,
+    rejectedLast: null,
   };
   g.__saosDexChain = rt;
   // אתחול-אסינכרוני: תמונת-מצב → אחרת ג'נזיס; אחר-כך טיימר
@@ -656,11 +670,21 @@ export function getState() {
     dbOk: rt.dbOk,
     halted: rt.halted === true, // חשיפה-תפעולית: מצב-fail-fast נראה-ב-System Health
     haltReason: rt.haltReason ?? null, // פורנזי: מקור-ה-ALERT (מה בדיוק נתפס)
+    rejectedLast: rt.rejectedLast, // SETTLE-15: אפס-דחיות-שקטות — הסיבה-חיה
     tickMs: TICK_MS,
     sealEvery: SEAL_EVERY,
     nextSealIn: SEAL_EVERY - (st.height % SEAL_EVERY),
     backing: st.backing,
     assets: st.assets,
+    // SETTLE-15: מקור-הנזיל-שמכניס-מהכל — פנקס-ההכנסה-החי (כנות: הכל-נמדד)
+    income: {
+      poolFeesMu: Object.values(st.pools).reduce((s, p) => s + p.feeAccruedTreasury, 0),
+      feeMeterMu: st.feeMeter,
+      treasuryProfitMu: st.treasuryProfit,
+      ladderSpentMu: st.ladder?.spentMu ?? 0,
+      backingWsteemMu: st.backing["WSTEEM"] ?? 0,
+      hub: "USDS", // כל-ראוטר-דרך-האב משלם 30bps → 30% לאוצר
+    },
   };
 }
 

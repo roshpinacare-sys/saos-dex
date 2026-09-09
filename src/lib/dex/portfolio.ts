@@ -19,13 +19,30 @@ import path from "path";
 import { getLiveState, getPools } from "./chain";
 import { getPool, poolMid } from "./amm";
 import { ASSETS } from "./kernel";
+import { routableMap, type RouteTier, LP_PREFIX } from "./router";
 
 const ANCHORS_FILE = path.join(process.cwd(), "state", "anchors.json");
+
+/** FIX(SETTLE-15 price-truth-2): טוקן-LP אינו "מטבע-לא-שווה" — הוא חלק-יחסי
+ * מהרזרבות. המפעיל-ראה "צמודים-מוזרים-חסרי-שווי" בתיקייה-השנייה (LP|SAOS/USDS
+ * וכד') במחיר-0 שקרי. עכשיו: תמחור-אמת — חלק-יחסי מ-Σ(רזרבה×מחיר-נזיל).
+ * מחיר-מוחזר: µ-USDS ל-1µ-LP (×1000 — עקבי-עם-הקונבנציה של valueUsdsMu). */
+function lpPriceUsdsMu(lpAsset: string): number {
+  const key = lpAsset.slice(3); // "LP|"
+  const st = getLiveState();
+  const p = getPool(st, key);
+  if (!p || p.lp <= 0) return 0;
+  const pa = usdsPriceOf(p.a);
+  const pb = usdsPriceOf(p.b);
+  const total = Math.floor((p.ra * pa) / 1000) + Math.floor((p.rb * pb) / 1000);
+  return Math.floor((total * 1000) / p.lp);
+}
 
 /** מחיר-נכס ב-µ-USDS ל-1-יחידה-בסיס: בריכה-ישירה ל-USDS → דרך-SAOS → refPrice. */
 export function usdsPriceOf(asset: string): number {
   const st = getLiveState();
   if (asset === "USDS") return 1000;
+  if (asset.startsWith("LP|")) return lpPriceUsdsMu(asset);
   const direct = getPool(st, [asset, "USDS"].sort().join("/"));
   if (direct) return poolMid(direct);
   const viaSaos = getPool(st, [asset, "SAOS"].sort().join("/"));
@@ -46,7 +63,7 @@ export interface PortfolioBook {
   balances: Record<string, number>; // µ
   credits: number;
   valueUsdsMu: number;
-  lines: { asset: string; amountMu: number; price: number; valueUsdsMu: number }[];
+  lines: { asset: string; amountMu: number; price: number; valueUsdsMu: number; tier: RouteTier | "lp"; tierNote: string }[];
 }
 
 export interface ExternalIdentity {
@@ -63,7 +80,7 @@ export interface PortfolioView {
   honesty: string;
 }
 
-function bookOf(name: string, role: string, accounts: string[]): PortfolioBook {
+function bookOf(name: string, role: string, accounts: string[], tiers: Map<string, { tier: RouteTier; routeDesc: string }>): PortfolioBook {
   const st = getLiveState();
   const balances: Record<string, number> = {};
   let credits = 0;
@@ -81,7 +98,17 @@ function bookOf(name: string, role: string, accounts: string[]): PortfolioBook {
     const price = usdsPriceOf(a);
     const v = valueUsdsMu(price, mu);
     totalUsds += v;
-    lines.push({ asset: a, amountMu: mu, price, valueUsdsMu: v });
+    // SETTLE-15: טירון-נזילות כנה לכל-שורה — המפעיל-רואה מה-ראוטר-ביל ומה-לא
+    let tier: RouteTier | "lp" = "none";
+    let tierNote = "אין-מסלול-מבצע — רצפת-refPrice בלבד";
+    if (a.startsWith(LP_PREFIX)) {
+      tier = "lp";
+      tierNote = "טוקן-LP — חלק-יחסי מרזרבות-הבריכה; ניתן-לפדות ב-pool_rmw";
+    } else {
+      const t = tiers.get(a);
+      if (t) { tier = t.tier; tierNote = t.routeDesc; }
+    }
+    lines.push({ asset: a, amountMu: mu, price, valueUsdsMu: v, tier, tierNote });
   }
   lines.sort((x, y) => y.valueUsdsMu - x.valueUsdsMu);
   return { name, role, balances, credits, valueUsdsMu: totalUsds, lines };
@@ -107,9 +134,11 @@ function externalIdentities(): ExternalIdentity[] {
 export function getPortfolio(): PortfolioView {
   const prices: Record<string, number> = {};
   for (const a of ASSETS) prices[a] = usdsPriceOf(a);
+  const tiers = new Map<string, { tier: RouteTier; routeDesc: string }>();
+  for (const r of routableMap()) tiers.set(r.asset, { tier: r.tier, routeDesc: r.routeDesc });
   const books: PortfolioBook[] = [
-    bookOf("core", "עתודת-הליבה: treasury+operator+arena", ["treasury", "operator", "arena"]),
-    bookOf("portfolio-b", "התיקייה-השנייה (SETTLE-12, הופעלה בהעברה-חופשית)", ["portfolio-b"]),
+    bookOf("core", "עתודת-הליבה: treasury+operator+arena", ["treasury", "operator", "arena"], tiers),
+    bookOf("portfolio-b", "התיקייה-השנייה (SETTLE-12, הופעלה בהעברה-חופשית)", ["portfolio-b"], tiers),
   ];
   const totalUsdsMu = books.reduce((s, b) => s + b.valueUsdsMu, 0);
   return {
