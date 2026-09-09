@@ -89,7 +89,7 @@ interface Walk { to: string; inMu: number; legs: RouteLeg[] }
 
 /** פסיעה-על-גרף-הבריכות+מסדרון-העיגון: כל-המסלולים-עד-MAX_LEGS, סימולציה-שלמים.
  * מופשט-מכאן-כדי-ש-quoteRoute ו-quoteSplit ישתמשו-באותה-מתמטיקה-בדיוק. */
-function walkRoutes(assetIn: string, assetOut: string, amountInMu: number): Walk[] {
+export function walkRoutes(assetIn: string, assetOut: string, amountInMu: number): Walk[] {
   const st = getLiveState();
   if (!(amountInMu > 0) || !ASSETS.includes(assetIn as never) || !ASSETS.includes(assetOut as never) || assetIn === assetOut) return [];
 

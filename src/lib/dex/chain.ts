@@ -23,12 +23,14 @@ import { railSummary, bindLiveState } from "./rail";
 import { milestoneSummary } from "./milestone";
 import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX } from "./amm";
 import { sortBook } from "./book";
+import { dcaTick, trigTick } from "./triggers";
 
 export const TICK_MS = 3_000;
 const SEAL_EVERY = 12;   // checkpoint כל-12 בלוקים (CHAIN_SPEC)
 const GC_EVERY = 8;
 const SNAPSHOT_EVERY = 16;
 const LADDER_EVERY = 24;
+const PRICE_SEAL_EVERY = 400; // Task 56 · חותם-אמינות-מחיר כל-400-בלוקים (~20 דק')
 const TAPE_CAP = 600;
 const CHART_CAP = 240;
 
@@ -129,6 +131,21 @@ async function loadSnapshot(rt: ChainRT): Promise<boolean> {
         const a = o.side === "sell" ? o.base : o.quote;
         const w = (orderLocks[o.owner] = orderLocks[o.owner] ?? {});
         w[a] = (w[a] ?? 0) + o.lockMu;
+      }
+      // FIX(Task 56): תוכניות-DCA וטריגרים מחזיקים-ערבות-אמת (הפקדה-מלאה) —
+      // בלעדיהן כאן, הפיוס היה מוחק-את-הנעילות-שלהן בכל-טעינה = כסף-מובטח-שנעלם.
+      for (const p of Object.values(rt.st.dca ?? {})) {
+        if (!(p.remainingMu > 0)) continue;
+        const w = (orderLocks[p.owner] = orderLocks[p.owner] ?? {});
+        w[p.assetIn] = (w[p.assetIn] ?? 0) + p.remainingMu;
+      }
+      for (const t of Object.values(rt.st.trig ?? {})) {
+        const a = t.side === "sell" ? t.base : t.quote;
+        const effPx = t.limitPx > 0 ? t.limitPx : t.triggerPx;
+        const mu = t.side === "sell" ? t.amountMu : notional(effPx, t.amountMu);
+        if (!(mu > 0)) continue;
+        const w = (orderLocks[t.owner] = orderLocks[t.owner] ?? {});
+        w[a] = (w[a] ?? 0) + mu;
       }
       const reconciled: string[] = [];
       for (const [who, wallet] of Object.entries(rt.st.locked)) {
@@ -327,6 +344,32 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   // Task 54 · הטיק-הכלכלי הקנוני: revenue-router (קנייה-ושריפה) + אפוק-פליפ-ve —
   // גובה-טריגר-טהור (אפס-שעון/רנדומליות) → ריפליי דטרמיניסטי.
   economyTick(st);
+
+  // Task 56 · מסחר-אוטומטי-חסר-קיפרים: DCA-פריסה + טריגרים (stop/take) —
+  // בונה-הבלוקים הוא ה-keper: הטיקים מבצעים applyOp ישירות-על-המצב (אטומי,
+  // סינכרוני, ללא-ממפול) והמסחר-שנוצר נכנס לטייפ ולעדות-המחיר-אמת.
+  {
+    const exec = (op: Op) => applyOp(st, op, t0);
+    const progEvents = [...dcaTick(st, exec), ...trigTick(st, exec)];
+    for (const ev of progEvents) rt.tape.unshift({ ...ev, h: st.height });
+    feedPriceOracle(rt, progEvents.length > 0 ? progEvents : undefined, st.height);
+    if (progEvents.length > 0) rt.tape = rt.tape.slice(0, TAPE_CAP);
+  }
+
+  // Task 56 · חותם-אמינות-מחיר (price-credibility seal): כל-400-בלוקים —
+  // תמונת-קנונית-שלמים (mid/טוויאפ/רף/עומק-1%) נחתמת-כקבלה-משורשרת-האש
+  // (חוץ-מצב — לא-נוגע-בריפליי; הראייה חיה-ב-DB-וב-/api/dex/price-proof).
+  if (st.height > 0 && st.height % PRICE_SEAL_EVERY === 0) {
+    const truth = priceTruthFor(rt, "SAOS", "USDS");
+    const saosPool = st.pools["SAOS/USDS"];
+    const mid = saosPool ? poolMid(saosPool) : 0;
+    pushReceipt(rt, "price-seal", {
+      h: st.height, mid, ref: st.ladder.refPrice,
+      twap: truth?.twap ?? 0, twapSamples: truth?.samples ?? 0,
+      backingWsteemMu: st.backing["WSTEEM"] ?? 0,
+      note: "price-credibility-seal",
+    });
+  }
 
   st.height++;
   // FIX(SETTLE-9 perf): stateRoot חושב-פעמיים-פר-בלוק (hash בלוק + כתיבת-DB) —

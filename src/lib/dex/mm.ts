@@ -116,8 +116,25 @@ const arenaRearm = { saos: 0, usds: 0, wsteem: 0 };
 
 type PushOp = (op: Op) => void;
 
-function submit(rt: Map<string, SoldierRT>, soldier: string, op: Omit<Op, "issuer" | "nonce">, pushOp: PushOp): void {
-  const r = rt.get(soldier) ?? { nonceSeq: 0, fills: 0, takes: 0 };
+/** FIX(Task 56 replay-storm): אחרי-טעינת-תמונת-מצב, st.nonces מכיל אלפי-נונסים
+ * `a<N>` של-החיילים-מהריצות-הקודמות; RT-רץ-חדש התחיל מ-seq=0 והתנגש-בכולם
+ * (replay-rejected המוני עד-שה-seq עובר-את-החלון). הפתרון: בעת-יצירת-RT לחייל,
+ * נזרע-seq מעל-המקסימום-הקיים-בחלון-הנונסים — התנגשות-אפסית מהטיק-הראשון. */
+function seedNonceSeq(st: DexState, soldier: string): number {
+  let max = 0;
+  const prefix = `${soldier}:a`;
+  for (let i = st.nonces.length - 1; i >= 0 && i >= st.nonces.length - 2000; i--) {
+    const n = st.nonces[i];
+    if (n.startsWith(prefix)) {
+      const v = parseInt(n.slice(prefix.length), 10);
+      if (Number.isFinite(v) && v > max) max = v;
+    }
+  }
+  return max;
+}
+
+function submit(rt: Map<string, SoldierRT>, st: DexState | null, soldier: string, op: Omit<Op, "issuer" | "nonce">, pushOp: PushOp): void {
+  const r = rt.get(soldier) ?? { nonceSeq: st ? seedNonceSeq(st, soldier) : 0, fills: 0, takes: 0 };
   r.nonceSeq++;
   rt.set(soldier, r);
   pushOp({ ...op, issuer: soldier, nonce: `a${r.nonceSeq}` } as Op);
@@ -358,7 +375,7 @@ export function arenaTick(
           const stillGood = d && d.side === o.side &&
             Math.abs(((fair - o.price) / fair) * 10_000) <= params.requoteBps + params.spreadBps;
           if (!stillGood) {
-            if (o.live) submit(rt, soldier, { type: "cancel", orderId: o.id }, pushOp);
+            if (o.live) submit(rt, st, soldier, { type: "cancel", orderId: o.id }, pushOp);
           } else {
             desired.delete(o.price);
           }
@@ -373,7 +390,7 @@ export function arenaTick(
           const lockAsset = d.side === "sell" ? m.base : m.quote;
           const lockMu = d.side === "sell" ? size : notional(d.px, size);
           if (lockMu <= 0 || avail(st, soldier, lockAsset) < lockMu) continue;
-          submit(rt, soldier, {
+          submit(rt, st, soldier, {
             type: "order", base: m.base, quote: m.quote, side: d.side,
             price: d.px, amount: size,
           }, pushOp);
@@ -393,14 +410,14 @@ export function arenaTick(
         const edgeBps = Math.floor(((fair - bestAsk.price) / bestAsk.price) * 10_000) - FEE_BPS;
         if (edgeBps >= params.minEdgeBps) {
           const qty = Math.min(bestAsk.amount - bestAsk.filled, 150_000);
-          submit(rt, taker, { type: "fill", base: m.base, quote: m.quote, side: "buy", amount: qty, market: true }, pushOp);
+          submit(rt, st, taker, { type: "fill", base: m.base, quote: m.quote, side: "buy", amount: qty, market: true }, pushOp);
         }
       }
       if (bestBid) {
         const edgeBps = Math.floor(((bestBid.price - fair) / fair) * 10_000) - FEE_BPS;
         if (edgeBps >= params.minEdgeBps) {
           const qty = Math.min(bestBid.amount - bestBid.filled, 150_000);
-          submit(rt, taker, { type: "fill", base: m.base, quote: m.quote, side: "sell", amount: qty, market: true }, pushOp);
+          submit(rt, st, taker, { type: "fill", base: m.base, quote: m.quote, side: "sell", amount: qty, market: true }, pushOp);
         }
       }
     }
@@ -423,20 +440,20 @@ export function arenaTick(
         const affordable = px > 0 ? Math.floor((avail(st, bot, assetHave) * 9) / (px * 10)) : 0;
         const qty = Math.min(25_000 + (tick % 5) * 10_000, affordable);
         if (qty > 0) {
-          submit(rt, bot, { type: "fill", base: m.base, quote: m.quote, side, amount: qty, market: true }, pushOp);
+          submit(rt, st, bot, { type: "fill", base: m.base, quote: m.quote, side, amount: qty, market: true }, pushOp);
         }
       } else if (roll < 6) {
         // היגיינת-פקודות לבוטים: בוט מחזיק עד-פקודת-רעש אחת פר-זוג — ישנות מבוטלות.
         // בלי-זה הבוטים צוברים פקודות-מנוחה שנועלות-את-כל-המלאי עד order-cap והזרימה מתה.
         for (const o of st.orders) {
           if (o.live && o.owner === bot && o.base === m.base && o.quote === m.quote) {
-            submit(rt, bot, { type: "cancel", orderId: o.id }, pushOp);
+            submit(rt, st, bot, { type: "cancel", orderId: o.id }, pushOp);
           }
         }
         const px = Math.floor((fair * (10_000 + (roll === 3 ? 40 : -40))) / 10_000);
         const side: "buy" | "sell" = roll === 4 ? "sell" : "buy";
         const amt = 20_000 + (tick % 7) * 8_000;
-        submit(rt, bot, { type: "order", base: m.base, quote: m.quote, side, price: px, amount: amt }, pushOp);
+        submit(rt, st, bot, { type: "order", base: m.base, quote: m.quote, side, price: px, amount: amt }, pushOp);
       } else {
         const p = getPool(st, poolKey(m.base, m.quote));
         if (p) {
@@ -444,7 +461,7 @@ export function arenaTick(
           // 2/3 קניות-בסיס). זרימה-חד-צדדית קטנה-אך-מתמדת היא-הרמת-מחיר,
           // לא-גילוי-מחיר. זוגיות-טיק = איזון-מושלם שתי-הכיוונים.
           const assetIn = tick % 2 === 0 ? p.a : p.b;
-          submit(rt, bot, { type: "pool_swap", pair: poolKey(p.a, p.b), assetIn, amount: 15_000 + (tick % 5) * 5_000 }, pushOp);
+          submit(rt, st, bot, { type: "pool_swap", pair: poolKey(p.a, p.b), assetIn, amount: 15_000 + (tick % 5) * 5_000 }, pushOp);
         }
       }
     }

@@ -49,6 +49,11 @@ export const GAS_TABLE = {
   ve_unlock: 30, // פריקה-אחרי-תום-התקופה
   ve_vote: 20,   // הצבעת-גייג' — לאיזו בריכה זורמת קרן-התגמולים
   bond_buy: 80,  // BONDS-2.0 — קניית-SAOS-בהנחה-3%, נעול-ve-12שב' (Olympus-POL בלי-מלכודת-ההדפסה)
+  // ── Task 56 · מסחר-אוטומטי-חסר-קיפרים (GMX TP/SL בלי-keepers · Jupiter DCA) ──
+  dca_create: 40,  // תוכנית-DCA: הפקדה-מלאה-מראש, פרוסה-אוטומטית-כל-K-בלוקים
+  dca_cancel: 15,  // ביטול-תוכנית + שחרור-יתרה-נעולה
+  trig_order: 60,  // פקודת-טריגר (stop/take): נחתמת-עצמאית-מול-המחיר-הקנוני
+  trig_cancel: 15, // ביטול-טריגר + שחרור-ערבות
 } as const;
 
 export type OpKind = keyof typeof GAS_TABLE;
@@ -148,6 +153,38 @@ export interface DexState {
   bond?: { soldSaosMu: number; usdsInMu: number; count: number };
   bondUserH?: Record<string, number>;   // cooldown-בונד-פר-חשבון
   ale?: { lastH: number; cycles: number; seededMu: number; seeds: number; polBaseUsdsMu: number }; // ALE-מדידה (רשויות: תמונות-מצב-ישנות-בלעדיהן)
+  // ── Task 56 · מסחר-אוטומטי (רשויות: תמונות-מצב-ישנות-בלעדיהן = undefined) ──
+  dca?: Record<string, DcaProgram>;   // תוכניות-DCA חיות
+  trig?: Record<string, TrigOrder>;   // פקודות-טריגר חיות
+  dcaSeq?: number;                    // מונה-תוכניות
+  trigSeq?: number;                   // מונה-טריגרים
+}
+
+/** Task 56 · תוכנית-DCA (Jupiter/Brink): הפקדה-מלאה-מראש (נעולה), פרוסה-אוטומטית
+ * דרך-הראוטר כל-everyK-בלוקים — ה-keper הוא-בונה-הבלוקים-עצמו (אפס-תשתית-חוץ). */
+export interface DcaProgram {
+  id: string; owner: string;
+  assetIn: string; assetOut: string;
+  perSliceMu: number;     // גודל-פרוסה (µ)
+  remainingMu: number;     // יתרה-לפרוס (µ) — נעולה-מראש-על-הבעלים
+  everyK: number;          // פרוסה-כל-K-בלוקים
+  minOutBps: number;       // מגן-סטייה-לכל-רגל (bps)
+  lastH: number;           // גובה-הפרוסה-האחרונה (0=טרם-פרסה)
+  done: number;            // פרוסות-שבוצעו
+  slicesMax: number;       // תקרת-פרוסות (ביטחון)
+  atH: number;             // גובה-יצירה
+}
+
+/** Task 56 · פקודת-טריגר (GMX TP/SL): נעולה-מראע, נסרקת-כל-בלוק-מול-המחיר
+ * הקנוני (mid-בריכה); בטריגר → הופכת-פקודת-לימיט-חוצת-ספר (taker-first). */
+export interface TrigOrder {
+  id: string; owner: string;
+  base: string; quote: string; side: "buy" | "sell";
+  triggerPx: number;       // מחיר-הטריגר (µ-ציטוט)
+  limitPx: number;         // מחיר-לימיט-בביצוע (0 → triggerPx)
+  amountMu: number;        // כמות-בסיס (µ)
+  expiresH: number;        // 0=ללא-תפוגה
+  atH: number;
 }
 
 // ─── עזרי-מצב (שלמים-בלבד) ──────────────────────────────────────────────────
@@ -217,6 +254,7 @@ export function genesisState(): DexState {
     burnedSaos: 0,
     bond: { soldSaosMu: 0, usdsInMu: 0, count: 0 },
     bondUserH: {},
+    dca: {}, trig: {}, dcaSeq: 1, trigSeq: 1,
   };
   // ארנקי-ג'נזיס (סימולציה ריבונית — כסף-ספר בלבד, כנות מלאה)
   const seed: Record<string, Record<string, number>> = {
@@ -283,6 +321,10 @@ export interface Op {
   // עטיפות/רשימות/עדים/דלתות
   wrapAsset?: Asset; name?: string; refPrice?: number; claim?: string; memo?: string;
   at?: number;
+  // Task 56 · מסחר-אוטומטי
+  progId?: string;      // dca_cancel
+  everyK?: number; perSlice?: number; slicesMax?: number; minOutBps?: number; // dca_create
+  triggerPx?: number; limitPx?: number; expiresH?: number;                    // trig_order
   // דבר-גורר-דבר (SETTLE-12): תתי-ops של batch — כל-תת-op חייב-issuer זהה למנפיק-ה-batch
   ops?: Op[];
 }
@@ -402,6 +444,88 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "bond_buy", note: `${usdsIn}µ USDS → ${saosOut}µ SAOS (-3%, ve ${BOND_VE_WEEKS}w)` });
       return { ok: true, gas };
     }
+    case "dca_create": {
+      // Task 56 · DCA (Jupiter/Brink): הפקדה-מלאה-מראע → נעילה-על-הבעלים;
+      // הפריסה-עצמה קורית-ב-dcaTick (chain.ts) — פרוסות-דרך-הראוטר במסגרת
+      // batch אטומי עם-מגן-minOut לכל-רגל. הבלוק-בילדר הוא-ה-keper.
+      // FIX(Task 56): applyOp מנרמל op.to לאותיות-קטנות (עבור-נמענים) — כאן `to`
+      // הוא קוד-נכס ולכן מנרמל-חזרה לאותיות-גדולות (USDS/SAOS/WSTEEM).
+      const assetIn = op.asset, assetOut = String(op.to ?? "").toUpperCase();
+      const perSlice = Math.floor(op.perSlice ?? 0);
+      const amount = perSlice * Math.floor(op.slicesMax ?? 0);
+      const everyK = Math.floor(op.everyK ?? 0);
+      const slicesMax = Math.floor(op.slicesMax ?? 0);
+      const minOutBps = Math.floor(op.minOutBps ?? 100);
+      if (!assetIn || !ASSETS.includes(assetIn)) return { ok: false, err: "bad-asset", gas: 0 };
+      if (!ASSETS.includes(assetOut as Asset) || assetOut === assetIn) return { ok: false, err: "bad-asset-out", gas: 0 };
+      if (!(perSlice > 0) || !(slicesMax >= 1) || slicesMax > 200) return { ok: false, err: "bad-slice", gas: 0 };
+      if (!Number.isInteger(everyK) || everyK < 1 || everyK > 10_000) return { ok: false, err: "bad-everyk", gas: 0 };
+      if (!(minOutBps >= 0) || minOutBps > 2_000) return { ok: false, err: "bad-minout", gas: 0 };
+      if (!(amount > 0)) return { ok: false, err: "bad-amount", gas: 0 };
+      if (Object.keys(st.dca ?? {}).filter((k) => st.dca?.[k]?.owner === issuer).length >= 8)
+        return { ok: false, err: "dca-cap", gas: 0 };
+      if (avail(st, issuer, assetIn) < amount) return { ok: false, err: "insufficient", gas: 0 };
+      const c = consume(); if (c) return c;
+      addLock(st, issuer, assetIn, amount); // הפקדה-מלאה-מראע — נעולה-עד-ביטול/גמר
+      const id = `dca-${st.dcaSeq ?? 1}`;
+      st.dcaSeq = (st.dcaSeq ?? 1) + 1;
+      st.dca = { ...(st.dca ?? {}), [id]: { id, owner: issuer, assetIn, assetOut, perSliceMu: perSlice, remainingMu: amount, everyK, minOutBps, lastH: 0, done: 0, slicesMax, atH: st.height } };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "dca_create", note: `${id}: ${amount}µ ${assetIn}→${assetOut}, ${perSlice}µ/פרוסה כל-${everyK}-בלוקים` });
+      return { ok: true, gas };
+    }
+    case "dca_cancel": {
+      const pid = String(op.progId ?? "");
+      const prog = st.dca?.[pid];
+      if (!prog) return { ok: false, err: "program-not-found", gas: 0 };
+      if (prog.owner !== issuer) return { ok: false, err: "not-owner", gas: 0 };
+      const c = consume(); if (c) return c;
+      if (prog.remainingMu > 0) addLock(st, issuer, prog.assetIn, -prog.remainingMu); // שחרור-יתרה
+      const dcaMap = { ...(st.dca ?? {}) }; delete dcaMap[pid]; st.dca = dcaMap;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "dca_cancel", note: `${pid} בוטל, הוחזרו ${prog.remainingMu}µ ${prog.assetIn}` });
+      return { ok: true, gas };
+    }
+    case "trig_order": {
+      // Task 56 · טריגר (GMX TP/SL חסר-קיפרים): נעילה-מלאה-מראע כמו-פקודת-לימיט;
+      // הסריקה-כל-בלוק-מול-המחיר-הקנוני; בטריגר → פקודת-לימיט-חוצת-ספר.
+      const side = op.side;
+      const base = op.base, quote = op.quote;
+      const triggerPx = Math.floor(op.triggerPx ?? 0);
+      const limitPx = Math.floor(op.limitPx ?? 0);
+      const amt = Math.floor(op.amount ?? 0);
+      const expiresH = Math.floor(op.expiresH ?? 0);
+      if ((side !== "buy" && side !== "sell") || !ASSETS.includes(base as Asset) || !ASSETS.includes(quote as Asset) || base === quote)
+        return { ok: false, err: "bad-order-params", gas: 0 };
+      if (!(triggerPx > 0) || !(amt > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
+      if (limitPx < 0) return { ok: false, err: "bad-limit", gas: 0 };
+      if (expiresH < 0) return { ok: false, err: "bad-expiry", gas: 0 };
+      const lockAsset = (side === "sell" ? base : quote) as string;
+      const effPx = limitPx > 0 ? limitPx : triggerPx;
+      const lockMu = side === "sell" ? amt : notional(effPx, amt);
+      if (!(lockMu > 0)) return { ok: false, err: "bad-lock", gas: 0 };
+      if (Object.keys(st.trig ?? {}).filter((k) => st.trig?.[k]?.owner === issuer).length >= 24)
+        return { ok: false, err: "trig-cap", gas: 0 };
+      if (avail(st, issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
+      const c = consume(); if (c) return c;
+      addLock(st, issuer, lockAsset, lockMu);
+      const id = `trg-${st.trigSeq ?? 1}`;
+      st.trigSeq = (st.trigSeq ?? 1) + 1;
+      st.trig = { ...(st.trig ?? {}), [id]: { id, owner: issuer, base: base as string, quote: quote as string, side, triggerPx, limitPx, amountMu: amt, expiresH, atH: st.height } };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "trig_order", note: `${id}: ${side} ${amt}µ ${base} @${triggerPx}${limitPx > 0 ? ` lim ${limitPx}` : ""}` });
+      return { ok: true, gas };
+    }
+    case "trig_cancel": {
+      const tid = String(op.progId ?? "");
+      const trg = st.trig?.[tid];
+      if (!trg) return { ok: false, err: "trigger-not-found", gas: 0 };
+      if (trg.owner !== issuer) return { ok: false, err: "not-owner", gas: 0 };
+      const c = consume(); if (c) return c;
+      const lockAsset = trg.side === "sell" ? trg.base : trg.quote;
+      const effPx = trg.limitPx > 0 ? trg.limitPx : trg.triggerPx;
+      addLock(st, issuer, lockAsset, -(trg.side === "sell" ? trg.amountMu : notional(effPx, trg.amountMu)));
+      const trigMap = { ...(st.trig ?? {}) }; delete trigMap[tid]; st.trig = trigMap;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "trig_cancel", note: `${tid} בוטל, ערבה שוחררה` });
+      return { ok: true, gas };
+    }
     case "transfer":
     case "pay": {
       const a = op.asset, amt = op.amount ?? 0;
@@ -442,9 +566,13 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (sub.some((s) => !s || s.type === "batch" || Array.isArray(s.ops))) return { ok: false, err: "batch-nesting-forbidden", gas: 0 };
       const trial = structuredClone(st) as DexState;
       let failedAt = -1; let failErr = "";
+      // FIX(Task 56): אירועי-מסחר של תתי-ops נאספים-ומוחזרים — בלי-זה מסחר-אמת
+      // (DCA/ראוטר) לא-נכנס-לטייפ ולעדות-המחיר (feedPriceOracle) — עדות-נעלמת.
+      const evs: TradeEvent[] = [];
       for (let i = 0; i < sub.length; i++) {
         const r = applyOp(trial, { ...sub[i], issuer }, nowMs); // issuer-pinned — הזהות של-החותם
         if (!r.ok) { failedAt = i; failErr = r.err; break; }
+        if (r.events) evs.push(...r.events);
       }
       if (failedAt >= 0) return { ok: false, err: `batch-atomic-fail@${failedAt}:${failErr}`, gas: 0 };
       // בדיקת-התעשרות-עצמית — על-העותק, לפני-האימוץ (fail-closed נקי: דחייה
@@ -456,7 +584,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       Object.assign(st, trial); // אימוץ-אטומי — אותו-אובייקט-זהות (ה-WeakMap של-ה-nonces נשאר-מכוון)
       nonceSets.set(st, new Set(st.nonces)); // סנכרון-מדד-ה-dedupe-מול-ה-nonces-המאומצים
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "batch", note: `${sub.length} ops atomic` });
-      return { ok: true, gas: 0 };
+      return { ok: true, gas: 0, events: evs };
     }
     case "refuel": {
       // THE-REFUEL (114): חיות-כלכלית מתמדת — ממני-הדלק (FUEL_FUNDERS: אוצר +
