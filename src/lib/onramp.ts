@@ -16,6 +16,7 @@ import { fleetStatusPublic } from "./dex/fleet";
 
 const HIVE_NODE = "https://api.hive.blog"; // מקובע-ב-fence (PINNED_HOSTS)
 const HE_NODE = "https://api.hive-engine.com/rpc/contracts"; // מקובע-ב-fence · מסלול-החוזות-המלא
+const STEEM_NODE = "https://api.steemit.com"; // מקובע-ב-fence — הרשת-הראשית-של-headcorner
 const HEAD_ACCOUNT = "headcorner";
 const RC_OP_COST = 200_000_000; // עלות-op-מדודה (199M) + מרווח — אותו-סף-כמו-הצי
 const TTL_MS = 10 * 60_000;
@@ -46,6 +47,7 @@ export interface OnrampSummary {
   stale: boolean;
   accounts: OnrampAccount[];
   tokens: OnrampTokenRow[];
+  steemHead: { account: string; steem: number; sbd: number; sp: number; vestShares: number } | null;
   totals: {
     liquidHive: number;
     hbd: number;
@@ -147,6 +149,28 @@ async function readTokens(names: string[]): Promise<OnrampTokenRow[]> {
   }
 }
 
+/** Task 54 · מדידת-STEEM-חיה של-headcorner (הרשת-הראשית של-המפעיל) —
+ * קריאה-ציבורית-חסרת-מפתחות; כנות-מלאה: מה שיש-בשרשרת, בלי-שום-הערכה. */
+async function readSteemHead(): Promise<OnrampSummary["steemHead"]> {
+  try {
+    const r = await rpc<{ result?: Array<Record<string, string>> }>(STEEM_NODE, {
+      jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [[HEAD_ACCOUNT]], id: 1,
+    });
+    const a = (r.result ?? []).find((x) => x.name === HEAD_ACCOUNT);
+    if (!a) return null;
+    const vest = num(a.vesting_shares);
+    return {
+      account: HEAD_ACCOUNT,
+      steem: num(a.balance),
+      sbd: num(a.sbd_balance),
+      sp: vest / 1e6,
+      vestShares: vest,
+    };
+  } catch {
+    return null; // STEEM-RPC-לא-זמין — לא-חוסם (כנות: השדה נעלם, לא מאולף)
+  }
+}
+
 export async function onrampSnapshot(force = false): Promise<OnrampSummary> {
   const m = rt();
   if (!force && m.data && Date.now() - m.at < TTL_MS) {
@@ -158,7 +182,9 @@ export async function onrampSnapshot(force = false): Promise<OnrampSummary> {
   } catch { /* צי-לא-חשוף-בזה-התהליך — רשימה-קנונית */ }
   const names = [...new Set([...(fleetNames.length ? fleetNames : FALLBACK_ACCOUNTS), HEAD_ACCOUNT])];
 
-  const [accts, tokens] = await Promise.all([readAccounts(names), readTokens(names)]);
+  const [accts, tokens, steemHead] = await Promise.all([
+    readAccounts(names), readTokens(names), readSteemHead(),
+  ]);
   const accounts = names.filter((n) => accts.has(n)).map((n) => accts.get(n)!);
   const totals = {
     liquidHive: accounts.reduce((s, a) => s + a.liquidHive, 0),
@@ -172,6 +198,7 @@ export async function onrampSnapshot(force = false): Promise<OnrampSummary> {
     stale: false,
     accounts,
     tokens,
+    steemHead,
     totals,
     tapNow: [
       { what: `עיגון-ריבוני-חינם: ~${totals.anchorCapacityPerDay} אבני-דרך/יום (RC-regen ÷ 200M)`, how: "מופעל-כבר-אוטומטית — THE-MILESTONE מעגן-את-P&L על-Hive" },

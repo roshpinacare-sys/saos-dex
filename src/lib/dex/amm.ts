@@ -5,12 +5,19 @@
  *  · שימור-ערך נבדק בכל swap (CHAIN_SPEC) · minOut fail-closed
  */
 import type { DexState, Op, OpResult, TradeEvent, Pool } from "./kernel";
-import { FEE_BPS, TREASURY_CUT_PCT, addBal, avail, poolKey } from "./kernel";
+import { FEE_BPS, TREASURY_CUT_PCT, DYN_FEE_MIN_BPS, DYN_FEE_MAX_BPS, DYN_FEE_K, addBal, avail, poolKey } from "./kernel";
 
 export const LP_ASSET_PREFIX = "LP|";
 
 export function getPool(st: DexState, key: string): Pool | null {
   return st.pools[key] ?? null;
+}
+
+/** Task 54 · עמלה-דינמית: clamp(base + vol/K, MIN, MAX) — V4-hooks/Bunni am-AMM:
+ * ככל-שהבריכה-תנודתית-יותר, ספקי-הנזילות מפוצים-יותר (מגן-LVR). */
+export function effectiveFeeBps(p: Pool): number {
+  const base = p.dynFeeBps ?? FEE_BPS;
+  return Math.min(DYN_FEE_MAX_BPS, Math.max(DYN_FEE_MIN_BPS, base));
 }
 
 /** מחיר-אמצע מהבריכה: µ-ציטוט ל-1 יחידת-בסיס (ra/bra ב-µ) */
@@ -34,7 +41,7 @@ export function quoteOut(p: Pool, assetIn: string, amountIn: number): { out: num
   const inA = assetIn === p.a;
   const rIn = inA ? p.ra : p.rb, rOut = inA ? p.rb : p.ra;
   if (rIn <= 0 || rOut <= 0 || amountIn <= 0) return null;
-  const feeAmt = Math.floor((amountIn * FEE_BPS) / 10_000);
+  const feeAmt = Math.floor((amountIn * effectiveFeeBps(p)) / 10_000); // ציטוט = עמלה-דינמית-אמת (עקביות-ביצוע)
   const inAfterFee = amountIn - feeAmt;
   const out = Math.floor((rOut * inAfterFee) / (rIn + inAfterFee));
   if (out <= 0 || out >= rOut) return null;
@@ -81,7 +88,9 @@ export function poolSwap(
 
   const inA = assetIn === p.a;
   const rIn = inA ? p.ra : p.rb, rOut = inA ? p.rb : p.ra;
-  const feeAmt = Math.floor((amountIn * FEE_BPS) / 10_000);
+  // Task 54 · העמלה-בפועל = עמלה-הדינמית-הנוכחית של-הבריכה (במקום-30bps-קבוע)
+  const feeBps = effectiveFeeBps(p);
+  const feeAmt = Math.floor((amountIn * feeBps) / 10_000);
   const inAfterFee = amountIn - feeAmt;
   const lpFee = feeAmt - Math.floor((feeAmt * TREASURY_CUT_PCT) / 100);
   const treasuryFee = feeAmt - lpFee;
@@ -97,6 +106,7 @@ export function poolSwap(
 
   const c = consume(); if (c) return c;
 
+  const midBefore = Math.floor((rOut * 1000) / rIn);
   addBal(st, op.issuer, assetIn, -amountIn);
   const assetOut = inA ? p.b : p.a;
   addBal(st, op.issuer, assetOut, out);
@@ -105,6 +115,17 @@ export function poolSwap(
   st.stats.swaps++;
   addBal(st, "treasury", assetIn, treasuryFee);
   st.feeMeter += treasuryFee; // מד-העמלות הכנה — סולם-הערך יקצור מכאן-בלבד
+
+  // Task 54 · עדכון-ה-EWMA + העמלה-הדינמית (אחרי-המסחר — מבוסס-על-הפגיעה-שנמדדה):
+  // impactBps = |Δmid|/mid ב-bps → vol = 0.9·EWMA + 0.1·impact → fee = base + vol/K
+  {
+    const rInAfter = inA ? p.ra : p.rb, rOutAfter = inA ? p.rb : p.ra;
+    const midAfter = Math.floor((rOutAfter * 1000) / rInAfter);
+    const impactBps = midBefore > 0 ? Math.min(10_000, (Math.abs(midAfter - midBefore) * 10_000) / midBefore) : 0;
+    const prev = p.volBpsEwma ?? 0;
+    p.volBpsEwma = Math.floor((prev * 9) / 10 + impactBps / 10);
+    p.dynFeeBps = Math.min(DYN_FEE_MAX_BPS, Math.max(DYN_FEE_MIN_BPS, FEE_BPS + Math.floor(p.volBpsEwma / DYN_FEE_K)));
+  }
 
   const price = Math.floor((out * 1000) / amountIn); // µ-פלט ל-1µ-כניסה ×1000 = סקאלה
   const ev: TradeEvent = {

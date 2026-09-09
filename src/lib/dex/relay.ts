@@ -164,6 +164,10 @@ type RelayKeys = {
   hiveAccount: string; hiveWif: string; hiveAuth: "posting" | "active";
   ethKey: string | null; solKey: string | null;
   ethExpected: string | null; solExpected: string | null;
+  // Task 54 · FIX(authority-pub): פאב-האימות נגזר-מה-WIF-הגולמי (פורמט-דחוס K/L) —
+  // wifToPublic של-הספרייה מחזיר פאב-שגוי לפורמט-המנורמל 5K (נמדד-חי 2026-09-09:
+  // אותו-סקלר → פאב-שונה!). החתימה עצמה רצה על המנורמל (SETTLE-10/11) — שני העולמות.
+  steemPub: string | null; hivePub: string | null;
 };
 
 /* ── FIX(SETTLE-11) נרמול-WIF: דחוס (38 בייטים, סיומת 0x01) → לא-דחוס קנוני (37) ──
@@ -215,8 +219,12 @@ async function loadKeys(): Promise<RelayKeys | null> {
   const steemRaw = steemPost || (process.env.STEEM_ACTIVE_WIF || "").trim();
   const hiveRaw = hivePost || (process.env.HIVE_ACTIVE_WIF || "").trim();
   if (!account || !steemRaw || !hiveRaw) return null;
-  const steemWif = await wifNormalized(steemRaw);
-  const hiveWif = await wifNormalized(hiveRaw);
+  // Task 54 · FIX(sign-wif): החתימה על ה-WIF-הגולמי (דחוס K/L) — נמדד-חי 2026-09-09:
+  // הספרייה הנוכחית גוזרת פאב-שגוי מהפורמט-המנורמל 5K (גם ב-wifToPublic וגם בחתימה
+  // → "Missing Active Authority" על-השרשרת). הגולמי: פאב-נכון + חתימה-מאומתת.
+  // הנרמול-ההיסטורי (SETTLE-10/11) נשמר-כנפילה-חזרה רק-אם-החתימה-על-הגולמי נדחית.
+  const steemWif = steemRaw;
+  const hiveWif = hiveRaw;
   if (!steemWif || !hiveWif) {
     console.error("[saos-relay][ALERT] wif-invalid: מפתח-ב-.env אינו WIF תקין (base58check) — relay מושהה fail-closed (לא-לולאת-ניסיונות)");
     return null;
@@ -231,7 +239,12 @@ async function loadKeys(): Promise<RelayKeys | null> {
   const solKey = (process.env.SOL_PRIVATE_KEY || "").trim() || null;
   const ethExpected = (process.env.ETH_EXPECTED_ADDRESS || "").trim() || null;
   const solExpected = (process.env.SOL_EXPECTED_ADDRESS || "").trim() || null;
-  return { account, steemWif, steemAuth, hiveAccount, hiveWif, hiveAuth, ethKey, solKey, ethExpected, solExpected };
+  // Task 54 · פאב-אימות מהגולמי (ראה FIX(authority-pub) למעלה); כישלון = null → authorityOk ידווח כנה
+  let steemPub: string | null = null;
+  let hivePub: string | null = null;
+  try { steemPub = steem.auth.wifToPublic(steemRaw) || null; } catch { steemPub = null; }
+  try { hivePub = steem.auth.wifToPublic(hiveRaw) || null; } catch { hivePub = null; }
+  return { account, steemWif, steemAuth, hiveAccount, hiveWif, hiveAuth, ethKey, solKey, ethExpected, solExpected, steemPub, hivePub };
 }
 
 /* בדיקת-נוכחות-סינכרונית (ל-rtInit — בלי-פענוח) */
@@ -689,7 +702,9 @@ async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"
     const account = chain === "steem" ? keys.account : keys.hiveAccount;
     const wif = chain === "steem" ? keys.steemWif : keys.hiveWif;
     const auth = chain === "steem" ? keys.steemAuth : keys.hiveAuth;
-    const pub = steem.auth.wifToPublic(wif); // מפתח-ציבורי בלבד — אפס-סודות בפלט
+    // Task 54 · הפאב מה-WIF-הגולמי (מחושב-פעם-אחת בטעינה) — לא מהמנורמל (ראה FIX)
+    const pub = (chain === "steem" ? keys.steemPub : keys.hivePub)
+      ?? steem.auth.wifToPublic(wif); // נפילה-חזרה היסטורית (מנורמל) אם-הטעינה לא גזרה
     const r = await rpc<{ posting: { key_auths: [string, number][] }; active: { key_auths: [string, number][] } }[]>(node, {
       jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [[account]], id: 1,
     }, 12000);

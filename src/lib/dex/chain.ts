@@ -15,6 +15,7 @@ import {
   applyOp, genesisState, stateRoot, type DexState, type Op, type TradeEvent,
   GAS_TABLE, notional, poolKey,
 } from "./kernel";
+import { economyTick } from "./economy";
 import { merkleRoot, sha256, canon } from "./canonical";
 import { invariant, InvariantViolation } from "./invariant";
 import { arenaTick, fairPrice, DEFAULT_PARAMS, type ArenaParams, type SoldierRT, MARKETS } from "./mm";
@@ -322,6 +323,10 @@ async function buildBlock(rt: ChainRT): Promise<void> {
 
   // פעימה-אוטומטית (heartbeat — מדידת-חיות על-הספר)
   applyOp(st, { type: "heartbeat", issuer: "treasury", nonce: sysNonce(st, "hb") }, t0);
+
+  // Task 54 · הטיק-הכלכלי הקנוני: revenue-router (קנייה-ושריפה) + אפוק-פליפ-ve —
+  // גובה-טריגר-טהור (אפס-שעון/רנדומליות) → ריפליי דטרמיניסטי.
+  economyTick(st);
 
   st.height++;
   // FIX(SETTLE-9 perf): stateRoot חושב-פעמיים-פר-בלוק (hash בלוק + כתיבת-DB) —
