@@ -23,6 +23,7 @@ import path from "path";
 import { createHash } from "crypto";
 import type { SealInfo } from "./chain";
 import { chaosPartitioned } from "./chaos";
+import { fleetConfigured, fleetSealNow, fleetStatusPublic } from "./fleet";
 
 import steemLib from "steem";
 import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor, ETH_RPCS } from "./relay-eth";
@@ -47,9 +48,9 @@ const ZERO_CHAIN_ID = "000000000000000000000000000000000000000000000000000000000
 
 /* ── קבועים ── */
 export const ANCHOR_ID = "saos-dex.anchor.v1";
-const HIVE_CHAIN_ID = "beeab0de00000000000000000000000000000000000000000000000000000000";
-const STEEM_NODES = ["https://api.steemit.com", "https://api.justyy.com"];
-const HIVE_NODES = ["https://api.hive.blog", "https://api.deathwing.me"];
+export const HIVE_CHAIN_ID = "beeab0de00000000000000000000000000000000000000000000000000000000";
+export const STEEM_NODES = ["https://api.steemit.com", "https://api.justyy.com"];
+export const HIVE_NODES = ["https://api.hive.blog", "https://api.deathwing.me"];
 const TRON_RPC = "https://api.trongrid.io";
 const RC_MIN = 1_000_000;          // מינימום-שמרטות לפני שידור (custom_json ~190B « 1M)
 const RETRY_MAX = 6;
@@ -68,12 +69,12 @@ const RECONCILE_FIRST_MS = 8_000;   // מחזור-ראשון — מיד-אחרי
 const RECONCILE_BATCH = 3;          // עד-3 אימותים-בדיעבד למחזור
 
 /* ── סוגים ── */
-export type ChainName = "steem" | "hive" | "tron" | "eth" | "sol";
-const ALL_CHAINS: ChainName[] = ["steem", "hive", "tron", "eth", "sol"];
+export type ChainName = "steem" | "hive" | "tron" | "eth" | "sol" | "fleet";
+const ALL_CHAINS: ChainName[] = ["steem", "hive", "tron", "eth", "sol", "fleet"];
 /* עיגון-כבד (gas/SOL) ועיגון-RC — רק החותם-החדש-ביותר מעוגן עליהם */
-const LATEST_ONLY: ChainName[] = ["hive", "tron", "eth", "sol"];
+const LATEST_ONLY: ChainName[] = ["hive", "tron", "eth", "sol", "fleet"];
 /* המתנה-כלכלית: RC מתחדש מהר; מימון (TRX/gas/SOL) הוא אירוע-תפעולי איטי */
-const econWaitMin = (c: ChainName): number => (c === "steem" || c === "hive" ? 20 : 30);
+const econWaitMin = (c: ChainName): number => (c === "steem" || c === "hive" || c === "fleet" ? 20 : 30);
 export type AnchorStatus = "anchored" | "sent-unconfirmed" | "pending" | "failed";
 export type BreakerState = "closed" | "open" | "half-open";
 
@@ -83,6 +84,8 @@ export interface AnchorRecord {
   stateRoot: string;
   digest: string;
   txid: string | null;
+  /** SETTLE-13: לעיגון-צי — איזה-חשבון-חייל חתם (ציבורי; אין-סודות) */
+  account?: string;
   status: AnchorStatus;
   at: string;
   attempt: number;
@@ -299,7 +302,7 @@ async function dgp(endpoint: string) {
   });
 }
 
-async function rcMana(endpoint: string, account: string): Promise<number | null> {
+export async function rcMana(endpoint: string, account: string): Promise<number | null> {
   try {
     const r = await rpc<{ rc_accounts: { rc_manabar: { current_mana: string; last_update_time: number }; max_rc: string }[] }>(endpoint, {
       jsonrpc: "2.0", method: "rc_api.find_rc_accounts", params: { accounts: [account] }, id: 1,
@@ -331,8 +334,9 @@ function buildOp(account: string, payload: unknown, auth: "posting" | "active"):
   }];
 }
 
-/* ── שידור-גרפני אחיד: build ← sign(chain_id) ← broadcast_transaction_synchronous ── */
-async function grapheneSealBroadcast(node: string, chainId: string, account: string, payload: unknown, wif: string, auth: "posting" | "active") {
+/* ── שידור-גרפני אחיד: build ← sign(chain_id) ← broadcast_transaction_synchronous ──
+ * SETTLE-13: מיוצא-למודול-הצי (fleet.ts) — נתיב-חתימה-אחד-מוסדי. */
+export async function grapheneSealBroadcast(node: string, chainId: string, account: string, payload: unknown, wif: string, auth: "posting" | "active") {
   const d = await dgp(node);
   const tx: GrapheneTx = {
     ref_block_num: d.head_block_number & 0xffff,
@@ -529,6 +533,8 @@ function persist(rt: RelayRT): void {
         tron: (id) => `https://tronscan.org/#/transaction/${id}`,
         eth: (id) => `https://etherscan.io/tx/${id}`,
         sol: (id) => `https://solscan.io/tx/${id}`,
+        // SETTLE-13: עיגוני-הצי נוחתים-על-Hive — אותו-סקר-ציבורי
+        fleet: (id) => `https://hiveblocks.com/tx/${id}`,
       };
       const link = anchored?.txid ? EXPLORER[c](anchored.txid) : null;
       return [c, {
@@ -592,16 +598,27 @@ async function verifyRecord(rt: RelayRT, rec: AnchorRecord): Promise<void> {
   rt.metrics.lastVerifyLatencyMs = Date.now() - t0;
   const indexed = !last.detail.startsWith("not indexed");
   // "טרם-נוכח באינדקס" אינו מיסמאץ' — הרשומה נשארת null ונכנסת לתור-הפיוס (reconcile)
+  // FIX(SETTLE-13, מחלקה-roshpina-forensic בזמן-ריצה): ספירה-על-מעברים-בלבד —
+  // אימות-חוזר-של-רשומה-כבר-מאומתת לא-מנפח את המדדים (verified ≤ anchored מבנית).
+  const prevVerified = rec.verified;
   rec.verified = indexed ? last.ok : null;
   if (!indexed) rec.verifiedAt = null;
-  if (last.ok) {
-    rt.metrics.verified += 1;
-    rt.chainState[rec.chain].verified += 1;
+  if (rec.verified === true) {
     rt.chainState[rec.chain].lastVerifyError = null;
+    if (prevVerified !== true) {
+      rt.metrics.verified += 1;
+      rt.chainState[rec.chain].verified += 1;
+    }
   } else {
-    if (!last.detail.startsWith("not indexed")) {
-      rt.metrics.mismatches += 1;
-      rt.chainState[rec.chain].mismatches += 1;
+    if (rec.verified === false) {
+      if (prevVerified === true) { // מהפכה: מאומת→מיסמאץ' — מתקנים-את-שני-המדדים
+        rt.metrics.verified -= 1;
+        rt.chainState[rec.chain].verified -= 1;
+      }
+      if (prevVerified !== false) {
+        rt.metrics.mismatches += 1;
+        rt.chainState[rec.chain].mismatches += 1;
+      }
       rt.chainState[rec.chain].lastVerifyError = last.detail;
       rec.error = last.detail.slice(0, 180); // הרשומה נושאת-את-הפירוט (ראיה-ציבורית)
       // ALERT — אי-התאמה בין השרשרת-הציבורית למקומי הוא אירוע-חמור
@@ -669,10 +686,18 @@ async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"
   }
 }
 
-async function attemptChain(rt: RelayRT, keys: RelayKeys, job: SealJob, chain: ChainName): Promise<void> {
+async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, chain: ChainName): Promise<void> {
   // FIX(SETTLE-11): שרשרת-ללא-מפתח = מושבתת-שקטה. ההיסטוריה: "eth/sol key missing"
   // נספר ככשל-קשה ×15 בכל-חותם → breakers-נפתחו-בשווא + רעש-לוג + זיהום-מדדים.
-  if ((chain === "eth" && !keys.ethKey) || (chain === "sol" && !keys.solKey)) {
+  // SETTLE-13: "fleet" אינו-דורש-מפתחות-headcorner — הצי-חתום-מתוך-הכספת-שלו.
+  if (!keys && chain !== "fleet") {
+    job.chains[chain].done = true;
+    rt.chainState[chain].enabled = false;
+    rt.chainState[chain].status = "disabled";
+    rt.chainState[chain].lastError = "relay keys missing — quiet-disabled (no record, no breaker, no retry)";
+    return;
+  }
+  if ((chain === "eth" && !keys?.ethKey) || (chain === "sol" && !keys?.solKey)) {
     job.chains[chain].done = true;
     rt.chainState[chain].enabled = false;
     rt.chainState[chain].status = "disabled";
@@ -682,7 +707,7 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys, job: SealJob, chain: C
   const cs = job.chains[chain];
   // FIX(SETTLE-11): טיסה-מקדימה — מפתח-שאינו-רשות-על-השרשרת = השבתה-כנה (בלי-רכבת-דחיות)
   // הערה: הבדיקה לפני cs.attempts += 1 — לכן התנאי הוא ===0 (הניסיון-הראשון)
-  if ((chain === "steem" || chain === "hive") && cs.attempts === 0 && !(await authorityOk(rt, keys, chain))) {
+  if (keys && (chain === "steem" || chain === "hive") && cs.attempts === 0 && !(await authorityOk(rt, keys, chain))) {
     cs.done = true;
     rt.chainState[chain].enabled = false;
     rt.chainState[chain].status = "disabled";
@@ -695,7 +720,7 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys, job: SealJob, chain: C
     return;
   }
   cs.attempts += 1;
-  const anchorAccount = chain === "steem" ? keys.account : keys.hiveAccount;
+  const anchorAccount = chain === "steem" ? keys?.account : keys?.hiveAccount;
   const rec: AnchorRecord = {
     chain, height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest,
     txid: null, status: "pending", at: job.at, attempt: cs.attempts,
@@ -715,13 +740,21 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys, job: SealJob, chain: C
       height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest,
     };
     if (chain === "tron") {
+      if (!keys?.steemWif) throw new Error("tron identity requires relay keys (disabled)");
       if (!rt.tronAddress) rt.tronAddress = await tronIdentity(keys.steemWif);
       if (!rt.tronAddress) throw new Error("tron identity derivation failed");
       const r = await tronSealBroadcast(rt.tronAddress, job.info.stateRoot, keys.steemWif);
       rec.txid = r.txid;
       rec.status = "anchored";
+    } else if (chain === "fleet") {
+      // SETTLE-13: צי-עיגון-ריבוני — חתימה-מקומית-מהכספת, סבב-חשבונות, POSTING-בלבד, אפס-עלות
+      const r = await fleetSealNow(payload);
+      rec.txid = r.txid;
+      rec.account = r.account;
+      rt.chainState.fleet.endpointHost = hostOf(HIVE_NODES[0]);
+      rec.status = "anchored";
     } else if (chain === "eth") {
-      if (!keys.ethKey) throw new Error("eth key missing (disabled)");
+      if (!keys?.ethKey) throw new Error("eth key missing (disabled)");
       if (!rt.ethAddress) {
         const id = ethIdentity(keys.ethKey);
         if (keys.ethExpected && id.address.toLowerCase() !== keys.ethExpected.toLowerCase()) {
@@ -742,7 +775,7 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys, job: SealJob, chain: C
       rec.txid = r.txid;
       rec.status = "anchored";
     } else if (chain === "sol") {
-      if (!keys.solKey) throw new Error("sol key missing (disabled)");
+      if (!keys?.solKey) throw new Error("sol key missing (disabled)");
       if (!rt.solAddress) {
         const id = solIdentity(keys.solKey);
         if (keys.solExpected && id.address !== keys.solExpected) {
@@ -755,27 +788,30 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys, job: SealJob, chain: C
       const r = await solSealBroadcast(payload, keys.solKey);
       rec.txid = r.txid;
       rec.status = "anchored";
-    } else {
+    } else if (chain === "steem" || chain === "hive") {
       const nodes = chain === "steem" ? STEEM_NODES : HIVE_NODES;
       const chainId = chain === "steem" ? ZERO_CHAIN_ID : HIVE_CHAIN_ID;
-      const wif = chain === "steem" ? keys.steemWif : keys.hiveWif;
-      const auth = chain === "steem" ? keys.steemAuth : keys.hiveAuth;
+      const wif = chain === "steem" ? keys!.steemWif : keys!.hiveWif;
+      const auth = chain === "steem" ? keys!.steemAuth : keys!.hiveAuth;
       if (cs.attempts === 1) {
-        const mana = await rcMana(nodes[0], anchorAccount);
+        const mana = await rcMana(nodes[0], anchorAccount!);
         if (mana !== null && mana < RC_MIN) throw new Error(`rc-low: ${mana} < ${RC_MIN} — waiting (honest retry)`);
       }
       // payload מכווץ — RC-תודעתי (כל בייט = כ-580K RC על Hive)
-      const r = await grapheneSealBroadcast(nodes[0], chainId, anchorAccount, payload, wif, auth);
+      const r = await grapheneSealBroadcast(nodes[0], chainId, anchorAccount!, payload, wif, auth);
       rt.chainState[chain].endpointHost = hostOf(nodes[0]); // FIX(CROSS-F-04): השער בפועל — נרשם
       rec.txid = r.txid;
       rec.status = "anchored";
+    } else {
+      throw new Error(`chain ${chain} has no anchor path (unreachable)`);
     }
   } catch (e) {
     const msg = String((e as Error)?.message || e).slice(0, 180);
     // סיווג-כנות: חוסר-תקציב (RC/unfunded) **וגם-הגבלת-סביבה** (rate-limit/quota/429
     // מ-RPC-ציבורי) אינם כשל-מערכת — הם המתנה-כלכלית כנה. ספירתם ככשל-קשי
     // יצרה-מעגל-שבירה: breaker נפתח ×7 על-רכבת-בריאה שרק-מוגבלת-תדר.
-    const economic = /rc-low|has not enough RC|unfunded|rate limit|too many requests|quota|\b429\b/i.test(msg);
+    // SETTLE-13: "no usable account" (צי: כל-החשבונות-RC-קר/בהתקררות) = המתנה-כלכלית-גם-כן
+    const economic = /rc-low|has not enough RC|unfunded|rate limit|too many requests|quota|\b429\b|no usable account/i.test(msg);
     if (economic) {
       // חוסר-תקציב = המתנה כלכלית כנה — לא כשל-מערכת (לא נספר ל-breaker); בדיקה-מחדש תקופתית
       cs.attempts = 0;
@@ -829,7 +865,8 @@ async function processQueue(rt: RelayRT): Promise<void> {
   const keys = await loadKeys();
   rt.processing = true;
   try {
-    if (!keys) return;
+    // SETTLE-13: גם-בלי-מפתחות-headcorner — הצי-הריבוני-ממשיך-לעגן (עיגון-לא-תלוי-זהות-אחת)
+    if (!keys && !fleetConfigured()) return;
     const now = Date.now();
     // עיבוד כל-העבודות מהישן-לחדש — steem מעגן כל-חותם, hive/tron רק-את-החדש-ביותר
     for (const job of [...rt.jobs].reverse()) {
@@ -866,11 +903,12 @@ function restoreRecords(rt: RelayRT): void {
     const clean: AnchorRecord[] = [];
     for (const r of raw.records.slice(0, 60)) {
       if (!r || typeof r.chain !== "string" || typeof r.height !== "number" || !r.txid || typeof r.stateRoot !== "string") continue;
-      if (!(r.chain === "steem" || r.chain === "hive" || r.chain === "tron" || r.chain === "eth" || r.chain === "sol")) continue;
+      if (!(r.chain === "steem" || r.chain === "hive" || r.chain === "tron" || r.chain === "eth" || r.chain === "sol" || r.chain === "fleet")) continue;
       clean.push({
         chain: r.chain, height: r.height, stateRoot: r.stateRoot, digest: String(r.digest ?? ""),
         txid: r.txid, status: (r.status === "anchored" ? "anchored" : "pending"),
         at: String(r.at ?? new Date().toISOString()), attempt: Number(r.attempt ?? 1),
+        account: typeof r.account === "string" ? r.account : undefined,
         // פסיקה-שמורה-בדיסק אינה אמת-מידה סופית: false נחשב "דורש-אימות-מחדש" (null)
         // כדי-שלולאת-הפיוס תגזור-אותה מחדש מה-RPC (ריפוי-עצמי משאריות-מהדורות-קודמות).
         verified: r.verified === true ? true : null,
@@ -917,7 +955,7 @@ function rtInit(): RelayRT {
   });
   const rt: RelayRT = {
     jobs: [], processing: false, records: [],
-    chainState: { steem: mk(cfg.main), hive: mk(cfg.main), tron: mk(cfg.main), eth: mk(cfg.eth), sol: mk(cfg.sol) },
+    chainState: { steem: mk(cfg.main), hive: mk(cfg.main), tron: mk(cfg.main), eth: mk(cfg.eth), sol: mk(cfg.sol), fleet: mk(fleetConfigured()) },
     metrics: { broadcasts: 0, verified: 0, mismatches: 0, breakerTrips: 0, economicWaits: 0, lastVerifyLatencyMs: null },
     account: cfg.account,
     tronAddress: null,
@@ -938,7 +976,8 @@ function rtInit(): RelayRT {
 export function relaySeal(info: SealInfo): void {
   try {
     const rt = rtInit();
-    if (!rt.account) return; // אין-מפתחות — ה-Relay כבוי בכנות
+    // SETTLE-13: ה-Relay חי-גם-כשאין-מפתחות-headcorner — הצי-מכסה-עיגון (ריבונות-לא-תלוית-זהות)
+    if (!rt.account && !fleetConfigured()) return; // אין-מפתחות-ואין-צי — ה-Relay כבוי-בכנות
     if (rt.jobs.length >= QUEUE_CAP) rt.jobs.pop(); // החדש-חשוב מהישן — הישן נזרק
     // חותמות-ישנות של עיגון-כבד/RC מסומנות done — רק החותם החדש-ביותר נעגן עליהן (תקציב RC/gas/SOL)
     for (const j of rt.jobs) for (const c of LATEST_ONLY) j.chains[c].done = true;
@@ -950,6 +989,7 @@ export function relaySeal(info: SealInfo): void {
         tron: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
         eth: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
         sol: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
+        fleet: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
       },
     });
     void processQueue(rt).catch(() => { /* לעולם לא מפיל את השרשרת */ });
@@ -999,9 +1039,22 @@ export function relayStatus(): Record<string, unknown> {
     ])),
     records: rt.records.slice(0, 60).map((r) => ({
       chain: r.chain, height: r.height, status: r.status, txid: r.txid, at: r.at, attempt: r.attempt,
+      account: r.account, // SETTLE-13: חתים-הצי-הריבוני (שם-חשבון-ציבורי-בלבד)
       stateRoot: r.stateRoot, // עדות-ציבורית — נדרשת לאימות-עיגון-טרי בעמדת-הסליקה
       verified: typeof r.verified === "boolean" ? r.verified : null, verifiedAt: r.verifiedAt ?? null,
       error: r.error ? r.error.slice(0, 90) : undefined,
     })),
+    // SETTLE-13: טלמטריית-הצי-הריבוני (אפס-סודות)
+    fleet: fleetStatusPublic(),
   };
+}
+
+/** SETTLE-13: החותם-המתאים-ביותר-לעיגון-צי-כפוי (מהתור; אחרת-הרשומה-האחרונה) */
+export function latestSealForFleet(): { height: number; stateRoot: string; digest: string; at: string } | null {
+  const rt = rtInit();
+  const job = rt.jobs[0];
+  if (job) return { height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest, at: job.at };
+  const last = rt.records[0];
+  if (last) return { height: last.height, stateRoot: last.stateRoot, digest: last.digest, at: last.at };
+  return null;
 }

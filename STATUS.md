@@ -1,6 +1,6 @@
 # STATUS — SAOS-DEX
 
-**גרסה:** טביעת-הקוד-החיה: `saos-dex/1.10.0+settle11-fence-convert` (CODE_VERSION, chain.ts) · **ענף:** main · **פורט:** 3010 מקושר-`127.0.0.1` (basePath `/saos-dex`) · **עודכן:** 2026-09-08 (SETTLE-11 — גדר-ריבונית+דלפק-המרות: **נרמול-WIF** (דחוס→לא-דחוס בטעינה — ריפוי-פצצת-הזמן שהייתה-הורגת-עיגון-בכל-אתחול; HIVE-חוזר-לחיות), **שרשראות-חסרות-מפתח-מושבתות-שקטה** (אין-breakers-שווא), **fence.ts — נעילת-שערים-יוצאים fail-closed** + `scripts/fence-check.ts` (אפס-קוד-זר) + `/api/dex/security` + **PHISHING_DEFENSE.md**, **SOVEREIGN-CONVERT — /api/dex/convert** (המרת-המטבעות-שברשותנו על-הרשת שלנו: ישיר/דרך-SAOS, minOut-חובה fail-closed); ראה §16 ב-PROOF). (SETTLE-10 — חילוף-מפתחות-חי: זרע-חדש, המפתחות-הדלופים-מבוטלים-על-השרשרת (STEEM 8313cdcb… block 109,410,651 · HIVE 92654439… block 109,745,168), Relay-חי-מחדש-עם-הזהות-החדשה, שער-מפעיל-מחובר-לקונסולה, wic-ROTATED; ראה §15 ב-PROOF). (SETTLE-9 — סבב-אופטימיזציה-ואימות-חוצה-סוכנים: stateRoot-חד-פעמי-פר-בלוק, minOut-fail-closed, F-04-endpointHost, bind-מקומי, **U-01-נפתר: עוגני-SOL-על-mainnet-מאומת-RPC**; ראה §14 ב-PROOF)
+**גרסה:** טביעת-הקוד-החיה: `saos-dex/1.12.0+settle13-sovereign-fleet` (CODE_VERSION, chain.ts) · **ענף:** main · **פורט:** 3010 מקושר-`127.0.0.1` (basePath `/saos-dex`) · **עודכן:** 2026-09-09 (SETTLE-13 — **הצי-הריבוני**: כספת-הצי-נפתחה-מאומתת-GCM, 9/10-חיילים=סמכויות-Hive-חיות-מלאות, עיגון-רב-חשבוני-POSTING-אפס-עלות (~199M-RC/op-מדוד, ~26-עיגונים-חינם/יום), relay-חי-גם-בלי-מפתחות-headcorner, /api/dex/fleet + פאנל-UI; ראה §18 ב-PROOF, **שרשראות-חסרות-מפתח-מושבתות-שקטה** (אין-breakers-שווא), **fence.ts — נעילת-שערים-יוצאים fail-closed** + `scripts/fence-check.ts` (אפס-קוד-זר) + `/api/dex/security` + **PHISHING_DEFENSE.md**, **SOVEREIGN-CONVERT — /api/dex/convert** (המרת-המטבעות-שברשותנו על-הרשת שלנו: ישיר/דרך-SAOS, minOut-חובה fail-closed); ראה §16 ב-PROOF). (SETTLE-10 — חילוף-מפתחות-חי: זרע-חדש, המפתחות-הדלופים-מבוטלים-על-השרשרת (STEEM 8313cdcb… block 109,410,651 · HIVE 92654439… block 109,745,168), Relay-חי-מחדש-עם-הזהות-החדשה, שער-מפעיל-מחובר-לקונסולה, wic-ROTATED; ראה §15 ב-PROOF). (SETTLE-9 — סבב-אופטימיזציה-ואימות-חוצה-סוכנים: stateRoot-חד-פעמי-פר-בלוק, minOut-fail-closed, F-04-endpointHost, bind-מקומי, **U-01-נפתר: עוגני-SOL-על-mainnet-מאומת-RPC**; ראה §14 ב-PROOF)
 > היסטורי: v1.0.0 (2026-09-07) — מסמך-זה-מתעדכן-כעת מטביעת-הקוד-החיה ולא-ממועד-העריכה.
 
 ## סטטוס-ריצה (נמדד)
@@ -19,6 +19,7 @@
 | relay→Steem | 🟢 חי — custom_json סמכות-active על כל-חותם (id: saos-dex.anchor.v1) |
 | relay→Hive | 🟡 חי-מותנה-תקציב — עיגן בפועל (ראה ראיות); קצב נשלט-RC, ממתין-ריג'נרציה בכנות |
 | relay→TRON | 🟡 זהות נגזרת-מהמפתח-החדש (TVN3vJhH…) — השרשרת חיה ונגישה; העיגון מותנה-מימון (0 TRX) |
+| relay→Fleet | 🟢 **חי — 9 חיילים סמכויות-Hive-מאומתות-חי** · עיגון-POSTING-אפס-עלות · verified≤anchored-מבנית · קיבולת ~26/יום (RC-regen) |
 
 ## עיגון-רשת חי (Relay — "הדלת")
 

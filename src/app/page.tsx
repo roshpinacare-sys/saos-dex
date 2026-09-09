@@ -67,7 +67,10 @@ interface WorldResp {
   proofs: { seals: SealInfo[]; receipts: { kind: string; digest: string; at: number }[]; blockWindow: number };
   tape: TapeEv[];
 }
-type RelayChain = "steem" | "hive" | "tron" | "eth" | "sol";
+type RelayChain = "steem" | "hive" | "tron" | "eth" | "sol" | "fleet";
+/* SETTLE-13: צי-עיגון-ריבוני — טלמטריה-ציבורית (אפס-סודות) */
+interface FleetAccountView { account: string; hasVerifiedKey: boolean; authorityOk: boolean | null; rcEffective: number | null; rcOk: boolean; failCount: number; anchoredCount: number; lastTxid: string | null; lastAnchorAt: string | null; usable: boolean }
+interface FleetView { configured: boolean; openError: string | null; sealedAt: string | null; probedAt: string | null; probeStale: boolean; accounts: FleetAccountView[]; usableCount: number }
 interface RelayRecord { chain: RelayChain; height: number; status: string; txid: string | null; at: string; attempt: number; verified: boolean | null; verifiedAt: string | null; error?: string }
 interface RelayView {
   enabled: boolean; account: string | null; anchorId: string; queue: number; tronIdentity: string | null;
@@ -80,6 +83,7 @@ interface RelayView {
     breaker: { state: "closed" | "open" | "half-open"; failures: number; openedAt: number | null; trips: number };
   }>;
   records: RelayRecord[];
+  fleet?: FleetView;
 }
 interface MyOrder { id: number; base: string; quote: string; side: "buy" | "sell"; price: number; amount: number; filled: number }
 
@@ -670,7 +674,7 @@ function SettlementDeskPanel({ report, loading, refresh, stabilize, stabilizing 
 
 // ─── פאנל: System Health & Relay (testid=system-health-panel) — טור-ימין ────
 function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; relay: RelayView | null; mempool: number }) {
-  const breakers = relay ? (["steem", "hive", "tron", "eth", "sol"] as const).map((c) => relay.chains[c]?.breaker.state).filter((s): s is "closed" | "open" | "half-open" => !!s) : [];
+  const breakers = relay ? (["steem", "hive", "tron", "eth", "sol", "fleet"] as const).map((c) => relay.chains[c]?.breaker.state).filter((s): s is "closed" | "open" | "half-open" => !!s) : [];
   const breakerOpen = breakers.includes("open");
   const breakerHalf = breakers.includes("half-open");
   const mismatched = (relay?.metrics.mismatches ?? 0) > 0;
@@ -719,7 +723,7 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
       </div>
 
       <div className="mt-2 space-y-1.5" dir="ltr">
-        {relay ? (["steem", "hive", "tron", "eth", "sol"] as const).map((c) => {
+        {relay ? (["steem", "hive", "tron", "eth", "sol", "fleet"] as const).map((c) => {
           const ch = relay.chains[c];
           if (!ch) return null; // שרת-ישן ללא-השרשראות-החדשות — לא קורסים
           const last = relay.records.find((r) => r.chain === c && r.txid);
@@ -750,7 +754,7 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
                 {last?.txid && (
                   <a
                     href={c === "steem" ? `https://steemworld.org/tx/${last.txid}`
-                      : c === "hive" ? `https://hiveblocks.com/tx/${last.txid}`
+                      : c === "hive" || c === "fleet" ? `https://hiveblocks.com/tx/${last.txid}`
                       : c === "tron" ? `https://tronscan.org/#/transaction/${last.txid}`
                       : c === "eth" ? `https://etherscan.io/tx/${last.txid}`
                       : `https://explorer.solana.com/tx/${last.txid}?cluster=devnet`}
@@ -1170,6 +1174,112 @@ function intentTone(status: string): "green" | "amber" | "zinc" {
   return "zinc";
 }
 
+/* ─── פאנל: FLEET ריבוני (SETTLE-13) — צי-עיגון-רב-חשבוני, אפס-עלות ─── */
+function FleetPanel() {
+  const [fv, setFv] = useState<FleetView | null>(null);
+  const [busyF, setBusyF] = useState<string | null>(null);
+  const [fleetMsg, setFleetMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+  const load = useCallback(() => {
+    fetch(api("/api/dex/fleet")).then((r) => r.json()).then((j) => { if (j?.fleet) setFv(j.fleet as FleetView); }).catch(() => { /* כנות: תצוגה-ריקה */ });
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 8000);
+    return () => clearInterval(t);
+  }, [load]);
+  const fleetAction = useCallback(async (action: "probe" | "anchor") => {
+    setBusyF(action);
+    setFleetMsg(null);
+    try {
+      const token = (() => { try { return window.localStorage.getItem(OPERATOR_KEY) ?? ""; } catch { return ""; } })();
+      const r = await fetch(api("/api/dex/fleet"), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-saos-dex-console": "1", ...(token ? { "x-saos-operator": token } : {}) },
+        body: JSON.stringify({ action }),
+      });
+      const j = (await r.json()) as { ok: boolean; error?: string; anchored?: { txid: string; account: string; block: number | null } };
+      if (j.ok && action === "anchor" && j.anchored) setFleetMsg({ tone: "ok", text: `עוגן-צי חי: ${j.anchored.account} · tx ${shortHash(j.anchored.txid, 10)}` });
+      else if (j.ok) setFleetMsg({ tone: "ok", text: "בדיקת-צי הושלמה" });
+      else setFleetMsg({ tone: "err", text: j.error ?? "נכשל" });
+    } catch {
+      setFleetMsg({ tone: "err", text: "שער-לא-זמין" });
+    } finally {
+      setBusyF(null);
+      load();
+    }
+  }, [load]);
+  const usable = fv?.usableCount ?? 0;
+  const total = fv?.accounts.length ?? 0;
+  return (
+    <div className="mt-4" data-testid="sovereign-fleet">
+      <Panel
+        title="צי-עיגון-ריבוני · FLEET"
+        icon={<ShieldCheck className="h-4 w-4 text-green-400" />}
+        action={fv && (
+          <span className="font-mono text-[10px] text-zinc-500" dir="ltr">
+            {usable}/{total} usable · {fv.probeStale ? "probe stale" : "probed"}
+          </span>
+        )}
+      >
+        {!fv ? (
+          <p className="py-2 text-center font-mono text-[11px] text-zinc-600">מתחבר לצי…</p>
+        ) : !fv.configured ? (
+          <div className="space-y-1">
+            <p className="font-mono text-[11px] text-amber-300">כספת-הצי לא-נמצאה (agent/keys) — הצי כבוי-בכנות</p>
+            {fv.openError && <p className="font-mono text-[9px] text-zinc-600" dir="ltr">{fv.openError}</p>}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => void fleetAction("probe")}
+                disabled={busyF !== null}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-800 disabled:opacity-50"
+                data-testid="fleet-probe"
+              >
+                <RefreshCcw className={`h-3 w-3 ${busyF === "probe" ? "animate-spin" : ""}`} /> probe authorities
+              </button>
+              <button
+                onClick={() => void fleetAction("anchor")}
+                disabled={busyF !== null || usable === 0}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-green-500/40 bg-green-500/10 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wider text-green-300 transition hover:bg-green-500/20 disabled:opacity-50"
+                data-testid="fleet-anchor"
+              >
+                <Anchor className={`h-3 w-3 ${busyF === "anchor" ? "animate-pulse" : ""}`} /> anchor now (free · RC)
+              </button>
+              {fleetMsg && (
+                <span className={`font-mono text-[10px] ${fleetMsg.tone === "ok" ? "text-green-300" : "text-red-300"}`} dir="ltr">{fleetMsg.text}</span>
+              )}
+            </div>
+            <div className="grid max-h-64 grid-cols-1 gap-1 overflow-y-auto pr-1 sm:grid-cols-2" data-testid="fleet-accounts">
+              {fv.accounts.map((a) => (
+                <div key={a.account} className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 bg-zinc-900/70 px-2.5 py-1.5" data-testid={`fleet-soldier-${a.account}`}>
+                  <span className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-zinc-200" dir="ltr">
+                    <StatusDot tone={a.usable ? "green" : a.authorityOk === false ? "red" : "zinc"} pulse={false} /> {a.account}
+                  </span>
+                  <span className="flex items-center gap-2 font-mono text-[9px]" dir="ltr">
+                    <span className={a.rcOk ? "text-green-400" : "text-zinc-500"}>RC {a.rcEffective === null ? "—" : fmtInt(a.rcEffective)}</span>
+                    {a.anchoredCount > 0 && (
+                      <a href={`https://hiveblocks.com/tx/${a.lastTxid}`} target="_blank" rel="noreferrer" className="text-amber-400 underline-offset-2 hover:underline">
+                        {a.anchoredCount}×
+                      </a>
+                    )}
+                    <span className={a.usable ? "text-green-300" : "text-zinc-600"}>{a.usable ? "READY" : a.authorityOk === false ? "AUTH" : "—"}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <p className="text-[9px] leading-snug text-zinc-600">
+              עיגון-custom_json בסמכות-POSTING על Hive — אפס-עלות (RC-borne), סבב-חשבונות, self-verify + בדיקת-סמכות-חיה לפני-כל-שימוש.
+              בלי-keyrelay, בלי-gas — החתימה-מקומית-מהכספת-האטומה.
+            </p>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
 function PortfolioBridgePanel() {
   const [pf, setPf] = useState<PortfolioResp | null>(null);
   const [br, setBr] = useState<BridgeResp | null>(null);
@@ -1563,6 +1673,9 @@ export default function DexTerminal() {
 
         {/* ═════ SETTLE-12: תיקיית-המטבעות + הגשר-הריבוני ═════ */}
         <PortfolioBridgePanel />
+
+        {/* ═════ SETTLE-13: צי-העיגון-הריבוני ═════ */}
+        <FleetPanel />
       </main>
 
       {/* ─── Footer דביק (mt-auto) — כנות-כלכלית ─── */}
