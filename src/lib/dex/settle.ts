@@ -444,9 +444,13 @@ export async function realMoneyAudit(): Promise<RealMoneyReport> {
     account: string | null; tronIdentity: string | null;
     identities: { eth: string | null; sol: string | null };
   };
+  const fleetSt = (rs as { fleet?: { accounts?: { usable?: boolean; account?: string }[] } }).fleet;
+  const fleetIdentity = fleetSt?.accounts?.find((a) => a.usable && a.account)?.account ?? null;
   const identity: Record<ChainName, string | null> = {
     steem: rs.account, hive: rs.account,
     tron: rs.tronIdentity, eth: rs.identities?.eth ?? null, sol: rs.identities?.sol ?? null,
+    // SETTLE-13: זהות-הצי = החייל-המשמש-חתימה (סבב) — כנות: אין-זהות-אחת
+    fleet: fleetIdentity,
   };
   const rails = await Promise.all(
     (Object.entries(identity) as [ChainName, string | null][]).map(([rail, id]) =>
