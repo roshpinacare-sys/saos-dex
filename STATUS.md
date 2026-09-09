@@ -47,6 +47,11 @@
 5. חלוקה-כפולה בתצוגה (µ→יחידות)
 6. גיזום-nonce (חלון-נע 6000) — מניעת צמיחת-זיכרון
 
+## Task 27/26-c — נתיב-ההמרה האמיתי (HIVE rail)
+
+- **GET/POST /api/dex/hive-rail** + `src/lib/hive-rail.ts`: token → SWAP.HIVE (HE market-sell) → liquid HIVE (hivepegged withdraw) → HP (transfer_to_vesting). executor = external-signer (:3033, authority+RC gates, fail-closed) — ה-DEX חסר-מפתחות. GET ציבורי: תצוגת-יתרות + מסלול-מוצע. POST: שער-מפעיל (DEX_OPERATOR_TOKEN) + console-guard.
+- מדידה-חי (2026-09-09): powerup 9.682 HIVE על headcorner נעצר נכון בשער-הסמכות (403 — מפתח-הבעלים לא בסביבה); עלות-op 225M RC מדודה; min-delegation 1,611.18 VESTS מדוד. עיגון-צי אוטומטי: fleet-cure (:3034).
+
 ## הבא בתור (לא-מובטח, סדר-עדיפויות)
 
 - מימון-זהות-TRON (≥0.3 TRX) → עיגון-TRON אוטומטי נדלק לבד (המודול קיים וממתין)
