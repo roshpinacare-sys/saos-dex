@@ -10,6 +10,7 @@ import type { DexState, Op, Asset } from "./kernel";
 import { FEE_BPS, LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, funderFor, poolKey, avail, notional } from "./kernel";
 import { sortBook } from "./book";
 import { poolMid, poolMidFor, getPool } from "./amm";
+import { railTick, RAIL_OWNED_POOLS } from "./rail";
 
 export const MARKETS: { base: Asset; quote: Asset }[] = [
   { base: "SAOS", quote: "USDS" },
@@ -146,8 +147,14 @@ export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void 
 
   // (1) מנעול-בריכה — לכל-הזוגות (FIX SETTLE-14: היה רק-הזוג-הריבוני ובריכת
   // WSTEEM צפה חופשי — נסחרה עד 6x מעל הספר בלי-שום-גרביטציה)
+  // SETTLE-16 THE-MICRORAIL: הזוגות-בבעלות-המסילה (USDS/WSTEEM) נשלפים-מהנעילה-
+  // הצפה — המסילה היא בעלת-המשמעת שלהם מול-עוגן-אמת (refPrice ≡ STEEM 1:1),
+  // ולא מול-פייר-צף שהבוק-מדלל (ממצא-חי: הפייר-הצף גרר-את-הבריכה-בחזרה-מעלה
+  // אחרי-ה-REPEG — מלחמת-סוכנים). מנוע-אחד-לעוגן.
   for (const mk of MARKETS) {
-    const p = getPool(st, poolKey(mk.base, mk.quote));
+    const mkPair = poolKey(mk.base, mk.quote);
+    if (RAIL_OWNED_POOLS.has(mkPair)) continue;
+    const p = getPool(st, mkPair);
     if (!p) continue;
     const pm = poolMidFor(p, mk.base, mk.quote);
     if (pm <= 0) continue;
@@ -232,6 +239,11 @@ export function arenaTick(
   // עמדת-הייצוב (סליקה): מנעול-בריכה + חגורת-סולם — לפני-הזרימה-החופשית
   pegkeeperTick(st, tick, pushOp);
 
+  // THE-MICRORAIL (SETTLE-16): המסילה-הריבונית-למיקרו — מימון-רצפות מהתקציב-
+  // הקיים (אפס-הטבעה) + מנות-שפשוף-לעוגן על הזוגות-בבעלותה. אחרי-pegkeeper,
+  // לפני-הגריד — העוגן-קודם-לזרימה-החופשית.
+  railTick(st, tick, pushOp);
+
   // קצבת-חיות (THE-REFUEL): כל-16 טיקים — מי-שהקרדיטים-שלו מתחת-למסלול מקבל
   // הזרמה מהאוצר. **העברה-טהורה (אפס-הטבעה)** — Σcredits נשמר. בלי-זה הגריד
   // מת-מוות-מבני: gas יורד-מונוטונית, החיילים מפסיקים-לצטט, הספר מתרוקן,
@@ -246,7 +258,7 @@ export function arenaTick(
       const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
       if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-${tick}`, to: "treasury", amount: mint });
     }
-    for (const ag of [...soldiers, "arena", "bot-a", "bot-b", "bot-c"]) {
+    for (const ag of [...soldiers, "arena", "bot-a", "bot-b", "bot-c", "rail"]) {
       const c = st.credits[ag] ?? 0;
       // FIX(SETTLE-15 fuel-oscillation, נתפס-בלוג-הדחיות): סף-4k עם-חלון-16-טיק
       // איפשר לחיילים-פעילים להגיע-ל-0-בין-הבדיקות (נמדד: 23-27-דחיות/בלוק
