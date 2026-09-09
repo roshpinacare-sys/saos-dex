@@ -71,25 +71,44 @@ export interface RouteQuote {
 
 /** ציטוט-מסלול-הטוב-ביותר לכל-המסלולים-הפשוטים עד-MAX_LEGS (קריאה-בלבד). */
 export function quoteRoute(assetIn: string, assetOut: string, amountInMu: number): RouteQuote | null {
+  const results = walkRoutes(assetIn, assetOut, amountInMu);
+  if (results.length === 0) return null;
+
+  results.sort((a, b) => b.inMu - a.inMu);
+  const best = results[0];
+  return {
+    assetIn, assetOut, amountInMu,
+    amountOutMu: best.inMu,
+    effPriceMu: Math.floor((best.inMu * 1000) / amountInMu),
+    legs: best.legs,
+    alternatives: results.slice(0, 4).map((r) => ({ amountOutMu: r.inMu, path: r.legs.map((l) => l.venue) })),
+  };
+}
+
+interface Walk { to: string; inMu: number; legs: RouteLeg[] }
+
+/** פסיעה-על-גרף-הבריכות+מסדרון-העיגון: כל-המסלולים-עד-MAX_LEGS, סימולציה-שלמים.
+ * מופשט-מכאן-כדי-ש-quoteRoute ו-quoteSplit ישתמשו-באותה-מתמטיקה-בדיוק. */
+function walkRoutes(assetIn: string, assetOut: string, amountInMu: number): Walk[] {
   const st = getLiveState();
-  if (!(amountInMu > 0) || !ASSETS.includes(assetIn as never) || !ASSETS.includes(assetOut as never) || assetIn === assetOut) return null;
+  if (!(amountInMu > 0) || !ASSETS.includes(assetIn as never) || !ASSETS.includes(assetOut as never) || assetIn === assetOut) return [];
 
   // בניית-גרף: שכנויות-בריכה + שכנויות-עטיפה
   const pools: { key: string; p: Pool }[] = Object.entries(st.pools).map(([key, p]) => ({ key, p }));
+  const wraps = wrapPairs();
   const neighbors = (a: string): { to: string; kind: "pool" | "wrap"; pool?: Pool; key?: string; wrapTo?: string }[] => {
     const out: { to: string; kind: "pool" | "wrap"; pool?: Pool; key?: string; wrapTo?: string }[] = [];
     for (const { key, p } of pools) {
       if (p.a === a) out.push({ to: p.b, kind: "pool", pool: p, key });
       if (p.b === a) out.push({ to: p.a, kind: "pool", pool: p, key });
     }
-    for (const w of wrapPairs()) {
+    for (const w of wraps) {
       if (a === w.wrapped) out.push({ to: w.native, kind: "wrap", wrapTo: w.native });
       if (a === w.native) out.push({ to: w.wrapped, kind: "wrap", wrapTo: w.wrapped });
     }
     return out;
   };
 
-  interface Walk { to: string; inMu: number; legs: RouteLeg[] }
   const results: Walk[] = [];
   const walk = (cur: string, mu: number, legs: RouteLeg[], visited: Set<string>, depth: number): void => {
     if (depth > 0 && cur === assetOut) { results.push({ to: cur, inMu: mu, legs }); return; }
@@ -107,7 +126,7 @@ export function quoteRoute(assetIn: string, assetOut: string, amountInMu: number
         // מסדרון-עיגון 1:1 — אין-דמי-עמלה על-העטיפה-עצמה (הגז-בלבד; wrap_mint/burn).
         // כנות-ביצוע: פריקה (wrapped→native) מחייבת-גיבוי-1:1 בפועל — אין-לצטט
         // מסלול-שייכשל-בביצוע (fail-closed גם-בציטוט).
-        const wp = wrapPairs().find((w) => w.wrapped === nx.wrapTo || w.native === nx.wrapTo);
+        const wp = wraps.find((w) => w.wrapped === nx.wrapTo || w.native === nx.wrapTo);
         if (!wp) continue;
         if (cur === wp.wrapped && nx.to === wp.native && (st.backing[wp.wrapped] ?? 0) < mu) continue;
         outMu = mu; priceMu = 1000; venue = `PEG-RAIL:${nx.wrapTo}`;
@@ -117,17 +136,67 @@ export function quoteRoute(assetIn: string, assetOut: string, amountInMu: number
     }
   };
   walk(assetIn, amountInMu, [], new Set([assetIn]), 0);
-  if (results.length === 0) return null;
+  return results;
+}
 
-  results.sort((a, b) => b.inMu - a.inMu);
-  const best = results[0];
-  return {
-    assetIn, assetOut, amountInMu,
-    amountOutMu: best.inMu,
-    effPriceMu: Math.floor((best.inMu * 1000) / amountInMu),
-    legs: best.legs,
-    alternatives: results.slice(0, 4).map((r) => ({ amountOutMu: r.inMu, path: r.legs.map((l) => l.venue) })),
-  };
+// ─── SPLIT-ROUTING (Task 55 · Uniswap-V3 חתימה): פיצול-חכם בין-שני-מסלולים ──
+
+export interface SplitQuote {
+  assetIn: string;
+  assetOut: string;
+  amountInMu: number;
+  singleBestOutMu: number;
+  splitOutMu: number;
+  savingBps: number; // חיסכון-הפיצול מעל-המסלול-הטוב-ביותר (bps)
+  splitPctFirst: number; // אחוז-הראשון (0-100)
+  leg1: { path: string; amountInMu: number; amountOutMu: number };
+  leg2: { path: string; amountInMu: number; amountOutMu: number } | null;
+  executed: boolean; // האם-הפיצול אכן-משתלם (savingBps>0)
+}
+
+const SPLIT_FRACTIONS = [50, 60, 70, 80] as const; // אחוז-הראשון — דטרמיניסטי
+
+/** פיצול-מסלול: במקום-לשפוך-הכל-למסלול-אחד (פגיעה-במחיר), מפצלים-בין
+ * שני-המסלולים-הטובים-הנבדלים ובוחרים-את-החיתוך-הדטרמיניסטי-המשתלם-ביותר.
+ * הכל-סימולציית-שלמים על-הבריכות-החיות — אותה-מתמטיקה שתבצע. */
+export function quoteSplit(assetIn: string, assetOut: string, amountInMu: number): SplitQuote | null {
+  const full = walkRoutes(assetIn, assetOut, amountInMu);
+  if (full.length === 0) return null;
+  full.sort((a, b) => b.inMu - a.inMu);
+  const singleBestOut = full[0].inMu;
+  // שני-המסלולים-הטובים-הנבדלים (זהות-מסלול שונה — לא-אותו-ציר)
+  const pathOf = (w: Walk) => w.legs.map((l) => l.venue).join(">");
+  const bestPath = pathOf(full[0]);
+  const second = full.find((w) => pathOf(w) !== bestPath);
+  if (!second) return null;
+  const secondPath = pathOf(second);
+
+  let best: SplitQuote | null = null;
+  for (const pct of SPLIT_FRACTIONS) {
+    const in1 = Math.floor((amountInMu * pct) / 100);
+    const in2 = amountInMu - in1;
+    if (in1 <= 0 || in2 <= 0) continue;
+    const o1 = walkRoutes(assetIn, assetOut, in1);
+    const o2 = walkRoutes(assetIn, assetOut, in2);
+    const leg1 = o1.filter((w) => pathOf(w) === bestPath).sort((a, b) => b.inMu - a.inMu)[0] ?? o1.sort((a, b) => b.inMu - a.inMu)[0];
+    const leg2 = o2.filter((w) => pathOf(w) === secondPath).sort((a, b) => b.inMu - a.inMu)[0] ?? o2.sort((a, b) => b.inMu - a.inMu)[0];
+    if (!leg1 || !leg2) continue;
+    const totalOut = leg1.inMu + leg2.inMu;
+    if (totalOut <= singleBestOut) continue;
+    const savingBps = Math.floor(((totalOut - singleBestOut) * 10_000) / singleBestOut);
+    const cand: SplitQuote = {
+      assetIn, assetOut, amountInMu,
+      singleBestOutMu: singleBestOut,
+      splitOutMu: totalOut,
+      savingBps,
+      splitPctFirst: pct,
+      leg1: { path: pathOf(leg1), amountInMu: in1, amountOutMu: leg1.inMu },
+      leg2: { path: pathOf(leg2), amountInMu: in2, amountOutMu: leg2.inMu },
+      executed: savingBps > 0,
+    };
+    if (!best || cand.savingBps > best.savingBps) best = cand;
+  }
+  return best;
 }
 
 // ─── מפת-נזילות: מי-ראוטר-ביל ומי-לא (כנות-מלאה) ─────────────────────────────

@@ -21,6 +21,7 @@
  */
 import type { DexState } from "./kernel";
 import { getPool } from "./amm";
+import { aleTick } from "./ale";
 import {
   BLOCKS_PER_WEEK, VE_MAX_WEEKS, EPOCH_BLOCKS, ROUTER_EVERY, REV_FLOOR,
   REV_BURN_PCT, REV_VE_PCT, ROUTER_USDS_FLOOR, REV_MIN_CYCLE, VE_POT,
@@ -49,6 +50,7 @@ export function economyTick(st: DexState): void {
   if (h <= 0) return;
   if (h % ROUTER_EVERY === 0) revenueCycle(st, h);
   if (h % EPOCH_BLOCKS === 0) epochFlip(st, h);
+  aleTick(st); // Task 55 · ALE: הזרעת-POL-אוטונומית כל-ALE_EVERY-בלוקים
 }
 
 /** (2) REVENUE-ROUTER: רווח-אוצר מדוד → 40% burn (קנייה-מהבריכה + השמדה) ·

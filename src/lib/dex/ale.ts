@@ -1,0 +1,232 @@
+/**
+ * ale.ts — ALE · מנוע-הנזילות-האוטונומית (Task 55)
+ * ═════════════════════════════════════════════════════════════════════════════
+ * דבר-המפעיל: "איך נוכל מתוך כל מה שיש לנו לגרום למערכת להשיג נזילות אוטונומית
+ * ולצמוח בלי תלות במשתמשים — נסה לפרוץ דרך על הרשת שלנו בלייב ולאמת".
+ *
+ * התרגום-הקנוני על הגרעין (אפס-float · אפס-random · אפס-Date.now — גובה-בלוקים
+ * טהורים, ריפליי דטרמיניסטי):
+ *
+ *  1. POL-SEED (האוצר הזורע): כל-ALE_EVERY-בלוקים, חלק-מדוד מה-USDS-החופשי
+ *     של האוצר (מעל-רצפת-הראוטר) נזרע-ישירות-לבריכות כנזילות-בעלות-פרוטוקול
+ *     (Protocol-Owned Liquidity). ה-LP-מוטבע-לאוצר — הפרוטוקול הוא-ה-LP,
+ *     והעמלים-מקומפסמים-אוטומטית בתוך-הרזרבות (Uniswap-V2-native).
+ *     מקור-הכסף: עמלות-אמת שנאספו-מהמסחר — המערכת מפרה-את-עצמה.
+ *  2. הגנות-ברזל: רצפת-אוצר (לא-מרוקן-אף-פעם — מתחת-ל-ROUTER_USDS_FLOOR
+ *     לא-נוגעים), תקרה-פר-מחזור (ALE_MAX_PER_CYCLE), סף-אבק (ALE_MIN_SEED),
+ *     וחלוקה-מדודה-לבריכות-לפי-חלק-האוצר (הכי-דל-נזילות-פרוטוקול קודם).
+ *  3. הפלאיהול (flywheel): עמלות → רווח-אוצר → revenueCycle (40% שריפה ·
+ *     40% קרן-ve · 20% אוצר) → ALE-זורע-מה-20% → בריכות-עמוקות-יותר →
+ *     פגיעה-במחיר-קטנה-יותר → מחזור-גבוה-יותר → עמלות-גבוהות-יותר. סגור.
+ *  4. אמת-אוטונומית (הבדלנות מול-DEX-ים-אחרים): כל-מספר-כאן נמדד-מהמצב-החי —
+ *     fills-של-הארנה (סוחרים-אוטונומיים, אפס-משתמשים-אנושיים), POL%-אמת
+ *     (LP-אוצר ÷ LP-כולל), Σשריפות, Σהזרעות. השוואה-חיה: /api/dex/compare.
+ *
+ * בנוסף (דבר-המפעיל "יש לנו בכספת קצת כסף — תמצא דרך לשמש את הדקס"):
+ * מסדרון-העיגון (STEEM→WSTEEM 1:1 מגובה-גיבוי-אמת) הוא-הצינור-מהכספת-החיה
+ * לנזילות-המקומית — aleState מדווח-עליו (vaultFeed) מה-backing-האמיתי.
+ */
+import type { DexState, Pool } from "./kernel";
+import { addBal, bal } from "./kernel";
+import {
+  ALE_EVERY, ALE_SEED_PCT, ALE_MIN_SEED, ALE_MAX_PER_CYCLE,
+  ROUTER_USDS_FLOOR,
+} from "./kernel";
+import { LP_ASSET_PREFIX } from "./amm";
+
+/* ══ 1. POL-SEED — ההזרעה-האוטונומית ═════════════════════════════════════════ */
+
+/** בחירת-בריכות-יעד: כל-הבריכות-החיות, ממוינות-דטרמיניסטית לפי-חלק-האוצר
+ * (הכי-דל-נזילות-פרוטוקול קודם) ואז-מפתח-קנוני — בלי-random, ריפליי-אמת. */
+function seedTargets(st: DexState): { key: string; pool: Pool; treasuryShareBps: number }[] {
+  const out: { key: string; pool: Pool; treasuryShareBps: number }[] = [];
+  for (const [key, p] of Object.entries(st.pools)) {
+    const totalLp = p.lp;
+    const tLp = bal(st, "treasury", LP_ASSET_PREFIX + key);
+    const shareBps = totalLp > 0 ? Math.floor((tLp * 10_000) / totalLp) : 0;
+    if (p.ra > 0 && p.rb > 0) out.push({ key, pool: p, treasuryShareBps: shareBps });
+  }
+  out.sort((x, y) => (x.treasuryShareBps - y.treasuryShareBps) || (x.key < y.key ? -1 : 1));
+  return out;
+}
+
+/** הזרעת-USDS-לבריכה: שני-הצדדים-פרופורציונלית-ליחס-הרזרבות הנוכחי, LP-מוטבע
+ * לאוצר — שכפול-מדויק של-מתמטיקת poolAdd אך-מהפרוטוקול-עצמו (בלי-עמלה-עצמית).
+ * אם-לאוצר אין-מספיק-מהצד-השני — מצמצמים-לפי-הצד-המחסום (כנות, לא-הדפסה). */
+function seedPool(st: DexState, key: string, p: Pool, usdsBudgetMu: number): number {
+  if (usdsBudgetMu < ALE_MIN_SEED || p.ra <= 0 || p.rb <= 0) return 0;
+  // איזה-צד-הוא-USDS (ממוין-אלפבתית — USDS יכול-להיות a או b)
+  const usdsIsA = p.a === "USDS";
+  const rUsds = usdsIsA ? p.ra : p.rb;
+  const rOther = usdsIsA ? p.rb : p.ra;
+  if (rUsds <= 0 || rOther <= 0) return 0;
+  const otherAsset = usdsIsA ? p.b : p.a;
+  const tUsds = bal(st, "treasury", "USDS");
+  const tOther = bal(st, "treasury", otherAsset);
+  const maxByOther = tOther > 0 ? Math.floor((tOther * rUsds) / rOther) : 0;
+  const addUsds = Math.min(usdsBudgetMu, maxByOther);
+  if (addUsds < ALE_MIN_SEED || tUsds < addUsds) return 0;
+  const addOther = Math.floor((addUsds * rOther) / rUsds);
+  if (addOther <= 0) return 0;
+  const lpMint = p.lp > 0 ? Math.max(1, Math.floor((p.lp * addUsds) / rUsds)) : Math.floor(Math.sqrt(addUsds * addOther));
+  // חיוב-אמת + הזרעה + הטבעת-LP-לאוצר (אטומי בתוך-הבלוק — דבר-גורר-דבר)
+  addBal(st, "treasury", "USDS", -addUsds);
+  addBal(st, "treasury", otherAsset, -addOther);
+  if (usdsIsA) { p.ra += addUsds; p.rb += addOther; } else { p.rb += addUsds; p.ra += addOther; }
+  addBal(st, "treasury", LP_ASSET_PREFIX + key, lpMint);
+  st.journal.push({
+    h: st.height, t: 0, soldier: "ale", action: "pol_seed",
+    profitMu: addUsds, note: `POL-seed ${key}: +${addUsds}µ USDS +${addOther}µ ${otherAsset} → ${lpMint}µ LP`,
+  });
+  return addUsds;
+}
+
+/**
+ * רכישת-הצד-השני-מהבריכה-עצמה (מוסכמת-הגרעין, כמו-revenueCycle: הפרוטוקול
+ * אינו-גובה-עמלה-מעצמו — כנות): ממירים-USDS→otherAsset במתמטיקת-בריכה טהורה.
+ * חגורת-בטיחות: פגיעה-במחיר-מוגבלת — swapIn ≤ rUsds/9 (≈סף-10% פגיעה).
+ */
+function acquireOther(st: DexState, p: Pool, usdsWantedMu: number): number {
+  const usdsIsA = p.a === "USDS";
+  const rIn = usdsIsA ? p.ra : p.rb;   // רזרבת-USDS
+  const rOut = usdsIsA ? p.rb : p.ra;  // רזרבת-הצד-השני
+  if (rIn <= 0 || rOut <= 0) return 0;
+  const tUsds = bal(st, "treasury", "USDS");
+  const swapIn = Math.min(usdsWantedMu, Math.floor(rIn / 9), tUsds);
+  if (swapIn <= 0) return 0;
+  const out = Math.floor((rOut * swapIn) / (rIn + swapIn));
+  if (out <= 0 || out >= rOut) return 0;
+  addBal(st, "treasury", "USDS", -swapIn);
+  addBal(st, "treasury", usdsIsA ? p.b : p.a, out);
+  if (usdsIsA) { p.ra += swapIn; p.rb -= out; } else { p.rb += swapIn; p.ra -= out; }
+  st.journal.push({
+    h: st.height, t: 0, soldier: "ale", action: "pol_acquire",
+    note: `acquire ${out}µ ${usdsIsA ? p.b : p.a} ב-${swapIn}µ USDS (פגיעה-מוגבלת ≤10%)`,
+  });
+  return out;
+}
+
+/** ה-מחזור-האוטונומי — נקרא-מ-economyTick (buildBlock) על-כל-גובה.
+ * יעדים: בריכות-המכילות-USDS (אנחנו-מזריעים-מהעמלות שהן-USDS), ממוינות
+ * לפי-חלק-האוצר-העולה (הכי-דל-POL קודם) — דטרמיניסטי-מלא. */
+export function aleTick(st: DexState): void {
+  const h = st.height;
+  if (h <= 0 || h % ALE_EVERY !== 0) return;
+  const targets = seedTargets(st).filter((t) => t.pool.a === "USDS" || t.pool.b === "USDS");
+  if (targets.length === 0) return;
+  // מקור-המימון: USDS-חופשי-מעל-רצפת-האוצר (הרצפה = אותה-רצפת-הראוטר — מגן-אחד)
+  const freeUsds = Math.max(0, bal(st, "treasury", "USDS") - ROUTER_USDS_FLOOR);
+  const budget = Math.min(
+    Math.floor((freeUsds * ALE_SEED_PCT) / 100),
+    ALE_MAX_PER_CYCLE,
+  );
+  if (budget < ALE_MIN_SEED) return;
+  // חלוקה-מדודה: 60% ליעד-הכי-דל, 40% לבא-אחריו (אם-יש) — עומק-ראשון-לזרע
+  const first = Math.floor((budget * 60) / 100);
+  const rest = budget - first;
+  const slices = [first, rest];
+  let seeded = 0;
+  for (let i = 0; i < slices.length && i < targets.length; i++) {
+    const slice = slices[i];
+    if (slice < ALE_MIN_SEED) break;
+    const t = targets[i];
+    // שלב-א: רכישת-הצד-השני-מהבריכה (חצי-הסלייס — השני-נשאר-USDS-לזריעה)
+    acquireOther(st, t.pool, Math.floor(slice / 2));
+    // שלב-ב: זריעת-שני-הצדדים-כנזילות-בעלות-פרוטוקול
+    seeded += seedPool(st, t.key, t.pool, slice);
+  }
+  if (seeded <= 0) return;
+  const a = st.ale ?? { lastH: h, cycles: 0, seededMu: 0, seeds: 0, polBaseUsdsMu: 0 };
+  a.lastH = h;
+  a.cycles++;
+  a.seeds++;
+  a.seededMu += seeded;
+  if (a.polBaseUsdsMu === 0) a.polBaseUsdsMu = treasuryLpValue(st); // בסיס-מדידת-צמיחה
+  st.ale = a;
+}
+
+/* ══ 2. הדוח-החי — aleState (הכל-נמדד-מהמצב, אפס-זיוף) ══════════════════════ */
+
+/**
+ * שווי-עמדות-LP-של-האוצר ב-µ-USDS.
+ * תמחור-LP כנה: עמדת-LP = חלק-יחסי מהבריכה. בריכה-עם-צד-USDS: שווי-הבריכה
+ * במונחי-USDS = 2×רזרבת-USDS (שני-הצדדים-שווי-ערך-בקירוב-על-פי-הבריכה-עצמה).
+ * בריכה-בלי-צד-USDS: אין-תמחור-אמת-לנו — נספר-כ-0 עם-דגל (כנות, לא-שווא).
+ */
+export function treasuryLpValue(st: DexState): number {
+  let total = 0;
+  for (const [key, p] of Object.entries(st.pools)) {
+    const tLp = bal(st, "treasury", LP_ASSET_PREFIX + key);
+    if (tLp <= 0 || p.lp <= 0) continue;
+    const usdsReserve = p.a === "USDS" ? p.ra : (p.b === "USDS" ? p.rb : 0);
+    if (usdsReserve <= 0) continue; // בלי-צד-USDS אין-מה-לתמחר-באמת
+    total += Math.floor((tLp * 2 * usdsReserve) / p.lp);
+  }
+  return total;
+}
+
+/** דוח-מלא: מה-המערכת משיגה-לבד, בלי-משתמשים. */
+export function aleState(st: DexState) {
+  const targets = seedTargets(st);
+  const pools = targets.map(({ key, pool: p, treasuryShareBps }) => {
+    return {
+      key,
+      reserveAMu: p.ra, reserveBMu: p.rb,
+      assetA: p.a, assetB: p.b,
+      lpTotalMu: p.lp,
+      lpTreasuryMu: bal(st, "treasury", LP_ASSET_PREFIX + key),
+      polShareBps: treasuryShareBps,
+      dynFeeBps: p.dynFeeBps ?? null,
+      swaps: p.swaps,
+    };
+  });
+  const lpValue = treasuryLpValue(st);
+  const ale = st.ale ?? null;
+  const growthBps = ale && ale.polBaseUsdsMu > 0
+    ? Math.floor(((lpValue - ale.polBaseUsdsMu) * 10_000) / ale.polBaseUsdsMu)
+    : 0;
+  const lpHolders = pools.filter((x) => x.lpTreasuryMu > 0);
+  const weightedPolBps = lpHolders.length > 0
+    ? Math.floor(lpHolders.reduce((s, x) => s + x.polShareBps * x.lpTreasuryMu, 0) /
+      Math.max(1, lpHolders.reduce((s, x) => s + x.lpTreasuryMu, 0)))
+    : 0;
+  return {
+    ok: true,
+    height: st.height,
+    policy: {
+      every: ALE_EVERY, seedPct: ALE_SEED_PCT, maxPerCycleMu: ALE_MAX_PER_CYCLE,
+      minSeedMu: ALE_MIN_SEED, floorUsdsMu: ROUTER_USDS_FLOOR,
+    },
+    treasury: {
+      usdsFreeMu: bal(st, "treasury", "USDS"),
+      usdsFreeAboveFloorMu: Math.max(0, bal(st, "treasury", "USDS") - ROUTER_USDS_FLOOR),
+      lpValueUsdsMu: lpValue,
+      profitMu: st.treasuryProfit,
+    },
+    ale,
+    pol: { growthBps, weightedPolBps },
+    flywheel: {
+      feeMeterMu: st.feeMeter,
+      burnedSaosMu: st.burnedSaos ?? 0,
+      revCycles: st.rev?.cycles ?? 0,
+      vePaidMu: st.rev?.vePaidMu ?? 0,
+      aleSeededMu: ale?.seededMu ?? 0,
+      aleSeeds: ale?.seeds ?? 0,
+      aleCycles: ale?.cycles ?? 0,
+    },
+    autonomy: {
+      arenaFills: st.stats.fills,     // סוחרים-אוטונומיים — אפס-משתמשים
+      swapsTotal: st.stats.swaps,
+      liveOrders: st.orders.length,
+      note: "הנזילות כאן צומחת מעמלות-אמת שהמערכת גבתה מעצמה ומהארנה — לא מהדפסה, לא ממשתמשים",
+    },
+    pools,
+    recentSeeds: st.journal.filter((j) => j.soldier === "ale" && j.action === "pol_seed").slice(-12).reverse(),
+    vaultFeed: {
+      // הצינור-מהכספת-החיה: WSTEEM 1:1 מגובה-backing-אמת (STEEM-אמת שנפקד-לכספת)
+      backingWsteemMu: st.backing["WSTEEM"] ?? 0,
+      honesty: "backing=STEEM-אמת-שנכנסה-מסדרון-העיגון — הכסף-החי-מהכספת משרת את הדקס דרך עטיפה 1:1",
+    },
+    honesty: "כל-המספרים-נמדדים-מהמצב-החי-של-הגרעין (height " + st.height + ") · אין-float · אין-random · ריפליי-דטרמיניסטי",
+  };
+}
