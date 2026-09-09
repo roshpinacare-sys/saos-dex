@@ -236,9 +236,15 @@ function usable(rt: FleetRT): { name: string; rc: number }[] {
   return out.sort((x, y) => y.rc - x.rc);
 }
 
-/* ── חותם-צי: custom_json על-HIVE בסמכות-POSTING — אפס-עלות ─────────────────── */
+/* ── חותם-צי: custom_json על-HIVE בסמכות-POSTING — אפס-עלות ───────────────────
+ * SETTLE-17: המטען-פתוח-לשדות-נוספים (rail-milestone מוסיף netMu/equityMu/…)
+ * — הכל-ציבורי, אפס-סודות-במטען. */
+export type FleetAnchorPayload = {
+  protocol: string; action: string; at: string; height: number; stateRoot: string; digest: string;
+} & Record<string, unknown>;
+
 export async function fleetSealNow(
-  payload: { protocol: string; action: string; at: string; height: number; stateRoot: string; digest: string },
+  payload: FleetAnchorPayload,
 ): Promise<{ txid: string; account: string; block: number | null }> {
   const rt = fleetInit();
   if (!rt.openedOk) throw new Error(`fleet disabled: ${rt.openError ?? "vault unavailable"}`);

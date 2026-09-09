@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { fleetProbe, fleetSealNow, fleetStatusPublic } from "@/lib/dex/fleet";
-import { latestSealForFleet } from "@/lib/dex/relay";
+import { latestSealForFleet, recordFleetAnchor } from "@/lib/dex/relay";
 import { consoleGuard } from "@/lib/dex/guard";
 import { operatorAuth } from "@/lib/operator-auth";
 
@@ -39,6 +39,9 @@ export async function POST(req: Request) {
       };
       try {
         const r = await fleetSealNow(payload);
+        // SETTLE-17: סגירת-הפער-ההיסטורי — עיגון-ידני-נרשם-בפנקס-הציבורי
+        // (היה: bypass-שקט — 3-עיגוני-SETTLE-13-החיים-לא-נרשמו-מעולם) + פיוס-אוטומטי.
+        recordFleetAnchor(seal.height, seal.stateRoot, seal.digest, r.txid, r.account);
         return NextResponse.json({ ok: true, anchored: r, seal: { height: seal.height, stateRoot: seal.stateRoot } });
       } catch (e) {
         return NextResponse.json({ ok: false, error: String((e as Error)?.message || e).slice(0, 160) }, { status: 502 });
