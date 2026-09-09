@@ -39,6 +39,7 @@ interface MarketView {
   base: string; quote: string; key: string;
   fair: number; bestBid: number; bestAsk: number; spreadBps: number;
   poolMid: number; refPrice: number;
+  twap: number; twapSamples: number; twapDevBps: number; // SETTLE-14: מחיר-אמת ממסחר-אמת
   bids: { price: number; total: number; orders: number }[];
   asks: { price: number; total: number; orders: number }[];
   chart: { t: number; p: number }[];
@@ -354,6 +355,17 @@ function Watchlist({ markets, selected, onSelect }: {
                 </span>
               )}
             </div>
+            {/* SETTLE-14 price-truth: המחיר-מהמסחר-בפועל (טוויאפ) מוצג-לכל — אפס-מחירים-שקריים */}
+            {m.twap > 0 && (
+              <div className="mt-0.5 flex items-center justify-between gap-2" dir="ltr">
+                <span className="font-mono text-[10px] text-emerald-400" title={`TWAP ממסחר-אמת · ${m.twapSamples} עסקאות`}>
+                  oracle {fmt(m.twap, 2)}
+                </span>
+                <span className={`font-mono text-[9px] ${Math.abs(m.twapDevBps) > 400 ? "text-amber-400" : "text-zinc-600"}`}>
+                  {m.twapDevBps > 0 ? "+" : ""}{m.twapDevBps}bps vs scale
+                </span>
+              </div>
+            )}
           </button>
         );
       })}
@@ -361,7 +373,7 @@ function Watchlist({ markets, selected, onSelect }: {
         <p className="py-4 text-center font-mono text-[11px] text-zinc-600">מתחבר למנוע…</p>
       )}
       <p className="px-1 pt-1 text-[10px] leading-snug text-zinc-600">
-        שינוי% מחושב מול מחיר-הייחוס של סולם-הערך. הזמנה = לחיצה על שוק.
+        oracle = TWAP מהמסחר-בפועל (ספר+בריכות). שינוי% מול סולם-הערך — סולם-שזז-בשני-הכיוונים אחרי-עדות-מסחר אמת (SETTLE-14).
       </p>
     </div>
   );

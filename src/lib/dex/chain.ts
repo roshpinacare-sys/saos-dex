@@ -18,7 +18,7 @@ import {
 import { merkleRoot, sha256, canon } from "./canonical";
 import { invariant, InvariantViolation } from "./invariant";
 import { arenaTick, fairPrice, DEFAULT_PARAMS, type ArenaParams, type SoldierRT, MARKETS } from "./mm";
-import { poolMid, getPool, quoteOut, LP_ASSET_PREFIX } from "./amm";
+import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX } from "./amm";
 import { sortBook } from "./book";
 
 const TICK_MS = 3_000;
@@ -32,7 +32,7 @@ const CHART_CAP = 240;
 /** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
  * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
  * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
-export const CODE_VERSION = "saos-dex/1.12.0+settle13-sovereign-fleet";
+export const CODE_VERSION = "saos-dex/1.13.0+settle14-price-truth";
 
 /** טבעת-דגימת-הדלק (SETTLE-5): {גובה, גז-מצטבר} לכל-בלוק, חלון-~400 בלוקים.
  * צריכת-השריפה-החלונית = (אחרון−ראשון)/(hאחרון−hראשון) — אמת-לרגע זה,
@@ -61,6 +61,7 @@ interface ChainRT {
   timer: ReturnType<typeof setInterval> | null;
   busy: boolean;
   fuelSamples: { h: number; gasUsed: number }[]; // SETTLE-5: טבעת-דגימת-דלק (חוץ-מצב — לא-חלק-מה-DexState/שורש) לשריפה-חלונית-אמת
+  priceSamples: { h: number; base: string; quote: string; px: number; muQ: number }[]; // SETTLE-14: עדות-מחיר-אמת ממסחר-אמת (fill+swap) — חוץ-מצב
   buildMsRolling: number;
   opsPerSecRolling: number;
   startedAt: number;
@@ -213,21 +214,72 @@ async function seal(rt: ChainRT, blockRoot: string): Promise<void> {
   } catch { /* כשל-Relay לעולם לא מפיל את השרשרת */ }
 }
 
+/** ── SETTLE-14 PRICE-TRUTH: עדות-מחיר-אמת ──
+ * כל-אירוע-מסחר אמת (fill על-הספר, swap בבריכה) נרשם: מה-נמכר, באיזה-מחיר,
+ * כמה-ציטוט-זרם (muQ = amountMu×px/1000). הטוויאפ-השקול-נוטיונל הוא המדד
+ * היחיד ל"מחיר-אמת" — הספר והבריכה עלולים-לצוף (וצפו — ממצא-חי +15%/+25%),
+ * אבל עסקאות-שקרו-בפועל הן-העדות. חוץ-מצב (לא-בשורש) — טבעת 600. */
+function feedPriceOracle(rt: ChainRT, events: TradeEvent[] | undefined, h: number): void {
+  if (!events || events.length === 0) return;
+  for (const ev of events) {
+    if (ev.kind !== "fill" && ev.kind !== "swap") continue;
+    if (!(ev.price > 0) || !(ev.amountMu > 0)) continue;
+    rt.priceSamples.push({ h, base: ev.base, quote: ev.quote, px: ev.price, muQ: Math.floor((ev.amountMu * ev.price) / 1000) });
+  }
+  if (rt.priceSamples.length > 600) rt.priceSamples.splice(0, rt.priceSamples.length - 600);
+}
+
+export interface PriceTruth { base: string; quote: string; twap: number; samples: number; devBpsVsRef: number; windowHeights: number }
+
+/** טוויאפ-שקול-נוטיונל לזוג (שני-הכיוונים — base/quote או quote/base) */
+export function priceTruthFor(rt: ChainRT, base: string, quote: string): PriceTruth | null {
+  const st = rt.st;
+  let wSum = 0, pxSum = 0, n = 0, hMin = Infinity, hMax = 0;
+  for (const s of rt.priceSamples) {
+    const same = s.base === base && s.quote === quote;
+    const flip = s.base === quote && s.quote === base;
+    if (!same && !flip) continue;
+    const px = same ? s.px : Math.floor(1_000_000 / (s.px > 0 ? s.px : 1)); // יחס-הפוך: pxFlip = (1000/px)×1000 = 10^6/px
+    wSum += s.muQ; pxSum += px * s.muQ; n++;
+    if (s.h < hMin) hMin = s.h; if (s.h > hMax) hMax = s.h;
+  }
+  if (n === 0 || wSum <= 0) return null;
+  const twap = Math.floor(pxSum / wSum);
+  const ref = st.assets[base]?.refPrice ?? 0;
+  return { base, quote, twap, samples: n, devBpsVsRef: ref > 0 ? Math.floor(((twap - ref) / ref) * 10_000) : 0, windowHeights: hMax >= hMin ? hMax - hMin + 1 : 0 };
+}
+
 function ladderCheck(rt: ChainRT): void {
   const st = rt.st;
   if (st.height - st.ladder.lastLiftHeight < LADDER_EVERY) return;
-  const availProfit = st.feeMeter; // רק-מה שנמדד בעמלות
-  if (availProfit < st.ladder.stepCostMu) return;
-  const newRef = Math.floor(st.ladder.refPrice * 1.005); // ≤0.5% לצעד
-  const step = Math.min(st.ladder.stepCostMu, availProfit);
-  rt.mempool.push({ type: "harvest", issuer: "treasury", nonce: sysNonce(st, "harv"), amount: step, memo: "ladder-funding" });
+  /* ── SETTLE-14 PRICE-TRUTH: הסולם-כמו-שדרה (keel), לא-מדרגות ──
+   * היה: newRef = ref×1.005 בלי-קשר-לשוק — מדרגות-עולות-בלבד (2500→2686
+   * מונוטוני, 15-הזזות). המפעיל צדק: "מטפס-ולא-נראה-כמו-נתון-אמת".
+   * עכשיו: הסולם זז רק-אחרי-עדות-מסחר-אמת (טוויאפ-מהטבעת), בשני-הכיוונים,
+   * מדומם (חצי-הפער, עד-0.5%), וממשיך-לשלם-עמלות-על-כל-הזזה (harvest).
+   * אין-עדות-מספקת (<40-מסחרות או |dev|<100bps) → הסולם לא-זז. */
+  const truth = priceTruthFor(rt, "SAOS", "USDS");
+  if (!truth || truth.samples < 40) return;
+  const ref = st.ladder.refPrice;
+  const devBps = truth.devBpsVsRef;
+  if (Math.abs(devBps) < 100) return;
+  if (st.feeMeter < st.ladder.stepCostMu) return; // עדיין-משלמים-בעמלות-אמת-על-כל-הזזה
+  const dir = devBps > 0 ? 1 : -1;
+  const halfDev = Math.floor(Math.abs(ref - truth.twap) / 2);
+  // מדומם-חצי-פער, עד-0.5%; פער-גולמי (|dev|>1000bps — מעגן-מיושן) מותר-עד-2%
+  // כדי-שהסולם-יתפוס-במהירות את-המציאות-שנצברה — באותה-מידה למעלה ולמטה.
+  const capPct = Math.abs(devBps) > 1_000 ? 0.02 : 0.005;
+  const step = Math.max(1, Math.min(Math.floor(ref * capPct), halfDev));
+  const newRef = Math.max(1, ref + dir * step);
+  const harvestMu = Math.min(st.ladder.stepCostMu, st.feeMeter);
+  rt.mempool.push({ type: "harvest", issuer: "treasury", nonce: sysNonce(st, "harv"), amount: harvestMu, memo: `keel-${dir > 0 ? "up" : "down"}` });
   rt.mempool.push({ type: "asset_price", issuer: "treasury", nonce: sysNonce(st, "ladder"), asset: "SAOS", refPrice: newRef });
   st.ladder.refPrice = newRef; // צפי-מקומי (ה-op יאשר על-הספר)
   st.ladder.lastLiftHeight = st.height;
   st.ladder.lifts++;
-  st.ladder.spentMu += step;
+  st.ladder.spentMu += harvestMu;
   st.stats.ladders++;
-  pushReceipt(rt, "ladder", { height: st.height, newRef, step, lifts: st.ladder.lifts });
+  pushReceipt(rt, "keel", { height: st.height, newRef, dir, devBps, step, harvestMu, twap: truth.twap, samples: truth.samples });
 }
 
 async function buildBlock(rt: ChainRT): Promise<void> {
@@ -240,6 +292,7 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     if (r.ok) {
       applied++;
       for (const ev of r.events ?? []) rt.tape.unshift({ ...ev, h: st.height });
+      feedPriceOracle(rt, r.events, st.height); // SETTLE-14: עדות-מחיר-אמת מכל-מסחר
     }
   }
   rt.tape = rt.tape.slice(0, TAPE_CAP);
@@ -321,6 +374,7 @@ export function ensureChain(): ChainRT {
     tape: [], blockHashes: [], seals: [], receipts: [],
     lastReceiptDigest: null, tickCount: 0, timer: null, busy: false,
     fuelSamples: [],
+    priceSamples: [],
     buildMsRolling: 0, opsPerSecRolling: 0, startedAt: Date.now(), lastBlockAt: 0,
     faucetAt: {}, dbOk: true, halted: false, haltReason: null, version: 1,
     cachedRoot: null,
@@ -389,6 +443,7 @@ export interface MarketView {
   base: string; quote: string; key: string;
   fair: number; bestBid: number; bestAsk: number; spreadBps: number;
   poolMid: number; refPrice: number;
+  twap: number; twapSamples: number; twapDevBps: number; // SETTLE-14: מחיר-אמת ממסחר-אמת
   bids: { price: number; total: number; orders: number }[];
   asks: { price: number; total: number; orders: number }[];
   chart: { t: number; p: number }[];
@@ -418,17 +473,23 @@ export function getMarkets(): MarketView[] {
     const bestBid = bids[0]?.price ?? 0;
     const bestAsk = asks[0]?.price ?? 0;
     const p = getPool(st, key);
+    // SETTLE-14: הטייפ מכיל שני-כיוונים (base/quote לפי-צד-המכירה) — מנרמל
+    // לכיוון-הזוג (בלי-זה המצגת-של-WSTEEM חסרה-חצי-מהמסחרות).
     const chart = rt.tape
-      .filter((e) => (e.base === m.base && e.quote === m.quote) && e.amountMu > 0)
-      .map((e) => ({ t: e.at, p: e.price }))
+      .filter((e) => e.amountMu > 0 && ((e.base === m.base && e.quote === m.quote) || (e.base === m.quote && e.quote === m.base)))
+      .map((e) => ({ t: e.at, p: e.base === m.base ? e.price : Math.floor(1_000_000 / (e.price > 0 ? e.price : 1)) }))
       .slice(0, CHART_CAP).reverse();
+    const truth = priceTruthFor(rt, m.base, m.quote);
     return {
       base: m.base, quote: m.quote, key,
       fair: fairPrice(st, m.base, m.quote),
       bestBid, bestAsk,
       spreadBps: bestBid > 0 && bestAsk > 0 ? Math.floor(((bestAsk - bestBid) / ((bestAsk + bestBid) / 2)) * 10_000) : 0,
-      poolMid: p ? poolMid(p) : 0,
+      poolMid: p ? poolMidFor(p, m.base, m.quote) : 0,
       refPrice: st.assets[m.base]?.refPrice ?? 0,
+      twap: truth?.twap ?? 0,
+      twapSamples: truth?.samples ?? 0,
+      twapDevBps: truth ? truth.devBpsVsRef : 0,
       bids, asks, chart,
     };
   });
