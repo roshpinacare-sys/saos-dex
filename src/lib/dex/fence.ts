@@ -25,6 +25,8 @@ const PINNED_HOSTS = new Set<string>([
   /* גרפני — זהה ל-STEEM_NODES/HIVE_NODES ב-relay.ts (העתק-קנוני מוצהר) */
   "api.steemit.com", "api.justyy.com",
   "api.hive.blog", "api.deathwing.me",
+  /* Hive-Engine sidechain — קריאות-מאזנים/שוק של מסילת-ההמרה (hive-rail.ts, Task 27/28) */
+  "api.hive-engine.com",
   /* TRON */
   "api.trongrid.io",
   /* ETH — ברירות-מחדל של ETH_RPCS */
