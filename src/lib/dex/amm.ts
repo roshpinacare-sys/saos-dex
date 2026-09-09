@@ -19,6 +19,16 @@ export function poolMid(p: Pool): number {
   return Math.floor((p.rb * 1000) / p.ra);
 }
 
+/** FIX(SETTLE-14 price-truth): מחיר-אמצע בכיוון-הזוג-המבוקש.
+ * poolMid הגולמי מניח p.a=base — אבל poolKey ממיין-אלפביתית וב-USDS/WSTEEM
+ * p.a=USDS: ה-mid היה יחס-הפוך (0.42 "WSTEEM-ל-USDS" במקום 2.36 USDS-ל-WSTEEM)
+ * והבריכה הייתה מנותקת מהספר ב-6x בלי-שאף-אחד-יראה. עכשיו: אוריינטציה-נכונה-תמיד. */
+export function poolMidFor(p: Pool, base: string, quote: string): number {
+  if (p.a === base) return p.ra > 0 ? Math.floor((p.rb * 1000) / p.ra) : 0;
+  if (p.b === base) return p.rb > 0 ? Math.floor((p.ra * 1000) / p.rb) : 0;
+  return 0;
+}
+
 /** ציטוט-קריאה-בלבד: פלט צפוי + מחיר-אפקטיבי (µ-ציטוט ל-1 יחידת-בסיס) */
 export function quoteOut(p: Pool, assetIn: string, amountIn: number): { out: number; price: number; minOut0: number } | null {
   const inA = assetIn === p.a;

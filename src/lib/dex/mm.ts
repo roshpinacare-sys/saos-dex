@@ -9,7 +9,7 @@
 import type { DexState, Op, Asset } from "./kernel";
 import { FEE_BPS, LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, funderFor, poolKey, avail, notional } from "./kernel";
 import { sortBook } from "./book";
-import { poolMid, getPool } from "./amm";
+import { poolMid, poolMidFor, getPool } from "./amm";
 
 export const MARKETS: { base: Asset; quote: Asset }[] = [
   { base: "SAOS", quote: "USDS" },
@@ -51,7 +51,7 @@ export function fairPrice(st: DexState, base: string, quote: string): number {
   const bestAsk = asks[0]?.price ?? 0;
   const bookMid = bestBid > 0 && bestAsk > 0 ? Math.floor((bestBid + bestAsk) / 2) : (bestBid || bestAsk || 0);
   const p = getPool(st, poolKey(base, quote));
-  const pm = p ? poolMid(p) : 0;
+  const pm = p ? poolMidFor(p, base, quote) : 0;
   // משקלים: ספר 50% · בריכה 30% · סולם-ערך 20% (נפילה-חן למקורות-קיימים)
   const parts: [number, number][] = [];
   if (bookMid > 0) parts.push([bookMid, 0.5]);
@@ -94,6 +94,25 @@ const BOT_SEED_CAP_USDS = 2_400_000;
 const BOT_SEED_CAP_SAOS = 1_200_000;
 const botSeedCaps = new Map<string, { usds: number; saos: number }>();
 
+/** ── THE-REARM (SETTLE-14 price-truth) ──
+ * ממצא-חי: הארנה שרפה את כל-המלאי (8M SAOS + 20M USDS מג'נזיס) בלחימה-חד-צדדית
+ * מול סולם-הערך-העולה — ומאז היא-ענייה (0 SAOS): כל-פעולות-הייצוב (מנעול-בריכה,
+ * חגורת-סולם) נדחות-בשקט והשוק צף ללא-גרביטציה. זה-המנוע-האמיתי של "המחיר-מטפס".
+ * הטיפול: חייל-אספקה — אוצר→ארנה העברה-טהורה (אפס-הטבעה, Σשומר), מנות-2M,
+ * תקרה-מצטברת-לכל-חיי-התהליך (8M SAOS + 20M USDS = מלאי-ג'נזיס-אחד),
+ * ורק-אם-לאוצר יש-באמת (אפס-דחיות-ספר). עם-הסולם-הסימטרי (keel) הלחימה
+ * כבר-לא-חד-צדדית — המלאי החדש נשחק בשני-הכיוונים ומתוחזק. */
+const REARM_TRANCHE_SAOS = 2_000_000;
+const REARM_TRANCHE_USDS = 4_000_000;
+const REARM_TRANCHE_WSTEEM = 1_000_000;
+const REARM_LIFETIME_SAOS = 8_000_000;
+const REARM_LIFETIME_USDS = 20_000_000;
+const REARM_LIFETIME_WSTEEM = 1_000_000; // גבול-אמת: סטוק-ה-STEEM-הטבעי של-האוצר (אפס-הטבעה)
+const REARM_FLOOR_SAOS = 600_000;   // מתחת-לזה הארנה לא יכולה למכור-לתוך-בידים
+const REARM_FLOOR_USDS = 1_200_000; // ולא-לקנות-מאסקים
+const REARM_FLOOR_WSTEEM = 300_000; // מנעול-בריכת-WSTEEM צריך בסיס-למכור-בו
+const arenaRearm = { saos: 0, usds: 0, wsteem: 0 };
+
 type PushOp = (op: Op) => void;
 
 function submit(rt: Map<string, SoldierRT>, soldier: string, op: Omit<Op, "issuer" | "nonce">, pushOp: PushOp): void {
@@ -105,31 +124,46 @@ function submit(rt: Map<string, SoldierRT>, soldier: string, op: Omit<Op, "issue
 
 /**
  * pegkeeperTick — עמדת-הייצוב (מהדורת-סליקה): "שהכל ישב".
- *  · מנעול-בריכה: כשהבריכה סוטה מהפייר ≥50bps — הארנה מארביטרג'ת אותה חזרה
- *    (הזרימה-החופשית יוצרת-תנועה; המנעול מחזיר-אותה לספר). העמלה-שהארנה משלמת
- *    נמדדת ב-feeMeter — דווקא מזינה את סולם-הערך (ייצוב-מממן-את-הרצפה).
- *  · חגורת-סולם: כשמחיר-הספר חורג ±400bps מ-refPrice הריבוני — הארנה סוחבת
- *    את המחיר בחזרה-לחגורה (מכירה-לתוך-הבידים מעל / קנייה-מהאסקים מתחת).
+ *  · מנעול-בריכה: כשהבריכה סוטה מהפייר ≥30bps — הארנה מארביטרג'ת אותה חזרה.
+ *    FIX(SETTLE-14 price-truth): גודל-פרופורציונלי לפער (עד 600kµ — היה 150k
+ *    שלא-סגר-אף-פער-מעל-1%) — הבריכה מתיישרת למחיר-אמת בשניות, לא בשעות.
+ *  · חגורת-סולם: חריגה מ-refPrice מוחזרת-בגודל-פרופורציונלי לסטייה —
+ *    חגורה-חלשה-קבועה היא-שאיפשרה-לספר לצוף +15% מעל הסולם (ממצא-חי 2026-09).
+ *  · רצפות-עומק: בריכה-שמתחת-לרצפה מקבלת-השלמה-פרופורציונלית מהארנה
+ *    (מנעול-יחס-בריכה — הוספה-ביחס-הנוכחי לא מזיזה-את ה-mid) — "הבריכות זמינות".
  * כל-הפעולות: ממפול רגיל, מאושרות-על-הספר, מדודות-GAS, מכסה-גודל ותדר.
  */
+
+/** רצפות-עומק-בריכה (SETTLE-14): רזרבה-מינ' בµ לכל-נכס — מתחת-לזה הבריכה לא
+ * "זמינה" מסחרית (slippage איום). הארנה משלימה-פרופורציונלית כל-8 טיקים. */
+export const POOL_DEPTH_FLOORS: Record<string, number> = {
+  USDS: 10_000_000, SAOS: 4_000_000, WSTEEM: 4_000_000,
+};
 export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void {
-  const m = MARKETS[0]; // SAOS/USDS — הזוג-הריבוני
+  const m = MARKETS[0]; // הזוג-הריבוני — לחגורת-הסולם
   const fair = fairPrice(st, m.base, m.quote);
   if (fair <= 0) return;
 
-  // (1) מנעול-בריכה: poolMid → fair
-  const p = getPool(st, poolKey(m.base, m.quote));
-  if (p) {
-    const pm = poolMid(p);
-    const gapBps = Math.floor(((pm - fair) / fair) * 10_000);
-    if (Math.abs(gapBps) >= 50 && tick % 2 === 0) {
-      const assetIn = gapBps > 0 ? m.base : m.quote; // יקר-בבריכה → מזרימים-בסיס-פנימה (מוריד-mid)
+  // (1) מנעול-בריכה — לכל-הזוגות (FIX SETTLE-14: היה רק-הזוג-הריבוני ובריכת
+  // WSTEEM צפה חופשי — נסחרה עד 6x מעל הספר בלי-שום-גרביטציה)
+  for (const mk of MARKETS) {
+    const p = getPool(st, poolKey(mk.base, mk.quote));
+    if (!p) continue;
+    const pm = poolMidFor(p, mk.base, mk.quote);
+    if (pm <= 0) continue;
+    const mkFair = fairPrice(st, mk.base, mk.quote); // פייר-פר-זוג — לעולם לא פייר-זר
+    if (mkFair <= 0) continue;
+    const gapBps = Math.floor(((pm - mkFair) / mkFair) * 10_000);
+    // SETTLE-14: פער-גדול (≥200bps) מטופל כל-טיק; קטן — כל-טיק-שני (חיסכון-גז)
+    if (Math.abs(gapBps) >= 30 && (Math.abs(gapBps) >= 200 || tick % 2 === 0)) {
+      const assetIn = gapBps > 0 ? mk.base : mk.quote; // יקר-בבריכה → מזרימים-בסיס-פנימה (מוריד-mid)
       const rIn = assetIn === p.a ? p.ra : p.rb;
-      // גודל-לסגירת-חצי-פער (ליניאריזציה), מדורג: 10k..150k µ, ולא-יותר-מהזמין
+      // גודל-לסגירת-חצי-פער (ליניאריזציה), מדורג: 10k..600k µ (היה 150k —
+      // לא-היה-מסוגל לסגור פער של 25% והבריכה צפה מעל השוק) — ולא-יותר-מהזמין
       const halfGap = Math.floor(Math.abs(Math.floor((rIn * gapBps) / 10_000)) / 2);
-      const size = Math.min(Math.max(halfGap, 10_000), 150_000, avail(st, "arena", assetIn));
+      const size = Math.min(Math.max(halfGap, 10_000), 600_000, avail(st, "arena", assetIn));
       if (size >= 5_000) {
-        pushOp({ type: "pool_swap", issuer: "arena", nonce: `pk-pool-${tick}`, pair: poolKey(m.base, m.quote), assetIn, amount: size });
+        pushOp({ type: "pool_swap", issuer: "arena", nonce: `pk-pool-${tick}-${mk.base}`, pair: poolKey(mk.base, mk.quote), assetIn, amount: size });
       }
     }
   }
@@ -142,20 +176,45 @@ export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void 
     const mid = bb > 0 && ba > 0 ? Math.floor((bb + ba) / 2) : (bb || ba);
     if (mid > 0) {
       const devBps = Math.floor(((mid - ref) / ref) * 10_000);
+      // SETTLE-14 price-truth: גודל-החגורה פרופורציונלי לסטייה — 80k-קבוע מול
+      // סטיית-15% היה טיפה-בים (הספר צף ולא חזר). 120k+300µ/סט-בפס, תקרה 600k.
+      const bandQty = Math.min(120_000 + Math.abs(devBps) * 300, 600_000);
       if (devBps > 400) {
         // יקר-מדי-מול-הסולם → הארנה מוכרת-לתוך-הבידים (מורידה-את-המגע)
-        const qty = Math.min(80_000, avail(st, "arena", m.base));
+        const qty = Math.min(bandQty, avail(st, "arena", m.base));
         if (qty >= 5_000) {
           pushOp({ type: "fill", issuer: "arena", nonce: `pk-band-${tick}`, base: m.base, quote: m.quote, side: "sell", amount: qty, market: true });
         }
       } else if (devBps < -400) {
         // זול-מדי → הארנה קונה-מהאסקים (מרימה-את-המגע)
         const px = ba > 0 ? ba : ref;
-        const qty = Math.min(80_000, Math.floor((avail(st, "arena", m.quote) * 900) / (px * 10)));
+        const qty = Math.min(bandQty, Math.floor((avail(st, "arena", m.quote) * 900) / (px * 10)));
         if (qty >= 5_000) {
           pushOp({ type: "fill", issuer: "arena", nonce: `pk-band-${tick}`, base: m.base, quote: m.quote, side: "buy", amount: qty, market: true });
         }
       }
+    }
+  }
+
+  // (3) רצפות-עומק (SETTLE-14): "הבריכות יהיו זמינות" — בריכה-שרזרבה-אחת-שלה
+  // מתחת-לרצפה מקבלת-השלמה-פרופורציונלית-מהארנה (הוספה-ביחס-הנוכחי = אפס-הזזת-mid).
+  // ממומן-רק-ממלאי-אמת-של-הארנה (בדיקת-avail לפני-הדחיפה — אפס-דחיות-ספר).
+  if (tick % 8 === 0) {
+    for (const m of MARKETS) {
+      const p = getPool(st, poolKey(m.base, m.quote));
+      if (!p) continue;
+      const floorA = POOL_DEPTH_FLOORS[p.a] ?? 0;
+      const floorB = POOL_DEPTH_FLOORS[p.b] ?? 0;
+      const shortA = Math.max(0, floorA - p.ra);
+      const shortB = Math.max(0, floorB - p.rb);
+      if (shortA <= 0 && shortB <= 0) continue;
+      // משלימים-את-הצד-החסר-הגדול; הצד-השני נגזר-מיחס-הבריכה (חוזה pool_add)
+      const addA = shortA >= shortB ? shortA : (p.ra > 0 ? Math.floor((shortB * p.ra) / p.rb) : 0);
+      if (p.ra <= 0 || p.rb <= 0 || addA <= 0) continue;
+      const addB = Math.floor((p.rb * addA) / p.ra);
+      if (addA < 20_000 || addB < 20_000) continue;
+      if (avail(st, "arena", p.a) < addA || avail(st, "arena", p.b) < addB) continue;
+      pushOp({ type: "pool_add", issuer: "arena", nonce: `pk-floor-${tick}-${p.a}`, pair: poolKey(p.a, p.b), amount: addA });
     }
   }
 }
@@ -199,6 +258,38 @@ export function arenaTick(
         // (המנוע דוחה rTo==issuer) — לכן-הממנה-שלה הוא אוצר/מפעיל בלבד.
         const funder = funderFor(st, amt, ag === "arena" ? "arena" : undefined);
         pushOp({ type: "refuel", issuer: funder, nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
+      }
+    }
+  }
+
+  // ── THE-REARM: חייל-אספקה-למייצב (למעלה — תיעוד-מלא) — קצב 16-טיק כמו-העירוי ──
+  if (tick % 16 === 0) {
+    if (avail(st, "arena", "SAOS") < REARM_FLOOR_SAOS && arenaRearm.saos + REARM_TRANCHE_SAOS <= REARM_LIFETIME_SAOS) {
+      const amt = Math.min(REARM_TRANCHE_SAOS, REARM_LIFETIME_SAOS - arenaRearm.saos);
+      if (avail(st, "treasury", "SAOS") >= amt) {
+        arenaRearm.saos += amt;
+        pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-s${tick}`, to: "arena", asset: "SAOS", amount: amt });
+      }
+    }
+    if (avail(st, "arena", "USDS") < REARM_FLOOR_USDS && arenaRearm.usds + REARM_TRANCHE_USDS <= REARM_LIFETIME_USDS) {
+      const amt = Math.min(REARM_TRANCHE_USDS, REARM_LIFETIME_USDS - arenaRearm.usds);
+      if (avail(st, "treasury", "USDS") >= amt) {
+        arenaRearm.usds += amt;
+        pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-u${tick}`, to: "arena", asset: "USDS", amount: amt });
+      }
+    }
+    // קו-WSTEEM (SETTLE-14): אוצר-עוטף-את-ה-STEEM-הטבעי-שלו-עצמו (גיבוי 1:1 כנה —
+    // אפס-הטבעה-רכה: הגיבוי נרשם ב-backing) ואז מעביר לארנה לשירות-המנעול.
+    // העטיפה-וההעברה-בטיקים-נפרדים — הבדיקה-על-avail לפני-כל-דחיפה מסדרת-את-הסדר.
+    if (avail(st, "arena", "WSTEEM") < REARM_FLOOR_WSTEEM && arenaRearm.wsteem + REARM_TRANCHE_WSTEEM <= REARM_LIFETIME_WSTEEM) {
+      const amt = Math.min(REARM_TRANCHE_WSTEEM, REARM_LIFETIME_WSTEEM - arenaRearm.wsteem);
+      const tw = avail(st, "treasury", "WSTEEM");
+      if (tw < amt && avail(st, "treasury", "STEEM") >= amt - tw) {
+        pushOp({ type: "wrap_mint", issuer: "treasury", nonce: `rearm-wrap-${tick}`, wrapAsset: "WSTEEM", amount: amt - tw });
+      }
+      if (avail(st, "treasury", "WSTEEM") >= amt) {
+        arenaRearm.wsteem += amt;
+        pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-w${tick}`, to: "arena", asset: "WSTEEM", amount: amt });
       }
     }
   }
@@ -306,8 +397,11 @@ export function arenaTick(
       const bot = bots[tick % bots.length]!;
       const roll = (tick * 7 + m.base.length * 3) % 10;
       if (roll < 3) {
-        // טייק-שוק של בוט — יוצר מילויים וגילוי-מחיר אמיתי
-        const side: "buy" | "sell" = roll === 0 ? "buy" : "sell";
+        // טייק-שוק של בוט — יוצר מילויים וגילוי-מחיר אמיתי.
+        // FIX(SETTLE-14): הצד היה מוטה-מבנית (roll===0 → קנייה; 1,2 → מכירה =
+        // 1/3 קנייה 2/3 מכירה). זרימה-חד-צדדית אינה "גילוי-מחיר" — היא מניפולציה
+        // בתוך-הסימולציה. עכשיו: זוגיות-טיק = איזון-מושלם קנייה/מכירה.
+        const side: "buy" | "sell" = tick % 2 === 0 ? "buy" : "sell";
         const px = side === "buy" ? (sortBook(st, m.base, m.quote, "sell")[0]?.price ?? fair) : (sortBook(st, m.base, m.quote, "buy")[0]?.price ?? fair);
         const assetHave = side === "buy" ? m.quote : m.base;
         const affordable = px > 0 ? Math.floor((avail(st, bot, assetHave) * 9) / (px * 10)) : 0;
@@ -330,7 +424,10 @@ export function arenaTick(
       } else {
         const p = getPool(st, poolKey(m.base, m.quote));
         if (p) {
-          const assetIn = tick % 3 === 0 ? p.a : p.b;
+          // FIX(SETTLE-14): הכיוון היה tick%3 — מוטה-מבנית 2:1 (על-הזוג-הריבוני:
+          // 2/3 קניות-בסיס). זרימה-חד-צדדית קטנה-אך-מתמדת היא-הרמת-מחיר,
+          // לא-גילוי-מחיר. זוגיות-טיק = איזון-מושלם שתי-הכיוונים.
+          const assetIn = tick % 2 === 0 ? p.a : p.b;
           submit(rt, bot, { type: "pool_swap", pair: poolKey(p.a, p.b), assetIn, amount: 15_000 + (tick % 5) * 5_000 }, pushOp);
         }
       }
