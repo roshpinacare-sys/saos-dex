@@ -82,6 +82,11 @@ export const REV_MIN_CYCLE = 10_000;    // מתחת-לזה — אין-מחזור
 export const DYN_FEE_MIN_BPS = 4;       // עמלה-דינמית: רצפה
 export const DYN_FEE_MAX_BPS = 1_500;   // עמלה-דינמית: תקרה
 export const DYN_FEE_K = 4;             // fee = base + vol/4 (0.25bps-ל-bps-תנודה)
+// ── Task 55 · ALE (מנוע-הנזילות-האוטונומית) — POL שצומח-מהעמלים עצמם, בלי-משתמשים ──
+export const ALE_EVERY = 100;           // מחזור-הזרעה-כל-100-בלוקים (5 דק' בטיק-3s)
+export const ALE_SEED_PCT = 25;         // % מהחופשי-מעל-הרצפה שיוזרע-כ-POL
+export const ALE_MIN_SEED = 5_000;      // מתחת-לזה — אין-הזרעה (אבק)
+export const ALE_MAX_PER_CYCLE = 500_000; // תקרת-הזרעה-פר-מחזור — גם-אם-האוצר נשפך, הנזק חסום
 
 export type FuelFunder = (typeof FUEL_FUNDERS)[number];
 /** ממנה-דלק מדורג (SETTLE-5/9): arena → treasury → operator.
@@ -142,6 +147,7 @@ export interface DexState {
   burnedSaos?: number;                  // ΣSAOS-שנשרף (דפלציוני-אמת)
   bond?: { soldSaosMu: number; usdsInMu: number; count: number };
   bondUserH?: Record<string, number>;   // cooldown-בונד-פר-חשבון
+  ale?: { lastH: number; cycles: number; seededMu: number; seeds: number; polBaseUsdsMu: number }; // ALE-מדידה (רשויות: תמונות-מצב-ישנות-בלעדיהן)
 }
 
 // ─── עזרי-מצב (שלמים-בלבד) ──────────────────────────────────────────────────

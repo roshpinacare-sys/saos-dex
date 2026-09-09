@@ -24,7 +24,7 @@ import { milestoneSummary } from "./milestone";
 import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX } from "./amm";
 import { sortBook } from "./book";
 
-const TICK_MS = 3_000;
+export const TICK_MS = 3_000;
 const SEAL_EVERY = 12;   // checkpoint כל-12 בלוקים (CHAIN_SPEC)
 const GC_EVERY = 8;
 const SNAPSHOT_EVERY = 16;

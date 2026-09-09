@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { nextNonce, submitOp } from "@/lib/dex/chain";
 import { BATCH_MAX_OPS, type Asset, type Op } from "@/lib/dex/kernel";
-import { allLpValuations, quoteRoute, routableMap, wrapPairs } from "@/lib/dex/router";
+import { allLpValuations, quoteRoute, quoteSplit, routableMap, wrapPairs } from "@/lib/dex/router";
 import { ASSETS } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
 import { operatorAuth } from "@/lib/operator-auth";
@@ -23,14 +23,17 @@ export async function GET(req: Request) {
   const assetOut = String(url.searchParams.get("assetOut") ?? "USDS").toUpperCase();
   const amountInMu = Math.floor(Number(url.searchParams.get("amount") ?? 0));
   const quote = amountInMu > 0 ? quoteRoute(assetIn, assetOut, amountInMu) : null;
+  // Task 55 · SPLIT-ROUTING: הפיצול-החכם — רק-אם-הוא-אכן-משתלם (savingBps>0)
+  const split = amountInMu > 0 ? quoteSplit(assetIn, assetOut, amountInMu) : null;
   return NextResponse.json({
     ok: true,
     quote,
+    split,
     routable: routableMap(),
     wrapRail: wrapPairs(),
     lpValuations: allLpValuations(),
     assets: ASSETS,
-    honesty: "ציטוט=סימולציית-שלמים על הבריכות-החיות (30bps לרגל-בריכה) · מסדרון-עיגון 1:1 מוגבל-גיבוי · מפה-כנה: מי-ראוטר-ביל ומי-לא",
+    honesty: "ציטוט=סימולציית-שלמים על הבריכות-החיות (30bps לרגל-בריכה) · מסדרון-עיגון 1:1 מוגבל-גיבוי · מפה-כנה: מי-ראוטר-ביל ומי-לא · פיצול-מסלול מוצע-רק-כשהוא משתלם",
   });
 }
 
