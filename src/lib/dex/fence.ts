@@ -27,6 +27,10 @@ const PINNED_HOSTS = new Set<string>([
   "api.hive.blog", "api.deathwing.me",
   /* Hive-Engine sidechain — קריאות-מאזנים/שוק של מסילת-ההמרה (hive-rail.ts, Task 27/28) */
   "api.hive-engine.com",
+  /* Task 56 · פידי-מחיר-אמת — שוק-ציבורי-חסר-מפתחות (price-proof.ts) */
+  "api.coingecko.com",
+  /* Task 4 · BLURT — הרשת-השלישית (blurtHead חי ב-price-proof) */
+  "blurt-rpc.saboin.com",
   /* TRON */
   "api.trongrid.io",
   /* ETH — ברירות-מחדל של ETH_RPCS */
