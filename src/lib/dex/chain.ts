@@ -334,6 +334,50 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
       console.warn(`[saos-dex][ALERT] HISTORICAL DRIFT DECLARED at h${rt.st.height}: ${details.join(" · ")} — declared in canonical state (not hidden); new drift beyond declaration = HALT at seal`);
     }
   }
+  // ── FIX(Roast-68 · pol-retro-mint): הפנטום-הג'נזיס הופך-עמדת-POL-גלויה-וכנה ──
+  // עד-היום: implied = pool.lp − Σbal(LP|) = ג'נזיס+מוצהר — נזילות-זרע "ששייכת-לאף-אחד"
+  // (85%/76%/100% מהבריכות-העיקריות): לא-מרוויחה-עמלות, לא-ניתנת-למימוש, ומרמה-את-מד-התשואה
+  // (lpYieldBps-מחושב-מול-pool.lp-כולל-הפנטום → תשואת-LP-חוץ-נראית-קטנה-מהאמת).
+  // מעתה-פעם-אחת: האוצר-מקבל-את-ה-implied כ-LP-אמת — עמדת-POL כנה שמרוויחה-עמלות-פרו-רטה —
+  // והביקורת-מחמירה: implied חייב-0-לנצח; כל-חצי-פעולה-עתידית (מונה-בלי-יתרה או יתרה-בלי-מונה)
+  // נתפסת-מיד-בחותם (HALT). אחרי-הצהרת-הסחיפה-ולפני-החזרה — הביקורת-חייבת-ירוקה-אחרת-דחייה.
+  if (rt.st.polRetroMint !== true) {
+    const { ledgerAudit, genesisTotals } = await import("./settle");
+    const totals = genesisTotals();
+    const adj = rt.st.auditAdjustments ?? (rt.st.auditAdjustments = {
+      note: "historical conservation drift from the pre-fix era (roast-63/64 bugs) — declared, not hidden; any NEW drift beyond this declaration halts at seal (65-a HIGH-2)",
+      atH: rt.st.height,
+      native: {}, lp: {}, feesSpentMu: 0,
+    });
+    adj.atH = rt.st.height;
+    const details: string[] = [];
+    for (const [key, p] of Object.entries(rt.st.pools)) {
+      const asset = LP_ASSET_PREFIX + key;
+      let sumBal = 0;
+      for (const wallet of Object.values(rt.st.balances)) sumBal += Number(wallet[asset] ?? 0);
+      const implied = p.lp - sumBal;
+      if (implied === 0) continue;
+      // הטבעת-LP-לאוצר + כיול-הצפוי-במבקר-לאפס (הפנטום-מגולם-עתה-כעמדת-POL-אמת)
+      const w = rt.st.balances.treasury ?? (rt.st.balances.treasury = {});
+      w[asset] = (w[asset] ?? 0) + implied;
+      adj.lp = adj.lp ?? {}; adj.lp[key] = -(totals.poolsLp[key] ?? 0);
+      details.push(`${key}:+${implied}`);
+    }
+    rt.st.polRetroMint = true;
+    const post = ledgerAudit(rt.st, genesisTotals());
+    if (!post.ok) {
+      console.error(`[saos-dex][ALERT] POL-RETRO-MINT BROKE THE AUDIT at h${rt.st.height}: ${[...post.errors, ...post.negatives].slice(0, 3).join(" | ")} — refusing load, evidence untouched`);
+      return "corrupt";
+    }
+    if (details.length > 0) {
+      rt.st.journal.push({
+        h: rt.st.height, t: 0, soldier: "treasury", action: "pol_retro_mint", profitMu: 0,
+        note: `pol-retro-mint @h${rt.st.height}: ${details.join(" · ")} — פנטום-הג'נזיס הוטבע כעמדת-POL של האוצר; implied=0 לנצח`,
+      });
+      pushReceipt(rt, "pol-retro-mint", { details, atH: rt.st.height, at: Date.now() });
+      console.warn(`[saos-dex][ALERT] POL RETRO-MINT at h${rt.st.height}: ${details.join(" · ")} — genesis phantom LP minted to treasury as explicit POL; audit tightened: implied must be 0 forever`);
+    }
+  }
   return "loaded";
 }
 
