@@ -239,17 +239,23 @@ export function routableMap(): RoutableEntry[] {
     // טירון: ישיר-עמוק / מיקרו / דרך-מסדרון
     const direct = getPool(st, [a, ROUTE_HUB].sort().join("/"));
     const isRail = q.legs.some((l) => l.kind === "wrap");
-    let depth = 0;
+    // FIX(Roast-67 · route-depth-neck): עומק-מסלול = הצוואר-בבק — הבריכה-הרדודה-ביותר
+    // במסלול (min). היה Math.max = עומק-הרגל-העמוקה-בלבד → depthUsdsMu נופח-למסלולי-
+    // רגליים (הצגת-נזילות-שלא-קיימת-בפועל-למסלול-כולו).
+    let depth: number | null = null;
     for (const l of q.legs) {
       if (l.kind !== "pool" || !l.venue.startsWith("POOL:")) continue;
       const p = getPool(st, l.venue.slice(5));
-      if (p) depth = Math.max(depth, poolDepthUsdsMu(p, (x) => priceRef(x, st)));
+      if (p) {
+        const d = poolDepthUsdsMu(p, (x) => priceRef(x, st));
+        depth = depth === null ? d : Math.min(depth, d);
+      }
     }
     let tier: RouteTier;
     if (isRail) tier = "rail";
     else if (direct) tier = "deep";
     else tier = "micro";
-    out.push({ asset: a, tier, priceUsdsMu: q.effPriceMu, routeDesc: q.legs.map((l) => l.venue).join(" → "), depthUsdsMu: depth });
+    out.push({ asset: a, tier, priceUsdsMu: q.effPriceMu, routeDesc: q.legs.map((l) => l.venue).join(" → "), depthUsdsMu: depth ?? 0 });
   }
   return out;
 }

@@ -13,8 +13,9 @@
  *    → ed25519-seed32 → base58.
  *  · stateRoot: רוכב בתוך הממו (בייטים חופשיים) — ללא-המרה; נקרא-חזרה מהלוג
  *    של getTransaction (אי-אמון-עצמי).
- *  · כלכלה: 5000 lamports לחתימה. ברירת-מחדל devnet (קרקע-הוכחה אפס-עלות,
- *    מורשת xwallet) — SOL_RPC_URL משמש לעקיפה ל-mainnet כשהזהות תמומן.
+ *  · כלכלה: הרצפה-האמתית = פטור-משכרת (~890,880-lamports) + 5,000-עמלה —
+ *    הוכח-בסימולציה-חיה (roast-67): מתחת-לפטור השידור נופל InsufficientFundsForRent.
+ *    ברירת-מחדל mainnet-beta — SOL_RPC_URL משמש לעקיפה.
  *
  * אבטחה: מפתח בזיכרון בלבד מ-.env (gitignored); אפס סודות בלוגים/פלט;
  * אימות-עצמי fail-closed — כתובת-נגזרת חייבת להתאים לכתובת-הצפוי.
@@ -30,7 +31,14 @@ export const SOL_RPCS = (process.env.SOL_RPC_URL
   : ["https://api.mainnet-beta.solana.com"]);
 
 export const SOL_MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"; // SPL Memo v2
-const BALANCE_FLOOR = 10_000;  // חסם-מימון: עמלת-חתימה (5000) + מרווח
+const SIGNATURE_FEE_LAMPORTS = 5_000;   // עמלת-חתימה בסיסית
+const RENT_EXEMPT_FALLBACK = 890_880;   // מינימום-פטור-משכרת-לחשבון-0-בייטים (ריצפה-קנונית)
+const RENT_MARGIN_LAMPORTS = 1_000;     // מרווח-זעיר מעל הפטור
+// FIX(Roast-67 · sol-rent-floor): הישן BALANCE_FLOOR=10_000 — שקר-מבני. הוכח-חי
+// (simulateTransaction מול-mainnet): InsufficientFundsForRent{account_index:0} —
+// חשבון-החותם חייב-להיות **פטור-משכרת** (890,880-lamports ל-0-בייטים) ולא רק-לשלם-עמלה.
+// עכשיו: הרצפה-דינמית = rentExempt(מ-RPC, fallback-קנוני) + עמלה + מרווח — והודעת-ה-unfunded
+// מדויקת: כמה-חסר-בפועל (לא עוד-"Transaction simulation failed"-תעלומתי).
 
 /* ── base58 (מורשת xwallet.cjs — אותה-אלגוריתמיקה) ── */
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -104,7 +112,7 @@ function buildMemoMessage(signer32: Uint8Array, memoProgram32: Uint8Array, block
 }
 
 /* ── שידור-עיגון חי (self-memo anchor) ──
- * חסם-מימון: getBalance ≥ BALANCE_FLOOR — אחרת "unfunded" (המתנה-כלכלית
+ * חסם-מימון: getBalance ≥ rentExempt+fee+margin — אחרת "unfunded" מדויק (המתנה-כלכלית
  * כנה אצל ה-Relay, לא-כשל-breaker). ה-blockhash נלקח מה-RPC רגע-לפני. */
 export async function solSealBroadcast(
   payload: unknown,
@@ -122,11 +130,17 @@ export async function solSealBroadcast(
   const { address } = solIdentity(secretHex);
   const memoProgram32 = b58Decode(SOL_MEMO_PROGRAM);
 
-  const balance = await rpc<number>(endpoint, "getBalance", [address, { commitment: "confirmed" }], 15000)
-    .then((r) => (typeof r === "number" ? r : Number((r as { value?: number })?.value ?? 0)))
-    .catch(() => 0);
-  if (balance < BALANCE_FLOOR) {
-    throw new Error(`unfunded: ${balance} lamports (<${BALANCE_FLOOR} fee floor) — pending funding (armed)`);
+  const [balance, rentMin] = await Promise.all([
+    rpc<number>(endpoint, "getBalance", [address, { commitment: "confirmed" }], 15000)
+      .then((r) => (typeof r === "number" ? r : Number((r as { value?: number })?.value ?? 0)))
+      .catch(() => 0),
+    rpc<number>(endpoint, "getMinimumBalanceForRentExemption", [0, { commitment: "confirmed" }], 15000)
+      .then((r) => (typeof r === "number" && r > 0 ? r : RENT_EXEMPT_FALLBACK))
+      .catch(() => RENT_EXEMPT_FALLBACK),
+  ]);
+  const needed = rentMin + SIGNATURE_FEE_LAMPORTS + RENT_MARGIN_LAMPORTS;
+  if (balance < needed) {
+    throw new Error(`unfunded: ${balance} lamports < rent-exempt ${rentMin} + fee ${SIGNATURE_FEE_LAMPORTS} = ${needed} — pending top-up (${needed - balance} lamports missing ≈ ${(needed - balance) / 1e9} SOL) — armed, memos signed (zero cost)`);
   }
 
   const bh = await rpc<{ value: { blockhash: string; lastValidBlockHeight: number } }>(

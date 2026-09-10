@@ -1016,6 +1016,7 @@ export function getState() {
     ladders: st.stats.ladders,
     treasuryProfit: st.treasuryProfit,
     feeMeter: st.feeMeter,
+    gasFundedMu: st.gasFundedMu ?? 0, // FIX(Roast-67 · ZFB-gas-tank): טלמטריית-מימון-הדלק
     ladder: st.ladder,
     liveOrders: st.orders.filter((o) => o.live).length,
     buildMs: rt.buildMsRolling,

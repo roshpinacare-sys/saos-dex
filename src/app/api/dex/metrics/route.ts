@@ -64,6 +64,7 @@ export async function GET(req: Request) {
 
   // ── דלק/סיבולת (SETTLE-5/7) ──
   push("saos_credits_total", runway.totalCredits, "Σ fuel credits in the closed SIM economy");
+  push("saos_gas_funded_total", s.gasFundedMu ?? 0, "FIX(Roast-67 · ZFB-gas-tank): Σ credits funded from measured fees (revenueCycle, mint_fuel semantics)");
   push("saos_burn_per_block", runway.burnPerHeight, "windowed burn (fuelSamples ring) — honest current-regime burn");
   push("saos_burn_window_blocks", runway.burnWindowBlocks ?? 0, "0 = fell back to lifetime average (young window)");
   push("saos_runway_hours", runway.systemRunwayHours, "hours of life at current burn");

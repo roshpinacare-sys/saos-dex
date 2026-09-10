@@ -180,6 +180,9 @@ export interface DexState {
   // pools===feeMeter+profit+minted נשברת-נצחית מהמחזור-הראשון שבו-הראוטר שורף
   // (המדידה-בבריכות אינה יורדת). רשויות: תמונות-מצב-ישנות (undefined→0).
   feesSpentMu?: number;
+  // FIX(Roast-67 · ZFB-gas-tank): Σקרדיטים-שמומנו-לארנק-הדלק-מהעמלות-שנמדדו
+  // (revenueCycle, 10%-מהמחזור, בסמנטיקות-mint_fuel-המלאות) — טלמטריית-ריצה.
+  gasFundedMu?: number;
   // FIX(Roast-65-a · LOW-11): cooldown-הברזל-של-ה-faucet — במצב (לא-בזיכרון-מודול)
   // כדי-שריסטארט לא יאפס את התקרה. רשויות: תמונות-ישנות (undefined→0).
   faucetAt?: Record<string, number>;
