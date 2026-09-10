@@ -77,6 +77,11 @@ export const GAS_TABLE = {
   // ── Task 58 · CoW-אצווה (מחקר R-56 #7): מכירות-אצווה-פר-בלוק במחיר-אחיד ──
   cow_order: 60,   // הזמנת-אצווה: נעולה-מראש, נסגרת-במחיר-שווק-אחיד בסוף-הבלוק
   cow_cancel: 15,  // ביטול-הזמנת-אצווה + שחרור-ערבות
+  // ── Task 72 · THE-COIN-DOOR (דלת-המטבעות): אורקל-מחירים קנוני ──
+  // נתון-שוק-אמת (median חוצה-מקורות ציבוריים) נכנס למצב-הקנוני דרך op-אוצר.
+  // הערכים חיים בתוך ה-op עצמו → ריפליי דטרמיניסטי. אפס-גז (משפחת-הערוצים
+  // הריבוניים: relay/wrap/batch) — השקיפות היא המוצר, והמגן-המבני הוא אוצר-בלבד.
+  oracle_set: 0,
 } as const;
 
 export type OpKind = keyof typeof GAS_TABLE;
@@ -144,11 +149,13 @@ export function funderFor(st: DexState, amt: number, exclude?: string): FuelFund
   return "operator";
 }
 
-export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM" | "BLURT" | "WBLURT";
+export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM" | "BLURT" | "WBLURT" | "WTRX" | "WSOL";
 /** רשימת-ריצה של הנכסים — אימות-קלט fail-closed ב-routes ובגרעין (SETTLE-9).
  * Task 61 · BLURT/WBLURT — מסילת-האמת: WBLURT מוטבע מול-גיבוי-חוץ-אמת
- * (BLURT-אמת על headcorner, מאומת-חי מול-RPC-ציבורי בכל-קריאת-truth). */
-export const ASSETS: Asset[] = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE", "STEEM", "BLURT", "WBLURT"];
+ * (BLURT-אמת על headcorner, מאומת-חי מול-RPC-ציבורי בכל-קריאת-truth).
+ * Task 72 · דלת-המטבעות: WTRX/WSOL — עוגנים-מגובי-פקדה (wrap_mint external
+ * + claim), הפקדות-אמת מאומתות מול-RPC ציבורי (trongrid/solana). */
+export const ASSETS: Asset[] = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE", "STEEM", "BLURT", "WBLURT", "WTRX", "WSOL"];
 
 export interface Pool {
   a: Asset; b: Asset; // ממוינים אלפבתית — מפתח-קנוני
@@ -239,6 +246,9 @@ export interface DexState {
   cow?: CowOrder[];                   // הזמנות-אצווה-פתוחות (נסגרות-בסוף-הבלוק)
   cowSeq?: number;                    // מונה-הזמנות-אצווה
   cowStats?: { matched: number; batches: number; surplusMu: number; fallbackPool: number; fallbackBook: number }; // מדידת-CoW
+  // ── Task 72 · דלת-המטבעות: אורקל-מחירים קנוני (רשויות: תמונות-מצב-ישנות-בלעדיו) ──
+  // נכס → { mu: µ-USDS ל-1-יחידת-שלמה · atH: גובה-העדכון · src: תווית-מקור }. חלק-מה-stateRoot.
+  oracle?: Record<string, { mu: number; atH: number; src: string }>;
 }
 
 /** Task 57/58 · השקה-על-מסילת-ההשקות: עקומת-מחיר-וירטואלית (pump.fun) או
@@ -480,6 +490,8 @@ export interface Op {
   triggerPx?: number; limitPx?: number; expiresH?: number;                    // trig_order
   // Task 57/58 · מסילת-ההשקות
   ticker?: string; lmode?: "curve" | "lbp"; supply?: number;
+  // Task 72 · oracle_set — מפת-מחירים (נכס → µ-USDS ל-1-יחידה, שלמים בלבד)
+  prices?: Record<string, number>;
   // דבר-גורר-דבר (SETTLE-12): תתי-ops של batch — כל-תת-op חייב-issuer זהה למנפיק-ה-batch
   ops?: Op[];
 }
@@ -1127,6 +1139,25 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         addBal(st, issuer, native, amt);
         return { ok: true, gas };
       }
+    }
+    case "oracle_set": {
+      // Task 72 · THE-COIN-DOOR: אורקל-מחירים קנוני — נתון-שוק-אמת נכנס למצב.
+      // אוצר-בלבד · ערכים-שלמים fail-closed · src כתווית-גלויה · מדדי-dedupe רגילים.
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas };
+      const prices = op.prices;
+      if (!prices || typeof prices !== "object" || Array.isArray(prices)) return { ok: false, err: "prices-required", gas: 0 };
+      const entries = Object.entries(prices);
+      if (entries.length === 0) return { ok: false, err: "prices-empty", gas: 0 };
+      const clean: Record<string, { mu: number; atH: number; src: string }> = {};
+      for (const [a, v] of entries) {
+        if (!a || a.length > 24 || FORBIDDEN_KEYS.has(a)) return { ok: false, err: "bad-oracle-asset", gas: 0 };
+        if (!Number.isSafeInteger(v) || v <= 0) return { ok: false, err: "bad-oracle-price", gas: 0 };
+        clean[a] = { mu: v, atH: st.height, src: String(op.claim ?? "ext").slice(0, 40) };
+      }
+      const c = consume(); if (c) return c;
+      st.oracle = { ...(st.oracle ?? {}), ...clean };
+      st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "oracle_set", note: `${Object.keys(clean).sort().join(",")} ← ${String(op.claim ?? "ext").slice(0, 40)}` });
+      return { ok: true, gas };
     }
     case "asset_list":
     case "asset_price": {
