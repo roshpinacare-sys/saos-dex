@@ -201,6 +201,9 @@ export interface DexState {
     lp?: Record<string, number>;       // מפתח-בריכה → הפרש-implied מוצהר
     feesSpentMu?: number;              // עמלות-שנצרכו-טרם-שדה-feesSpentMu (חתימה)
   };
+  // FIX(Roast-68 · pol-retro-mint): דגל-הגירה-חד-פעמי — הפנטום-הג'נזיס (implied>0)
+  // הוטבע-כעמדת-POL-אמת-בידי-האוצר; מאז: implied=0-לנצח והביקורת-מחמירה-מיד-בחותם.
+  polRetroMint?: boolean;
   ladder: { refPrice: number; stepCostMu: number; lifts: number; lastLiftHeight: number; spentMu: number };
   journal: JournalEntry[];
   gasUsed: number;
