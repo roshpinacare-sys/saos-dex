@@ -37,7 +37,7 @@ export async function POST(req: Request) {
       return NextResponse.json(r, { status: 200 });
     }
     case "claim": {
-      const r = claimInbound({ id: String(body.id || "") });
+      const r = await claimInbound({ id: String(body.id || "") });
       return NextResponse.json(r, { status: 200 });
     }
     case "lock-out": {
@@ -49,7 +49,7 @@ export async function POST(req: Request) {
       return NextResponse.json(r, { status: 200 });
     }
     case "release": {
-      const r = markReleased({ id: String(body.id || ""), farTxid: String(body.farTxid || "") });
+      const r = await markReleased({ id: String(body.id || ""), farTxid: String(body.farTxid || "") });
       return NextResponse.json(r, { status: 200 });
     }
     default:

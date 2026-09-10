@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getPools, getQuote, getWallets, nextNonce, submitOp } from "@/lib/dex/chain";
+import { getPools, getQuote, getWallets, getLiveState, nextNonce, submitOp } from "@/lib/dex/chain";
+import { ASSETS } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
 import { operatorAuth } from "@/lib/operator-auth";
 
@@ -65,7 +66,8 @@ export async function GET(req: Request) {
   return NextResponse.json({
     ok: true,
     desk: "sovereign-convert/1.0.0+settle11",
-    assets: ["SAOS", "USDS", "WSTEEM", "WSBD", "PHIVE", "ENERGY", "STEEM"],
+    // FIX(Roast-63 · M4): רשימת-הנכסים-חיה-מהגרעין (הייתה-קבועה-והתיישנה — חסרו BLURT/WBLURT/LB|*)
+    assets: [...new Set([...ASSETS, ...Object.keys(getLiveState().assets)])],
     pairs: [...pairs].sort(),
     holdings,
     quote, // null כשאין-פרמטרים/אין-מסלול

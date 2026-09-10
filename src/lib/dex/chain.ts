@@ -758,7 +758,6 @@ export function getTape(limit = 30): TapeEvent[] {
  * קבלה-ל-DB בכל-קריאה = DoS-מחשוב + זיהום-שרשרת-העדויות בלי-גבול. */
 let benchCache: { at: number; res: { ops: number; ms: number; opsPerSec: number; perDay: number } } | null = null;
 export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: number; perDay: number; cached?: boolean } {
-  const rt = ensureChain();
   if (benchCache && Date.now() - benchCache.at < 60_000) {
     return { ...benchCache.res, cached: true };
   }
@@ -781,7 +780,7 @@ export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: numbe
   const opsPerSec = Math.floor((ops / ms) * 1000);
   const res = { ops, ms, opsPerSec, perDay: opsPerSec * 86_400 };
   benchCache = { at: Date.now(), res };
-  pushReceipt(rt, "bench", res);
+  // FIX(Roast-63 · L6): אין-עוד-רישום-בנץ' בפנקס-הקבלות-המגובה-חש (היה-מזהם-שרשרת-עדויות-בכל-סקר-ציבורי)
   return res;
 }
 

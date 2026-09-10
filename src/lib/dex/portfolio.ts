@@ -138,7 +138,8 @@ export function getPortfolio(): PortfolioView {
   for (const r of routableMap()) tiers.set(r.asset, { tier: r.tier, routeDesc: r.routeDesc });
   const books: PortfolioBook[] = [
     bookOf("core", "עתודת-הליבה: treasury+operator+arena", ["treasury", "operator", "arena"], tiers),
-    bookOf("portfolio-b", "התיקייה-השנייה (SETTLE-12, הופעלה בהעברה-חופשית)", ["portfolio-b"], tiers),
+    // FIX(Roast-63 · M2): כנות — החשבון-reserved-אך-לא-קיים-במצב-החי (יתרות-אפס)
+    bookOf("portfolio-b", "התיקייה-השנייה (SETTLE-12 — שמורה-למוסד; טרם-מומנת — יתרות-אפס)", ["portfolio-b"], tiers),
   ];
   const totalUsdsMu = books.reduce((s, b) => s + b.valueUsdsMu, 0);
   return {

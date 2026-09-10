@@ -39,6 +39,10 @@ const PINNED_HOSTS = new Set<string>([
   "ethereum-rpc.publicnode.com", "eth.llamarpc.com",
   /* SOL — ברירת-מחדל של SOL_RPCS (mainnet-beta) */
   "api.mainnet-beta.solana.com",
+  /* FIX(Roast-63): realmarket.ts — רשימת-הצמתים שלו מקובעת-כאן (היה-עוקף-גדר) */
+  "steem-rpc.publicnode.com",
+  /* FIX(Roast-63): bridge.ts — אימות-הוכחות-חוץ (eth_getTransactionReceipt על-BSC) */
+  "bsc-rpc.publicnode.com",
   /* מקומי (דמון/בדיקות) */
   "127.0.0.1", "localhost",
 ]);

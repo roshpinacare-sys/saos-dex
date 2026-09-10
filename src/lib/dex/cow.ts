@@ -191,9 +191,11 @@ function fallback(st: DexState, exec: Exec, o: CowOrder, rem: number, h: number,
     st.journal.push({ h, t: nowMs, soldier: "cow", action: "cow_fallback_book", note: `cow-${o.seq}: שארית ${rem}µ נחה-על-הספר @${o.price}` });
     return;
   }
-  // כשל-קשה (גז/ספר-סגור) — החזרה-כנה-ליתרה (הערבה כבר שוחררה)
-  addBal(st, o.owner, assetIn, rem);
-  st.journal.push({ h, t: 0, soldier: "cow", action: "cow_refund", note: `cow-${o.seq}: הוחזרו ${rem}µ ${assetIn} (${r2.err ?? "no-route"})` });
+  // FIX(Roast-63): כשל-קשה (גז/ספר-סגור) — אין-צורך-בהחזרה-בכלל.
+  // cow_order לא-מחייב-יתרה-בעת-ההצבה (רק-נועל ערבות), והנעילה כבר-שוחררה
+  // בראש-הסליקה → הכסף-כבר-פנוי-במלואו. addBal כאן היה **הדפסת-כסף**
+  // (אינפלציה-של-Σיתרות → אודיט-שימור-נכשל → HALT). השאר-רק-רישום-כנה.
+  st.journal.push({ h, t: 0, soldier: "cow", action: "cow_refund", note: `cow-${o.seq}: שארית ${rem}µ ${assetIn} נשארת-פנויה-אצל-${o.owner} (${r2.err ?? "no-route"}) — לא-הוחזרה-כפול` });
 }
 
 /** הדוח-החי ל-UI — הכל-מהמצב-האמת */

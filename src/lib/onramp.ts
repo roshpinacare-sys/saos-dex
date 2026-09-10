@@ -159,7 +159,7 @@ async function readAccounts(names: string[]): Promise<Map<string, OnrampAccount>
       movableNow: false,
       why: role === "fleet-soldier"
         ? "מפתח-active-לא-מופעל-בדרך-הצי (posting-only לעיגון בלבד) — סריקת-אבק/העברה-דורשת-החלטת-מפעיל+רוטציה"
-        : "אין-WIF-בכספת-כלל — רק-המפעיל-חתם-על-הזזת-headcorner (9.68 HIVE-נזילים-נמדדו-חי)",
+        : "אין-WIF-בכספת-כלל — רק-המפעיל-חתם-על-הזזת-headcorner (המספר-החי-במצב-למעלה — ה-9.68-HIVE-היה-מדידה-היסטורית)",
     });
   }
   return out;
@@ -246,7 +246,7 @@ export async function onrampSnapshot(force = false): Promise<OnrampSummary> {
       { what: `עיגון-ריבוני-חינם: ~${totals.anchorCapacityPerDay} אבני-דרך/יום (RC-regen ÷ 200M)`, how: "מופעל-כבר-אוטומטית — THE-MILESTONE מעגן-את-P&L על-Hive" },
     ],
     needsOperator: [
-      { what: "headcorner — 9.68 HIVE נזיל (2018, ראש-הממסורת)", why: "אין-WIF-בכספת — דרוש-מפתח-active-מהמפעיל (או-ערוץ-חתימה-חוץ)" },
+      { what: "headcorner — HIVE נזיל (מדידה-חיה-במצב-למעלה; 9.68-HIVE-היה-מדידה-היסטורית)", why: "אין-WIF-בכספת — דרוש-מפתח-active-מהמפעיל (או-ערוץ-חתימה-חוץ)" },
       { what: `אבק-HE-בצי (~${totals.swapHive.toFixed(4)} SWAP.HIVE + סטייקים WAIV/LOLZ/WEED/STEM)`, why: "מכירת-HE-דורשת-מפתח-active — מדיניות-הצי: posting-only עד-רוטציית-מפתחות" },
     ],
     note: "קריאה-ציבורית-חסרת-מפתחות-מה-RPC-המקובע — אפס-סודות, אפס-כתיבה. מפת-היכולת-כנה: מה-מניב-עכשיו מול-מה-דורש-החלטת-בעלים.",

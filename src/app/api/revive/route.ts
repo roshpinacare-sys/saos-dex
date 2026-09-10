@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import net from 'net';
+import { operatorAuth } from '@/lib/operator-auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +32,10 @@ function spawnDetached(cmd: string, args: string[], cwd: string): number | null 
   }
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  // FIX(Roast-63 · M6): זה-שער-תהליכים (spawn!) — לא-עוד-פתוח-לכולם. מפעיל-בלבד (fail-closed).
+  const oa = operatorAuth(req);
+  if (oa) return oa;
   const report: Record<string, unknown> = {};
 
   // 1) main platform :3000

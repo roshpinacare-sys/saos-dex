@@ -77,23 +77,10 @@ function bookSellSim(st: DexState, base: string, quote: string, baseMu: number):
   return { quoteMu, full: rem <= 0 };
 }
 
-/** סימולציית-קנייה-מהספר (קניית-base כ-taker-שוק מול-המוכרים): מחזיר ציטוט-שישולם.
- * מדלג-על-מייקרים-עצמיים (owner===treasury). full=true אם-הספר-בלע-את-כל-baseMu. */
-function bookBuySim(st: DexState, base: string, quote: string, baseMu: number): { quoteMu: number; full: boolean } {
-  let quoteMu = 0;
-  let rem = baseMu;
-  for (const m of sortBook(st, base, quote, "sell")) {
-    if (rem <= 0) break;
-    const q = m.amount - m.filled;
-    if (q <= 0 || m.owner === "treasury") continue;
-    const qty = Math.min(rem, q);
-    const leg = notional(m.price, qty);
-    if (leg <= 0) continue;
-    quoteMu += leg;
-    rem -= qty;
-  }
-  return { quoteMu, full: rem <= 0 };
-}
+/** FIX(Roast-63 · M8): bookBuySim היה-העתק-בייט-של-bookSellSim (מלכודת-סטייה).
+ * כנות-מתמטית: "קנייה-מהספר" מול-המוכרים ו"מכירה-לספר" מול-הקונים — בספר-הזה
+ * שני-הכיוונים-נמדדים-מול-אותם-מנחי-sell (הצד-ההפוך-לא-מדומה-כאן) — אותו-חישוב. */
+const bookBuySim = bookSellSim;
 
 /** כל-המועמדים-הרווחיים-עכשיו — קריאה-טהורה על המצב (סימולציית-שלמים בדיוק
  * כמו-הביצוע: quoteOut === poolSwap מתמטיקה; sims === matchBook-שוק).

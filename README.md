@@ -24,7 +24,7 @@ flowchart LR
     end
 
     subgraph CORE["Kernel — deterministic (sha256 stateRoot)"]
-        K["applyOp · 23 ops<br/>GAS table · integers-only"]
+        K["applyOp · 38 ops<br/>GAS table · integers-only"]
         B["book.ts — escrow orderbook<br/>crossing-at-placement"]
         AMM["amm.ts — x·y=k<br/>30bps (70% LP / 30% treasury)"]
         MM["mm.ts — soldier arena<br/>makers + budget-sized takers"]
@@ -81,7 +81,7 @@ chain.ts חותם מרקל כל-12 בלוקים → Relay משדר ואז **קו
 
 | רכיב | מימוש | מורשת |
 |---|---|---|
-| **גרעין דטרמיניסטי** | 23 ops (כולל REFUEL/FOUNTAIN), טבלת-GAS מהמפרט, dedupe קשיח, stateRoot=sha256(canon) | kernel.cjs · CHAIN_SPEC |
+| **גרעין דטרמיניסטי** | 38 ops (כולל CoW/launchpad/wrap/truth-rail), טבלת-GAS מהמפרט, dedupe קשיח, stateRoot=sha256(canon) | kernel.cjs · CHAIN_SPEC |
 | **ספר-הזמנות** | escrow מלא (sell נועל בסיס · buy נועל ציטוט), מילוי במחיר-מייקר, partial fills | saos-dex.ts |
 | **בריכות AMM** | x·y=k שלמים, עמלי-30bps (70% LP · 30% אוצר), שימור-ערך בכל-swap | dex-facts · grid98 |
 | **ארנה אוטונומית** | 4 חיילים עושי-שוק + טייק-מסתובב + שער-שוליים (edge ≥ עמלה+מינ') + בוטי-רעש | grid98 "זאן-חיילים" |

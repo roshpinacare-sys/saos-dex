@@ -629,7 +629,10 @@ async function verifyRecord(rt: RelayRT, rec: AnchorRecord): Promise<void> {
   }
   rec.verifiedAt = new Date().toISOString();
   rt.metrics.lastVerifyLatencyMs = Date.now() - t0;
-  const indexed = !last.detail.startsWith("not indexed");
+  // FIX(Roast-63): "awaiting finalized block" של-SOL אינו מיסמאץ' — זה-טרם-אינדוקס
+  // (Solana מאשרת-confirmed תוך-שניות אך finalized רק-אחרי-~32-סלוטים). היה-נספר
+  // כ-mismatch → אזעקת-שווא-קבועה (68-רשומות-אמת סומנו-זיוף) ו-realMoney.ok לא-יכול-היה-להתאמת.
+  const indexed = !last.detail.startsWith("not indexed") && !last.detail.startsWith("awaiting finalized block");
   // "טרם-נוכח באינדקס" אינו מיסמאץ' — הרשומה נשארת null ונכנסת לתור-הפיוס (reconcile)
   // FIX(SETTLE-13, מחלקה-roshpina-forensic בזמן-ריצה): ספירה-על-מעברים-בלבד —
   // אימות-חוזר-של-רשומה-כבר-מאומתת לא-מנפח את המדדים (verified ≤ anchored מבנית).

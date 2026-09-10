@@ -463,7 +463,8 @@ export async function realMoneyAudit(): Promise<RealMoneyReport> {
   const anchors = await anchorSpotCheck();
   const liveRails = rails.filter((r) => r.ok).length;
   const verifiedNow = anchors.filter((a) => a.verified).length;
-  const mismatches = anchors.filter((a) => !a.ok && a.height > 0 && !a.detail.includes("not indexed")).length;
+  // FIX(Roast-63): "awaiting finalized block" (SOL) אינו-מיסמאץ' — טרם-אינדוקס/פיינליזציה
+  const mismatches = anchors.filter((a) => !a.ok && a.height > 0 && !a.detail.includes("not indexed") && !a.detail.includes("awaiting finalized block")).length;
   return { rails, anchors, liveRails, verifiedNow, ok: liveRails >= 1 && mismatches === 0 };
 }
 
