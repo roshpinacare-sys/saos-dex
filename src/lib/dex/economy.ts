@@ -74,14 +74,24 @@ function revenueCycle(st: DexState, h: number): void {
   const burnUsds = Math.floor((take * REV_BURN_PCT) / 100);
   const veUsds = Math.floor((take * REV_VE_PCT) / 100);
   if (burnUsds > 0) {
-    const out = swapReserves(pool.rb, pool.ra, burnUsds); // USDS→SAOS מתמטיקת-בריכה
-    if (out > 0) {
-      pool.rb += burnUsds;
-      pool.ra -= out;
-      pool.swaps++;
-      // השמדה-אמת: ה-SAOS שנקנה לא מגיע-לאף-ארנק — ΣSAOS במצב יורד
-      st.burnedSaos = (st.burnedSaos ?? 0) + out;
-      st.journal.push({ h, t: 0, soldier: "router", action: "burn", profitMu: out, note: `burn ${out}µ SAOS (${burnUsds}µ USDS from fees)` });
+    // FIX(AUDIT-2026-09-10 · critical · conservation): לפני התיקון הנתיב הזה הוסיף
+    // burnUsds לבריכה (pool.rb += burnUsds) בלי לנכות אותם מיתרת האוצר — USDS-פנטום
+    // הוזרם לרזרבות בכל מחזור (Σbalances+Σpools גדל יש-מאין; ענף ה-ve ניכה כחוק, ענף ה-burn לא).
+    // התיקון fail-closed: מנכים מהאוצר רק כשיש לו באמת, אחרת skip-כנה מתועד ביומן.
+    const tBalB = st.balances["treasury"] ?? (st.balances["treasury"] = {});
+    if ((tBalB.USDS ?? 0) >= burnUsds) {
+      const out = swapReserves(pool.rb, pool.ra, burnUsds); // USDS→SAOS מתמטיקת-בריכה
+      if (out > 0) {
+        tBalB.USDS = (tBalB.USDS ?? 0) - burnUsds; // הכסף האמיתי יוצא מהאוצר — שימור-כספים
+        pool.rb += burnUsds;
+        pool.ra -= out;
+        pool.swaps++;
+        // השמדה-אמת: ה-SAOS שנקנה לא מגיע-לאף-ארנק — ΣSAOS במצב יורד
+        st.burnedSaos = (st.burnedSaos ?? 0) + out;
+        st.journal.push({ h, t: 0, soldier: "router", action: "burn", profitMu: out, note: `burn ${out}µ SAOS (${burnUsds}µ USDS from fees)` });
+      }
+    } else {
+      st.journal.push({ h, t: 0, soldier: "router", action: "burn_skipped", profitMu: 0, note: `treasury USDS below burn ${burnUsds}µ — honest skip (fail-closed, audit fix)` });
     }
   }
   if (veUsds > 0) {
