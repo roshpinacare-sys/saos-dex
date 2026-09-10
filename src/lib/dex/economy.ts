@@ -26,7 +26,15 @@ import { launchpadTick } from "./launchpad";
 import {
   BLOCKS_PER_WEEK, VE_MAX_WEEKS, EPOCH_BLOCKS, ROUTER_EVERY, REV_FLOOR,
   REV_BURN_PCT, REV_VE_PCT, ROUTER_USDS_FLOOR, REV_MIN_CYCLE, VE_POT,
+  MINT_FUEL_CAP, LADDER_FUEL_FLOOR,
 } from "./kernel";
+
+// FIX(Roast-67 · ZFB-gas-tank): מימון-דלק-דטרמיניסטי מהפונטיין — 10% מכל-מחזור-ראוטר
+// הופך-עמלות-שנמדדו (מעל-רצפת-הסולם) לקרדיטים-בארנק-האוצר (ה-FUEL_FUNDER) —
+// אותן-סמנטיקות-מדויקות-של-mint_fuel (הגרעין): feeMinted↑ + treasuryProfit↓/feeMeter↓ —
+// כל-µ-נצרך-פעם-אחת; האינווריאנטות (a)+(d) נשמרות-בדיוק. האוצר-מפיץ-דרך-refuel
+// (העברה-טהורה) לסוכנים-שאזל-מסלולם — ריצת-המערכת-לא-תיגמר-בשקט.
+export const ZFB_GAS_PCT = 10;
 
 // קבועים-מקומיים (לא-קונצנזוסיים — רק-לתצוגה/מדידה)
 export const REV_TREASURY_PCT = 20; // → נשאר באוצר (לא-מוזז)
@@ -127,6 +135,31 @@ function revenueCycle(st: DexState, h: number, nowMs: number): void {
     feesSpentThis = take;
   }
   if (feesSpentThis > 0) st.feesSpentMu = (st.feesSpentMu ?? 0) + feesSpentThis;
+  // ── FIX(Roast-67 · ZFB-gas-tank): מימון-דלק-מהעמלות-שנמדדו (אחרי-חלוקת-הראוטר) ──
+  // אותן-סמנטיקות-כמו-mint_fuel-של-הגרעין (treasury-only, fees-backed, cap):
+  // רק-מהרווח-שנמדד-שנותר מעל-רצפת-הסולם (+meter מעל-רצפתו); feeMinted מתועד —
+  // האינווריאנטה Σcredits+gasUsed−feeMinted===genesis וביקורת-העמלות ממשיכות-לעמוד.
+  {
+    const profitAvail = Math.max(0, st.treasuryProfit - REV_FLOOR);
+    const meterAvail = Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
+    const gasAlloc = Math.min(
+      Math.floor((take * ZFB_GAS_PCT) / 100),
+      MINT_FUEL_CAP,
+      profitAvail + meterAvail,
+    );
+    if (gasAlloc > 0) {
+      const fromProfit = Math.min(gasAlloc, profitAvail);
+      const fromMeter = gasAlloc - fromProfit;
+      if (fromMeter <= meterAvail) {
+        st.treasuryProfit -= fromProfit;
+        st.feeMeter -= fromMeter;
+        st.feeMinted = (st.feeMinted ?? 0) + gasAlloc;
+        st.credits["treasury"] = (st.credits["treasury"] ?? 0) + gasAlloc;
+        st.gasFundedMu = (st.gasFundedMu ?? 0) + gasAlloc;
+        st.journal.push({ h, t: nowMs, soldier: "router", action: "gas_tank_fund", note: `gasTank +${gasAlloc}µ credits →treasury (fees-backed: profit ${fromProfit} + meter ${fromMeter}) — ZFB runway` });
+      }
+    }
+  }
   st.rev = {
     lastH: h,
     cycles: (st.rev?.cycles ?? 0) + 1,

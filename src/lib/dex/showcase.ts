@@ -17,11 +17,12 @@
 import { applyOp, genesisState, type DexState, type Op } from "./kernel";
 import { stateRootOf } from "./canonical";
 
-// ─── עזרי-בריכה (שעתוק-מדויק של amm.ts poolSwap — אפס-סטייה מהקוד-החי) ──────
-const FEE_BPS = 30;
-const TREASURY_CUT_PCT = 30;
+// ─── עזרי-בריכה (מצג-מכניקה-סטטי — לא-שעתוק-מלא של-הקוד-החי) ──────────────
+const FEE_BPS = 30;       // FIX(Roast-67 · showcase-fee-honesty): בסיס-בלבד —
+const TREASURY_CUT_PCT = 30; // הבריכות-החיות-מפעילות-עמלה-דינמית (effectiveFeeBps 4..1500bps);
 
-/** החלפה אחת על בריכת x*y=k עם עמלת-30bps (70% LP · 30% אוצר) — זהה ל-amm.ts L74-96 */
+/** החלפה אחת על בריכת x*y=k עם עמלת-בסיס-30bps (70% LP · 30% אוצר) —
+ * מצג-חינוכי-של-המתמטיקה; העמלה-בפועל-על-הבריכות-החיות-דינמית (amm.ts). */
 function ammSwap(rIn: number, rOut: number, amountIn: number): { out: number; rIn: number; rOut: number } {
   const feeAmt = Math.floor((amountIn * FEE_BPS) / 10_000);
   const inAfterFee = amountIn - feeAmt;
