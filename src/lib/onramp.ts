@@ -47,7 +47,7 @@ export interface OnrampSummary {
   stale: boolean;
   accounts: OnrampAccount[];
   tokens: OnrampTokenRow[];
-  steemHead: { account: string; steem: number; sbd: number; sp: number; vestShares: number } | null;
+  steemHead: { account: string; steem: number; sbd: number; sp: number; vestShares: number; spFactor?: number; spOwn?: number; powerdownActive?: boolean } | null;
   totals: {
     liquidHive: number;
     hbd: number;
@@ -88,6 +88,37 @@ const num = (s: string | undefined): number => {
   return Number.isFinite(v) ? v : 0;
 };
 
+// ── FIX(Task 61 · price-truth): המרת-vests→SP/HP בגורם-חי-אמת.
+// השגיאה-ההיסטורית: `vests / 1e6` — על-STEEM ו-Hive 1 SP/HP ≈ 1,600-1,700 vests
+// (הגורם = total_vesting_fund ÷ total_vesting_shares, מתעדכן-בכל-בלוק).
+// על-headcorner זה הפריך 2,139.49-SP-אמת ל-"8.64" — תת-דיווח ×4 באוצר-האמת.
+const VEST_TTL_MS = 10 * 60_000;
+interface VestRT { at: number; steem: number | null; hive: number | null }
+const gVest = globalThis as unknown as { __saosVestFactor?: VestRT };
+async function vestFactor(chain: "STEEM" | "HIVE"): Promise<number | null> {
+  const m = (gVest.__saosVestFactor ??= { at: 0, steem: null, hive: null });
+  const hit = chain === "STEEM" ? m.steem : m.hive;
+  if (hit !== null && Date.now() - m.at < VEST_TTL_MS) return hit;
+  try {
+    const node = chain === "STEEM" ? STEEM_NODE : HIVE_NODE;
+    const fundKey = chain === "STEEM" ? "total_vesting_fund_steem" : "total_vesting_fund_hive";
+    const r = await rpc<{ result?: Record<string, string> }>(node, {
+      jsonrpc: "2.0", method: "condenser_api.get_dynamic_global_properties", params: [], id: 1,
+    });
+    const d = r.result;
+    if (!d) return hit;
+    const fund = parseFloat(String(d[fundKey] ?? "0"));
+    const shares = parseFloat(String(d.total_vesting_shares ?? "0"));
+    const f = shares > 0 ? fund / shares : 0;
+    if (!(f > 0)) return hit;
+    m.at = Date.now();
+    if (chain === "STEEM") m.steem = f; else m.hive = f;
+    return f;
+  } catch {
+    return hit; // fail-כנה — last-good עד-TTL
+  }
+}
+
 async function readAccounts(names: string[]): Promise<Map<string, OnrampAccount>> {
   const out = new Map<string, OnrampAccount>();
   // קריאה-אחת-משותפת — מאזנים + RC-קנוני (אותו-מימוש-כמו-הצי)
@@ -103,6 +134,7 @@ async function readAccounts(names: string[]): Promise<Map<string, OnrampAccount>
     )),
   ]);
   const rows = cond.result ?? [];
+  const hiveFactor = await vestFactor("HIVE");
   for (let i = 0; i < names.length; i++) {
     const a = rows.find((x) => x.name === names[i]);
     const rc = rcAll[i];
@@ -119,7 +151,7 @@ async function readAccounts(names: string[]): Promise<Map<string, OnrampAccount>
     const role: OnrampAccount["role"] = names[i] === HEAD_ACCOUNT ? "relay-head" : "fleet-soldier";
     const liquidHive = num(a?.balance);
     const hbd = num(a?.hbd_balance);
-    const hp = num(a?.vesting_shares) / 1e6;
+    const hp = hiveFactor !== null ? num(a?.vesting_shares) * hiveFactor : num(a?.vesting_shares) / 1e6; // Task 61 · גורם-חי (נפילה-חזרה כנה ל-1e6)
     const cap = rcEff !== null ? Math.floor((rcMax ?? 0) / 5 / RC_OP_COST) : 0;
     out.set(names[i], {
       account: names[i], role, liquidHive, hbd, hp, rcEffective: rcEff, rcMax,
@@ -153,9 +185,12 @@ async function readTokens(names: string[]): Promise<OnrampTokenRow[]> {
  * קריאה-ציבורית-חסרת-מפתחות; כנות-מלאה: מה שיש-בשרשרת, בלי-שום-הערכה. */
 async function readSteemHead(): Promise<OnrampSummary["steemHead"]> {
   try {
-    const r = await rpc<{ result?: Array<Record<string, string>> }>(STEEM_NODE, {
-      jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [[HEAD_ACCOUNT]], id: 1,
-    });
+    const [r, factor] = await Promise.all([
+      rpc<{ result?: Array<Record<string, string>> }>(STEEM_NODE, {
+        jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [[HEAD_ACCOUNT]], id: 1,
+      }),
+      vestFactor("STEEM"),
+    ]);
     const a = (r.result ?? []).find((x) => x.name === HEAD_ACCOUNT);
     if (!a) return null;
     const vest = num(a.vesting_shares);
@@ -163,8 +198,15 @@ async function readSteemHead(): Promise<OnrampSummary["steemHead"]> {
       account: HEAD_ACCOUNT,
       steem: num(a.balance),
       sbd: num(a.sbd_balance),
-      sp: vest / 1e6,
+      sp: factor !== null ? vest * factor : vest / 1e6, // Task 61 · גורם-חי-אמת (2,139.49-SP במקום "8.64")
       vestShares: vest,
+      spFactor: factor ?? undefined, // שקיפות-מלאה — הגורם ששימש להמרה
+      spOwn: (() => {
+        // SP-עצמי = (vesting − delegated_out + received_in) × גורם — מה שבאמת שלנו
+        const ownVest = num(a.vesting_shares) - num(a.delegated_vesting_shares) + num(a.received_vesting_shares);
+        return factor !== null ? ownVest * factor : ownVest / 1e6;
+      })(),
+      powerdownActive: Number(a.to_withdraw ?? 0) > Number(a.withdrawn ?? 0),
     };
   } catch {
     return null; // STEEM-RPC-לא-זמין — לא-חוסם (כנות: השדה נעלם, לא מאולף)

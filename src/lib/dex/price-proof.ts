@@ -28,13 +28,13 @@ import { assertAllowedHost } from "./fence";
 import { onrampSnapshot } from "@/lib/onramp";
 
 // ─── פידים-חוץ-אמת — שרשרת-מקורות-ממוינת (Task 58: עמידות-ל-429/השבתות) ───────
-const CG_URL = "https://api.coingecko.com/api/v3/simple/price?ids=steem,hive,hive_dollar,blurt&vs_currencies=usd";
+const CG_URL = "https://api.coingecko.com/api/v3/simple/price?ids=steem,hive,hive_dollar,blurt,ethereum,solana,binancecoin,tron,bitcoin&vs_currencies=usd";
 const BLURT_NODE = "https://blurt-rpc.saboin.com";
 const HEAD_ACCOUNT = "headcorner";
 const FEED_TTL_MS = 5 * 60_000;
 const FEED_STALE_OK_MS = 60 * 60_000; // last-good-חוקי עד-שעה — מעבר-לזה: NO-FEED כנה
 
-type FeedKey = "steem" | "hive" | "hbd" | "blurt";
+type FeedKey = "steem" | "hive" | "hbd" | "blurt" | "eth" | "sol" | "bnb" | "trx" | "btc";
 type FeedVal = { v: number | null; src: string | null };
 type FeedMap = Record<FeedKey, FeedVal>;
 
@@ -48,7 +48,7 @@ const FEED_SOURCES: FeedSource[] = [
     parse: (j) => {
       const o = j as Record<string, { usd?: number }>;
       const p = (id: string): number | null => (typeof o[id]?.usd === "number" && o[id].usd > 0 ? o[id].usd : null);
-      return { steem: p("steem"), hive: p("hive"), hbd: p("hive_dollar"), blurt: p("blurt") };
+      return { steem: p("steem"), hive: p("hive"), hbd: p("hive_dollar"), blurt: p("blurt"), eth: p("ethereum"), sol: p("solana"), bnb: p("binancecoin"), trx: p("tron"), btc: p("bitcoin") };
     },
   },
   {
@@ -62,12 +62,12 @@ const FEED_SOURCES: FeedSource[] = [
         const v = row?.quotes?.USD?.price;
         return typeof v === "number" && v > 0 ? v : null;
       };
-      return { steem: p("steem-steem"), hive: p("hive-hive"), blurt: p("blurt-blurt") };
+      return { steem: p("steem-steem"), hive: p("hive-hive"), blurt: p("blurt-blurt"), eth: p("eth-ethereum"), sol: p("sol-solana"), bnb: p("bnb-binance-coin"), trx: p("trx-tron"), btc: p("btc-bitcoin") };
     },
   },
   {
     name: "cryptocompare",
-    url: "https://min-api.cryptocompare.com/data/pricemulti?fsyms=STEEM,HIVE,HBD,BLURT&tsyms=USD",
+    url: "https://min-api.cryptocompare.com/data/pricemulti?fsyms=STEEM,HIVE,HBD,BLURT,ETH,SOL,BNB,TRX,BTC&tsyms=USD",
     where: "price-proof/cryptocompare",
     parse: (j) => {
       const o = j as Record<string, Record<string, number>>;
@@ -75,12 +75,12 @@ const FEED_SOURCES: FeedSource[] = [
         const v = o[sym]?.USD;
         return typeof v === "number" && v > 0 ? v : null;
       };
-      return { steem: p("STEEM"), hive: p("HIVE"), hbd: p("HBD"), blurt: p("BLURT") };
+      return { steem: p("STEEM"), hive: p("HIVE"), hbd: p("HBD"), blurt: p("BLURT"), eth: p("ETH"), sol: p("SOL"), bnb: p("BNB"), trx: p("TRX"), btc: p("BTC") };
     },
   },
   {
     name: "binance",
-    url: "https://api.binance.com/api/v3/ticker/price?symbols=%5B%22STEEMUSDT%22,%22HIVEUSDT%22%5D",
+    url: "https://api.binance.com/api/v3/ticker/price?symbols=%5B%22STEEMUSDT%22,%22HIVEUSDT%22,%22ETHUSDT%22,%22SOLUSDT%22,%22BNBUSDT%22,%22TRXUSDT%22,%22BTCUSDT%22%5D",
     where: "price-proof/binance",
     parse: (j) => {
       const arr = Array.isArray(j) ? (j as { symbol?: string; price?: string }[]) : [];
@@ -89,7 +89,7 @@ const FEED_SOURCES: FeedSource[] = [
         const v = parseFloat(String(row?.price ?? ""));
         return Number.isFinite(v) && v > 0 ? v : null;
       };
-      return { steem: p("STEEMUSDT"), hive: p("HIVEUSDT") };
+      return { steem: p("STEEMUSDT"), hive: p("HIVEUSDT"), eth: p("ETHUSDT"), sol: p("SOLUSDT"), bnb: p("BNBUSDT"), trx: p("TRXUSDT"), btc: p("BTCUSDT") };
     },
   },
 ];
@@ -98,8 +98,11 @@ export interface ExtFeeds {
   ok: boolean;
   at: number;
   stale: boolean;
-  usd: { steem: number | null; hive: number | null; hbd: number | null; blurt: number | null };
-  src: { steem?: string | null; hive?: string | null; hbd?: string | null; blurt?: string | null };
+  usd: {
+    steem: number | null; hive: number | null; hbd: number | null; blurt: number | null;
+    eth: number | null; sol: number | null; bnb: number | null; trx: number | null; btc: number | null;
+  };
+  src: { steem?: string | null; hive?: string | null; hbd?: string | null; blurt?: string | null; eth?: string | null; sol?: string | null; bnb?: string | null; trx?: string | null; btc?: string | null };
   error?: string;
 }
 
@@ -109,6 +112,8 @@ function feedRt(): FeedRT {
   if (!g.__saosPriceFeeds) g.__saosPriceFeeds = { at: 0, data: null, inflight: null };
   return g.__saosPriceFeeds;
 }
+
+const EMPTY_USD = { steem: null, hive: null, hbd: null, blurt: null, eth: null, sol: null, bnb: null, trx: null, btc: null };
 
 async function fetchOne(s: FeedSource): Promise<Partial<Record<FeedKey, number | null>>> {
   assertAllowedHost(s.url, s.where);
@@ -124,7 +129,9 @@ async function fetchOne(s: FeedSource): Promise<Partial<Record<FeedKey, number |
 }
 
 async function fetchFeeds(): Promise<ExtFeeds> {
-  const merged: FeedMap = { steem: { v: null, src: null }, hive: { v: null, src: null }, hbd: { v: null, src: null }, blurt: { v: null, src: null } };
+  const merged = Object.fromEntries(([
+    "steem", "hive", "hbd", "blurt", "eth", "sol", "bnb", "trx", "btc",
+  ] as FeedKey[]).map((k) => [k, { v: null, src: null }])) as unknown as FeedMap;
   const errs: string[] = [];
   // בסדר-קנוני: הראשון-שענה-לנכס זוכה (סדר-קבוע = דטרמיניזם-קריאה)
   for (const s of FEED_SOURCES) {
@@ -143,13 +150,19 @@ async function fetchFeeds(): Promise<ExtFeeds> {
   if (any) {
     return {
       ok: true, at: Date.now(), stale: false,
-      usd: { steem: merged.steem.v, hive: merged.hive.v, hbd: merged.hbd.v, blurt: merged.blurt.v },
-      src: { steem: merged.steem.src, hive: merged.hive.src, hbd: merged.hbd.src, blurt: merged.blurt.src },
+      usd: {
+        steem: merged.steem.v, hive: merged.hive.v, hbd: merged.hbd.v, blurt: merged.blurt.v,
+        eth: merged.eth.v, sol: merged.sol.v, bnb: merged.bnb.v, trx: merged.trx.v, btc: merged.btc.v,
+      },
+      src: {
+        steem: merged.steem.src, hive: merged.hive.src, hbd: merged.hbd.src, blurt: merged.blurt.src,
+        eth: merged.eth.src, sol: merged.sol.src, bnb: merged.bnb.src, trx: merged.trx.src, btc: merged.btc.src,
+      },
       error: errs.length > 0 ? errs.join("; ") : undefined, // כנות: מקורות-שנפלו נראים
     };
   }
   // fail-כנה: אין-מקור-חי = אין-מחיר-חוץ (לא מאולף)
-  return { ok: false, at: Date.now(), stale: false, usd: { steem: null, hive: null, hbd: null, blurt: null }, src: {}, error: errs.join("; ") || "all-sources-down" };
+  return { ok: false, at: Date.now(), stale: false, usd: { ...EMPTY_USD }, src: {}, error: errs.join("; ") || "all-sources-down" };
 }
 
 export async function extFeeds(force = false): Promise<ExtFeeds> {
@@ -178,8 +191,10 @@ export async function extFeeds(force = false): Promise<ExtFeeds> {
   return m.inflight;
 }
 
-/** BLURT-ראש — הרשת-השלישית שלנו (Task 4): יתרת-headcorner החיה מהצומת-הקהילתי */
-export async function blurtHead(): Promise<{ account: string; liquid: number; vested: number } | null> {
+/** BLURT-ראש — הרשת-השלישית שלנו (Task 4): יתרת-headcorner החיה מהצומת-הקהילתי.
+ * FIX(Task 61 · price-truth): vested מומר ל-BP בגורם-חי (total_vesting_fund_blurt
+ * ÷ total_vesting_shares ≈ 1.147) — כך 7,378-vests מוצגים כ-8,463-BP-אמת. */
+export async function blurtHead(): Promise<{ account: string; liquid: number; vested: number; bp: number; bpFactor: number | null } | null> {
   try {
     assertAllowedHost(BLURT_NODE, "price-proof/blurt");
     const ac = new AbortController();
@@ -198,7 +213,27 @@ export async function blurtHead(): Promise<{ account: string; liquid: number; ve
       const v = parseFloat(String(s ?? "0").replace(/,/g, "").split(" ")[0]);
       return Number.isFinite(v) ? v : 0;
     };
-    return { account: HEAD_ACCOUNT, liquid: num(a.balance), vested: num(a.vesting_shares) };
+    // גורם-המרה-חי (cache 10-דק׳)
+    const g = globalThis as unknown as { __saosBlurtBpFactor?: { at: number; f: number | null } };
+    g.__saosBlurtBpFactor ??= { at: 0, f: null };
+    const bf = g.__saosBlurtBpFactor;
+    if (bf.f === null || Date.now() - bf.at > 10 * 60_000) {
+      try {
+        const pr = await fetch(BLURT_NODE, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", method: "condenser_api.get_dynamic_global_properties", params: [], id: 1 }),
+          signal: AbortSignal.timeout(10_000), cache: "no-store",
+        });
+        const pj = (await pr.json()) as { result?: Record<string, string> };
+        const d = pj.result;
+        const fund = parseFloat(String(d?.total_vesting_fund_blurt ?? "0"));
+        const shares = parseFloat(String(d?.total_vesting_shares ?? "0"));
+        if (shares > 0 && fund > 0) { bf.f = fund / shares; bf.at = Date.now(); }
+      } catch { /* fail-כנה — last-good */ }
+    }
+    const vested = num(a.vesting_shares);
+    const bp = bf.f !== null ? vested * bf.f : vested / 1e6;
+    return { account: HEAD_ACCOUNT, liquid: num(a.balance), vested, bp, bpFactor: bf.f };
   } catch {
     return null; // fail-כנה
   }
@@ -286,10 +321,10 @@ export interface PriceProof {
   };
   treasuryReal: {
     feedsNote: string;
-    steemHead: { account: string; steem: number; sbd: number; sp: number } | null;
+    steemHead: { account: string; steem: number; sbd: number; sp: number; spOwn?: number; spFactor?: number; powerdownActive?: boolean } | null;
     hiveFleet: { liquidHive: number; hbd: number; hp: number } | null;
-    blurt: { account: string; liquid: number; vested: number } | null;
-    usd: { steem: number | null; hbd: number | null; hive: number | null; blurt: number | null; total: number | null };
+    blurt: { account: string; liquid: number; vested: number; bp?: number; bpFactor?: number | null } | null;
+    usd: { steem: number | null; hbd: number | null; hive: number | null; blurt: number | null; blurtVested?: number | null; spLocked?: number | null; total: number | null };
     honesty: string;
   };
 }
@@ -334,6 +369,9 @@ export async function priceProof(st: DexState): Promise<PriceProof> {
   const usdHbd = steemHead && hbdUsd !== null ? steemHead.sbd * hbdUsd : null;
   const usdHive = hiveFleet && hiveUsd !== null ? (hiveFleet.liquidHive + hiveFleet.hp) * hiveUsd : null;
   const usdBlurt = blurt && blurtUsd !== null ? blurt.liquid * blurtUsd : null;
+  // Task 61 · SP/BP-נעול-אמת — מדידה-נפרדת-וכנה (מה שיהיה-נזיל אחרי-powerdown)
+  const spLockedUsd = steemHead && steemUsd !== null && steemHead.spOwn !== undefined ? steemHead.spOwn * steemUsd : null;
+  const bpLockedUsd = blurt && blurtUsd !== null && blurt.bp !== undefined ? blurt.bp * blurtUsd : null;
   const parts = [usdSteem, usdHbd, usdHive, usdBlurt].filter((x): x is number => x !== null);
   const usdTotal = parts.length > 0 ? parts.reduce((s, x) => s + x, 0) : null;
 
@@ -367,11 +405,11 @@ export async function priceProof(st: DexState): Promise<PriceProof> {
     },
     treasuryReal: {
       feedsNote: onramp?.note ?? "קריאה-ציבורית-חסרת-מפתחות-מה-RPC-המקובע",
-      steemHead: steemHead ? { account: steemHead.account, steem: steemHead.steem, sbd: steemHead.sbd, sp: steemHead.sp } : null,
+      steemHead: steemHead ? { account: steemHead.account, steem: steemHead.steem, sbd: steemHead.sbd, sp: steemHead.sp, spOwn: steemHead.spOwn, spFactor: steemHead.spFactor, powerdownActive: steemHead.powerdownActive } : null,
       hiveFleet,
       blurt,
-      usd: { steem: usdSteem, hbd: usdHbd, hive: usdHive, blurt: usdBlurt, total: usdTotal },
-      honesty: "אלה יתרות-השרשראות-הציבוריות-האמת שלנו × מחירי-שוק-אמת — המספרים-הקטנים-והאמיתיים. מצב-הספר-הפנימי (SAOS/USDS) הוא סימולציה-ריבונית נפרדת ומתועדת-ככזו.",
+      usd: { steem: usdSteem, hbd: usdHbd, hive: usdHive, blurt: usdBlurt, blurtVested: bpLockedUsd, spLocked: spLockedUsd, total: usdTotal },
+      honesty: "אלה יתרות-השרשראות-הציבוריות-האמת שלנו × מחירי-שוק-אמת — המספרים-הקטנים-והאמיתיים. מצב-הספר-הפנימי (SAOS/USDS) הוא סימולציה-ריבונית נפרדת ומתועדת-ככזו. SP/BP-נעול מדוד-בנפרד (spOwn/bp).",
     },
   };
 }

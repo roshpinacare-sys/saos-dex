@@ -128,9 +128,11 @@ export function funderFor(st: DexState, amt: number, exclude?: string): FuelFund
   return "operator";
 }
 
-export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM";
-/** רשימת-ריצה של הנכסים — אימות-קלט fail-closed ב-routes ובגרעין (SETTLE-9). */
-export const ASSETS: Asset[] = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE", "STEEM"];
+export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM" | "BLURT" | "WBLURT";
+/** רשימת-ריצה של הנכסים — אימות-קלט fail-closed ב-routes ובגרעין (SETTLE-9).
+ * Task 61 · BLURT/WBLURT — מסילת-האמת: WBLURT מוטבע מול-גיבוי-חוץ-אמת
+ * (BLURT-אמת על headcorner, מאומת-חי מול-RPC-ציבורי בכל-קריאת-truth). */
+export const ASSETS: Asset[] = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE", "STEEM", "BLURT", "WBLURT"];
 
 export interface Pool {
   a: Asset; b: Asset; // ממוינים אלפבתית — מפתח-קנוני
@@ -159,6 +161,7 @@ export interface DexState {
   pools: Record<string, Pool>;
   assets: Record<string, { refPrice: number; listed: number }>;
   backing: Record<string, number>; // גיבוי נעול 1:1 לנכסים-עטופים
+  extBack?: Record<string, { claim: string; mu: number; atH: number }>; // Task 61 · גיבוי-חוץ-אמת (תביעה + מדידה חיה ב-truth)
   treasuryProfit: number; // רווח-אוצר מצטבר-מונוטוני (µ)
   feeMeter: number; // עמלות-שנצברו-שטרם-נקצרו (מדידה-כנה)
   feeMinted?: number; // THE-FOUNTAIN: Σקרדיטים-שהוטבעו-מעמלות-מדודות — מנוכה-באינווריאנטה (רשות: תמונות-מצב-ישנות)
@@ -397,6 +400,7 @@ export interface Op {
   weeks?: number;
   // עטיפות/רשימות/עדים/דלתות
   wrapAsset?: Asset; name?: string; refPrice?: number; claim?: string; memo?: string;
+  external?: boolean; // Task 61 · wrap_mint-מגובה-חוץ (אוצר-בלבד)
   at?: number;
   // Task 56 · מסחר-אוטומטי
   progId?: string;      // dca_cancel
@@ -953,6 +957,19 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const a = op.wrapAsset, amt = op.amount ?? 0;
       if (!a || !a.startsWith("W") || !(amt > 0)) return { ok: false, err: "bad-wrap", gas };
       const native = a.slice(1) as Asset;
+      if (op.type === "wrap_mint" && op.external === true) {
+        // TRUTH-RAIL (Task 61): הטבעה-מגובה-חוץ — הגיבוי הוא נכס-אמת על-שרשרת-חוץ
+        // (BLURT-אמת ב-headcorner). אוצר-בלבד + תביעה-חובה; מנוע-ה-Truth מאמת-חי
+        // מול-RPC-ציבורי שהגיבוי באמת קיים — אם-לא, דגל-BACKING-BROKEN-פומבי.
+        if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas };
+        if (!op.claim) return { ok: false, err: "external-claim-required", gas };
+        const ce = consume(); if (ce) return ce;
+        st.backing[a] = (st.backing[a] ?? 0) + amt;
+        addBal(st, issuer, a, amt);
+        st.extBack = { ...(st.extBack ?? {}), [a]: { claim: op.claim, mu: (st.extBack?.[a]?.mu ?? 0) + amt, atH: st.height } };
+        st.journal.push({ h: st.height, t: 0, soldier: "treasury", action: "wrap_mint_ext", profitMu: amt, note: `external-backed mint ${amt}µ ${a} (${op.claim})` });
+        return { ok: true, gas };
+      }
       if (op.type === "wrap_mint") {
         // גיבוי 1:1 אמת (dex-facts): היליד ננעל → נפקה עטופה
         if (avail(st, issuer, native) < amt) return { ok: false, err: "insufficient-native", gas };

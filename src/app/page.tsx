@@ -1662,6 +1662,131 @@ function RouterPanel() {
   );
 }
 
+/* ══ Task 61: אמת-הדקס · THE-TRUTH-LEDGER ═════════════════════════════════════
+ * פסק-דין-כן לכל-נכס מול-הרשת: מה-אמת-ממומש, מה-אמת-נעול, מה-פנימי-בלבד,
+ * מה-פג-מדומה — וסולם-היציאה-האמיתי-עם-החסמים. "רק-אמת-תהיה." */
+interface TruthAsset {
+  asset: string; supplyMu: number; backingClaimMu: number;
+  realBackingMu: number | null; realBackingLockedMu: number | null;
+  coveragePct: number | null; coverageLockedPct: number | null;
+  internalPriceMu: number | null; externalPriceUsd: number | null; externalPriceMu: number | null;
+  divBps: number | null; verdict: string; exitPath: string; blocker: string | null;
+}
+interface TruthStep { n: number; what: string; status: string; valueUsd: number | null; detail: string; zeroFee: boolean }
+interface TruthView {
+  ok: boolean; at: string; height: number; feedOk: boolean; feedStale: boolean;
+  assets: TruthAsset[];
+  rail: { wblurt: { listed: boolean; backingMu: number; liveBlurtMu: number; liveAccount: string; verified: boolean; mintedNowMu: number; note: string } };
+  ladder: TruthStep[];
+  totals: { estateRealUsd: number | null; estateLockedUsd: number | null; usdsSupplyMu: number; usdsRealCoveragePct: number | null; conclusion: string };
+  honesty: string;
+}
+const verdictTone = (v: string): "green" | "amber" | "red" | "zinc" =>
+  v === "REAL-ACTIONABLE" ? "green" : v === "REAL-LOCKED" ? "amber" : v === "FAKE-PEG" || v === "UNBACKED-WRAP" ? "red" : "zinc";
+const verdictText = (v: string): string =>
+  v === "REAL-ACTIONABLE" ? "אמת-ממומשת" : v === "REAL-LOCKED" ? "אמת-נעולה" : v === "FAKE-PEG" ? "פג-מדומה" : v === "UNBACKED-WRAP" ? "עטיפה-ללא-פדיון" : "פנימי-בלבד";
+const stepTone = (s: string): "green" | "gold" | "red" | "amber" | "zinc" =>
+  s === "LIVE" ? "green" : s === "READY" ? "gold" : s === "BLOCKED" ? "red" : s === "OPERATOR" ? "amber" : "zinc";
+
+function TruthPanel() {
+  const [t, setT] = useState<TruthView | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => {
+      fetch(api("/api/dex/truth")).then((r) => r.json()).then((j) => { if (live && j?.ok) setT(j); }).catch(() => { /* כנות */ });
+    };
+    load();
+    const iv = setInterval(load, 45_000);
+    return () => { live = false; clearInterval(iv); };
+  }, []);
+  return (
+    <Panel title="אמת-הדקס · THE-TRUTH-LEDGER" icon={<ShieldCheck className="h-4 w-4 text-emerald-400" />}
+      action={
+        <span className="flex items-center gap-2">
+          {t && <Pill tone={t.feedOk ? (t.feedStale ? "amber" : "green") : "red"}>{t.feedOk ? (t.feedStale ? "FEED-STALE" : "FEED-LIVE") : "NO-FEED"}</Pill>}
+          <span className="font-mono text-[10px] text-zinc-600" dir="ltr">h {t ? t.height : "…"}</span>
+        </span>
+      }>
+      {!t ? (
+        <p className="py-2 text-center font-mono text-[11px] text-zinc-600">מודד-אמת מהרשת…</p>
+      ) : (
+        <div className="space-y-3" data-testid="truth-panel">
+          {/* המציאות-החוץ-במספרים */}
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" data-testid="truth-totals">
+            <Stat label="נזיל-חוץ-אמת" value={t.totals.estateRealUsd !== null ? `$${t.totals.estateRealUsd.toFixed(2)}` : "—"} sub="STEEM+SBD+HIVE+BLURT חי" />
+            <Stat label="נעול (SP/BP)" value={t.totals.estateLockedUsd !== null ? `$${t.totals.estateLockedUsd.toFixed(2)}` : "—"} sub="powerdown-13שב׳ — דורש-מפתח" />
+            <Stat label="כיסוי-אמת-USDS" value={t.totals.usdsRealCoveragePct !== null ? `${t.totals.usdsRealCoveragePct.toFixed(4)}%` : "—"} sub="גיבוי-חוץ ÷ היצע" />
+            <Stat label="מסילת-WBLURT" value={t.rail.wblurt.verified ? "VERIFIED" : "BROKEN"} sub={`${fmtInt(t.rail.wblurt.backingMu)}µ מגובה-חי`} />
+          </div>
+
+          {/* ספר-הפסק-דין פר-נכס */}
+          <div className="max-h-72 space-y-1 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900/80 p-2 pr-1" data-testid="truth-assets">
+            {t.assets.map((a) => (
+              <div key={a.asset} className="rounded-md border border-zinc-800 bg-zinc-950/60 px-2.5 py-1.5" data-testid={`truth-asset-${a.asset.replace("|", "-")}`}>
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <span className="flex items-center gap-1.5 font-mono text-[11px] font-bold text-zinc-200" dir="ltr">
+                    {a.asset}
+                    <Pill tone={verdictTone(a.verdict)}>{verdictText(a.verdict)}</Pill>
+                  </span>
+                  <span className="flex flex-wrap items-center gap-2 font-mono text-[9px]" dir="ltr">
+                    <span className="text-zinc-500">supply {fmtInt(a.supplyMu)}µ</span>
+                    {a.internalPriceMu !== null && <span className="text-zinc-500">in {fmtInt(a.internalPriceMu)}µ</span>}
+                    {a.externalPriceUsd !== null && <span className="text-emerald-300">ext ${a.externalPriceUsd < 0.01 ? a.externalPriceUsd.toFixed(5) : a.externalPriceUsd.toFixed(4)}</span>}
+                    {a.divBps !== null && Math.abs(a.divBps) > 300 && <Pill tone="red">DIV {(a.divBps / 100).toFixed(0)}%</Pill>}
+                    {a.coverageLockedPct !== null && a.coverageLockedPct > 0 && <span className="text-amber-300">cov+SP {a.coverageLockedPct.toFixed(0)}%</span>}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-[9px] leading-snug text-zinc-600">{a.exitPath}</p>
+                {a.blocker && <p className="text-[9px] font-semibold leading-snug text-red-400/90">חוסם: {a.blocker}</p>}
+              </div>
+            ))}
+          </div>
+
+          {/* מסילת-האמת החיה */}
+          <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <span className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-emerald-300" dir="ltr">
+                <Coins className="h-3 w-3" /> TRUTH-RAIL · WBLURT ← BLURT-אמת ({t.rail.wblurt.liveAccount})
+              </span>
+              <span className="flex items-center gap-2 font-mono text-[9px]" dir="ltr">
+                <Pill tone={t.rail.wblurt.verified ? "green" : "red"}>{t.rail.wblurt.verified ? "BACKING-VERIFIED" : "BACKING-BROKEN"}</Pill>
+                <span className="text-zinc-400">backing {fmtInt(t.rail.wblurt.backingMu)}µ = live {(t.rail.wblurt.liveBlurtMu / 1000).toFixed(3)} BLURT</span>
+                {t.rail.wblurt.mintedNowMu > 0 && <Pill tone="gold">minted {fmtInt(t.rail.wblurt.mintedNowMu)}µ</Pill>}
+              </span>
+            </div>
+            <p className="mt-1 text-[9px] leading-snug text-zinc-600">
+              המסילה-האמת-הראשונה: כל-µWBLURT מגובה-1:1 ב-BLURT-אמת על-השרשרת (מאומת-חי מול-blurt-rpc בכל-קריאה) · burn→BLURT-אמת→שוק-חוץ · אפס-עמלת-העברה.
+            </p>
+          </div>
+
+          {/* סולם-היציאה */}
+          <div className="space-y-1" data-testid="truth-ladder">
+            <p className="font-mono text-[10px] font-bold text-zinc-400">סולם-היציאה לכסף-אמת · דבר-גורר-דבר (אפס-עמלות-על-השרשראות-החברתיות)</p>
+            {t.ladder.map((s) => (
+              <div key={s.n} className="rounded-md border border-zinc-800 bg-zinc-900/70 px-2.5 py-1.5" data-testid={`truth-step-${s.n}`}>
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <span className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-zinc-200">
+                    <span className="text-zinc-600" dir="ltr">#{s.n}</span> {s.what}
+                    <Pill tone={stepTone(s.status)}>{s.status}</Pill>
+                    {s.zeroFee && <Pill tone="violet">אפס-עמלה</Pill>}
+                  </span>
+                  {s.valueUsd !== null && Number.isFinite(s.valueUsd) && (
+                    <span className="font-mono text-[10px] text-emerald-300" dir="ltr">${s.valueUsd < 1 ? s.valueUsd.toFixed(4) : s.valueUsd.toFixed(2)}</span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-[9px] leading-snug text-zinc-600">{s.detail}</p>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-[9px] leading-snug text-zinc-600">{t.totals.conclusion}</p>
+          <p className="border-t border-zinc-800 pt-1.5 text-[9px] leading-snug text-zinc-600">{t.honesty}</p>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
 function PortfolioBridgePanel() {
   const [pf, setPf] = useState<PortfolioResp | null>(null);
   const [br, setBr] = useState<BridgeResp | null>(null);
@@ -2058,6 +2183,9 @@ export default function DexTerminal() {
 
         {/* ═════ SETTLE-15: THE-ROUTER — מקור-הנזיל-שמכניס-מהכל ═════ */}
         <RouterPanel />
+
+        {/* ═════ Task 61: אמת-הדקס — ספר-הפסק-דין-החי ═════ */}
+        <TruthPanel />
 
         {/* ═════ SETTLE-12: תיקיית-המטבעות + הגשר-הריבוני ═════ */}
         <PortfolioBridgePanel />
