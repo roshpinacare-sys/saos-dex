@@ -218,14 +218,16 @@ export function aleState(st: DexState) {
       arenaFills: st.stats.fills,     // סוחרים-אוטונומיים — אפס-משתמשים
       swapsTotal: st.stats.swaps,
       liveOrders: st.orders.length,
-      note: "הנזילות כאן צומחת מעמלות-אמת שהמערכת גבתה מעצמה ומהארנה — לא מהדפסה, לא ממשתמשים",
+      note: "FIX(Roast-63): הנזילות-כאן-צומחת-מעמלות-פנימיות (סים) שהמערכת-גבתה-מעצמה-ומהארנה-הפנימית — לא-מהדפסה-ישירה, אך-גם-לא-מכסף-חוץ · סימולציה-סגורה",
     },
     pools,
     recentSeeds: st.journal.filter((j) => j.soldier === "ale" && j.action === "pol_seed").slice(-12).reverse(),
     vaultFeed: {
-      // הצינור-מהכספת-החיה: WSTEEM 1:1 מגובה-backing-אמת (STEEM-אמת שנפקד-לכספת)
+      // הצינור-מהכספת: עטיפת-WSTEEM — FIX(Roast-63): כנות-מלאה. הגיבוי-במצב-הוא
+      // STEEM-ספר-פנימי (סים) שהאוצר עטף-1:1 (וכולל REARM-חוזרים). ה-STEEM-אמת
+      // על-השרשרת (נזיל+SP) נמדד-בנפרד-ובכנות ב-truth.ts — והוא-קטן-בהרבה.
       backingWsteemMu: st.backing["WSTEEM"] ?? 0,
-      honesty: "backing=STEEM-אמת-שנכנסה-מסדרון-העיגון — הכסף-החי-מהכספת משרת את הדקס דרך עטיפה 1:1",
+      honesty: "backing = STEEM-ספר-פנימי (סים) שנעטף-1:1-על-ידי-האוצר · STEEM-אמת-על-השרשרת נמדד-בנפרד ב-truth.ts והוא-קטן-בהרבה — אל-תחליפו-ביניהם",
     },
     honesty: "כל-המספרים-נמדדים-מהמצב-החי-של-הגרעין (height " + st.height + ") · אין-float · אין-random · ריפליי-דטרמיניסטי",
   };

@@ -8,6 +8,13 @@ bun install        # or npm install / pnpm install
 bun run typecheck  # tsc --noEmit (strict)
 ```
 
+
+> **FIX(Roast-63 · H7) — חותמת-קפיאה כנה:** החבילה-הזו **קפואה** בקומיט `d977a46`
+> (SETTLE-7, 2026-09-08). עץ-הייצור **התקדם מאז** (Task 58: CoW/launchpad/protorev;
+> Task 61: truth/rail/WBLURT; Roast-63: cow-refund/SOL-verify/bridge-proof) —
+> **אל תחשבו-את-החבילה-כנציגת-הייצור-הנוכחי**. אודיט-על-הקוד-החי = מול-`../src/lib/dex/`
+> בקומיט-ה-HEAD-של-הריפו (MANIFEST-מקורי של-החבילה נשמר-לראיה-בלבד).
+
 > **SETTLE-7 (2026-09-08) — אריזה-מחדש-מלאה.** החבילה-הקודמת-הכילה-קוד-ישן
 > (7/12-קבצים-סטו, כולל-bug-ה-escrow-שעצר-ייצור). מעכשיו: **כל-קובץ-זהה-ביט-מול-ביט**
 > לעץ-הייצור פרט-לעיבוד-אחד-מתועד (chain.ts-שורת-הייבוא). ראה `FIDELITY.diff`

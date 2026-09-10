@@ -22,6 +22,7 @@
  */
 import steem from "steem";
 import { extFeeds } from "./price-proof";
+import { assertAllowedHost } from "./fence";
 
 const STEEM_NODES = [
   "https://api.steemit.com",
@@ -46,6 +47,8 @@ interface GrapheneTx {
 /* ── RPC ─────────────────────────────────────────────────────────────────── */
 
 async function rpc<T>(node: string, body: unknown, timeoutMs = 8_000): Promise<T> {
+  // FIX(Roast-63): הגדר-נאכפת — שער-לא-מקובע = חסימה fail-closed (היה-עוקף)
+  assertAllowedHost(node, "realmarket.rpc");
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {

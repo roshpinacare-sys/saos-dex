@@ -65,6 +65,7 @@ export interface LadderStep {
   valueUsd: number | null;
   detail: string;   // איך-זה-עובד / מה-החוסם
   zeroFee: boolean; // דבר-גורר-דבר — העברת-ערך-באפס-עמלה
+  staticNote?: string; // FIX(Roast-63 · M3): לשלבים-היסטוריים — תיעוד-קבוע-שלא-ידרוש (ה-txids-מתועדים-על-השרשרת)
 }
 
 export interface TruthReport {
@@ -97,7 +98,6 @@ export interface TruthReport {
   honesty: string;
 }
 
-const WSTEEM_REAL_BACKING = 683_941; // µ-WSTEEM שהוטבעו מול-ספר-STEEM-הפנימי (מג'נזיס+wrap)
 
 /** היצע-אמת: Σ כל-הארנקים (כולל-נעול) פר-נכס */
 function supplyMu(st: DexState, asset: string): number {
@@ -119,9 +119,10 @@ function internalPrice(st: DexState, asset: string): number | null {
 }
 
 /** TRUTH-RAIL: אתחול/השלמת-WBLURT מגובה-חוץ — אידמפוטנטי, אוצר-בלבד.
- * כל-קריאת-truth מאמתת-חי את-יתרת-BLURT ומטביעה-רק-את-הגירעון מול-הגיבוי.
+ * FIX(Roast-63): ההטבעה-עברה-מ-GET (היה-מטבע-ציבורי-בלתי-מאומת) ל-POST-מאומת
+ * (operatorAuth). כל-קריאה מאמתת-חי את-יתרת-BLURT ומטביעה-רק-את-הגירעון.
  * אם-היתרה-החיה-קטנה-מהגיבוי-המוכרז — דגל-BACKING-BROKEN-פומבי (כנות). */
-function railTick(st: DexState, liveBlurtMu: number): { mintedNowMu: number; listed: boolean } {
+export function railTick(st: DexState, liveBlurtMu: number): { mintedNowMu: number; listed: boolean } {
   let minted = 0;
   let listed = Boolean(st.assets["WBLURT"]);
   if (liveBlurtMu > 0) {
@@ -143,16 +144,18 @@ function railTick(st: DexState, liveBlurtMu: number): { mintedNowMu: number; lis
   return { mintedNowMu: minted, listed };
 }
 
-/** המאגד-המלא — נקרא מ-/api/dex/truth (GET ציבורי) */
+/** המאגד-המלא — נקרא מ-/api/dex/truth (GET ציבורי).
+ * FIX(Roast-63): GET-קריאה-בלבד — אפס-כתיבה-לגרעין (ההטבעה-ב-POST-מאומת).
+ * מצב-הרייל-מדווח-מהמצב-החי + אימות-בלורט-בלבד. */
 export async function truthLedger(st: DexState): Promise<TruthReport> {
   const [feeds, blurt, onramp, proof, realV] = await Promise.all([
     extFeeds(), blurtHead(), onrampSnapshot().catch(() => null), priceProof(st),
     realSnapshotSoft().catch(() => null as unknown as Awaited<ReturnType<typeof realSnapshotSoft>>),
   ]);
 
-  // ── TRUTH-RAIL (WBLURT) ──
+  // ── TRUTH-RAIL (WBLURT) — קריאה-בלבד: אימות-גיבוי בלבד, אין-הטבעה ──
   const liveBlurtMu = blurt ? Math.floor(blurt.liquid * 1000) : 0;
-  const rail = railTick(st, liveBlurtMu);
+  const rail = { mintedNowMu: 0, listed: Boolean(st.assets["WBLURT"]) };
   const backingWblurt = st.backing["WBLURT"] ?? 0;
   const wblurtVerified = liveBlurtMu >= backingWblurt;
   const supplyWblurt = supplyMu(st, "WBLURT");
@@ -190,9 +193,10 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
     blocker: "אין-כספת-דולרית-מאחורי-הפג — 1 USDS ≠ 1$",
   });
 
-  // SAOS — המטבע-הריבוני (פנימי)
+  // FIX(Roast-63): SAOS לא-מקבל עוד "מחיר-חוץ" — הנגזרת-מהבריכות-הפנימיות הייתה
+  // מנופחת-פרמיית-ה-WSTEEM-הפנימית (~×2) וחבשה-תחפושת-חוץ. כנות: אין-מחיר-חוץ
+  // ל-SAOS; הנגזרת-המדומה נשארת-חשופה ב-price-proof (saosSim*) עם-הפרמיה-צמודה.
   const saosSupply = supplyMu(st, "SAOS");
-  const saosUsd = proof.derived.saosUsdMicro !== null ? proof.derived.saosUsdMicro / 1_000_000 : null;
   push({
     asset: "SAOS",
     supplyMu: saosSupply,
@@ -202,8 +206,8 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
     coveragePct: 0,
     coverageLockedPct: 0,
     internalPriceMu: internalPrice(st, "SAOS"),
-    externalPriceUsd: saosUsd,
-    externalPriceMu: saosUsd !== null ? Math.floor(saosUsd * 1000) : null,
+    externalPriceUsd: null,
+    externalPriceMu: null,
     divBps: null,
     verdict: "INTERNAL",
     exitPath: "SAOS→USDS (בריכה) → WSTEEM (בריכה) → burn → STEEM-אמת → שוק-חוץ. הנתיב-קיים-אך-מגובה-רק-ב-0.67-STEEM-נזיל.",
@@ -357,7 +361,7 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
     },
     {
       n: 3.5,
-      what: "החייל-האמת-הראשון — הזמנת-גריד-על-שוק-STEEM-הפנימי",
+      what: "החייל-האמת-הראשון — הזמנת-גריד-על-ספר-STEEM-הציבורי",
       status: (realV && "openOrders" in realV && realV.openOrders.length > 0) ? "LIVE" : "READY",
       valueUsd: realV && "balances" in realV && realV.steemUsd !== null
         ? realV.balances.sbd * (feeds.usd.hbd ?? feeds.usd.steem ?? 1)
@@ -370,7 +374,7 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
     },
     {
       n: 4,
-      what: "BLURT-אמת ישירות מהכספת (42.28)",
+      what: `BLURT-אמת ישירות מהכספת (${(liveBlurtMu / 1000).toFixed(2)} — נמדד-חי)`,
       status: "READY",
       valueUsd: usdBlurtDirect(),
       detail: "מפתחות-active/owner-בכספת-ומאומתים-חי. מכירה-דרך-שוק-BLURT-החוץ (פארק-קטן — נזילות-מוגבלת-אמת).",

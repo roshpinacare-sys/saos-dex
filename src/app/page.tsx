@@ -470,7 +470,7 @@ function SovereignMetricsPanel({ showcase, loading, rerun }: {
           {/* 4 עדויות-ראש */}
           <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-4">
             <div className="rounded-lg border border-green-500/30 bg-green-500/[0.05] px-3 py-2" data-testid="metric-mev">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">MEV EXTRACTED (BOOK)</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">MEV SIMULATION (BOOK) · <span className="text-amber-400">סים</span></div>
               <div className="mt-0.5 font-mono text-lg font-black text-green-300" dir="ltr">
                 {sc.B.bookSandwich.attackerPnlMu <= 0 ? fmt(sc.B.bookSandwich.attackerPnlMu, 0) : `+${fmt(sc.B.bookSandwich.attackerPnlMu, 0)}`} µ
               </div>
@@ -488,7 +488,7 @@ function SovereignMetricsPanel({ showcase, loading, rerun }: {
               </div>
             </div>
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-3 py-2" data-testid="metric-grid-liquidity">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">GRID-MADE LIQUIDITY</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">GRID-MADE LIQUIDITY · <span className="text-amber-400">סים</span></div>
               <div className="mt-0.5 font-mono text-lg font-black text-amber-300" dir="ltr">{sc.C.restingGridPct}%</div>
               <div className="mt-0.5 font-mono text-[10px] text-zinc-500" dir="ltr">
                 {sc.C.restingOrdersGrid}/{sc.C.restingOrdersTotal} orders · {sc.C.fillsPerMin}/min fills
@@ -816,7 +816,7 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
                       : c === "hive" || c === "fleet" ? `https://hiveblocks.com/tx/${last.txid}`
                       : c === "tron" ? `https://tronscan.org/#/transaction/${last.txid}`
                       : c === "eth" ? `https://etherscan.io/tx/${last.txid}`
-                      : `https://explorer.solana.com/tx/${last.txid}?cluster=devnet`}
+                      : `https://explorer.solana.com/tx/${last.txid}`}
                     target="_blank" rel="noreferrer"
                     className="text-amber-400 underline-offset-2 hover:underline"
                   >
@@ -1471,7 +1471,8 @@ function RouterPanel() {
               </div>
             </div>
           )}
-          {/* פנקס-ההכנסה — מקור-הנזיל-שמכניס-מהכל */}
+          {/* FIX(Roast-63): פנקס-ההכנסה — הכל-סים-פנימי (ספר/בריכות-פנימיות) — לא-כסף-חוץ */}
+          <p className="mb-1 text-[9px] font-semibold text-amber-400/90">⚠ כל-הסכומים-כאן-פנימיים-בלבד (סים) — נגזרים-מהארנה-הפנימית, לא-מכסף-חוץ</p>
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="income-strip">
             <Stat label="עמלות-בריכות" value={`${fmtInt(income?.poolFeesMu ?? 0)}µ`} sub="30bps · 30% לאוצר" />
             <Stat label="מד-עמלות" value={`${fmtInt(income?.feeMeterMu ?? 0)}µ`} sub="שטרם-נקצר" />
@@ -2039,7 +2040,7 @@ export default function DexTerminal() {
               <h1 className="text-base font-black tracking-tight text-zinc-50">
                 SAOS-DEX <span className="font-mono text-amber-400">SOVEREIGN TERMINAL</span>
               </h1>
-              <p className="text-[10px] text-zinc-500">ספר-דטרמיניסטי · ארנה-אוטונומית · עיגון-ריבוני ×5 רשתות · SAOS במרכז</p>
+              <p className="text-[10px] text-zinc-500">ספר-דטרמיניסטי · ארנה-אוטונומית · עיגון-ריבוני עד-5-רשתות (החיות-בפועל: בכרטיס-Real-Money) · SAOS במרכז</p>
             </div>
           </div>
 
@@ -2251,7 +2252,7 @@ export default function DexTerminal() {
       <footer className="mt-auto border-t border-zinc-800 bg-zinc-950">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2 px-4 py-3 text-[10px] text-zinc-600" style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}>
           <span className="flex items-center gap-1.5">
-            <Bot className="h-3.5 w-3.5" /> ספר-SIM ריבוני — חשבונאות-מדויקת-בברזל, נבחנת-מול כסף-אמת ועיגון-חי ×5 רשתות · אין הבטחות-תשואה
+            <Bot className="h-3.5 w-3.5" /> ספר-SIM ריבוני — חשבונאות-מדויקת-בברזל · העיגון-חי: רק-הרשתות-שבכרטיס-Real-Money-באמת-חיות · אין הבטחות-תשואה
           </span>
           <span className="flex items-center gap-3">
             <span className="flex items-center gap-1"><Anchor className="h-3.5 w-3.5" /> עיגון חי · {relay ? `${fmtInt(relay.metrics.verified)} verified` : "…"}</span>

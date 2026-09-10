@@ -287,7 +287,7 @@ export function bookDepth1pct(st: DexState, base: string, quote: string): { bidM
   return { bidMu, askMu, orders };
 }
 
-// ─── שרשרת-הנגזרת — SAOS ב-$-אמת דרך-העיגון ────────────────────────────────
+// ─── שרשרת-הנגזרת — SAOS ב-$-סימולציה דרך-הבריכות-הפנימיות ─────────────────
 export interface PriceProof {
   ok: boolean;
   height: number;
@@ -309,8 +309,12 @@ export interface PriceProof {
     feedError?: string;
   };
   derived: {
-    saosUsdMicro: number | null;   // SAOS ב-$-אמת (µ$ = 10⁻⁶ $)
-    saosUsdText: string | null;
+    // FIX(Roast-63): שדה-זה אינו "מחיר-חוץ" — הוא נגזרת-פנימית (mid-בריכות
+    // פנימיות × מחיר-STEEM-חוץ). הרגל-WSTEEM-בבריכה נסחרת-בפרמיה על מול STEEM-אמת
+    // (נמדד-ב-wsteemDivBps) — לכן הערך-מנופח. שם-כנה: סימולציה.
+    saosSimUsdMicro: number | null;   // SAOS ב-$-מדומה-נגזר-בריכות (µ$ = 10⁻⁶ $)
+    saosSimUsdText: string | null;
+    saosPremiumBps: number | null;    // הפרמיה-הפנימית-שנכללה-בחישוב (מ-wsteemDivBps)
     wsteemDivBps: number | null;   // סטיית-הבריכה מול-השוק-הציבורי
     verdict: "CONVERGED" | "DRIFT" | "DIVERGENT" | "NO-FEED" | "STALE";
   };
@@ -345,13 +349,13 @@ export async function priceProof(st: DexState): Promise<PriceProof> {
 
   const [feeds, blurt, onramp] = await Promise.all([extFeeds(), blurtHead(), onrampSnapshot().catch(() => null)]);
 
-  // SAOS-ב-$ (µ$ = 10⁻⁶ $): (WSTEEM/SAOS × steemUsd). יחידות: bps=×10⁻⁴ WSTEEM/SAOS
-  // × $/STEEM → $/SAOS. ב-µ$: ×10⁶ → wsteemPerSaosBps × steemUsd × 10².
+  // FIX(Roast-63): זהו-לא-מחיר-חוץ — נגזרת-סימולציה: mid-בריכות-פנימיות × $/STEEM-אמת.
+  // מכיוון-שהבריכה-הפנימית-נסחרת-בפרמיה (wsteemDivBps), הערך-מנופח-מול-המציאות.
   const steemUsd = feeds.usd.steem;
-  const saosUsdMicro = steemUsd !== null && wsteemPerSaosBps > 0
+  const saosSimUsdMicro = steemUsd !== null && wsteemPerSaosBps > 0
     ? wsteemPerSaosBps * steemUsd * 100
     : null;
-  const saosUsdText = saosUsdMicro !== null ? fmtUsd(saosUsdMicro / 1_000_000) : null;
+  const saosSimUsdText = saosSimUsdMicro !== null ? fmtUsd(saosSimUsdMicro / 1_000_000) : null;
 
   // הצלבה-חוץ: מחיר-הבריכה של WSTEEM (ב-$) מול STEEM-ציבורי
   const wsteemPoolUsd = wsteemUsdsMu > 0 ? wsteemUsdsMu / 1000 : 0; // USDS≈$-יחידת-חשבון-פנימית
@@ -393,8 +397,9 @@ export async function priceProof(st: DexState): Promise<PriceProof> {
       feedError: feeds.error,
     },
     derived: {
-      saosUsdMicro: saosUsdMicro,
-      saosUsdText,
+      saosSimUsdMicro: saosSimUsdMicro,
+      saosSimUsdText,
+      saosPremiumBps: wsteemDivBps,
       wsteemDivBps,
       verdict,
     },

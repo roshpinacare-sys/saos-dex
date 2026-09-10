@@ -7,6 +7,12 @@
  *
  * כללי-ברזל: 1 SAOS = 1000µ · מחיר = µ-ציטוט ל-1-יחידת-בסיס · אין float במצב ·
  * עסקה לא-חוקית לא נוגעת במצב · stateRoot = sha256(canonicalJSON(state)).
+ *
+ * FIX(Roast-63 · H1) — כנות-על-דטרמיניזם: journal.t נושא חותמת-שעון (nowMs
+ * שהוזרק-מ-buildBlock) והוא חלק-מה-state → ריפליי מהטייפ דטרמיניסטי רק-כשמשחזרים
+ * גם-את-t-מהרשומות-הכלולות-במצב. יישום-טרי-של-אותם-ops ייתן-journal.t אחר
+ * → stateRoot אחר. שינוי-מבני (t=height) דורש-הגירה-של-השרשרת-החיה — מתועד-כחוב-
+ * טכני-פתוח, לא-מוסתר.
  */
 import { canon, sha256, stateRootOf } from "./canonical";
 import { cancelOrder, matchBook, gcOrders, type BookOrder } from "./book";

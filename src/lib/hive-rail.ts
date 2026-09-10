@@ -18,6 +18,8 @@
  */
 
 const SIGNER_URL = (process.env.SAOS_EXTERNAL_SIGNER_URL ?? "http://127.0.0.1:3033").replace(/\/$/, "");
+// FIX(Roast-63): כל-שער-יוצא-כאן-עובר-דרך-הגדר (היה-עוקף assertAllowedHost)
+import { assertAllowedHost } from "./dex/fence";
 const SIGNER_TOKEN = (process.env.SAOS_EXTERNAL_SIGNER_TOKEN ?? "").trim();
 
 export type RailAction = "sell" | "withdraw" | "powerup" | "transfer";
@@ -68,6 +70,7 @@ export async function railExecute(req: RailRequest): Promise<{ ok: boolean; txid
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 30_000);
   try {
+    assertAllowedHost(`${SIGNER_URL}/sign`, "hive-rail.signer");
     const res = await fetch(`${SIGNER_URL}/sign`, { method: "POST", headers: signerHeaders(), body: JSON.stringify(body), signal: ctl.signal });
     const json = (await res.json()) as { ok: boolean; txid?: string; account?: string; error?: string; refused?: string };
     return json;
@@ -87,6 +90,7 @@ export interface AccountPreview {
 }
 
 async function rpcNode<T>(node: string, method: string, params: unknown): Promise<T> {
+  assertAllowedHost(node, "hive-rail.rpcNode");
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 12_000);
   try {
