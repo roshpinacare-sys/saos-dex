@@ -26,6 +26,8 @@ import { sortBook } from "./book";
 import { dcaTick, trigTick } from "./triggers";
 import { protoRevTick } from "./protorev";
 import { cowSettle } from "./cow";
+// Task 72 · דלת-המטבעות: פיד-האורקל — extFeeds (median חוצה-מקורות, TTL-משותף עם price-proof)
+import { extFeeds } from "./price-proof";
 
 export const TICK_MS = 3_000;
 const SEAL_EVERY = 12;   // checkpoint כל-12 בלוקים (CHAIN_SPEC)
@@ -39,7 +41,7 @@ const CHART_CAP = 240;
 /** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
  * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
  * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
-export const CODE_VERSION = "saos-dex/1.17.0+task58-protorev-launchpad-cow";
+export const CODE_VERSION = "saos-dex/1.18.0+task72-coin-door";
 
 // THE-MICRORAIL: קישור-מצב-חי-למסילה (מניעת-ייבוא-מעגלי chain⇄rail — הזרקה)
 bindLiveState(() => ensureChain().st);
@@ -89,6 +91,7 @@ interface ChainRT {
   version: number;
   cachedRoot: { h: number; root: string } | null; // FIX(SETTLE-9 perf): stateRoot-פר-גובה — getState פר-לקוח לא מחשב-מחדש O(state)
   rejectedLast: { h: number; count: number; sample: string[] } | null; // FIX(SETTLE-15 silent-drop): ראית-דחיות-חיה
+  oracleTimer: ReturnType<typeof setInterval> | null; // Task 72 · לולאת-פיד-האורקל (חוץ-מצב — ה-op עצמו קנוני)
 }
 
 const g = globalThis as unknown as { __saosDexChain?: ChainRT };
@@ -730,6 +733,56 @@ async function tick(rt: ChainRT): Promise<void> {
   }
 }
 
+// ─── Task 72 · פיד-האורקל (דלת-המטבעות) ──────────────────────────────────────
+// extFeeds מחזיר median חוצה-מקורות ($ ליחידה) → ממפה ל-µ-USDS-ל-יחידה (×1e6,
+// עיגול-שלמים) על נכסי-הרשת הרלוונטיים. דחיפה רק-כשערך-שונה מהאורקל-הקנוני —
+// אין-רעש-מצב. ה-op עצמו אוצר-חתום + nonce-מערכת → ריפליי דטרמיניסטי.
+const ORACLE_MAP: Array<{ asset: string; feed: "steem" | "hive" | "blurt" | "eth" | "sol" | "trx" | "btc" }> = [
+  { asset: "WTRX", feed: "trx" },
+  { asset: "WSOL", feed: "sol" },
+  { asset: "WSTEEM", feed: "steem" },
+  { asset: "HIVE", feed: "hive" },
+  { asset: "WBLURT", feed: "blurt" },
+  { asset: "ETH", feed: "eth" },
+  { asset: "BTC", feed: "btc" },
+];
+
+async function oracleTick(rt: ChainRT): Promise<void> {
+  if (rt.halted) return;
+  try {
+    const feeds = await extFeeds();
+    if (!feeds.ok || feeds.stale) return; // אין-פיד-חי = אין-דחיפה (כנות: last-good נשאר במצב)
+    const prices: Record<string, number> = {};
+    const srcs: string[] = [];
+    for (const { asset, feed } of ORACLE_MAP) {
+      const v = feeds.usd[feed];
+      if (typeof v !== "number" || !(v > 0)) continue;
+      const mu = Math.round(v * 1_000_000);
+      if (!Number.isSafeInteger(mu) || mu <= 0) continue;
+      if (rt.st.oracle?.[asset]?.mu === mu) continue; // לא-השתנה — אין-רעש-מצב
+      prices[asset] = mu;
+      const cross = feeds.cross?.[feed];
+      srcs.push(`${asset}×${cross?.sources ?? "?"}`);
+    }
+    if (Object.keys(prices).length === 0) return;
+    const src = `median(${srcs.slice(0, 4).join(",")})`;
+    rt.mempool.push({
+      type: "oracle_set", issuer: "treasury", nonce: sysNonce(rt.st, "oracle"), prices, claim: src,
+    });
+    console.info(`[saos-dex] oracle_set queued: ${Object.entries(prices).map(([a, m]) => `${a}=${(m / 1e6).toPrecision(6)}$`).join(" · ")} (${src})`);
+  } catch {
+    // fail-כנה — פיד-חוץ לא מוריד את השרשרת; הניסיון-הבא בעוד-60ש׳
+  }
+}
+
+/** דחיפת-אורקל-מיידית (שער-מפעיל — /api/dex/door action=refresh-oracle). */
+export function requestOracleRefresh(): { queued: boolean; reason?: string } {
+  const rt = ensureChain();
+  if (rt.halted) return { queued: false, reason: "halted" };
+  void oracleTick(rt);
+  return { queued: true };
+}
+
 export function ensureChain(): ChainRT {
   if (g.__saosDexChain) return g.__saosDexChain;
   const rt: ChainRT = {
@@ -744,8 +797,15 @@ export function ensureChain(): ChainRT {
     pendingLift: null, // FIX(Roast-65-a · MED-6)
     cachedRoot: null,
     rejectedLast: null,
+    oracleTimer: null,
   };
   g.__saosDexChain = rt;
+  // Task 72 · לולאת-פיד-האורקל (דלת-המטבעות): כל-60ש׳ בודקת את פידי-השוק-האמת
+  // (extFeeds — TTL-קאש משותף, רשת-אמיתית רק כשה-TTL פג) ודוחפת oracle_set אוצר
+  // רק-כשמחיר-שינה. ה-op קנוני (בתוך ה-stateRoot); הלולאה עצמה חוץ-מצב וכשלה
+  // שקט-כנה — פיד-חוץ לא מוריד את השרשרת.
+  rt.oracleTimer = setInterval(() => void oracleTick(rt), 60_000);
+  void oracleTick(rt); // דחיפה-ראשונה מיד-באתחול
   // אתחול-אסינכרוני: תמונת-מצב (מאומתת) → אחרת ג'נזיס-מוצדק; אחר-כך טיימר
   void (async () => {
     const loaded = await loadSnapshot(rt);
