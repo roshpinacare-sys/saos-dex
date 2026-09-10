@@ -28,7 +28,7 @@ import { fleetConfigured, fleetSealNow, fleetStatusPublic } from "./fleet";
 import steemLib from "steem";
 import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor, ETH_RPCS } from "./relay-eth";
 import { solSealBroadcast, verifySolAnchor, solIdentity } from "./relay-sol";
-import { assertAllowedHost } from "./fence";
+import { fencedFetch } from "./fence"; // FIX(SETTLE-11)+FIX(Roast-65-b · H2): כל-ה-fetch-ים-דרך-הגדר (redirect:error מרוכז)
 
 type GrapheneTx = {
   ref_block_num: number;
@@ -296,11 +296,11 @@ async function scalarOf(wif: string): Promise<Uint8Array> {
 
 /* ── JSON-RPC ── */
 async function rpc<T>(endpoint: string, body: unknown, timeoutMs = 20000): Promise<T> {
-  assertAllowedHost(endpoint, "relay.rpc"); // FIX(SETTLE-11): גדר-ריבונית — שער-לא-מקובע = חסימה fail-closed
+  // FIX(SETTLE-11): גדר-ריבונית — שער-לא-מקובע = חסימה fail-closed · FIX(Roast-65-b · H2): דרך-fencedFetch (redirect:error)
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal });
+    const res = await fencedFetch(endpoint, "relay.rpc", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal });
     const json = (await res.json()) as { result?: T; error?: { message?: string } };
     if (json.error) throw new Error(json.error.message || "rpc error");
     return json.result as T;
@@ -375,8 +375,8 @@ export async function grapheneSealBroadcast(node: string, chainId: string, accou
 
 /* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = stateRoot) ── */
 async function tronSealBroadcast(tronAddress: string, stateRoot: string, wif: string): Promise<{ txid: string }> {
-  assertAllowedHost(TRON_RPC, "relay.tron"); // FIX(SETTLE-11): גדר-ריבונית
-  const acc = await fetch(`${TRON_RPC}/v1/accounts/${tronAddress}`, { signal: AbortSignal.timeout(12000) }).then((r) => r.json()) as { data: { balance?: number }[] };
+  // FIX(SETTLE-11): גדר-ריבונית · FIX(Roast-65-b · H2): ה-GET-יתרה עובר-גם-הוא-דרך-fencedFetch (redirect:error)
+  const acc = await fencedFetch(`${TRON_RPC}/v1/accounts/${tronAddress}`, "relay.tron.accounts", { signal: AbortSignal.timeout(12000) }).then((r) => r.json()) as { data: { balance?: number }[] };
   const balance = acc?.data?.[0]?.balance ?? 0;
   if (balance < 300_000) throw new Error(`unfunded: ${balance} sun (<0.3 TRX bandwidth floor) — queued honestly`);
 

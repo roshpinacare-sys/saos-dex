@@ -110,15 +110,23 @@ function revenueCycle(st: DexState, h: number, nowMs: number): void {
   // צריכת-המדידה: revAux-ראשון (protorev → launchpad, סדר-קנוני), ואז-רווח-העמלות
   const auxTake = Math.min(take, aux);
   let rem = auxTake;
+  // FIX(Roast-65-a · HIGH-3d): צריכת-treasuryProfit-על-ידי-הראוטר חייבת-להירשם-בדלי
+  // feesSpentMu — בלעדיו ביקורת-העמלות (pools===meter+profit+minted−spent) נשברת
+  // נצחית מהמחזור-הראשון שבו-הראוטר שורף: המדידה-בבריכות אינה יורדת, הרווח כן.
+  // רק-החלק-שנצרך-מרווח-עמלות-הסוואפ נספר (החלק-מ-revAux אינו עמלות-בריכות-כלל).
+  let feesSpentThis = 0;
   if (rem > 0) {
     const pr = Math.min(st.revAux?.protorevMu ?? 0, rem);
     if (pr > 0) { st.revAux = { ...(st.revAux ?? { protorevMu: 0, launchpadMu: 0 }), protorevMu: (st.revAux?.protorevMu ?? 0) - pr }; rem -= pr; }
     const lp = Math.min(st.revAux?.launchpadMu ?? 0, rem);
     if (lp > 0) { st.revAux = { ...(st.revAux ?? { protorevMu: 0, launchpadMu: 0 }), launchpadMu: (st.revAux?.launchpadMu ?? 0) - lp }; rem -= lp; }
     st.treasuryProfit -= (take - auxTake); // השארית — מרווח-עמלות-הסוואפ-המדוד
+    feesSpentThis = take - auxTake;
   } else {
     st.treasuryProfit -= take;
+    feesSpentThis = take;
   }
+  if (feesSpentThis > 0) st.feesSpentMu = (st.feesSpentMu ?? 0) + feesSpentThis;
   st.rev = {
     lastH: h,
     cycles: (st.rev?.cycles ?? 0) + 1,

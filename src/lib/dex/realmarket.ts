@@ -22,7 +22,7 @@
  */
 import steem from "steem";
 import { extFeeds } from "./price-proof";
-import { assertAllowedHost } from "./fence";
+import { fencedFetch } from "./fence"; // FIX(Roast-63)+FIX(Roast-65-b · H2): גדר + redirect:error מרוכזים
 
 const STEEM_NODES = [
   "https://api.steemit.com",
@@ -47,12 +47,11 @@ interface GrapheneTx {
 /* ── RPC ─────────────────────────────────────────────────────────────────── */
 
 async function rpc<T>(node: string, body: unknown, timeoutMs = 8_000): Promise<T> {
-  // FIX(Roast-63): הגדר-נאכפת — שער-לא-מקובע = חסימה fail-closed (היה-עוקף)
-  assertAllowedHost(node, "realmarket.rpc");
+  // FIX(Roast-63): הגדר-נאכפת — שער-לא-מקובע = חסימה fail-closed (היה-עוקף) · FIX(Roast-65-b · H2): דרך-fencedFetch (redirect:error)
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const r = await fetch(node, {
+    const r = await fencedFetch(node, "realmarket.rpc", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

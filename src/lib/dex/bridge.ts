@@ -36,7 +36,7 @@ import fs from "fs";
 import path from "path";
 import { getLiveState, nextNonce, submitOp } from "./chain";
 import { bal, ASSETS, type Asset } from "./kernel";
-import { assertAllowedHost } from "./fence";
+import { fencedFetch } from "./fence"; // FIX(SETTLE-11)+FIX(Roast-65-b · H2): גדר + redirect:error מרוכזים
 
 export type FarVerify = { verified: boolean; note: string };
 
@@ -59,11 +59,11 @@ const RPC: Record<string, string> = {
 };
 
 async function jsonRpc<T>(url: string, body: unknown, timeoutMs = 10_000): Promise<T> {
-  assertAllowedHost(url, "bridge.verifyFarTx");
+  // FIX(SETTLE-11): גדר-ריבונית · FIX(Roast-65-b · H2): דרך-fencedFetch (redirect:error)
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: ctl.signal, cache: "no-store" });
+    const res = await fencedFetch(url, "bridge.verifyFarTx", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: ctl.signal, cache: "no-store" });
     return (await res.json()) as T;
   } finally { clearTimeout(t); }
 }

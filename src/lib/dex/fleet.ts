@@ -15,7 +15,7 @@
  *   · חשבון-לא-מאומת-בשרשרת = לא-משמש (בדיקת-get_accounts חיה + TTL).
  *   · POSTING בלבד לשידור (לא-ACTIVE) — לצי אין-יכולת-העברת-כספים-בנתיב-עיגון.
  *   · breaker-פר-חשבון (3-כשלים-רצופים → התקררות-10דק) + RC-gate קנוני.
- *   · כל-fetch דרך-הגדר-הריבונית (assertAllowedHost).
+ *   · כל-fetch דרך-הגדר-הריבונית (fencedFetch — גדר + redirect:"error", FIX Roast-65-b).
  *
  * הערת-כנות: ה-pass-של-הכספת היה-היסטורית-חשוף (meta-בריפו). החיילים-אינם-כספת-
  * אוצר — השימוש-כאן הוא-עיגון-פרסום-בלבד; רוטציית-מפתחות-לצי נותרת-המלצה-פתוחה
@@ -25,7 +25,7 @@ import fs from "fs";
 import path from "path";
 import { scryptSync, createDecipheriv } from "crypto";
 import steemLibRaw from "steem";
-import { assertAllowedHost } from "./fence";
+import { fencedFetch } from "./fence"; // FIX(Roast-65-b · H2): גדר + redirect:error מרוכזים
 import { ANCHOR_ID, HIVE_CHAIN_ID, HIVE_NODES, grapheneSealBroadcast, rcMana } from "./relay";
 
 interface SteemAuth {
@@ -165,11 +165,11 @@ export function fleetConfigured(): boolean {
 
 /* ── בדיקה-חיה: סמכויות-מול-השרשרת + RC-קנוני-פר-חשבון ─────────────────────── */
 async function rpcJson<T>(endpoint: string, body: unknown, timeoutMs = 15000): Promise<T> {
-  assertAllowedHost(endpoint, "fleet.rpc");
+  // FIX(Roast-65-b · H2): דרך-fencedFetch — גדר + redirect:error (חתימות-הצי לא-משוחזרות-החוצה)
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal });
+    const res = await fencedFetch(endpoint, "fleet.rpc", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal });
     const json = (await res.json()) as { result?: T; error?: { message?: string } };
     if (json.error) throw new Error(json.error.message || "rpc error");
     return json.result as T;

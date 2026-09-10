@@ -11,7 +11,7 @@
  *
  * אפס-סודות (שמות-חשבונות-ומספרים — ציבוריים-ממילא-על-השרשרת) ·
  * TTL-קאש 10 דק' · אפס-כתיבה — קריאה-בלבד. */
-import { assertAllowedHost } from "./dex/fence";
+import { fencedFetch } from "./dex/fence"; // FIX(Roast-65-b · H2): גדר + redirect:error מרוכזים
 import { fleetStatusPublic } from "./dex/fleet";
 
 const HIVE_NODE = "https://api.hive.blog"; // מקובע-ב-fence (PINNED_HOSTS)
@@ -69,11 +69,11 @@ function rt(): RT {
 }
 
 async function rpc<T>(endpoint: string, body: unknown, timeoutMs = 12_000): Promise<T> {
-  assertAllowedHost(endpoint, "onramp");
+  // FIX(Roast-65-b · H2): דרך-fencedFetch — גדר + redirect:error (קריאות-יתרות-חיות)
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
-    const r = await fetch(endpoint, {
+    const r = await fencedFetch(endpoint, "onramp", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify(body), signal: ac.signal, cache: "no-store",
     });

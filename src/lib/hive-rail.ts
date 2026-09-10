@@ -5,8 +5,8 @@
  * arena): token → SWAP.HIVE (Hive-Engine market sell) → liquid HIVE
  * (hivepegged withdraw) → HP (transfer_to_vesting).
  *
- * Execution ALWAYS goes through the external signer (:3033) — the dex process
- * holds NO keys (golden architecture, docs/external-signer.md). The signer
+ * Execution ALWAYS goes through the external signer (http://127.0.0.1:3004 — see
+ * below) — the dex process holds NO keys (golden architecture, docs/external-signer.md). The signer
  * enforces:
  *   - authority-verification gate (derive WIF → compare LIVE chain authority,
  *     mismatch ⇒ 403, nothing broadcast);
@@ -17,9 +17,12 @@
  * Zero secrets in logs/responses — only account names, symbols, txids.
  */
 
-const SIGNER_URL = (process.env.SAOS_EXTERNAL_SIGNER_URL ?? "http://127.0.0.1:3033").replace(/\/$/, "");
+// FIX(Roast-65-b · H1): ברירת-המחדל 3033 הייתה-הזיה — אין-מאזין-על-3033 (Roast-65-b מדיד).
+// הפורט-האמתי: ADMIN_PORT=3004 של mini-services/relay-service/index.ts (העתק-קנוני
+// מוצהר; נמדד-חי — 127.0.0.1:3004 מאזין). SAOS_EXTERNAL_SIGNER_URL עוקף לחותם-ייעודי.
+const SIGNER_URL = (process.env.SAOS_EXTERNAL_SIGNER_URL ?? "http://127.0.0.1:3004").replace(/\/$/, "");
 // FIX(Roast-63): כל-שער-יוצא-כאן-עובר-דרך-הגדר (היה-עוקף assertAllowedHost)
-import { assertAllowedHost } from "./dex/fence";
+import { fencedFetch } from "./dex/fence"; // FIX(Roast-65-b · H2): fencedFetch — גדר + redirect:error מאוכפים-מרכזית
 const SIGNER_TOKEN = (process.env.SAOS_EXTERNAL_SIGNER_TOKEN ?? "").trim();
 
 export type RailAction = "sell" | "withdraw" | "powerup" | "transfer";
@@ -36,6 +39,12 @@ export interface RailRequest {
 
 export function railConfigured(): boolean {
   return Boolean(SIGNER_TOKEN);
+}
+
+/** FIX(Roast-65-b · H1): נקודת-הקצה-החיתומית-החיה — מיוצאת ל-fence-check/fenceSelftest
+ * (מוצלב-מול-מניפסט-הקוראים-שב-fence.ts כדי-שהפין-והקוד-לא-יסטו-זה-מזה-בשקט). */
+export function signerEndpointUrl(): string {
+  return `${SIGNER_URL}/sign`;
 }
 
 function signerHeaders() {
@@ -70,8 +79,7 @@ export async function railExecute(req: RailRequest): Promise<{ ok: boolean; txid
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 30_000);
   try {
-    assertAllowedHost(`${SIGNER_URL}/sign`, "hive-rail.signer");
-    const res = await fetch(`${SIGNER_URL}/sign`, { method: "POST", headers: signerHeaders(), body: JSON.stringify(body), signal: ctl.signal });
+    const res = await fencedFetch(signerEndpointUrl(), "hive-rail.signer", { method: "POST", headers: signerHeaders(), body: JSON.stringify(body), signal: ctl.signal });
     const json = (await res.json()) as { ok: boolean; txid?: string; account?: string; error?: string; refused?: string };
     return json;
   } catch (e) {
@@ -90,11 +98,10 @@ export interface AccountPreview {
 }
 
 async function rpcNode<T>(node: string, method: string, params: unknown): Promise<T> {
-  assertAllowedHost(node, "hive-rail.rpcNode");
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 12_000);
   try {
-    const res = await fetch(node, {
+    const res = await fencedFetch(node, "hive-rail.rpcNode", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }),

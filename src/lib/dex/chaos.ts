@@ -45,9 +45,17 @@ export function chaosPartitioned(target: ChaosTarget): boolean {
 
 /** תצפית-ציבורית על-מצב-ההזרקות (לכלי-בדיקה ולתיעוד)
  * FIX(SETTLE-7): כל-חמשת-היעדים — eth/sol נוספו (היו-בטיפוס-בלבד; מחיצה-מוזרקת
- * עליהם הייתה-בלתי-נראית לתצפית). */
+ * עליהם הייתה-בלתי-נראית לתצפית).
+ * FIX(Roast-65-b · M9): "fleet" נוסף — ה-relay מגדר-גם-את-מסילת-הצי
+ * (chaosPartitioned(chain) על-chain="fleet" ב-relay.ts), אבל-התצפית הציגה-רק
+ * 5/6-יעדים: מחיצה-מוזרקת-על-fleet הייתה-חוסמת-עיגון-והתצפית-מציגה-הכל-תקין.
+ * הרשימה-נגזרת-מ-ChaosTarget עצמו — לא-עוד-רשימת-תצוגה-נפרדת-שיכולה-לפגר. */
 export function chaosView(): { target: ChaosTarget; partitioned: boolean; remainingMs: number }[] {
-  return (["steem", "hive", "tron", "eth", "sol"] as ChaosTarget[]).map((target) => {
+  const targets: ChaosTarget[] = ["steem", "hive", "tron", "eth", "sol", "fleet"];
+  // אכיפת-קומפילציה: אם-ChaosTarget יגדל-בלי-עדכון-התצפית — tsc ייכשל (לא-עוד-יעד-בלתי-נראה)
+  type _EveryTargetInView = [ChaosTarget] extends [(typeof targets)[number]] ? true : never;
+  const _targetViewGuard: _EveryTargetInView = true;
+  return targets.map((target) => {
     const until = armMap().get(target);
     const remainingMs = until === undefined ? 0 : Math.max(0, until - Date.now());
     return { target, partitioned: remainingMs > 0, remainingMs };
