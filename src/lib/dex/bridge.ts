@@ -245,13 +245,47 @@ export async function verifyFarTx(chain: string, txid: string, expect: FarExpect
       if (s.confirmationStatus !== "finalized") return { verified: false, note: `awaiting finalized (now: ${s.confirmationStatus ?? "processed"})` };
       // FIX(F1): קישור — הכתובת-הרשומה חייבת להופיע בהודעה (fee-payer/accounts) או בלוגים
       if (!expect.farAddress) return { verified: false, note: "recipient-unregistered — אין-קישור-כתובת-רשום-על-הכוונה (refused)" };
-      const g = await jsonRpc<{ result?: { transaction?: { message?: { accountKeys?: string[] } }; meta?: { logMessages?: string[] } } | null }>(RPC[chain]!, { jsonrpc: "2.0", id: 1, method: "getTransaction", params: [[tx], { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }] });
+      const g = await jsonRpc<{
+        result?: {
+          transaction?: { message?: { accountKeys?: string[] } };
+          meta?: {
+            logMessages?: string[];
+            preBalances?: number[]; postBalances?: number[];
+            preTokenBalances?: { accountIndex: number; owner?: string; uiTokenAmount?: { amount?: string } }[];
+            postTokenBalances?: { accountIndex: number; owner?: string; uiTokenAmount?: { amount?: string } }[];
+          };
+        } | null;
+      }>(RPC[chain]!, { jsonrpc: "2.0", id: 1, method: "getTransaction", params: [[tx], { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }] });
       if (!g?.result) return { verified: false, note: "tx-body-not-indexed (finalized-אך-הגוף-לא-זמין)" };
       const keys = g.result.transaction?.message?.accountKeys ?? [];
       const logs = g.result.meta?.logMessages ?? [];
       const bound = keys.includes(expect.farAddress) || logs.some((l) => l.includes(expect.farAddress!));
       if (!bound) return { verified: false, note: "no-binding — הכתובת-הרשומה אינה מופיעה בהודעה/לוגים (refused)" };
-      return { verified: true, note: "signature ok (finalized) · bound: far-address mentioned in tx accounts/logs" };
+      // FIX(Roast-66 · sol-amount-binding): היה — "הכתובת-מופיעה" מספיק (עוקף-את-רוח-F1
+      // וסותר-את-eth/tron/steem שם-הסכום-נאכף) → תשלום-אפשרי-על-tx-כמעט-כלשהו-שמזכיר-את-הכתובת.
+      // עכשיו: אכיפת-סכום-מלאה — native-delta (pre/postBalances, lamports) או SPL-delta
+      // (pre/postTokenBalances, יחידות-גלם); בלי-farAmount-רשום או-שלא-ניתן-לפרש = דחייה fail-closed
+      // (אותו-חוזה-כמו-המסילות-האחרות: recipient+amount+intent מחייבים).
+      if (!expect.farAmount) return { verified: false, note: "amount-unverifiable-on-this-rail (לא-נרשם-סכום-צפוי-בlamports/יחידות-טוקן)" };
+      if (!/^\d+$/.test(expect.farAmount.trim())) return { verified: false, note: "amount-unverifiable-on-this-rail (farAmount-פורמט-פסול)" };
+      const want = BigInt(expect.farAmount.trim());
+      const meta = g.result.meta!;
+      const idx = keys.indexOf(expect.farAddress);
+      if (idx >= 0 && Array.isArray(meta.preBalances) && Array.isArray(meta.postBalances) && meta.preBalances.length === meta.postBalances.length && meta.preBalances.length > idx) {
+        const delta = BigInt(Math.max(0, (meta.postBalances[idx] ?? 0) - (meta.preBalances[idx] ?? 0)));
+        if (delta < want) return { verified: false, note: `amount-short-on-chain (lamports ${delta} < ${want}) — refused` };
+      } else {
+        const postTok = Array.isArray(meta.postTokenBalances) ? meta.postTokenBalances : [];
+        const preTok = Array.isArray(meta.preTokenBalances) ? meta.preTokenBalances : [];
+        const hit = postTok.findIndex((t) => t.owner === expect.farAddress || (keys[t.accountIndex] === expect.farAddress && t.accountIndex < preTok.length));
+        if (hit < 0) return { verified: false, note: "amount-unverifiable-on-this-rail (אין-native-delta-ואין-SPL-balance-לכתובת) — refused (fail-closed)" };
+        const raw = postTok[hit]?.uiTokenAmount?.amount ?? "0";
+        const prev = preTok[hit]?.uiTokenAmount?.amount ?? "0";
+        if (!/^\d+$/.test(raw) || !/^\d+$/.test(prev)) return { verified: false, note: "amount-unverifiable-on-this-rail (SPL-amounts-unparseable) — refused" };
+        const d = BigInt(raw) - BigInt(prev);
+        if (d < want) return { verified: false, note: `amount-short-on-chain (spl ${d} < ${want}) — refused` };
+      }
+      return { verified: true, note: "signature ok (finalized) · bound: far-address+amount (native-delta/SPL)" };
     }
     return { verified: false, note: `chain-${chain}-לא-ניתן-לאימות-חוץ (פנימי/לא-נתמך)` };
   } catch (e) {
@@ -530,4 +564,56 @@ export async function markReleased(p: { id: string; farTxid: string }): Promise<
   writeLedger(l);
   seenAdd(ref, intent.id, "out"); // FIX(F2): רישום-קבוע-בשחרור
   return { ok: true, intent };
+}
+
+/* ══ FIX(Roast-66 · ZFB-keeper) — סולק-אוטומטי-כניסה: פריצת-הדרך "גשר-אפס-עמלה
+ * על-כלל-הרשתות" ══════════════════════════════════════════════════════════════
+ * ההפקדה-החוץ (STEEM/HIVE/TRON/ETH/BSC/SOL → SAOS) נסלקת-**אוטומטית** ברגע
+ * שהוכחת-הקישור (נמען+סכום+finalized) עומדת — בלי-מפעיל, בלי-עמלה, בלי-גז
+ * (xfer_free). האמת-מצייתת-לאותם-שערים: claimInbound עצמו עושה verifyFarTx
+ * fail-closed מחדש — ה-keeper מוסיף-אוטומציה, לא-אמון. הרצה-בתהליך (כמו-ה-milestone
+ * player): סריקת-pending-מקושרים → ניסיון-סליקה מדוד (≤2-פר-פעימה, inflight-guard). */
+const autoRt = {
+  started: false, inflight: false, lastRunAt: 0,
+  lastAction: "never-run", autoClaimed: 0, lastError: null as string | null,
+};
+export function bridgeAutoStatus(): { started: boolean; inflight: boolean; lastRunAt: number; lastAction: string; autoClaimed: number; lastError: string | null } {
+  return { ...autoRt };
+}
+export function startBridgeAutoKeeper(intervalMs = 20_000): void {
+  const g = globalThis as unknown as { __saosBridgeAuto?: boolean };
+  if (g.__saosBridgeAuto) { autoRt.started = true; return; }
+  g.__saosBridgeAuto = true; autoRt.started = true;
+  setInterval(() => { void bridgeAutoTick(); }, intervalMs).unref?.();
+}
+async function bridgeAutoTick(): Promise<void> {
+  if (autoRt.inflight) return;
+  autoRt.inflight = true;
+  try {
+    const l = readLedger();
+    const cands = l.intents
+      .filter((i) => i.dir === "in" && i.status === "pending" && i.farAddress && i.farAmount)
+      .slice(-2); // הישנות-ראשונה, ≤2-פר-פעימה — אפס-לחץ-RPC
+    if (cands.length === 0) { autoRt.lastAction = "idle"; return; }
+    for (const intent of cands) {
+      const r = await claimInbound({ id: intent.id });
+      if (r.ok) {
+        autoRt.autoClaimed++;
+        autoRt.lastAction = `auto-claimed:${intent.id} (${intent.amountMu}µ ${intent.asset} ← ${intent.chain})`;
+        console.log(`[saos-bridge][ZFB-keeper] ${autoRt.lastAction} — אפס-עמלה, אפס-גז (xfer_free)`);
+      } else if (r.error.startsWith("proof-unverified")) {
+        autoRt.lastAction = `waiting-proof:${intent.id}`;
+        break; // עוד-לא-finalized/לא-נמדד-עומק — נמתין-לפעימה-הבאה (לא-לשרוף-RPC)
+      } else {
+        autoRt.lastAction = `hold:${intent.id} (${r.error.slice(0, 60)})`;
+      }
+    }
+    autoRt.lastError = null;
+  } catch (e) {
+    autoRt.lastError = String((e as Error)?.message ?? e).slice(0, 120);
+    autoRt.lastAction = `error:${autoRt.lastError}`;
+  } finally {
+    autoRt.lastRunAt = Date.now();
+    autoRt.inflight = false;
+  }
 }

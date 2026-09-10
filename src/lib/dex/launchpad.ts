@@ -25,7 +25,7 @@ export const launchAccount = (id: string): string => `launch:${id}`;
 
 /** הגירה-אוטומטית — נקרא-מ-buildBlock (באמצעות economyTick הורים) על-כל-בלוק.
  * מחזיר את מזהי-ההשקות-שהוגרו (ליומן). כשל-חלקי בהשקה אחת לא עוצר את האחרות. */
-export function launchpadTick(st: DexState): string[] {
+export function launchpadTick(st: DexState, nowMs: number): string[] {
   const h = st.height;
   if (h <= 0) return [];
   const graduated: string[] = [];
@@ -55,7 +55,7 @@ export function launchpadTick(st: DexState): string[] {
     l.poolKey = key;
     graduated.push(l.id);
     st.journal.push({
-      h, t: 0, soldier: "launchpad", action: "graduation",
+      h, t: nowMs, soldier: "launchpad", action: "graduation",
       note: `${l.code} GRADUATED → ${key}: ${R}µ טוקן + ${B}µ USDS · LP ${st.pools[key].lp}µ (100% אוצר)`,
     });
   }

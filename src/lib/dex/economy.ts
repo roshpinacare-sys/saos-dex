@@ -52,8 +52,8 @@ export function economyTick(st: DexState, nowMs: number): void {
   if (h <= 0) return;
   if (h % ROUTER_EVERY === 0) revenueCycle(st, h, nowMs);
   if (h % EPOCH_BLOCKS === 0) epochFlip(st, h, nowMs);
-  launchpadTick(st); // Task 57/58 · הגירות-אוטומטיות של מסילת-ההשקות (גיוס-הסף → בריכה)
-  aleTick(st); // Task 55 · ALE: הזרעת-POL-אוטונומית כל-ALE_EVERY-בלוקים
+  launchpadTick(st, nowMs); // Task 57/58 · הגירות-אוטומטיות של מסילת-ההשקות (גיוס-הסף → בריכה)
+  aleTick(st, nowMs); // Task 55 · ALE: הזרעת-POL-אוטונומית כל-ALE_EVERY-בלוקים
 }
 
 /** (2) REVENUE-ROUTER: רווח-אוצר מדוד → 40% burn (קנייה-מהבריכה + השמדה) ·
@@ -91,10 +91,10 @@ function revenueCycle(st: DexState, h: number, nowMs: number): void {
         pool.swaps++;
         // השמדה-אמת: ה-SAOS שנקנה לא מגיע-לאף-ארנק — ΣSAOS במצב יורד
         st.burnedSaos = (st.burnedSaos ?? 0) + out;
-        st.journal.push({ h, t: 0, soldier: "router", action: "burn", profitMu: out, note: `burn ${out}µ SAOS (${burnUsds}µ USDS from fees)` });
+        st.journal.push({ h, t: nowMs, soldier: "router", action: "burn", profitMu: out, note: `burn ${out}µ SAOS (${burnUsds}µ USDS from fees)` });
       }
     } else {
-      st.journal.push({ h, t: 0, soldier: "router", action: "burn_skipped", profitMu: 0, note: `treasury USDS below burn ${burnUsds}µ — honest skip (fail-closed, audit fix)` });
+      st.journal.push({ h, t: nowMs, soldier: "router", action: "burn_skipped", profitMu: 0, note: `treasury USDS below burn ${burnUsds}µ — honest skip (fail-closed, audit fix)` });
     }
   }
   if (veUsds > 0) {

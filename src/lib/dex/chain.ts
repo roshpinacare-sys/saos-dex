@@ -19,7 +19,7 @@ import { economyTick } from "./economy";
 import { merkleRoot, sha256, canon, CanonicalError } from "./canonical";
 import { invariant, InvariantViolation } from "./invariant";
 import { arenaTick, fairPrice, DEFAULT_PARAMS, type ArenaParams, type SoldierRT, MARKETS } from "./mm";
-import { railSummary, bindLiveState } from "./rail";
+import { railSummary, bindLiveState, railReconcile } from "./rail";
 import { milestoneSummary } from "./milestone";
 import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX, effectiveFeeBps } from "./amm";
 import { sortBook } from "./book";
@@ -516,6 +516,12 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     if (op.nonce === rt.pendingLift.harvestNonce) keelHarvest = ok;
     if (op.nonce === rt.pendingLift.priceNonce) keelPrice = ok;
   };
+  // FIX(Roast-66 · dose-truth): מעקב-תוצאות-המנות-של-המסילה (נונס rail-*) — המנה
+  // נספרת-כבוצעה רק-מתוצאת-הבלוק-בפועל (היה: נספרה-בדחיפה, minOut-fail נספר-כמנה).
+  const railResults: { nonce: string; ok: boolean }[] = [];
+  const trackRail = (op: Op, ok: boolean): void => {
+    if (op.nonce.startsWith("rail-")) railResults.push({ nonce: op.nonce, ok });
+  };
   for (const op of ops) {
     // FIX(Roast-65-a · MED-8): אטומיות-בלוק. הישן: זריקה-מ-applyOp באמצע-הלולאה הפילה
     // את-כל-הבלוק אחרי-שה-ops-המוקדמים כבר שינו את st — מוטציות-חיות בלי blockHash/DB,
@@ -527,11 +533,13 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     } catch (e) {
       if (e instanceof InvariantViolation) throw e;
       trackKeel(op, false);
+      trackRail(op, false);
       rejected++;
       if (rejSample.length < 5) rejSample.push(`${op.type}(${(op as { issuer?: string }).issuer ?? "?"}):${String(e instanceof Error ? e.message : e).slice(0, 60)}`);
       continue;
     }
     trackKeel(op, r.ok);
+    trackRail(op, r.ok);
     if (r.ok) {
       applied++;
       for (const ev of r.events ?? []) rt.tape.unshift({ ...ev, h: st.height });
@@ -544,6 +552,8 @@ async function buildBlock(rt: ChainRT): Promise<void> {
       if (rejSample.length < 5) rejSample.push(`${op.type}(${(op as { issuer?: string }).issuer ?? "?"}):${r.err}`);
     }
   }
+  // FIX(Roast-66 · dose-truth): פיוס-המנות-של-המסילה אחרי-הבלוק (ספירה-בהצלחה-בלבד)
+  if (railResults.length > 0) railReconcile(railResults);
   // FIX(Roast-65-a · MED-6): אישור-הספרים-רק-אחרי-ששני-ה-ops-של-הכוונה אכן היו-בבלוק
   // ואושרו. דחייה = לוג-רועש + קבלה-כנה, אפס-שינוי-ב-st.ladder (הכוונה נזרקת).
   if (rt.pendingLift && keelHarvest !== null && keelPrice !== null) {
@@ -590,7 +600,7 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     const exec = (op: Op) => applyOp(st, op, t0);
     // FIX(Roast-65-a · LOW-13): nowMs מוזרק-גם-ל-DCA/טריגרים — רישומי-הג'ורנל שלהם
     // היו t:0 (זמן-מזויף) בניגוד-לתיקון-63/64 על-שאר-הנתיבים.
-    const tickEvents = [...dcaTick(st, exec, t0), ...trigTick(st, exec, t0), ...protoRevTick(st, exec), ...cowSettle(st, exec, t0)];
+    const tickEvents = [...dcaTick(st, exec, t0), ...trigTick(st, exec, t0), ...protoRevTick(st, exec, t0), ...cowSettle(st, exec, t0)];
     for (const ev of tickEvents) rt.tape.unshift({ ...ev, h: st.height });
     feedPriceOracle(rt, tickEvents.length > 0 ? tickEvents : undefined, st.height);
     if (tickEvents.length > 0) rt.tape = rt.tape.slice(0, TAPE_CAP);
@@ -836,12 +846,23 @@ export function getMarkets(): MarketView[] {
 
 export function getPools() {
   const rt = ensureChain();
-  return Object.entries(rt.st.pools).map(([key, p]) => ({
-    key, a: p.a, b: p.b, ra: p.ra, rb: p.rb, lp: p.lp,
-    mid: poolMid(p), swaps: p.swaps, feeAccruedTreasury: p.feeAccruedTreasury,
-    k: p.ra * p.rb,
-    feeBps: effectiveFeeBps(p), // FIX(Roast-65-c · F4): העמלה-הדינמית-האפקטיבית חשופה-ל-UI (היה-חייב-ניחוש-של-30bps-קבוע)
-  }));
+  return Object.entries(rt.st.pools).map(([key, p]) => {
+    // FIX(Roast-66 · pool-nourishment): מד-ההזנה-הכן לספקי-נזילות — העמלי-70%-ל-LP
+    // מוטמעים-ברזרבות (k צומח) אבל מעולם-לא-פורטו-כתשואה. נגזרת-כנה: אותו-זרימת-סוואפ
+    // שיצר feeT (30%-אוצר) יצר 70%-LP → lpFeesMu ≈ feeT×7/3. תשואה-ליחידת-LP-וחלק-POL
+    // של-האוצר חשופים — מזינות-נמדדת-ולא-מוצהרת.
+    const tLp = rt.st.balances["treasury"]?.[`LP|${key}`] ?? 0;
+    const lpFeesMu = Math.floor((p.feeAccruedTreasury * 7) / 3);
+    return {
+      key, a: p.a, b: p.b, ra: p.ra, rb: p.rb, lp: p.lp,
+      mid: poolMid(p), swaps: p.swaps, feeAccruedTreasury: p.feeAccruedTreasury,
+      k: p.ra * p.rb,
+      feeBps: effectiveFeeBps(p), // FIX(Roast-65-c · F4): העמלה-הדינמית-האפקטיבית חשופה-ל-UI (היה-חייב-ניחוש-של-30bps-קבוע)
+      lpFeesMu,                                                       // FIX(Roast-66): עמלי-ה-LP-המוטמעים (נגזרת-כנה)
+      lpYieldBps: p.lp > 0 ? Math.floor((lpFeesMu * 10_000) / p.lp) : 0, // תשואת-עמלות-ליחידת-LP (lifetime, bps)
+      polShareBps: p.lp > 0 ? Math.floor((tLp * 10_000) / p.lp) : 0,   // חלק-נזילות-בעלות-הפרוטוקול
+    };
+  });
 }
 
 export function getQuote(pair: string, assetIn: string, amountIn: number) {
