@@ -218,6 +218,15 @@ export async function verifyEthAnchor(
     endpoint, "eth_getTransactionByHash", [txid], 15000,
   ).catch(() => null);
   if (!tx) return { ok: false, detail: "not indexed: tx unknown to public node yet" };
+  // FIX(Roast-64-c · F7): הנמען מאוגד — expectedAddress היה מוזרק-למחרוזת-בלבד;
+  // עתה: tx.to (lowercased) != הכתובת-הצפויה → ok:false "wrong-recipient" (fail-closed).
+  if (expectedAddress) {
+    const to = String(tx.to ?? "").toLowerCase();
+    if (!to) return { ok: false, detail: "mismatch: wrong-recipient — tx carries no recipient (contract-creation)" };
+    if (to !== expectedAddress.toLowerCase()) {
+      return { ok: false, detail: `mismatch: wrong-recipient on-chain (to=${to.slice(0, 12)}… expected=${expectedAddress.slice(0, 12)}…)` };
+    }
+  }
   if (!tx.input || tx.input === "0x") return { ok: false, detail: "mismatch: tx carries no calldata payload" };
   let parsed: { height?: number; stateRoot?: string };
   try { parsed = JSON.parse(Buffer.from(tx.input.slice(2), "hex").toString("utf8")) as { height?: number; stateRoot?: string }; }

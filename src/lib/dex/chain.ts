@@ -149,6 +149,15 @@ async function loadSnapshot(rt: ChainRT): Promise<boolean> {
         const w = (orderLocks[t.owner] = orderLocks[t.owner] ?? {});
         w[a] = (w[a] ?? 0) + mu;
       }
+      // FIX(Roast-64 · cow-escrow-wipe): הפיוס התעלם מנעילות-הזמנות-CoW-פתוחות —
+      // בתסריט-המצב-היחיד-שהותיר-אותן-חיות (חור-באמצע-סליקה) הפיוס היה מוחק
+      // את-הערבות → כסף-מובטח-נעשה-זמין → בסליקה addLock(-) → נעילה-שלילית → HALT.
+      // הגנה-עודפת (דלת-הסליקה-עצמה מנקה באותו-בלוק) — אך fail-closed עדיף.
+      for (const o of rt.st.cow ?? []) {
+        const a = o.side === "sell" ? o.base : o.quote;
+        const w = (orderLocks[o.owner] = orderLocks[o.owner] ?? {});
+        w[a] = (w[a] ?? 0) + o.lockMu;
+      }
       const reconciled: string[] = [];
       for (const [who, wallet] of Object.entries(rt.st.locked)) {
         for (const a of Object.keys(wallet)) {
@@ -345,7 +354,9 @@ async function buildBlock(rt: ChainRT): Promise<void> {
 
   // Task 54 · הטיק-הכלכלי הקנוני: revenue-router (קנייה-ושריפה) + אפוק-פליפ-ve —
   // גובה-טריגר-טהור (אפס-שעון/רנדומליות) → ריפליי דטרמיניסטי.
-  economyTick(st);
+  // FIX(Roast-64): nowMs מוזרק — רשומות-הג'ורנל-של-הכלכלה נושאות את-זמן-הבלוק
+  // (היו t:0 — זמן-מזויף שנגל-את-חוב-ה-determinism-של-journal.t באופן-גרוע יותר).
+  economyTick(st, t0);
 
   // Task 56 · מסחר-אוטומטי-חסר-קיפרים: DCA-פריסה + טריגרים (stop/take) —
   // בונה-הבלוקים הוא ה-keper: הטיקים מבצעים applyOp ישירות-על-המצב (אטומי,
@@ -486,6 +497,14 @@ export function submitOp(op: Op): { queued: boolean; reason?: string } {
   if (rt.mempool.length >= 512) return { queued: false, reason: "mempool-full" };
   if (!op.issuer || !op.nonce) return { queued: false, reason: "issuer+nonce-required" };
   if (GAS_TABLE[op.type] === undefined) return { queued: false, reason: "unknown-op" };
+  // FIX(Roast-64 · free-op-flood): פעולות-אפס-גז (relay/xfer_free/relay_ack) היו
+  // יכולות למלא את כל-512-הממפול ואת-160-חריצי-הבלוק ולחנוק את כל-הפעולות-שמשלמות
+  // (DoS-על-השרשרת-עצמה בפעולה-חינמית). עכשיו: הקצבה-פר-חשבון על-הממפול — חינם
+  // עדיין-חינם, אבל אזרח-אחד לא חונק-את-הרשת.
+  if (GAS_TABLE[op.type] === 0) {
+    const pendingFree = rt.mempool.filter((o) => o.issuer === op.issuer && GAS_TABLE[o.type] === 0).length;
+    if (pendingFree >= 48) return { queued: false, reason: "free-op-cap" };
+  }
   rt.mempool.push(op);
   return { queued: true };
 }
@@ -677,7 +696,7 @@ export function getProofs() {
     receipts: rt.receipts.slice(0, 10),
     howToVerify: [
       "קח את רשימת hashי-הבלוקים (leaves) מה-API",
-      "מרקל: לכל זוג sha256(a+b) · מפלג-אי-זוגי העלה-האחרון מוכפל",
+      "FIX(Roast-64) סכמה-מוגנת-CVE-2012-2459: עלה = sha256(0x00‖leaf) · צומת = sha256(0x01‖L‖R) · עלה-אחרון-אי-זוגי מוכפל · שורש = sha256(0x02‖uint32le(מספר-עלים)‖top)",
       "השווה ל-root — שוויון = הבלוקים כלולים בחותם, בלי לסמוך עלינו",
     ],
     blockWindow: rt.blockHashes.length,
@@ -728,6 +747,11 @@ export function getState() {
     halted: rt.halted === true, // חשיפה-תפעולית: מצב-fail-fast נראה-ב-System Health
     haltReason: rt.haltReason ?? null, // פורנזי: מקור-ה-ALERT (מה בדיוק נתפס)
     rejectedLast: rt.rejectedLast, // SETTLE-15: אפס-דחיות-שקטות — הסיבה-חיה
+    // FIX(Roast-64 · replay-honesty): חוב-טכני-מוצהר בפומבי — חלק מתנועות הבונה
+    // (הסולם-כפקע, ה-rearm, ה-botseed) נשענות על טבעות-חוץ-מצב (priceSamples,
+    // מוני-תהליך) — ריפליי מהלוג בלבד לא ישחזר אותן ביט-לביט; שיחזור-מלא =
+    // ריצת-הבונה-עצמה על אותם-קלטים. זה מתועד — לא מוסתר.
+    replayNote: "deterministic-from-ops+builder-ticks; price-evidence ring & process counters are off-state (documented)",
     tickMs: TICK_MS,
     sealEvery: SEAL_EVERY,
     nextSealIn: SEAL_EVERY - (st.height % SEAL_EVERY),
@@ -795,7 +819,9 @@ export async function resetChain(): Promise<void> {
   // ערבב-עידנים (dh שלילי → שריפה שלילית → ריצה-שלילית = טלמטריה-משקרת —
   // בדיוק-מה-SETTLE-5 ריפא). וגם: chain-מושהית (halted) נשארה-מתה-אחרי-reset
   // (tick מסרב-מוקדם) — reset הוא נתיב-ההתאוששות והוא חייב להעיר.
-  rt.fuelSamples = []; rt.buildMsRolling = 0; rt.opsPerSecRolling = 0;
+  // FIX(Roast-64 · evidence-leak-across-reset): טבעת-עדות-המחיר לא נוקתה — אחרי-reset
+  // הסולם המשיך-לזוז לפי מסחר-השרשרת-הישנה (עדות-מעורבת של שני עידנים).
+  rt.fuelSamples = []; rt.priceSamples = []; rt.buildMsRolling = 0; rt.opsPerSecRolling = 0;
   rt.cachedRoot = null; // FIX(SETTLE-9): cache-השורש מת לפי-גובה — reset מתחיל-גובה-חדש
   rt.halted = false; rt.haltReason = null;
   try {

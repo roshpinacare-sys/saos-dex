@@ -27,7 +27,8 @@ export interface OnrampAccount {
   role: "fleet-soldier" | "relay-head";
   liquidHive: number;
   hbd: number;
-  hp: number;
+  hp: number | null; // FIX(Roast-64-c · F16): null = גורם-vests-לא-זמין (לא-הגורם-השגוי 1e6)
+  hpDetail?: string;  // FIX(F16): "vest-factor-unavailable" — כנות-מלאה
   rcEffective: number | null;
   rcMax: number | null;
   anchorCapacityPerDay: number; // ריבוני-חינם — RC-regen ÷ עלות-op-מדודה
@@ -47,11 +48,11 @@ export interface OnrampSummary {
   stale: boolean;
   accounts: OnrampAccount[];
   tokens: OnrampTokenRow[];
-  steemHead: { account: string; steem: number; sbd: number; sp: number; vestShares: number; spFactor?: number; spOwn?: number; powerdownActive?: boolean } | null;
+  steemHead: { account: string; steem: number; sbd: number; sp: number | null; vestShares: number; spFactor?: number; spOwn: number | null; spDetail?: string; powerdownActive?: boolean } | null;
   totals: {
     liquidHive: number;
     hbd: number;
-    hp: number;
+    hp: number | null; // FIX(F16): null = גורם-vests-לא-זמין — הסך-אינו-ידוע (לא-0-שקרי)
     swapHive: number;
     anchorCapacityPerDay: number;
   };
@@ -92,6 +93,8 @@ const num = (s: string | undefined): number => {
 // השגיאה-ההיסטורית: `vests / 1e6` — על-STEEM ו-Hive 1 SP/HP ≈ 1,600-1,700 vests
 // (הגורם = total_vesting_fund ÷ total_vesting_shares, מתעדכן-בכל-בלוק).
 // על-headcorner זה הפריך 2,139.49-SP-אמת ל-"8.64" — תת-דיווח ×4 באוצר-האמת.
+// FIX(Roast-64-c · F16): אין-עוד-נפילה-חזרה-לגורם-השגוי-הידוע — גורם-חסר = null
+// + detail "vest-factor-unavailable". מקור-אמת-יחיד (realmarket מייבא מכאן).
 const VEST_TTL_MS = 10 * 60_000;
 interface VestRT { at: number; steem: number | null; hive: number | null }
 const gVest = globalThis as unknown as { __saosVestFactor?: VestRT };
@@ -117,6 +120,20 @@ async function vestFactor(chain: "STEEM" | "HIVE"): Promise<number | null> {
   } catch {
     return hit; // fail-כנה — last-good עד-TTL
   }
+}
+
+/** FIX(Roast-64-c · F16): SP-עצמי = (vesting − delegated_out + received_in) × גורם-חי.
+ * מקור-אמת-יחיד — onramp ו-realmarket מחשבים **את-אותו-מספר** (היה: שני-"אמיתות"
+ * — realmarket התעלם מ-received_vesting_shares). גורם-חסר → null (לא-1e6-שגוי). */
+export interface VestSharesRow {
+  vesting_shares?: string;
+  delegated_vesting_shares?: string;
+  received_vesting_shares?: string;
+}
+export function spOwnOf(a: VestSharesRow, factor: number | null): number | null {
+  if (factor === null || !(factor > 0)) return null;
+  const own = num(a.vesting_shares) - num(a.delegated_vesting_shares) + num(a.received_vesting_shares);
+  return own * factor;
 }
 
 async function readAccounts(names: string[]): Promise<Map<string, OnrampAccount>> {
@@ -151,10 +168,13 @@ async function readAccounts(names: string[]): Promise<Map<string, OnrampAccount>
     const role: OnrampAccount["role"] = names[i] === HEAD_ACCOUNT ? "relay-head" : "fleet-soldier";
     const liquidHive = num(a?.balance);
     const hbd = num(a?.hbd_balance);
-    const hp = hiveFactor !== null ? num(a?.vesting_shares) * hiveFactor : num(a?.vesting_shares) / 1e6; // Task 61 · גורם-חי (נפילה-חזרה כנה ל-1e6)
+    // FIX(Roast-64-c · F16): גורם-חי-חסר → hp=null + detail (לא-עוד-/1e6-שגוי-ידוע)
+    const hp = hiveFactor !== null ? num(a?.vesting_shares) * hiveFactor : null;
     const cap = rcEff !== null ? Math.floor((rcMax ?? 0) / 5 / RC_OP_COST) : 0;
     out.set(names[i], {
-      account: names[i], role, liquidHive, hbd, hp, rcEffective: rcEff, rcMax,
+      account: names[i], role, liquidHive, hbd, hp,
+      hpDetail: hp === null ? "vest-factor-unavailable — לא-מדווח (הגורם-השגוי 1e6 הוסר)" : undefined,
+      rcEffective: rcEff, rcMax,
       anchorCapacityPerDay: role === "fleet-soldier" ? cap : 0,
       movableNow: false,
       why: role === "fleet-soldier"
@@ -194,18 +214,17 @@ async function readSteemHead(): Promise<OnrampSummary["steemHead"]> {
     const a = (r.result ?? []).find((x) => x.name === HEAD_ACCOUNT);
     if (!a) return null;
     const vest = num(a.vesting_shares);
+    // FIX(Roast-64-c · F16): גורם-חי-חסר → null + "vest-factor-unavailable"
+    // (לא-עוד-הגורם-השגוי-הידוע 1e6 שדיווח-SP-חסר ×4); spOwn-מהעזר-המשותף.
     return {
       account: HEAD_ACCOUNT,
       steem: num(a.balance),
       sbd: num(a.sbd_balance),
-      sp: factor !== null ? vest * factor : vest / 1e6, // Task 61 · גורם-חי-אמת (2,139.49-SP במקום "8.64")
+      sp: factor !== null ? vest * factor : null,
       vestShares: vest,
       spFactor: factor ?? undefined, // שקיפות-מלאה — הגורם ששימש להמרה
-      spOwn: (() => {
-        // SP-עצמי = (vesting − delegated_out + received_in) × גורם — מה שבאמת שלנו
-        const ownVest = num(a.vesting_shares) - num(a.delegated_vesting_shares) + num(a.received_vesting_shares);
-        return factor !== null ? ownVest * factor : ownVest / 1e6;
-      })(),
+      spOwn: spOwnOf(a, factor),     // SP-עצמי = (vesting − delegated_out + received_in) × גורם
+      spDetail: factor === null ? "vest-factor-unavailable — לא-מדווח (הגורם-השגוי 1e6 הוסר)" : undefined,
       powerdownActive: Number(a.to_withdraw ?? 0) > Number(a.withdrawn ?? 0),
     };
   } catch {
@@ -228,10 +247,12 @@ export async function onrampSnapshot(force = false): Promise<OnrampSummary> {
     readAccounts(names), readTokens(names), readSteemHead(),
   ]);
   const accounts = names.filter((n) => accts.has(n)).map((n) => accts.get(n)!);
+  // FIX(Roast-64-c · F16): hp-null (גורם-חסר) → סך-null כנה (לא-0-שקרי)
+  const hpUnknown = accounts.some((a) => a.hp === null);
   const totals = {
     liquidHive: accounts.reduce((s, a) => s + a.liquidHive, 0),
     hbd: accounts.reduce((s, a) => s + a.hbd, 0),
-    hp: accounts.reduce((s, a) => s + a.hp, 0),
+    hp: hpUnknown ? null : accounts.reduce((s, a) => s + (a.hp ?? 0), 0),
     swapHive: tokens.filter((t) => t.symbol === "SWAP.HIVE").reduce((s, t) => s + t.balance, 0),
     anchorCapacityPerDay: accounts.reduce((s, a) => s + a.anchorCapacityPerDay, 0),
   };
@@ -249,7 +270,7 @@ export async function onrampSnapshot(force = false): Promise<OnrampSummary> {
       { what: "headcorner — HIVE נזיל (מדידה-חיה-במצב-למעלה; 9.68-HIVE-היה-מדידה-היסטורית)", why: "אין-WIF-בכספת — דרוש-מפתח-active-מהמפעיל (או-ערוץ-חתימה-חוץ)" },
       { what: `אבק-HE-בצי (~${totals.swapHive.toFixed(4)} SWAP.HIVE + סטייקים WAIV/LOLZ/WEED/STEM)`, why: "מכירת-HE-דורשת-מפתח-active — מדיניות-הצי: posting-only עד-רוטציית-מפתחות" },
     ],
-    note: "קריאה-ציבורית-חסרת-מפתחות-מה-RPC-המקובע — אפס-סודות, אפס-כתיבה. מפת-היכולת-כנה: מה-מניב-עכשיו מול-מה-דורש-החלטת-בעלים.",
+    note: "קריאה-ציבורית-חסרת-מפתחות-מה-RPC-המקובע — אפס-סודות, אפס-כתיבה. מפת-היכולת-כנה: מה-מניב-עכשיו מול-מה-דורש-החלטת-בעלים. FIX-Roast-64-c: גורם-vests-חסר = null (vest-factor-unavailable) — הגורם-השגוי 1e6 הוסר.",
   };
   m.at = Date.now();
   m.data = data;

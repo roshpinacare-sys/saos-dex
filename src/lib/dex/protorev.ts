@@ -59,12 +59,18 @@ interface Cand {
   order: number; // סדר-קנוני-לשוויון
 }
 
-/** סימולציית-הליכה-על-הספר (מכירת-base כ-taker-שוק): מחזיר ציטוט-כולל שיתקבל.
- * מדלג-על-מייקרים-עצמיים (owner===treasury — איסור-מילוי-עצמי של-מאץ'בוק). */
+/** סימולציית-הליכה-על-הספר — FIX(Roast-64 · wrong-side-scan):
+ * הסריקה (A) "מכרת-בסיס-לספר" הדמתה מכירה מול ה-ASKS (side "sell") — אבל מכירת-
+ * taker מתמלאת-מול-ה-BIDS (matchBook: fill side:"sell" צולב את קוני-הספר).
+ * asks ≥ bids → רווח-מדומה-שיטתי → הבאץ' מבצע מכירה-אמת מתחת לסימולציה = הפסד
+ * אוצר-אמיתי (לספר-ה-fill אין-מגן-minOut). עכשיו: שני-כיוונים מדויקים:
+ *  · bookSellSim — מכירת-base כ-taker → עובר-על ה-BIDS (side "buy").
+ *  · bookBuySim — קניית-base כ-taker → עובר-על ה-ASKS (side "sell"), סוכם-עלות.
+ * שניהם מדלגים על מייקרים-עצמיים (owner === treasury — איסור-מילוי-עצמי). */
 function bookSellSim(st: DexState, base: string, quote: string, baseMu: number): { quoteMu: number; full: boolean } {
   let quoteMu = 0;
   let rem = baseMu;
-  for (const m of sortBook(st, base, quote, "sell")) {
+  for (const m of sortBook(st, base, quote, "buy")) { // הקונים — הצד שמוכרים-אליו
     if (rem <= 0) break;
     const q = m.amount - m.filled;
     if (q <= 0 || m.owner === "treasury") continue;
@@ -77,10 +83,22 @@ function bookSellSim(st: DexState, base: string, quote: string, baseMu: number):
   return { quoteMu, full: rem <= 0 };
 }
 
-/** FIX(Roast-63 · M8): bookBuySim היה-העתק-בייט-של-bookSellSim (מלכודת-סטייה).
- * כנות-מתמטית: "קנייה-מהספר" מול-המוכרים ו"מכירה-לספר" מול-הקונים — בספר-הזה
- * שני-הכיוונים-נמדדים-מול-אותם-מנחי-sell (הצד-ההפוך-לא-מדומה-כאן) — אותו-חישוב. */
-const bookBuySim = bookSellSim;
+/** קניית-base מהספר (taker-buy מול המוכרים): מחזיר עלות-ציטוט-כוללת-שתשולם. */
+function bookBuySim(st: DexState, base: string, quote: string, baseMu: number): { quoteMu: number; full: boolean } {
+  let quoteMu = 0;
+  let rem = baseMu;
+  for (const m of sortBook(st, base, quote, "sell")) { // המוכרים — הצד שקונים-ממנו
+    if (rem <= 0) break;
+    const q = m.amount - m.filled;
+    if (q <= 0 || m.owner === "treasury") continue;
+    const qty = Math.min(rem, q);
+    const leg = notional(m.price, qty);
+    if (leg <= 0) continue;
+    quoteMu += leg;
+    rem -= qty;
+  }
+  return { quoteMu, full: rem <= 0 };
+}
 
 /** כל-המועמדים-הרווחיים-עכשיו — קריאה-טהורה על המצב (סימולציית-שלמים בדיוק
  * כמו-הביצוע: quoteOut === poolSwap מתמטיקה; sims === matchBook-שוק).
@@ -155,20 +173,33 @@ export function protoRevScan(st: DexState): { cands: Cand[]; spreads: ReturnType
     return out;
   };
   const start = "USDS";
+  // FIX(Roast-64 · dead-cycle-walk): `visited` הכיל את התחלה והסינון חסם כל-כניסה
+  // מחדש-אליה — עומק>0 && cur===start היה-בלתי-אפשרי → אף-מחזור-מועמד-מעולם לא
+  // נוצל (revAux.cycles ≡ 0 תיאטרון-פנקס). עכשיו: ניסיון-סגירה מפורש בכל-צומת
+  // (רגל-חזרה-ל-USDS) בטרם-הסינון, והסינון חוסם-רק-חזרה-לצומת-לא-סגירה.
   const walk = (cur: string, mu: number, legs: Cand["legs"], visited: Set<string>, usedPools: Set<string>, depth: number): void => {
-    if (depth > 0 && cur === start) {
-      const profit = mu - legs[0].inMu;
-      if (profit >= PROTREV_MIN_PROFIT_MU) {
-        const edge = Math.floor((profit * 10_000) / legs[0].inMu);
-        if (edge >= PROTREV_EDGE_BPS) {
-          cands.push({ kind: "cycle", legs, inMu: legs[0].inMu, outMu: mu, profitMu: profit, edgeBps: edge, order: order++ });
+    if (depth > 0) {
+      // סגירת-מחזור: רגל-אחרונה-חוזרת-אל-ההתחלה
+      for (const nx of neighbors(cur).sort((x, y) => (x.key < y.key ? -1 : 1))) {
+        if (nx.to !== start || usedPools.has(nx.key)) continue;
+        const p = getPool(st, nx.key);
+        if (!p) continue;
+        const q = quoteOut(p, cur, mu);
+        if (!q || !(q.out > 0)) continue;
+        const closeLegs = [...legs, { venue: `POOL:${nx.key}`, from: cur, to: nx.to, inMu: mu, outMu: q.out }];
+        const profit = q.out - closeLegs[0].inMu;
+        if (profit >= PROTREV_MIN_PROFIT_MU) {
+          const edge = Math.floor((profit * 10_000) / closeLegs[0].inMu);
+          if (edge >= PROTREV_EDGE_BPS) {
+            cands.push({ kind: "cycle", legs: closeLegs, inMu: closeLegs[0].inMu, outMu: q.out, profitMu: profit, edgeBps: edge, order: order++ });
+          }
         }
       }
-      return;
     }
     if (depth >= 3) return;
     for (const nx of neighbors(cur).sort((x, y) => (x.key < y.key ? -1 : 1))) {
       if (usedPools.has(nx.key)) continue;
+      if (nx.to === start) continue; // הסגירה-כבר-נבדקה-מעלה — אין-מעבר-מקרי
       if (visited.has(nx.to)) continue;
       const p = getPool(st, nx.key);
       if (!p) continue;

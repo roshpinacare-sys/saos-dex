@@ -31,6 +31,7 @@ export type Verdict =
   | "REAL-LOCKED"       // גיבוי-אמת-קיים-על-השרשרת אבל נעול (SP) או חסום-מפתח
   | "INTERNAL"          // יחידת-ספר-פנימית — אין-תביעה-חוץ-בכלל
   | "UNBACKED-WRAP"     // עטיפה-בלי-מסילת-פדיון — תביעה-שאין-מאחוריה-דרך
+  | "UNKNOWN-PROBE"     // FIX(Roast-64-c · F12): ה-probe-החוץ נפל — אין-פסק-דין-עד-מדידה-חוזרת
   | "FAKE-PEG";         // טוען-שווי-חוץ (1 USDS = 1$) בלי-גיבוי-חוץ
 
 export const VERDICT_TEXT: Record<Verdict, string> = {
@@ -38,6 +39,7 @@ export const VERDICT_TEXT: Record<Verdict, string> = {
   "REAL-LOCKED": "אמת-נעולה — הגיבוי קיים על-השרשרת אך נעול/חסום-מפתח",
   "INTERNAL": "פנימי-בלבד — יחידת-ספר, אין-תביעה-על-כסף-אמת",
   "UNBACKED-WRAP": "עטיפה-ללא-מסילת-פדיון — אין-דרך-חוץ",
+  "UNKNOWN-PROBE": "לא-ניתן-לאמת-כרגע — ה-probe-החוץ (RPC) נפל; אין-פסק-דין (לא-שבור, לא-מאומת)",
   "FAKE-PEG": "פג-מדומה — טוען-שווי-דולרי-בלי-גיבוי-חוץ",
 };
 
@@ -71,6 +73,7 @@ export interface LadderStep {
 export interface TruthReport {
   ok: boolean;
   at: string;
+  probe?: "ok" | "timeout";      // FIX(Roast-64-c · F14): שער-זמן-כולל — timeout = תשובה-חלקית-כנה
   height: number;
   feedOk: boolean;
   feedStale: boolean;
@@ -81,8 +84,9 @@ export interface TruthReport {
       backingMu: number;
       liveBlurtMu: number;
       liveAccount: string;
-      verified: boolean;       // הגיבוי-המוכרז ≤ היתרה-החיה
-      mintedNowMu: number;     // כמה-הוטבע-בקריאה-זו (deficit)
+      verified: boolean | null;  // FIX(Roast-64-c · F12): null = probe-נפל — אי-ודאות גלויה (לא-שבירה, לא-אישרור)
+      probe: "ok" | "rpc-down";  // FIX(Roast-64-c · F12): מצב-ה-probe-החוץ — כשל-RPC אינו נראה כ-BACKING-BROKEN
+      mintedNowMu: number;       // כמה-הוטבע-בקריאה-זו (deficit)
       note: string;
     };
   };
@@ -121,10 +125,20 @@ function internalPrice(st: DexState, asset: string): number | null {
 /** TRUTH-RAIL: אתחול/השלמת-WBLURT מגובה-חוץ — אידמפוטנטי, אוצר-בלבד.
  * FIX(Roast-63): ההטבעה-עברה-מ-GET (היה-מטבע-ציבורי-בלתי-מאומת) ל-POST-מאומת
  * (operatorAuth). כל-קריאה מאמתת-חי את-יתרת-BLURT ומטביעה-רק-את-הגירעון.
- * אם-היתרה-החיה-קטנה-מהגיבוי-המוכרז — דגל-BACKING-BROKEN-פומבי (כנות). */
-export function railTick(st: DexState, liveBlurtMu: number): { mintedNowMu: number; listed: boolean } {
+ * אם-היתרה-החיה-קטנה-מהגיבוי-המוכרז — דגל-BACKING-BROKEN-פומבי (כנות).
+ * FIX(Roast-64-c · F11): מנעול-inflight-פר-מסילה + claim-ייחודי-ל-mint:
+ * `blurt:headcorner:${height}:${deficit}` — POST-שני-באותו-חלון-בלוק מדלג
+ * עם note "rail-inflight" (deficit-מ-RPC-חי + claim-קבוע היה מאפשר double-mint
+ * על-אותו-גיבוי; claim-ייחודי מאפשר-לגרעין לדחות שימוש-חוזר). */
+const railMint = { inflight: false, mintedHeight: -1 }; // מנעול-פר-רכבת-ההטבעה (F11)
+export function railTick(st: DexState, liveBlurtMu: number): { mintedNowMu: number; listed: boolean; note?: string } {
+  // FIX(F11): POST-שני-באותו-חלון-בלוק אחרי-הטבעה (ה-op טרם-נחת) → דילוג-כנה
+  if (railMint.mintedHeight === st.height) {
+    return { mintedNowMu: 0, listed: Boolean(st.assets["WBLURT"]), note: "rail-inflight" };
+  }
   let minted = 0;
   let listed = Boolean(st.assets["WBLURT"]);
+  let note: string | undefined;
   if (liveBlurtMu > 0) {
     if (!listed) {
       submitOp({ type: "asset_list", issuer: "treasury", nonce: nextNonce("truth"), asset: "WBLURT", refPrice: 1 });
@@ -133,21 +147,77 @@ export function railTick(st: DexState, liveBlurtMu: number): { mintedNowMu: numb
     const cur = st.backing["WBLURT"] ?? 0;
     const deficit = liveBlurtMu - cur;
     if (deficit > 0) {
-      submitOp({
-        type: "wrap_mint", issuer: "treasury", nonce: nextNonce("truth"),
-        wrapAsset: "WBLURT", amount: deficit, external: true,
-        claim: `blurt:headcorner:live`,
-      });
-      minted = deficit;
+      if (railMint.inflight) {
+        return { mintedNowMu: 0, listed, note: "rail-inflight" };
+      }
+      railMint.inflight = true;
+      railMint.mintedHeight = st.height;
+      try {
+        submitOp({
+          type: "wrap_mint", issuer: "treasury", nonce: nextNonce("truth"),
+          wrapAsset: "WBLURT", amount: deficit, external: true,
+          claim: `blurt:headcorner:${st.height}:${deficit}`, // FIX(F11): ייחודי-ל-mint — דחיית-שידור-חוזר בגרעין
+        });
+        minted = deficit;
+      } finally {
+        railMint.inflight = false; // ה-guard-לחלון-נשאר עד שהבלוק-נוחת (height מתקדם)
+      }
     }
   }
-  return { mintedNowMu: minted, listed };
+  return { mintedNowMu: minted, listed, note };
 }
 
 /** המאגד-המלא — נקרא מ-/api/dex/truth (GET ציבורי).
  * FIX(Roast-63): GET-קריאה-בלבד — אפס-כתיבה-לגרעין (ההטבעה-ב-POST-מאומת).
- * מצב-הרייל-מדווח-מהמצב-החי + אימות-בלורט-בלבד. */
+ * מצב-הרייל-מדווח-מהמצב-החי + אימות-בלורט-בלבד.
+ * FIX(Roast-64-c · F14): שער-זמן-כולל 15ש׳ על-הרכבת-הנתונים כולה — חריגה →
+ * תשובה-חלקית-כנה (probe:"timeout"), לא קריאה-תלויה. ה-blurtHead-עצמו
+ * כבר-מ-Cache-60ש׳-משותף (price-proof) — לא עוד-קריאת-RPC-חיה-בכל-GET. */
+const TRUTH_DEADLINE_MS = 15_000;
+
+function timeoutReport(st: DexState, reason: string): TruthReport {
+  return {
+    ok: true,
+    at: new Date().toISOString(),
+    probe: "timeout",
+    height: st.height,
+    feedOk: false,
+    feedStale: false,
+    assets: [],
+    rail: {
+      wblurt: {
+        listed: Boolean(st.assets["WBLURT"]),
+        backingMu: st.backing["WBLURT"] ?? 0,
+        liveBlurtMu: 0,
+        liveAccount: "headcorner",
+        verified: null,
+        probe: "rpc-down",
+        mintedNowMu: 0,
+        note: `probe:${reason} — אין-מדידה-חיה-בשער-הזמן; אין-פסק-דין (כנות, לא-BACKING-BROKEN)`,
+      },
+    },
+    ladder: [],
+    totals: {
+      estateRealUsd: null,
+      estateLockedUsd: null,
+      usdsSupplyMu: 0,
+      usdsRealCoveragePct: null,
+      conclusion: `timeout — הרכבת-נתוני-האמת חרגה מ-${TRUTH_DEADLINE_MS / 1000}ש׳ (${reason}) — תשובה-חלקית-כנה; נסו-שוב`,
+    },
+    honesty: `שער-זמן-כולל ${TRUTH_DEADLINE_MS / 1000}ש׳ — תשובה-חלקית-כנה עדיפה על תלייה או על מספר-מאולף`,
+  };
+}
+
 export async function truthLedger(st: DexState): Promise<TruthReport> {
+  const work = truthLedgerFull(st).catch((e): TruthReport => timeoutReport(st, `assembly-error: ${String((e as Error)?.message ?? e).slice(0, 120)}`));
+  const deadline = new Promise<TruthReport>((resolve) => {
+    const t = setTimeout(() => resolve(timeoutReport(st, "timeout")), TRUTH_DEADLINE_MS);
+    (t as unknown as { unref?: () => void }).unref?.();
+  });
+  return Promise.race([work, deadline]);
+}
+
+async function truthLedgerFull(st: DexState): Promise<TruthReport> {
   const [feeds, blurt, onramp, proof, realV] = await Promise.all([
     extFeeds(), blurtHead(), onrampSnapshot().catch(() => null), priceProof(st),
     realSnapshotSoft().catch(() => null as unknown as Awaited<ReturnType<typeof realSnapshotSoft>>),
@@ -155,13 +225,26 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
 
   // ── TRUTH-RAIL (WBLURT) — קריאה-בלבד: אימות-גיבוי בלבד, אין-הטבעה ──
   const liveBlurtMu = blurt ? Math.floor(blurt.liquid * 1000) : 0;
+  // FIX(Roast-64-c · F12): מצב-ה-probe-החוץ מגיע-מ-blurtHead (Cache-60ש׳ משותף) —
+  // כשל-RPC (blurt=null) אינו נראה עוד כ"גיבוי-שבור".
+  const railProbe: "ok" | "rpc-down" = blurt?.probe ?? "rpc-down";
   const rail = { mintedNowMu: 0, listed: Boolean(st.assets["WBLURT"]) };
   const backingWblurt = st.backing["WBLURT"] ?? 0;
-  const wblurtVerified = liveBlurtMu >= backingWblurt;
   const supplyWblurt = supplyMu(st, "WBLURT");
+  // FIX(Roast-64-c · F12): verified = supply ≤ backing ≤ live (היה: backing ≤ live
+  // בלבד — supply-לא-נבדק). probe-נפל → verified=null (אי-ודאות גלויה).
+  const wblurtVerified: boolean | null = railProbe === "ok"
+    ? (supplyWblurt <= backingWblurt && backingWblurt <= liveBlurtMu)
+    : null;
+  // FIX(F12): פסק-הדין אינו עוד "REAL-ACTIONABLE" מקודד-קבוע — נגזר מהאימות ומה-probe.
+  const wblurtVerdict: Verdict = wblurtVerified === true
+    ? "REAL-ACTIONABLE"
+    : (railProbe === "ok" ? "UNBACKED-WRAP" : "UNKNOWN-PROBE");
 
   // ── גיבוי-STEEM-אמת ──
   const steemHead = onramp?.steemHead ?? null;
+  // FIX(Roast-64-c · F16): spOwn=null (גורם-vests-לא-זמין) → 0 = תביעת-חסר-כנה
+  // (מתחת-לאמת, לעולם לא מעליה) — לא-עוד-הגורם-השגוי-הידוע 1e6.
   const spOwn = steemHead?.spOwn ?? 0;                    // SP-עצמי-אמת (גורם-חי)
   const steemLiquid = steemHead?.steem ?? 0;              // נזיל (אין-מפתח-STEEM-בכספת)
   const steemRealTotalMu = Math.floor((steemLiquid + spOwn) * 1000); // כל-מה-שלנו-על-STEEM (נזיל+SP)
@@ -290,6 +373,7 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
   });
 
   // WBLURT — מסילת-האמת-החיה (מגובה-BLURT-אמת-מאומת-בכל-קריאה)
+  // FIX(Roast-64-c · F12): verdict/verified/blocker כנים — probe-נפל ≠ BACKING-BROKEN
   push({
     asset: "WBLURT",
     supplyMu: supplyWblurt,
@@ -302,9 +386,14 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
     externalPriceUsd: feeds.usd.blurt,
     externalPriceMu: feeds.usd.blurt !== null ? Math.floor(feeds.usd.blurt * 1000) : null,
     divBps: null,
-    verdict: "REAL-ACTIONABLE",
+    verdict: wblurtVerdict,
     exitPath: "burn→BLURT-אמת-ל-headcorner (אפס-עמלת-העברה)→שוק-ה-BLURT-החוץ. הגיבוי מאומת-חי מול-blurt-rpc בכל-קריאת-truth.",
-    blocker: wblurtVerified ? null : "BACKING-BROKEN: הגיבוי-המוכרז גדול-מהיתרה-החיה",
+    blocker:
+      wblurtVerified === true
+        ? null
+        : wblurtVerified === false
+          ? "BACKING-BROKEN: supply≤backing≤live נפסק — ההיצע/הגיבוי חורג-מהיתרה-החיה"
+          : "probe-חוץ-נפל (rpc-down) — אין-אימות-גיבוי-חי כרגע; אין-פסק-דין (לא-שבור, לא-מאומת)",
   });
 
   // ENERGY / LB|LA — פנימיים-טהורים
@@ -406,6 +495,7 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
   return {
     ok: true,
     at: new Date().toISOString(),
+    probe: "ok", // FIX(F14): הרכבה-מלאה — בניגוד-לתשובה-החלקית-בשער-הזמן
     height: st.height,
     feedOk: feeds.ok,
     feedStale: feeds.stale,
@@ -416,11 +506,16 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
         backingMu: backingWblurt,
         liveBlurtMu,
         liveAccount: blurt?.account ?? "headcorner",
-        verified: wblurtVerified,
+        verified: wblurtVerified, // FIX(F12): null = probe-נפל — אי-ודאות גלויה
+        probe: railProbe,         // FIX(F12): מצב-ה-probe-החוץ
         mintedNowMu: rail.mintedNowMu,
         note: rail.mintedNowMu > 0
-          ? `הוטבעו ${rail.mintedNowMu}µ WBLURT בקריאה-זו מול-גיבוי-חוץ-מאומת`
-          : wblurtVerified ? "הגיבוי-מכוסה-מלא-ומאומת-חי" : "BACKING-BROKEN — נדרש-בדיקת-מפעיל",
+          ? `הוטבעו ${rail.mintedNowMu}µ WBLURT בקריאה-זו מול-גיבוי-חוץ-מאומת (claim-ייחודי-פר-mint — F11)`
+          : wblurtVerified === true
+            ? "הגיבוי-מכוסה-מלא-ומאומת-חי (supply ≤ backing ≤ live)"
+            : wblurtVerified === false
+              ? "BACKING-BROKEN — נדרשת-בדיקת-מפעיל"
+              : "probe-rpc-down — אין-מדידה-חיה; אין-פסק-דין (לא-BACKING-BROKEN — כנות)",
       },
     },
     ladder,

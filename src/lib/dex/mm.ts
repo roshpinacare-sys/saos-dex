@@ -2,12 +2,17 @@
  * mm.ts — הארנה האוטונומית (מורשת grid98.cjs "זאן-חיילים"):
  *  · כל-חייל עושה-שוק (maker) בגריד-סביב-מחיר-הוגן
  *  · טייק-מסתובב: רוטציה בין-החיילים — לוקח רק-אם-שער-השוליים עובר
- *    edge ≥ עמלה + רווח-מינ' ("רווחיות-וודאית" לפני-הוצאה)
+ *    edge ≥ רווח-מינ'. FIX(Roast-64 · honesty): הספר **לא גובה עמלת-taker**
+ *    (matchBook מסונכרן על עלות-אמת אפס) — הסרת-ה-"FEE_BPS"-פיקטיבי מהחשבון
+ *    ומהשיווק; השער-מגן-מול-סיכון-מלאי, לא-מול-עמלה-שאינה-קיימת.
  *  · סטיית-מלאי (inventory skew) מזיזה-ציטוטים לכיוון-האיזון
  *  · בוטי-רעש: זרימה-חופשית שמגלה-מחיר (dex-facts: "עודף-מחיר נאכל מיד")
+ * FIX(Roast-64 · phantom-lifetime-caps): מדדי-התקרה-המצטברת (rearm/botseed)
+ * חיו-במודול — כל-ריסטארט הטביע מחדש מלוא-התקרה. עכשיו: ב-DexState-עצמו
+ * (שורד-תמונות-מצב; רשויות-ישנות = undefined → 0-כנה).
  */
 import type { DexState, Op, Asset } from "./kernel";
-import { FEE_BPS, LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, funderFor, poolKey, avail, notional } from "./kernel";
+import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, funderFor, poolKey, avail, notional } from "./kernel";
 import { sortBook } from "./book";
 import { poolMid, poolMidFor, getPool } from "./amm";
 import { railTick, RAIL_OWNED_POOLS } from "./rail";
@@ -87,13 +92,11 @@ export function soldierEquity(st: DexState, soldier: string, fair: number): numb
   return usds + Math.floor((saos * p) / 1000);
 }
 
-/** FIX(SETTLE-7 anti-bandit): תקרות-זריעה-מצטברות לבוטי-הרעש (חוץ-מצב — לא נוגעות
- * ב-DexState/שורש). בלי-תקרה, זרימה-עוינת שואבת את הארנה דרך-הבוטים לנצח
- * (מחזור-פתוח: בנדיט מנקה-את-הבוטים → קצבה חדשה → שוב). 2.4M USDS + 1.2M SAOS
- * לכל-בוט לכל-חיי-התהליך = גילוי-מחיר חי אך-ורק עם גג-נזק-מרבי מדוד. */
+/** FIX(SETTLE-7 anti-bandit): תקרות-זריעה-מצטברות לבוטי-הרעש — FIX(Roast-64):
+ * המדדים עברו ממודול-רגיש למצב (st.botSeedCounts) — ריסטארט לא מאפס עוד את
+ * הגג-הכולל (זרימה-עוינת לא יכולה לגזור-מחדש מלאי-ג'נזיס-חדש-כל-ריסטארט). */
 const BOT_SEED_CAP_USDS = 2_400_000;
 const BOT_SEED_CAP_SAOS = 1_200_000;
-const botSeedCaps = new Map<string, { usds: number; saos: number }>();
 
 /** ── THE-REARM (SETTLE-14 price-truth) ──
  * ממצא-חי: הארנה שרפה את כל-המלאי (8M SAOS + 20M USDS מג'נזיס) בלחימה-חד-צדדית
@@ -112,7 +115,14 @@ const REARM_LIFETIME_WSTEEM = 1_000_000; // גבול-אמת: סטוק-ה-STEEM-�
 const REARM_FLOOR_SAOS = 600_000;   // מתחת-לזה הארנה לא יכולה למכור-לתוך-בידים
 const REARM_FLOOR_USDS = 1_200_000; // ולא-לקנות-מאסקים
 const REARM_FLOOR_WSTEEM = 300_000; // מנעול-בריכת-WSTEEM צריך בסיס-למכור-בו
-const arenaRearm = { saos: 0, usds: 0, wsteem: 0 };
+// FIX(Roast-64 · phantom-lifetime-caps): היה const arenaRearm = {...} במודול —
+// ריסטארט = תקרה-מלאה-חדשה. עכשיו: st.rearmCounts (חוזה-מעלה).
+const rearmCounts = (st: DexState): { saos: number; usds: number; wsteem: number } =>
+  (st.rearmCounts ??= { saos: 0, usds: 0, wsteem: 0 });
+const botSeedCounts = (st: DexState, bot: string): { usds: number; saos: number } => {
+  st.botSeedCounts ??= {};
+  return (st.botSeedCounts[bot] ??= { usds: 0, saos: 0 });
+};
 
 type PushOp = (op: Op) => void;
 
@@ -297,31 +307,32 @@ export function arenaTick(
 
   // ── THE-REARM: חייל-אספקה-למייצב (למעלה — תיעוד-מלא) — קצב 16-טיק כמו-העירוי ──
   if (tick % 16 === 0) {
-    if (avail(st, "arena", "SAOS") < REARM_FLOOR_SAOS && arenaRearm.saos + REARM_TRANCHE_SAOS <= REARM_LIFETIME_SAOS) {
-      const amt = Math.min(REARM_TRANCHE_SAOS, REARM_LIFETIME_SAOS - arenaRearm.saos);
+    const rc = rearmCounts(st);
+    if (avail(st, "arena", "SAOS") < REARM_FLOOR_SAOS && rc.saos + REARM_TRANCHE_SAOS <= REARM_LIFETIME_SAOS) {
+      const amt = Math.min(REARM_TRANCHE_SAOS, REARM_LIFETIME_SAOS - rc.saos);
       if (avail(st, "treasury", "SAOS") >= amt) {
-        arenaRearm.saos += amt;
+        rc.saos += amt;
         pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-s${tick}`, to: "arena", asset: "SAOS", amount: amt });
       }
     }
-    if (avail(st, "arena", "USDS") < REARM_FLOOR_USDS && arenaRearm.usds + REARM_TRANCHE_USDS <= REARM_LIFETIME_USDS) {
-      const amt = Math.min(REARM_TRANCHE_USDS, REARM_LIFETIME_USDS - arenaRearm.usds);
+    if (avail(st, "arena", "USDS") < REARM_FLOOR_USDS && rc.usds + REARM_TRANCHE_USDS <= REARM_LIFETIME_USDS) {
+      const amt = Math.min(REARM_TRANCHE_USDS, REARM_LIFETIME_USDS - rc.usds);
       if (avail(st, "treasury", "USDS") >= amt) {
-        arenaRearm.usds += amt;
+        rc.usds += amt;
         pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-u${tick}`, to: "arena", asset: "USDS", amount: amt });
       }
     }
     // קו-WSTEEM (SETTLE-14): אוצר-עוטף-את-ה-STEEM-הטבעי-שלו-עצמו (גיבוי 1:1 כנה —
     // אפס-הטבעה-רכה: הגיבוי נרשם ב-backing) ואז מעביר לארנה לשירות-המנעול.
     // העטיפה-וההעברה-בטיקים-נפרדים — הבדיקה-על-avail לפני-כל-דחיפה מסדרת-את-הסדר.
-    if (avail(st, "arena", "WSTEEM") < REARM_FLOOR_WSTEEM && arenaRearm.wsteem + REARM_TRANCHE_WSTEEM <= REARM_LIFETIME_WSTEEM) {
-      const amt = Math.min(REARM_TRANCHE_WSTEEM, REARM_LIFETIME_WSTEEM - arenaRearm.wsteem);
+    if (avail(st, "arena", "WSTEEM") < REARM_FLOOR_WSTEEM && rc.wsteem + REARM_TRANCHE_WSTEEM <= REARM_LIFETIME_WSTEEM) {
+      const amt = Math.min(REARM_TRANCHE_WSTEEM, REARM_LIFETIME_WSTEEM - rc.wsteem);
       const tw = avail(st, "treasury", "WSTEEM");
       if (tw < amt && avail(st, "treasury", "STEEM") >= amt - tw) {
         pushOp({ type: "wrap_mint", issuer: "treasury", nonce: `rearm-wrap-${tick}`, wrapAsset: "WSTEEM", amount: amt - tw });
       }
       if (avail(st, "treasury", "WSTEEM") >= amt) {
-        arenaRearm.wsteem += amt;
+        rc.wsteem += amt;
         pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-w${tick}`, to: "arena", asset: "WSTEEM", amount: amt });
       }
     }
@@ -334,14 +345,14 @@ export function arenaTick(
   // נעילות-ספר) ולא-יתרה-גולמית — פקודות-מנוחות של-בוט לא-ימנעו-מימון-חדש.
   if (params.noise && tick % 24 === 0) {
     for (const bot of ["bot-a", "bot-b", "bot-c"]) {
-      const caps = botSeedCaps.get(bot) ?? { usds: 0, saos: 0 };
+      const caps = botSeedCounts(st, bot);
       if (avail(st, bot, "USDS") < 100_000 && caps.usds < BOT_SEED_CAP_USDS) {
-        botSeedCaps.set(bot, { ...caps, usds: caps.usds + 400_000 });
+        caps.usds += 400_000;
         pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-u${tick}-${bot}`, to: bot, asset: "USDS", amount: 400_000 });
       }
-      const caps2 = botSeedCaps.get(bot) ?? { usds: 0, saos: 0 };
+      const caps2 = botSeedCounts(st, bot);
       if (avail(st, bot, "SAOS") < 100_000 && caps2.saos < BOT_SEED_CAP_SAOS) {
-        botSeedCaps.set(bot, { ...caps2, saos: caps2.saos + 200_000 });
+        caps2.saos += 200_000;
         pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-s${tick}-${bot}`, to: bot, asset: "SAOS", amount: 200_000 });
       }
     }
@@ -407,14 +418,17 @@ export function arenaTick(
       const bestAsk = asks.find((o) => o.owner !== taker);
       const bestBid = bids.find((o) => o.owner !== taker);
       if (bestAsk) {
-        const edgeBps = Math.floor(((fair - bestAsk.price) / bestAsk.price) * 10_000) - FEE_BPS;
+        // FIX(Roast-64 · phantom-fee): הפחתת-FEE_BPS נמחקה — הספר לא גובה עמלת-taker
+        // (matchBook מעביר ערך-מלא); השער-מגן מול-סיכון-מלאי-ובכיוון-הפייר, בלי
+        // להציג-עמלה-שאינה-קיימת כ"רווחיות-וודאית".
+        const edgeBps = Math.floor(((fair - bestAsk.price) / bestAsk.price) * 10_000);
         if (edgeBps >= params.minEdgeBps) {
           const qty = Math.min(bestAsk.amount - bestAsk.filled, 150_000);
           submit(rt, st, taker, { type: "fill", base: m.base, quote: m.quote, side: "buy", amount: qty, market: true }, pushOp);
         }
       }
       if (bestBid) {
-        const edgeBps = Math.floor(((bestBid.price - fair) / fair) * 10_000) - FEE_BPS;
+        const edgeBps = Math.floor(((bestBid.price - fair) / fair) * 10_000);
         if (edgeBps >= params.minEdgeBps) {
           const qty = Math.min(bestBid.amount - bestBid.filled, 150_000);
           submit(rt, st, taker, { type: "fill", base: m.base, quote: m.quote, side: "sell", amount: qty, market: true }, pushOp);
@@ -436,8 +450,14 @@ export function arenaTick(
         // בתוך-הסימולציה. עכשיו: זוגיות-טיק = איזון-מושלם קנייה/מכירה.
         const side: "buy" | "sell" = tick % 2 === 0 ? "buy" : "sell";
         const px = side === "buy" ? (sortBook(st, m.base, m.quote, "sell")[0]?.price ?? fair) : (sortBook(st, m.base, m.quote, "buy")[0]?.price ?? fair);
-        const assetHave = side === "buy" ? m.quote : m.base;
-        const affordable = px > 0 ? Math.floor((avail(st, bot, assetHave) * 9) / (px * 10)) : 0;
+        // FIX(Roast-64 · noise-sell-units): נוסחת-הקנייה הועתקה למכירה — למכירה
+ // assetHave=בסיס ואסור-לחלק במחיר (חילקו בסיס במחיר = כמות-0.04%-מהאמת →
+ // זרימת-המכירות-הייתה-אפסית וה"איזון-מושלם" היה-שקר). למכירה: הבסיס-עצמו.
+        const affordable = px > 0
+          ? (side === "buy"
+              ? Math.floor((avail(st, bot, m.quote) * 9) / (px * 10))
+              : Math.floor((avail(st, bot, m.base) * 9) / 10))
+          : 0;
         const qty = Math.min(25_000 + (tick % 5) * 10_000, affordable);
         if (qty > 0) {
           submit(rt, st, bot, { type: "fill", base: m.base, quote: m.quote, side, amount: qty, market: true }, pushOp);

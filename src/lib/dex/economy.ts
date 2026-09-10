@@ -45,12 +45,13 @@ export function totalVePoints(st: DexState, hNow: number): number {
   return t;
 }
 
-/** ה-מחזור-הכלכלי הקנוני — נקרא מ-buildBlock (לפני-העלאת-גובה) אחרי-כל-ה-ops. */
-export function economyTick(st: DexState): void {
+/** ה-מחזור-הכלכלי הקנוני — נקרא מ-buildBlock (לפני-העלאת-גובה) אחרי-כל-ה-ops.
+ * FIX(Roast-64): nowMs מוזרק — רשומות-הג'ורנל נושאות זמן-הבלוק-האמיתי (היו t:0). */
+export function economyTick(st: DexState, nowMs: number): void {
   const h = st.height;
   if (h <= 0) return;
-  if (h % ROUTER_EVERY === 0) revenueCycle(st, h);
-  if (h % EPOCH_BLOCKS === 0) epochFlip(st, h);
+  if (h % ROUTER_EVERY === 0) revenueCycle(st, h, nowMs);
+  if (h % EPOCH_BLOCKS === 0) epochFlip(st, h, nowMs);
   launchpadTick(st); // Task 57/58 · הגירות-אוטומטיות של מסילת-ההשקות (גיוס-הסף → בריכה)
   aleTick(st); // Task 55 · ALE: הזרעת-POL-אוטונומית כל-ALE_EVERY-בלוקים
 }
@@ -61,7 +62,7 @@ export function economyTick(st: DexState): void {
  * Task 58 · סדר-צריכה: **revAux-ראשון** — הכנסה-נלווית-מדודה (ארב-ProtoRev +
  * עמלות-השקות) נצרכת-לפני-רווח-עמלות-הסוואפ (שמוגן-ברצפת-REV_FLOOR). כך
  * הפלאיהול סגור: ארב+השקות → שריפה/ve → ALE-זורע → עומק → עמלות. */
-function revenueCycle(st: DexState, h: number): void {
+function revenueCycle(st: DexState, h: number, nowMs: number): void {
   const aux = Math.max(0, (st.revAux?.protorevMu ?? 0) + (st.revAux?.launchpadMu ?? 0));
   const treasuryUsds = st.balances["treasury"]?.["USDS"] ?? 0;
   const usableProfit = Math.max(0, st.treasuryProfit - REV_FLOOR);
@@ -73,11 +74,13 @@ function revenueCycle(st: DexState, h: number): void {
   // p.a=SAOS p.b=USDS (ממוין) — קניית-SAOS-בשוק-הבריכה עם-take-USDS
   const burnUsds = Math.floor((take * REV_BURN_PCT) / 100);
   const veUsds = Math.floor((take * REV_VE_PCT) / 100);
+  let vePaidThis = 0; // FIX(Roast-64 · ve-paid-ghost): רק-העברות-שבוצעו-בפועל נמדדות
   if (burnUsds > 0) {
-    // FIX(AUDIT-2026-09-10 · critical · conservation): לפני התיקון הנתיב הזה הוסיף
-    // burnUsds לבריכה (pool.rb += burnUsds) בלי לנכות אותם מיתרת האוצר — USDS-פנטום
-    // הוזרם לרזרבות בכל מחזור (Σbalances+Σpools גדל יש-מאין; ענף ה-ve ניכה כחוק, ענף ה-burn לא).
-    // התיקון fail-closed: מנכים מהאוצר רק כשיש לו באמת, אחרת skip-כנה מתועד ביומן.
+    // FIX(AUDIT-2026-09-10 · critical · conservation + Roast-64 · router-money-print):
+    // לפני התיקון הנתיב הזה הוסיף burnUsds לבריכה (pool.rb += burnUsds) בלי לנכות
+    // אותם מיתרת האוצר — USDS-פנטום הוזרם לרזרבות בכל מחזור (Σbalances+Σpools גדל
+    // יש-מאין; ענף ה-ve ניכה כחוק, ענף ה-burn לא). התיקון fail-closed: מנכים מהאוצר
+    // רק כשיש לו באמת, אחרת skip-כנה מתועד ביומן (בלי לבטל את ענף ה-ve).
     const tBalB = st.balances["treasury"] ?? (st.balances["treasury"] = {});
     if ((tBalB.USDS ?? 0) >= burnUsds) {
       const out = swapReserves(pool.rb, pool.ra, burnUsds); // USDS→SAOS מתמטיקת-בריכה
@@ -100,7 +103,8 @@ function revenueCycle(st: DexState, h: number): void {
       tBal.USDS = (tBal.USDS ?? 0) - veUsds;
       const pot = st.balances[VE_POT] ?? (st.balances[VE_POT] = {});
       pot.USDS = (pot.USDS ?? 0) + veUsds;
-      st.journal.push({ h, t: 0, soldier: "router", action: "ve_fund", profitMu: veUsds, note: `ve pot +${veUsds}µ USDS` });
+      vePaidThis = veUsds;
+      st.journal.push({ h, t: nowMs, soldier: "router", action: "ve_fund", profitMu: veUsds, note: `ve pot +${veUsds}µ USDS` });
     }
   }
   // צריכת-המדידה: revAux-ראשון (protorev → launchpad, סדר-קנוני), ואז-רווח-העמלות
@@ -119,13 +123,13 @@ function revenueCycle(st: DexState, h: number): void {
     lastH: h,
     cycles: (st.rev?.cycles ?? 0) + 1,
     burnedMu: st.burnedSaos ?? 0,           // Σ שריפה מצטברת
-    vePaidMu: (st.rev?.vePaidMu ?? 0) + veUsds, // Σ מימון-קרן-ve מצטבר
+    vePaidMu: (st.rev?.vePaidMu ?? 0) + vePaidThis, // Σ מימון-קרן-ve מצטבר (העברות-שבוצעו-בלבד)
   };
 }
 
 /** (1) אפוק-פליפ: קרן-ve-pot מתחלקת פרופורציונלית לכוח-הצבעה (vePoints) של
  * המצביעים — "100%-דמי-הסוואפ-למצביעים" של-Aerodrome, על-כל-מקורות-הקרן. */
-function epochFlip(st: DexState, h: number): void {
+function epochFlip(st: DexState, h: number, nowMs: number): void {
   const pot = st.balances[VE_POT]?.USDS ?? 0;
   st.veEpoch = (st.veEpoch ?? 0) + 1;
   if (pot <= 0) return;
@@ -145,7 +149,7 @@ function epochFlip(st: DexState, h: number): void {
       if (pay <= 0) continue;
       st.balances[VE_POT] = { ...(st.balances[VE_POT] ?? {}), USDS: (st.balances[VE_POT]?.USDS ?? 0) - pay };
       st.balances[who] = { ...(st.balances[who] ?? {}), USDS: (st.balances[who]?.USDS ?? 0) + pay };
-      st.journal.push({ h, t: 0, soldier: who, action: "ve_reward", profitMu: pay, note: `epoch ${st.veEpoch} payout` });
+      st.journal.push({ h, t: nowMs, soldier: who, action: "ve_reward", profitMu: pay, note: `epoch ${st.veEpoch} payout` });
     }
   }
 }

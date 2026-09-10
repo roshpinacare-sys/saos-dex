@@ -17,7 +17,7 @@
 import fs from "fs";
 import path from "path";
 import { getLiveState, getPools } from "./chain";
-import { getPool, poolMid } from "./amm";
+import { getPool, poolMidFor } from "./amm";
 import { ASSETS } from "./kernel";
 import { routableMap, type RouteTier, LP_PREFIX } from "./router";
 
@@ -44,12 +44,14 @@ export function usdsPriceOf(asset: string): number {
   if (asset === "USDS") return 1000;
   if (asset.startsWith("LP|")) return lpPriceUsdsMu(asset);
   const direct = getPool(st, [asset, "USDS"].sort().join("/"));
-  if (direct) return poolMid(direct);
+  // FIX(Roast-64 · inverted-portfolio-price): poolMid הגולמי מניח p.a=base — ב-USDS/WSTEEM
+  // הערך-היה יחס-הפוך (~1/6M מהאמת). אוריינטציה-מובטחת דרך poolMidFor.
+  if (direct) return poolMidFor(direct, asset, "USDS");
   const viaSaos = getPool(st, [asset, "SAOS"].sort().join("/"));
   const saosUsds = getPool(st, ["SAOS", "USDS"].sort().join("/"));
   if (viaSaos && saosUsds) {
-    const p = poolMid(viaSaos) * poolMid(saosUsds);
-    if (p > 0) return Math.floor(p / 1000); // µ-SAOS/יחידה × µ-USDS/SAOS-µ → µ-USDS/יחידה
+    const p = poolMidFor(viaSaos, asset, "SAOS") * poolMidFor(saosUsds, "SAOS", "USDS");
+    if (p > 0) return Math.floor(p / 1000); // µ-SAOS/יחידה × µ-USDS/µ-SAOS → µ-USDS/יחידה (×1000)
   }
   return st.assets[asset]?.refPrice ?? 0;
 }

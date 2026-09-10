@@ -35,8 +35,6 @@ const FEED_TTL_MS = 5 * 60_000;
 const FEED_STALE_OK_MS = 60 * 60_000; // last-good-חוקי עד-שעה — מעבר-לזה: NO-FEED כנה
 
 type FeedKey = "steem" | "hive" | "hbd" | "blurt" | "eth" | "sol" | "bnb" | "trx" | "btc";
-type FeedVal = { v: number | null; src: string | null };
-type FeedMap = Record<FeedKey, FeedVal>;
 
 interface FeedSource { name: string; url: string; where: string; parse: (j: unknown) => Partial<Record<FeedKey, number | null>> }
 
@@ -103,6 +101,9 @@ export interface ExtFeeds {
     eth: number | null; sol: number | null; bnb: number | null; trx: number | null; btc: number | null;
   };
   src: { steem?: string | null; hive?: string | null; hbd?: string | null; blurt?: string | null; eth?: string | null; sol?: string | null; bnb?: string | null; trx?: string | null; btc?: string | null };
+  // FIX(Roast-64-c · F13): הצלבה-חוצה-מקורות — חציון+MAD-פר-נכס (עד-אתמול: first-wins
+  // סריאלי בלי-שום-הצלבה-חרף-הטענה). median = המחיר-המדווח · outliers = מקורות-חורגים.
+  cross?: Partial<Record<FeedKey, { median: number; mad: number; sources: number; outliers: { v: number; src: string }[] }>>;
   error?: string;
 }
 
@@ -113,7 +114,7 @@ function feedRt(): FeedRT {
   return g.__saosPriceFeeds;
 }
 
-const EMPTY_USD = { steem: null, hive: null, hbd: null, blurt: null, eth: null, sol: null, bnb: null, trx: null, btc: null };
+const EMPTY_USD: Record<FeedKey, number | null> = { steem: null, hive: null, hbd: null, blurt: null, eth: null, sol: null, bnb: null, trx: null, btc: null };
 
 async function fetchOne(s: FeedSource): Promise<Partial<Record<FeedKey, number | null>>> {
   assertAllowedHost(s.url, s.where);
@@ -128,36 +129,57 @@ async function fetchOne(s: FeedSource): Promise<Partial<Record<FeedKey, number |
   }
 }
 
+/* FIX(Roast-64-c · F13): חציון+MAD חוצה-מקורות */
+function medianOf(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid]! : (s[mid! - 1]! + s[mid]!) / 2;
+}
+
 async function fetchFeeds(): Promise<ExtFeeds> {
-  const merged = Object.fromEntries(([
+  // FIX(Roast-64-c · F13): כל-המקורות נשלפים **במקביל** (Promise.allSettled) — היה
+  // סריאלי-ראשון-זוכה: עד-32ש׳-עוקבות ואפס-הצלבה. עתה: median+MAD-פר-נכס מכל-העונים,
+  // outliers חושפים-מקור-סוטה. צורת-ה-merge (usd/src) נשמרת לצרכנים — usd = החציון.
+  const settled = await Promise.allSettled(FEED_SOURCES.map((s) => fetchOne(s)));
+  const perKey = Object.fromEntries(([
     "steem", "hive", "hbd", "blurt", "eth", "sol", "bnb", "trx", "btc",
-  ] as FeedKey[]).map((k) => [k, { v: null, src: null }])) as unknown as FeedMap;
+  ] as FeedKey[]).map((k) => [k, [] as { v: number; src: string }[]])) as Record<FeedKey, { v: number; src: string }[]>;
   const errs: string[] = [];
-  // בסדר-קנוני: הראשון-שענה-לנכס זוכה (סדר-קבוע = דטרמיניזם-קריאה)
-  for (const s of FEED_SOURCES) {
-    try {
-      const vals = await fetchOne(s);
-      for (const k of Object.keys(merged) as FeedKey[]) {
-        if (merged[k].v === null && typeof vals[k] === "number" && vals[k] > 0) {
-          merged[k] = { v: vals[k] as number, src: s.name };
-        }
-      }
-    } catch (e) {
-      errs.push(`${s.name}: ${e instanceof Error ? e.message : "err"}`);
+  settled.forEach((r, i) => {
+    const s = FEED_SOURCES[i]!;
+    if (r.status !== "fulfilled") {
+      errs.push(`${s.name}: ${r.reason instanceof Error ? r.reason.message : "err"}`);
+      return;
     }
+    for (const k of Object.keys(perKey) as FeedKey[]) {
+      const v = r.value[k];
+      if (typeof v === "number" && v > 0) perKey[k].push({ v, src: s.name });
+    }
+  });
+  const cross: NonNullable<ExtFeeds["cross"]> = {};
+  const usd = { ...EMPTY_USD };
+  const src: ExtFeeds["src"] = {};
+  for (const k of Object.keys(perKey) as FeedKey[]) {
+    const rows = perKey[k];
+    if (rows.length === 0) continue;
+    const med = medianOf(rows.map((x) => x.v));
+    const mad = medianOf(rows.map((x) => Math.abs(x.v - med)));
+    // outliers: חריגה > 3×MAD (robust z>3); MAD=0 (כולם-שווים) → אין-חריגים
+    const outliers = mad > 0 ? rows.filter((x) => Math.abs(x.v - med) > 3 * mad) : [];
+    cross[k] = { median: med, mad, sources: rows.length, outliers };
+    usd[k] = med;
+    src[k] = rows.map((x) => x.src).join("+");
   }
-  const any = (Object.keys(merged) as FeedKey[]).some((k) => merged[k].v !== null);
+  const any = (Object.keys(perKey) as FeedKey[]).some((k) => usd[k] !== null);
   if (any) {
     return {
       ok: true, at: Date.now(), stale: false,
       usd: {
-        steem: merged.steem.v, hive: merged.hive.v, hbd: merged.hbd.v, blurt: merged.blurt.v,
-        eth: merged.eth.v, sol: merged.sol.v, bnb: merged.bnb.v, trx: merged.trx.v, btc: merged.btc.v,
+        steem: usd.steem, hive: usd.hive, hbd: usd.hbd, blurt: usd.blurt,
+        eth: usd.eth, sol: usd.sol, bnb: usd.bnb, trx: usd.trx, btc: usd.btc,
       },
-      src: {
-        steem: merged.steem.src, hive: merged.hive.src, hbd: merged.hbd.src, blurt: merged.blurt.src,
-        eth: merged.eth.src, sol: merged.sol.src, bnb: merged.bnb.src, trx: merged.trx.src, btc: merged.btc.src,
-      },
+      src,
+      cross, // FIX(F13): median+MAD+sources+outliers גלויים-לציבור
       error: errs.length > 0 ? errs.join("; ") : undefined, // כנות: מקורות-שנפלו נראים
     };
   }
@@ -193,8 +215,29 @@ export async function extFeeds(force = false): Promise<ExtFeeds> {
 
 /** BLURT-ראש — הרשת-השלישית שלנו (Task 4): יתרת-headcorner החיה מהצומת-הקהילתי.
  * FIX(Task 61 · price-truth): vested מומר ל-BP בגורם-חי (total_vesting_fund_blurt
- * ÷ total_vesting_shares ≈ 1.147) — כך 7,378-vests מוצגים כ-8,463-BP-אמת. */
-export async function blurtHead(): Promise<{ account: string; liquid: number; vested: number; bp: number; bpFactor: number | null } | null> {
+ * ÷ total_vesting_shares ≈ 1.147) — כך 7,378-vests מוצגים כ-8,463-BP-אמת.
+ * FIX(Roast-64-c · F14): TTL-קאש 60ש׳ משותף לכל-הקוראים (GET-/truth + priceProof
+ * היו קוראים-live-RPC-פעמיים-בכל-קריאה, ללא-TTL וללא-deadline). ה-return נושא
+ * probe: "ok"|"rpc-down" — כשל-RPC אינו נראה עוד כ"גיבוי-שבור". */
+export interface BlurtHead {
+  account: string; liquid: number; vested: number;
+  bp: number; bpFactor: number | null;
+  probe: "ok" | "rpc-down";
+}
+interface BlurtRT { at: number; data: BlurtHead | null; down: boolean; inflight: Promise<BlurtHead | null> | null }
+const gBlurt = globalThis as unknown as { __saosBlurtHead?: BlurtRT };
+const BLURT_HEAD_TTL_MS = 60_000; // FIX(F14): TTL-משותף-60ש׳
+function blurtRt(): BlurtRT {
+  if (!gBlurt.__saosBlurtHead) gBlurt.__saosBlurtHead = { at: 0, data: null, down: false, inflight: null };
+  return gBlurt.__saosBlurtHead;
+}
+/** מצב-ה-probe האחרון של blurtHead — "unknown" = טרם-נבדק בתהליך-זה. */
+export function blurtProbe(): "ok" | "rpc-down" | "unknown" {
+  const m = blurtRt();
+  if (m.data) return m.data.probe;
+  return m.down ? "rpc-down" : "unknown";
+}
+async function fetchBlurtHead(): Promise<BlurtHead | null> {
   try {
     assertAllowedHost(BLURT_NODE, "price-proof/blurt");
     const ac = new AbortController();
@@ -233,10 +276,19 @@ export async function blurtHead(): Promise<{ account: string; liquid: number; ve
     }
     const vested = num(a.vesting_shares);
     const bp = bf.f !== null ? vested * bf.f : vested / 1e6;
-    return { account: HEAD_ACCOUNT, liquid: num(a.balance), vested, bp, bpFactor: bf.f };
+    return { account: HEAD_ACCOUNT, liquid: num(a.balance), vested, bp, bpFactor: bf.f, probe: "ok" };
   } catch {
     return null; // fail-כנה
   }
+}
+export async function blurtHead(): Promise<BlurtHead | null> {
+  const m = blurtRt();
+  if ((m.data || m.down) && Date.now() - m.at < BLURT_HEAD_TTL_MS) return m.data; // TTL-60ש׳ (כולל-cache-שלילי-כנה)
+  if (m.inflight) return m.inflight;
+  m.inflight = fetchBlurtHead()
+    .then((d) => { m.data = d; m.down = d === null; m.at = Date.now(); return d; })
+    .finally(() => { m.inflight = null; });
+  return m.inflight;
 }
 
 // ─── עומק-אמת (depth profile) — סימולציית-שלמים על הבריכה החיה ──────────────
@@ -325,8 +377,10 @@ export interface PriceProof {
   };
   treasuryReal: {
     feedsNote: string;
-    steemHead: { account: string; steem: number; sbd: number; sp: number; spOwn?: number; spFactor?: number; powerdownActive?: boolean } | null;
-    hiveFleet: { liquidHive: number; hbd: number; hp: number } | null;
+    // FIX(Roast-64-c · F16): sp/spOwn יכולים-להיות null — גורם-ה-vests-חי לא-זמין
+    // ("vest-factor-unavailable"). לא-עוד-הגורם-השגוי-הידוע 1e6.
+    steemHead: { account: string; steem: number; sbd: number; sp: number | null; spOwn?: number | null; spFactor?: number; powerdownActive?: boolean; spDetail?: string } | null;
+    hiveFleet: { liquidHive: number; hbd: number; hp: number | null } | null;
     blurt: { account: string; liquid: number; vested: number; bp?: number; bpFactor?: number | null } | null;
     usd: { steem: number | null; hbd: number | null; hive: number | null; blurt: number | null; blurtVested?: number | null; spLocked?: number | null; total: number | null };
     honesty: string;
@@ -371,10 +425,12 @@ export async function priceProof(st: DexState): Promise<PriceProof> {
   const hiveUsd = feeds.usd.hive, hbdUsd = feeds.usd.hbd, blurtUsd = feeds.usd.blurt;
   const usdSteem = steemHead && steemUsd !== null ? steemHead.steem * steemUsd : null;
   const usdHbd = steemHead && hbdUsd !== null ? steemHead.sbd * hbdUsd : null;
-  const usdHive = hiveFleet && hiveUsd !== null ? (hiveFleet.liquidHive + hiveFleet.hp) * hiveUsd : null;
+  // FIX(Roast-64-c · F16): hp-null (גורם-vests-לא-זמין) = הסכום-אינו-ידוע → null-כנה (לא-0-מזויף)
+  const usdHive = hiveFleet && hiveUsd !== null && hiveFleet.hp !== null ? (hiveFleet.liquidHive + hiveFleet.hp) * hiveUsd : null;
   const usdBlurt = blurt && blurtUsd !== null ? blurt.liquid * blurtUsd : null;
   // Task 61 · SP/BP-נעול-אמת — מדידה-נפרדת-וכנה (מה שיהיה-נזיל אחרי-powerdown)
-  const spLockedUsd = steemHead && steemUsd !== null && steemHead.spOwn !== undefined ? steemHead.spOwn * steemUsd : null;
+  // FIX(Roast-64-c · F16): spOwn-null (vest-factor-unavailable) → null-כנה, לא-0-שקרי
+  const spLockedUsd = steemHead && steemUsd !== null && typeof steemHead.spOwn === "number" ? steemHead.spOwn * steemUsd : null;
   const bpLockedUsd = blurt && blurtUsd !== null && blurt.bp !== undefined ? blurt.bp * blurtUsd : null;
   const parts = [usdSteem, usdHbd, usdHive, usdBlurt].filter((x): x is number => x !== null);
   const usdTotal = parts.length > 0 ? parts.reduce((s, x) => s + x, 0) : null;
