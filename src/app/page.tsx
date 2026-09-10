@@ -44,7 +44,7 @@ interface MarketView {
   asks: { price: number; total: number; orders: number }[];
   chart: { t: number; p: number }[];
 }
-interface PoolView { key: string; a: string; b: string; ra: number; rb: number; lp: number; mid: number; swaps: number; feeAccruedTreasury: number; k: number }
+interface PoolView { key: string; a: string; b: string; ra: number; rb: number; lp: number; mid: number; swaps: number; feeAccruedTreasury: number; k: number; feeBps?: number }
 interface WalletView { name: string; credits: number; balances: Record<string, number>; locked: Record<string, number> }
 interface TapeEv { kind: string; base: string; quote: string; price: number; amountMu: number; taker: string; maker?: string; at: number; h: number }
 interface SealInfo { fromHeight: number; toHeight: number; root: string; stateRoot: string; leaves: number; at: number; digest: string }
@@ -239,8 +239,10 @@ function useSettleDesk(): { data: SettleResp | null; loading: boolean; refresh: 
 /* ══ מנוע-זרימה: long-polling מבוסס-אירוע + AbortController ══════════════════
  * הלקוח תולה בקשה עם הגרסה-המקומית; השרת משיב רק כשהשרשרת התקדמה (או keepalive
  * כל-12ש׳). אפס-סקר-תקופתי — עדכון עם-כל-בלוק. */
-function useWorldStream(): { world: WorldResp | null; load: () => Promise<void> } {
+function useWorldStream(): { world: WorldResp | null; load: () => Promise<void>; online: boolean } {
   const [world, setWorld] = useState<WorldResp | null>(null);
+  // FIX(Roast-65-e4 · F1): דגל-online מה-long-poll עצמו — הלולאה יודעת-מתי-השרת משיב
+  const [online, setOnline] = useState(false);
   const versionRef = useRef(0);
   const ctrlRef = useRef<AbortController | null>(null);
   const [gen, setGen] = useState(0);
@@ -254,8 +256,9 @@ function useWorldStream(): { world: WorldResp | null; load: () => Promise<void> 
       if (j.ok) {
         versionRef.current = j.version;
         setWorld(j);
+        setOnline(true);
       }
-    } catch { /* השרת עוד קם */ }
+    } catch { setOnline(false); }
     setGen((x) => x + 1);
   }, []);
 
@@ -272,8 +275,10 @@ function useWorldStream(): { world: WorldResp | null; load: () => Promise<void> 
             versionRef.current = j.version;
             setWorld(j);
           }
+          if (!stopped) setOnline(true);
         } catch {
           if (stopped || ctrl.signal.aborted) return;
+          setOnline(false);
           await new Promise((res) => setTimeout(res, 1500)); // backoff — השרת עוד קם
         }
       }
@@ -282,7 +287,40 @@ function useWorldStream(): { world: WorldResp | null; load: () => Promise<void> 
     return () => { stopped = true; ctrl.abort(); };
   }, [gen]);
 
-  return { world, load };
+  return { world, load, online };
+}
+
+/* FIX(Roast-65-e4 · F7): לולאת-סקירה-מכובדת — השהיה-בהסתרת-טאב, backoff-עם-jitter בכישלון,
+   ודגל "נתונים-ישנים" במקום catch-שקט (הנתון-הישן נשאר-אך-מסומן). */
+function usePoll(fetcher: () => Promise<boolean>, periodMs: number): boolean {
+  const [stale, setStale] = useState(false);
+  const fRef = useRef(fetcher);
+  useEffect(() => { fRef.current = fetcher; });
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let backoff = 1;
+    let everOk = false;
+    const tick = async () => {
+      if (stopped) return;
+      if (document.visibilityState === "hidden") { timer = setTimeout(tick, periodMs); return; }
+      let ok = false;
+      try { ok = await fRef.current(); } catch { ok = false; }
+      if (stopped) return;
+      if (ok) { everOk = true; setStale(false); }
+      else if (everOk) setStale(true);
+      const delay = ok ? periodMs : Math.min(periodMs * 2 ** backoff, 60_000) + Math.floor(Math.random() * 1_000);
+      backoff = ok ? 1 : Math.min(backoff + 1, 5);
+      timer = setTimeout(tick, delay);
+    };
+    const onVis = () => {
+      if (document.visibilityState === "visible" && !stopped) { clearTimeout(timer); void tick(); }
+    };
+    void tick();
+    document.addEventListener("visibilitychange", onVis);
+    return () => { stopped = true; clearTimeout(timer); document.removeEventListener("visibilitychange", onVis); };
+  }, [periodMs]);
+  return stale;
 }
 
 /* ══ זרם-Relay: נשלף עם כל-גרסת-עולם (מנוע-אירוע, בלי סקר-עצמאי) ════════════ */
@@ -481,7 +519,8 @@ function SovereignMetricsPanel({ showcase, loading, rerun }: {
             <div className="rounded-lg border border-violet-500/30 bg-violet-500/[0.05] px-3 py-2" data-testid="metric-determinism">
               <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">REPLAY DETERMINISM</div>
               <div className={`mt-0.5 font-mono text-lg font-black ${sc.B.replay.identical ? "text-violet-300" : "text-red-300"}`} dir="ltr">
-                {sc.B.replay.identical ? "PASS 3/3" : "FAIL"}
+                {/* FIX(Roast-65-e4 · F12): המספר-חי מה-API (roots.length) — לא-עוד "PASS 3/3" קבוע */}
+                {sc.B.replay.identical ? `PASS (${sc.B.replay.roots.length} roots)` : "FAIL"}
               </div>
               <div className="mt-0.5 font-mono text-[10px] text-zinc-500" dir="ltr">
                 {fmtInt(sc.B.replay.ops)} ops · root {shortHash(sc.B.replay.roots[0] ?? "", 8)}
@@ -535,7 +574,8 @@ function SovereignMetricsPanel({ showcase, loading, rerun }: {
           </div>
           <p className="mt-2 text-[10px] leading-snug text-zinc-500">
             מדידה-חיה על הזוג-הריבוני: הספר ממלא תמיד במחיר-המייקר המדויק (book.ts · matchBook) — אפס-סליפ,
-            אפס-עמלת-טייקר; הבריכה (x*y=k + 30bps) סופגת כל-עסקה לתוך-הרזרבות וגובה גם-בבריכה-צודקה
+            {/* FIX(Roast-65-e4 · F4): הוסרה הטענה-הקבועה 30bps — העמלה-דינמית-חי */}
+            אפס-עמלת-טייקר; הבריכה (x*y=k + עמלה-דינמית) סופגת כל-עסקה לתוך-הרזרבות וגובה גם-בבריכה-צודקה
             (clean = reserves aligned to fair). הנזילות-המנוחה נוצרת-אוטונומית ע"י גריד-החיילים (mm.ts · arenaTick)
             — אפס-LP-חיצוני, אפס-Impermanent-Loss קלאסי.
           </p>
@@ -744,8 +784,9 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
     halted || breakerOpen || mismatched ? "red" : (st?.dbOk === false || breakerHalf) ? "amber" : "green";
   const sysText = halted ? "CHAIN HALTED" : breakerOpen ? "BREAKER OPEN" : mismatched ? "VERIFY ALERT" : (st?.dbOk === false || breakerHalf) ? "DEGRADED" : "NOMINAL";
 
-  const chainDot = (status: string): "green" | "amber" | "zinc" =>
-    status === "anchored" ? "green" : status === "failed" ? "amber" : status === "pending" ? "amber" : "zinc";
+  // FIX(Roast-65-e4 · F17): failed → אדום (היה ענבר — כישלון-אמת דומה-להמתנה)
+  const chainDot = (status: string): "green" | "amber" | "red" | "zinc" =>
+    status === "anchored" ? "green" : status === "failed" ? "red" : status === "pending" ? "amber" : "zinc";
   const breakerChip = (s: string): string =>
     s === "closed" ? "border-green-500/40 bg-green-500/10 text-green-300" : s === "half-open" ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-red-500/40 bg-red-500/10 text-red-300";
 
@@ -1474,7 +1515,7 @@ function RouterPanel() {
           {/* FIX(Roast-63): פנקס-ההכנסה — הכל-סים-פנימי (ספר/בריכות-פנימיות) — לא-כסף-חוץ */}
           <p className="mb-1 text-[9px] font-semibold text-amber-400/90">⚠ כל-הסכומים-כאן-פנימיים-בלבד (סים) — נגזרים-מהארנה-הפנימית, לא-מכסף-חוץ</p>
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="income-strip">
-            <Stat label="עמלות-בריכות" value={`${fmtInt(income?.poolFeesMu ?? 0)}µ`} sub="30bps · 30% לאוצר" />
+            <Stat label="עמלות-בריכות" value={`${fmtInt(income?.poolFeesMu ?? 0)}µ`} sub="עמלה-דינמית · 30% לאוצר" />
             <Stat label="מד-עמלות" value={`${fmtInt(income?.feeMeterMu ?? 0)}µ`} sub="שטרם-נקצר" />
             <Stat label="רווח-אוצר" value={`${fmtInt(income?.treasuryProfitMu ?? 0)}µ`} sub="מונוטוני" />
             <Stat label="גיבוי-WSTEEM" value={`${fmtInt(income?.backingWsteemMu ?? 0)}µ`} sub="עטיפה 1:1 נעולה" />
@@ -1949,7 +1990,7 @@ function PortfolioBridgePanel() {
 }
 
 export default function DexTerminal() {
-  const { world, load } = useWorldStream();
+  const { world, load, online } = useWorldStream();
   const [marketKey, setMarketKey] = useState<string>("");
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -2027,6 +2068,17 @@ export default function DexTerminal() {
   const refPx = market?.refPrice ?? 0;
   const up = px >= refPx;
 
+  // FIX(Roast-65-e4 · F1): נורת-חיות-אמת — נגזרת מ-lastBlockAgoMs (חי <10ש׳ · ישן <60ש׳ · אחרת-מנותק)
+  // + דגל-online של ה-long-poll; st-חסר → CONNECTING. לא-עוד ירוק-תמיד.
+  const lastAgo = st?.lastBlockAgoMs ?? null;
+  const liveness: { tone: "green" | "amber" | "red" | "zinc"; text: string } =
+    !st ? { tone: "zinc", text: "CONNECTING" }
+      : !online ? { tone: "red", text: "OFFLINE" }
+        : lastAgo == null ? { tone: "amber", text: "STALE" }
+          : lastAgo < 10_000 ? { tone: "green", text: "LIVE" }
+            : lastAgo < 60_000 ? { tone: "amber", text: "STALE" }
+              : { tone: "red", text: "OFFLINE" };
+
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950">
       {/* ─── Header מוסדי: לוגו טקסטואלי · מחיר-חי גדול · נורת-מערכת ─── */}
@@ -2057,10 +2109,10 @@ export default function DexTerminal() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* נורת-מערכת ירוקה/אדומה — בלי אימוג'ים */}
-            <Pill tone={st?.halted ? "red" : "green"} pulse={st?.halted === true}>
-              <StatusDot tone={st?.halted ? "red" : "green"} pulse={st?.halted === true} />
-              {st?.halted ? "HALTED" : "LIVE"} · h{st ? fmtInt(st.height) : "…"}
+            {/* FIX(Roast-65-e4 · F1): נורת-חיות-אמת מה-API — LIVE/STALE/OFFLINE/CONNECTING */}
+            <Pill tone={st?.halted ? "red" : liveness.tone} pulse={st?.halted === true || liveness.text === "LIVE"}>
+              <StatusDot tone={st?.halted ? "red" : liveness.tone} pulse={st?.halted === true || liveness.text === "LIVE"} />
+              {st?.halted ? "HALTED" : liveness.text} · h{st ? fmtInt(st.height) : "…"}
             </Pill>
             <Pill tone="violet">TPS {st ? fmtInt(st.tps) : "…"}</Pill>
             <Pill tone="zinc">root {st ? shortHash(st.stateRoot, 8) : "…"}</Pill>
@@ -2069,7 +2121,8 @@ export default function DexTerminal() {
                 <Crown className="h-3 w-3" aria-hidden /> SOVEREIGN MARKET
               </Pill>
             )}
-            <Pill tone="amber" testid="header-sim-pill">SIM book · REAL-money audited ×5</Pill>
+            {/* FIX(Roast-65-e4 · F11): ×5-קבוע → מספר-המסילות-החי בפועל מעמדת-הסליקה (liveRails), נפילה-כנה ל-… */}
+            <Pill tone="amber" testid="header-sim-pill">SIM book · REAL-money audited ×{settle.data?.realMoney ? settle.data.realMoney.liveRails : "…"}</Pill>
             <button
               type="button"
               onClick={() => setOpPanel((v) => !v)}
@@ -2155,6 +2208,7 @@ export default function DexTerminal() {
                   </span>
                   <select
                     value={market?.key ?? ""} onChange={(e) => setMarketKey(e.target.value)}
+                    aria-label="בחירת-שוק"
                     className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs font-bold text-amber-300 outline-none"
                   >
                     {(world?.markets ?? []).map((m) => <option key={m.key} value={m.key}>{m.key}</option>)}
@@ -2199,7 +2253,7 @@ export default function DexTerminal() {
             <Tape tape={world?.tape ?? []} />
           </Panel>
 
-          <Panel title="SWAP — בריכות 30bps" icon={<Waves className="h-4 w-4 text-violet-300" />}>
+          <Panel title="SWAP — בריכות · עמלה-דינמית" icon={<Waves className="h-4 w-4 text-violet-300" />}>
             <SwapPanel pools={world?.pools ?? []} busy={busy} post={post} />
           </Panel>
 

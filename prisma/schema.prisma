@@ -30,8 +30,8 @@ model BlockHeader {
 
 model SealRecord {
   id          String   @id @default(cuid())
-  fromHeight  Int
-  toHeight    Int
+  fromHeight  Int?
+  toHeight    Int?
   root        String @unique // merkle root של hashי הבלוקים בחלון
   stateRoot   String
   leavesCount Int

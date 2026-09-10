@@ -30,6 +30,7 @@ import { poolMid, getPool } from "./amm";
 import { sortBook } from "./book";
 import { getWallets } from "./chain";
 import { relayStatus, verifyOnChain, type ChainName } from "./relay";
+import { fencedFetch } from "./fence"; // FIX(Roast-65-b · M7 / 65-b MED-7): כל-fetch-יוצא דרך-הגדר (assertAllowedHost + redirect:"error") — כולל-ETH_RPC_URL/SOL_RPC_URL-מה-env
 
 /* ── ג'נזיס-עוגן: טבלת-האמת של ההנפקה (מחושבת מהג'נזיס עצמו — תמיד-מסונכרן) ── */
 export interface GenesisTotals {
@@ -61,9 +62,9 @@ function computeGenesisTotals(): GenesisTotals {
 export interface LedgerAudit {
   ok: boolean;
   credits: { sum: number; gasUsed: number; expected: number; minted: number; ok: boolean };
-  assets: { asset: string; live: number; expected: number; ok: boolean; kind: "native" | "wrapped" | "lp" }[];
+  assets: { asset: string; live: number; expected: number; ok: boolean; kind: "native" | "wrapped" | "lp" | "issued" }[];
   escrow: { accounts: number; lockedSum: number; ordersSum: number; exact: boolean; availOk: boolean; ok: boolean };
-  fees: { poolsTreasury: number; feeMeterPlusProfit: number; ok: boolean };
+  fees: { poolsTreasury: number; feeMeterPlusProfit: number; feesSpentMu: number; ok: boolean };
   negatives: string[];
   errors: string[];
 }
@@ -90,15 +91,32 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
   for (const a of names) {
     const isLp = a.startsWith("LP|");
     const isWrapped = a.startsWith("W") && !isLp;
+    // FIX(Roast-65-a · HIGH-3b): פנקס-היצע-שנברא — טוקני-השקה (LB|*) חיים-מחוץ-לג'נזיס:
+    // הג'נזיס לא מכיר אותם, אבל הם הנפקה-אמת-מגובה-גיוס (launch_buy מטביע, launch_sell
+    // שורף, ההגירה מעבירה-את-ההיצע-כולו לבריכה). בלי-פנקס-זה הביקורת דנה "live>0 ≠ genesis 0"
+    // על-כל-טוקן-השקה = פסק-דין-אדום-תמידי = עייפות-אזעקה. ההיצע-הצפוי נגזר-מההשקה-עצמה:
+    // טרם-הגירה = soldMu (מחזור-מוחזק) · אחרי-הגירה = supplyMu (R בבריכה + soldMu בידיים, קבוע).
+    if (a.startsWith("LB|")) {
+      const l = Object.values(st.launch ?? {}).find((x) => x.code === a);
+      const live = liveAssets[a] ?? 0;
+      const expected = l ? (l.graduated ? l.supplyMu : l.soldMu) : 0;
+      const ok = live === expected;
+      assetRows.push({ asset: a, live, expected, ok, kind: "issued" });
+      if (!ok) errors.push(`issued ${a}: live ${live} ≠ issuance ${expected}`);
+      continue;
+    }
     if (isLp) {
-      // היצע-LP: pool.lp − Σbal(LP|) === lp-ג'נזיס (חלק-האוצר-הנעול קבוע)
+      // היצע-LP: pool.lp − Σbal(LP|) === lp-ג'נזיס + הפרש-היסטורי-מוצהר
+      // FIX(Roast-65 · drift-declaration): ההפרש-ההיסטורי (עידן-טרם-התיקונים)
+      // מוצהר-במצב — לא-מוסתר; סחיפה-חדשה-מעבר-להצהרה נשארת-כשל.
       const sumBal = liveAssets[a] ?? 0;
       const key = a.slice(3);
       const lpNow = st.pools[key]?.lp ?? 0;
-      const expected = (totals.poolsLp[key] ?? 0);
+      const adjLp = st.auditAdjustments?.lp?.[key] ?? 0;
+      const expected = (totals.poolsLp[key] ?? 0) + adjLp;
       const ok = lpNow - sumBal === expected;
       assetRows.push({ asset: a, live: lpNow - sumBal, expected, ok, kind: "lp" });
-      if (!ok) errors.push(`lp ${key}: implied ${lpNow - sumBal} ≠ genesis ${expected}`);
+      if (!ok) errors.push(`lp ${key}: implied ${lpNow - sumBal} ≠ genesis+declared ${expected}`);
       continue;
     }
     if (isWrapped) {
@@ -110,13 +128,16 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
       if (!ok) errors.push(`wrapped ${a}: supply ${live} ≠ genesis+backing ${expected}`);
       continue;
     }
-    // נכס-טבעי: Σbal + Σpools + backing(W+x) === ג'נזיס (העטיפה נועלת-את-הטבעי)
+    // נכס-טבעי: Σbal + Σpools + backing(W+x) === ג'נזיס − שריפות-שנרשמו (FIX: HIGH-3b —
+    // הראוטר שורף SAOS אמת (burnedSaos): ההיצע-החי יורד-לצמיתות — בלי-הדלי הביקורת
+    // הייתה נכשלת-נצחית מהמחזור-הראשון של ה-buy-and-burn) + הפרש-היסטורי-מוצהר
     const nativeBacking = backing[`W${a}`] ?? 0;
     const live = (liveAssets[a] ?? 0) + nativeBacking;
-    const expected = totals.assets[a] ?? 0;
+    const adjNative = st.auditAdjustments?.native?.[a] ?? 0;
+    const expected = (totals.assets[a] ?? 0) - (a === "SAOS" ? (st.burnedSaos ?? 0) : 0) + adjNative;
     const ok = live === expected;
     assetRows.push({ asset: a, live, expected, ok, kind: "native" });
-    if (!ok) errors.push(`native ${a}: live ${live} ≠ genesis ${expected}`);
+    if (!ok) errors.push(`native ${a}: live ${live} ≠ genesis+declared ${expected}`);
   }
 
   // (c) ערבות: locked === Σפקודות-חיות + נעילות-תוכניות (מדויק) · avail ≥ 0 · אין-יתרות-שליליות
@@ -181,19 +202,25 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
     }
   }
 
-  // (d) עמלות: מדידה-כנה — Σpools.feeAccruedTreasury === feeMeter + treasuryProfit
+  // (d) עמלות: מדידה-כנה — Σpools.feeAccruedTreasury === feeMeter + treasuryProfit + feeMinted − feesSpentMu
   const poolsTreasury = Object.values(st.pools).reduce((s, p) => s + p.feeAccruedTreasury, 0);
-  // (d) עמלות: כל-מה-שהבריכות-מדדו === מד-שלא-הוכר + רווח-שהוכר + דלק-שמוחזר
-  // (THE-FOUNTAIN: feeMinted הוא-עמלות-שהפכו-קרדיטים — נצרך-מהמדידה, לא-נעלם)
-  const feesOk = poolsTreasury === st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0);
-  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted ${st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0)}`);
+  // (d) עמלות: כל-מה-שהבריכות-מדדו === מד-שלא-הוכר + רווח-שהוכר + דלק-שמוחזר − צריכת-הראוטר
+  // (THE-FOUNTAIN: feeMinted הוא-עמלות-שהפכו-קרדיטים — נצרך-מהמדידה, לא-נעלם ·
+  // FIX(Roast-65-a · HIGH-3d): feesSpentMu — עמלות-שהראוטר צרך-מ-treasuryProfit (economy.ts)
+  // לשריפה/קרן-ve. בלי-הדלי-הרביעי הזהות נשברת-נצחית מהמחזור-הראשון של-השריפה)
+  const feesSpentMu = (st.feesSpentMu ?? 0) + (st.auditAdjustments?.feesSpentMu ?? 0); // FIX(Roast-65 · drift-declaration): כולל-ההיסטוריה-המוצהרת
+  const feesRhs = st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0) - feesSpentMu;
+  const feesOk = poolsTreasury === feesRhs;
+  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted−spent ${feesRhs}`);
 
   return {
     ok: errors.length === 0 && negatives.length === 0,
     credits: { sum: creditSum, gasUsed: st.gasUsed, expected: totals.credits, minted, ok: creditsOk },
     assets: assetRows,
     escrow: { accounts, lockedSum, ordersSum, exact: errors.filter((e) => e.startsWith("escrow")).length === 0, availOk, ok: errors.filter((e) => e.startsWith("escrow") || e.startsWith("escrow-shadow")).length === 0 && negatives.length === 0 },
-    fees: { poolsTreasury, feeMeterPlusProfit: st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0), ok: feesOk },
+    // שדה-השם-מטעה-בכוונת-מקור: feeMeterPlusProfit = meter+profit+**minted** (השלישייה-כולה) —
+    // FIX(Roast-65 · doc): מתועד-כאן-כדי-שהצהרת-הסחיפה-ב-chain.ts לא תספור-את-ה-minted פעמיים.
+    fees: { poolsTreasury, feeMeterPlusProfit: st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0), feesSpentMu, ok: feesOk },
     negatives,
     errors,
   };
@@ -360,7 +387,11 @@ async function jfetch<T>(url: string, body?: unknown, timeoutMs = 9_000): Promis
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const r = await fetch(url, {
+    // FIX(Roast-65-b · M7 / 65-b MED-7): jfetch היה bare-fetch בלי-גדר — ETH_RPC_URL/SOL_RPC_URL
+    // מה-env (וכל-שער-RPC) יצאו-חוצה בלי-קיבוע-מארח ובלי-הגנת-redirect (307/308 של מארח-עוין
+    // היה גורר method+body מחוץ-לגדר). עכשיו: fencedFetch — assertAllowedHost (פיני-ה-env
+    // קיימים-כבר-ב-PINNED_HOSTS) + redirect:"error" בלתי-ניתן-לעקיפה. שער-לא-מקובע = זריקה fail-closed.
+    const r = await fencedFetch(url, "settle.jfetch", {
       method: body === undefined ? "GET" : "POST",
       headers: { "content-type": "application/json", "user-agent": UA },
       body: body === undefined ? undefined : JSON.stringify(body),

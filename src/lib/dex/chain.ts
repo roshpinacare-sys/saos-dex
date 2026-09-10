@@ -16,12 +16,12 @@ import {
   GAS_TABLE, notional, poolKey,
 } from "./kernel";
 import { economyTick } from "./economy";
-import { merkleRoot, sha256, canon } from "./canonical";
+import { merkleRoot, sha256, canon, CanonicalError } from "./canonical";
 import { invariant, InvariantViolation } from "./invariant";
 import { arenaTick, fairPrice, DEFAULT_PARAMS, type ArenaParams, type SoldierRT, MARKETS } from "./mm";
 import { railSummary, bindLiveState } from "./rail";
 import { milestoneSummary } from "./milestone";
-import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX } from "./amm";
+import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX, effectiveFeeBps } from "./amm";
 import { sortBook } from "./book";
 import { dcaTick, trigTick } from "./triggers";
 import { protoRevTick } from "./protorev";
@@ -54,7 +54,10 @@ export function getBurnWindow(): { h: number; gasUsed: number }[] {
 }
 
 export interface TapeEvent extends TradeEvent { h: number }
-export interface SealInfo { fromHeight: number; toHeight: number; root: string; stateRoot: string; leaves: number; at: number; digest: string }
+// FIX(Roast-65-a · MED-7): החותם נושא עתה את החלון-החתום עצמו (blockHashes) — קודם
+// רוקן את החלון מיד-אחרי-החתימה ו-getLatestSealLeaves הציג את החלון-הבא (שקר —
+// "אימות-עצמאי" בלתי-אפשרי דרך-ה-API). העלים-החתומים נשמרים-פר-חותם + נשמרים-ל-DB.
+export interface SealInfo { fromHeight: number; toHeight: number; root: string; stateRoot: string; leaves: number; at: number; digest: string; blockHashes: string[] }
 export interface ReceiptInfo { kind: string; digest: string; at: number }
 
 interface ChainRT {
@@ -76,10 +79,13 @@ interface ChainRT {
   opsPerSecRolling: number;
   startedAt: number;
   lastBlockAt: number;
-  faucetAt: Record<string, number>;
   dbOk: boolean;
   halted: boolean; // fail-fast: הפרת-אינווריאנטה מעלה-את-השרשרת (לא בונה בלוקים נוספים)
   haltReason: string | null; // פורנזי — מה בדיוק נתפס (חשוף ב-API)
+  // FIX(Roast-65-a · MED-6): כוונת-הרמת-סולם בהמתנה — ספרי-הסולם לא נוגעים עד-ששני-ה-ops
+  // (harvest + asset_price) מאושרים-בפועל בבלוק (הישן: מוטט את st.ladder מראש — הרמה-שלא-שולמה
+  // נשארה-במצב אם-ה-ops נדחו). חוץ-מצב (כמו-כל-טבעות-הבונה — מתועד ב-replayNote).
+  pendingLift: { newRef: number; harvestMu: number; h: number; harvestNonce: string; priceNonce: string } | null;
   version: number;
   cachedRoot: { h: number; root: string } | null; // FIX(SETTLE-9 perf): stateRoot-פר-גובה — getState פר-לקוח לא מחשב-מחדש O(state)
   rejectedLast: { h: number; count: number; sample: string[] } | null; // FIX(SETTLE-15 silent-drop): ראית-דחיות-חיה
@@ -111,71 +117,224 @@ function pushReceipt(rt: ChainRT, kind: string, payload: unknown): ReceiptInfo {
   return rec;
 }
 
-async function loadSnapshot(rt: ChainRT): Promise<boolean> {
+/* FIX(Roast-65-a · HIGH-4): טעינת-תמונת-מצב עם אימות-שלמות fail-closed.
+ * הישן: אימות-צורה-בלבד (version/height/pools) · פיוס שכתב st.locked בשקט ("מתקן
+ * במקום למות") · כישלון-קריאה = טיהור-כל-ראיות-ה-DB וג'נזיס-חדש (fail-destructive).
+ * עכשיו: שלוש-תוצאות — "loaded" (אומתה מול stateRoot-ב-DB) · "absent" (אין-קובץ
+ * כלל — ג'נזיס-לגיטימי רק אם-אין-עדויות-קודמות) · "corrupt" (קיימת-ושבורה —
+ * דחיית-טעינה + HALT רועש, אף-ראיה לא נמחקת, אף-ג'נזיס לא נכפה). */
+const ESCROW_DUST_MU = 100; // אבק-פיוס: שאריות-floor של-notional (< 1µ-פר-רגל) — מתחתיו פיוס-שקט מוצדק
+
+/** FIX(Roast-65 · corroboration-birth): העוגן-החיצוני-האחרון — קריאת-state/anchors.json
+ * (הרשומות-המאומתות-על-השרשראות-הציבוריות: STEEM/SOL/ETH — txid+stateRoot). זו-הראיה
+ * הציבורית-החזקה-ביותר לשלמות-השרשרת כשהשכבה-המקומית-טרם-נולדה.
+ * הערה: תיקון-נתיב — העוגנים-חיים-ב-state/-של-ה-relay (לא db/ — שם-רק-תמונת-המצב). */
+function readLatestAnchoredSeal(): { height: number; stateRoot: string; chain: string; txid: string } | null {
+  const candidates = [
+    path.join(process.cwd(), "state", "anchors.json"),
+    path.join(DATA_DIR, "anchors.json"),
+  ];
+  for (const p of candidates) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(p, "utf8")) as {
+        records?: Array<{ chain: string; height: number; stateRoot: string; txid: string; status: string }>;
+      };
+      const recs = (raw.records ?? []).filter((r) => r.status === "anchored" || r.status === "verified");
+      if (recs.length === 0) continue;
+      const best = recs.reduce((a, b) => (b.height > a.height ? b : a));
+      return { height: best.height, stateRoot: best.stateRoot, chain: best.chain, txid: best.txid };
+    } catch { continue; }
+  }
+  return null;
+}
+async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt"> {
+  let raw: { version: number; state: DexState } | null = null;
   try {
-    const raw = JSON.parse(fs.readFileSync(SNAPSHOT_FILE, "utf8")) as { version: number; state: DexState };
-    if (raw?.version === rt.version && raw?.state?.height > 0 && raw.state.pools && raw.state.balances) {
-      rt.st = raw.state;
-      // ── FIX(escrow-dust) — פיוס-ערבות בעת-טעינה ──
-      // (1) נרמול: פקודות-ישנות בלי מד-נעילה מקבלות מד-נגזר (rem/notional(rem))
-      for (const o of rt.st.orders) {
-        if (typeof o.lockMu !== "number" || !Number.isSafeInteger(o.lockMu) || o.lockMu < 0) {
-          const rem = o.amount - o.filled;
-          o.lockMu = o.side === "sell" ? rem : notional(o.price, rem);
-        }
-      }
-      // (2) פיוס: locked := Σ מדי-הנעילה של-פקודות-חיות — מחיקת-אבק-רצפה
-      // היסטורי (נתפס-ע"י ביקורת-הסליקה; notional-floor אינו-אדיטיבי). האבק
-      // חוזר-לזמין — הוא-מעולם לא היה מובטח-לאף-אחד. נרשם-כראיה.
-      const orderLocks: Record<string, Record<string, number>> = {};
-      for (const o of rt.st.orders) {
-        if (!o.live) continue;
-        const a = o.side === "sell" ? o.base : o.quote;
-        const w = (orderLocks[o.owner] = orderLocks[o.owner] ?? {});
-        w[a] = (w[a] ?? 0) + o.lockMu;
-      }
-      // FIX(Task 56): תוכניות-DCA וטריגרים מחזיקים-ערבות-אמת (הפקדה-מלאה) —
-      // בלעדיהן כאן, הפיוס היה מוחק-את-הנעילות-שלהן בכל-טעינה = כסף-מובטח-שנעלם.
-      for (const p of Object.values(rt.st.dca ?? {})) {
-        if (!(p.remainingMu > 0)) continue;
-        const w = (orderLocks[p.owner] = orderLocks[p.owner] ?? {});
-        w[p.assetIn] = (w[p.assetIn] ?? 0) + p.remainingMu;
-      }
-      for (const t of Object.values(rt.st.trig ?? {})) {
-        const a = t.side === "sell" ? t.base : t.quote;
-        const effPx = t.limitPx > 0 ? t.limitPx : t.triggerPx;
-        const mu = t.side === "sell" ? t.amountMu : notional(effPx, t.amountMu);
-        if (!(mu > 0)) continue;
-        const w = (orderLocks[t.owner] = orderLocks[t.owner] ?? {});
-        w[a] = (w[a] ?? 0) + mu;
-      }
-      // FIX(Roast-64 · cow-escrow-wipe): הפיוס התעלם מנעילות-הזמנות-CoW-פתוחות —
-      // בתסריט-המצב-היחיד-שהותיר-אותן-חיות (חור-באמצע-סליקה) הפיוס היה מוחק
-      // את-הערבות → כסף-מובטח-נעשה-זמין → בסליקה addLock(-) → נעילה-שלילית → HALT.
-      // הגנה-עודפת (דלת-הסליקה-עצמה מנקה באותו-בלוק) — אך fail-closed עדיף.
-      for (const o of rt.st.cow ?? []) {
-        const a = o.side === "sell" ? o.base : o.quote;
-        const w = (orderLocks[o.owner] = orderLocks[o.owner] ?? {});
-        w[a] = (w[a] ?? 0) + o.lockMu;
-      }
-      const reconciled: string[] = [];
-      for (const [who, wallet] of Object.entries(rt.st.locked)) {
-        for (const a of Object.keys(wallet)) {
-          const target = orderLocks[who]?.[a] ?? 0;
-          if (wallet[a] !== target) {
-            reconciled.push(`${who}.${a}:${wallet[a]}→${target}`);
-            wallet[a] = target;
-          }
-        }
-      }
-      if (reconciled.length > 0) {
-        console.info(`[saos-dex] escrow reconcile on load: ${reconciled.join(", ")}`);
-        pushReceipt(rt, "escrow-reconcile", { fixed: reconciled, at: Date.now() });
-      }
-      return true;
+    raw = JSON.parse(fs.readFileSync(SNAPSHOT_FILE, "utf8")) as { version: number; state: DexState };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return "absent"; // אין-תמונה כלל — לא שחיתות
+    console.error(`[saos-dex][ALERT] SNAPSHOT UNREADABLE (bitrot/partial JSON?) — refusing load, evidence untouched: ${(e as Error)?.message ?? e}`);
+    return "corrupt";
+  }
+  if (!(raw?.version === rt.version && raw?.state?.height > 0 && raw.state.pools && raw.state.balances)) {
+    console.error("[saos-dex][ALERT] SNAPSHOT SHAPE INVALID — refusing load, evidence untouched (was: silent genesis + evidence purge)");
+    return "corrupt";
+  }
+  // ── אימות-שלמות מול-DB: stateRoot(המצב-הנטען) חייב להיות בדיוק ה-stateRoot שנחתם
+  // ל-blockHeader בגובה-זה. בלי-זה, תמונה-שבורה-חלקית (bitrot/כתיבה-קרועה) הייתה נטענת
+  // וממשיכה לחתום על מצב-זר — והפיוס היה "מתקן" ערבויות בשקט.
+  let dbRoot: string | null = null;
+  try {
+    const hdr = await db.blockHeader.findUnique({ where: { height: raw.state.height }, select: { stateRoot: true } });
+    dbRoot = hdr?.stateRoot ?? null;
+  } catch { dbRoot = null; }
+  let claimedRoot: string | null = null;
+  try { claimedRoot = stateRoot(raw.state); } catch (e) {
+    console.error(`[saos-dex][ALERT] SNAPSHOT STATE UNCANONICAL (stateRoot throws) — refusing load: ${(e as Error)?.message ?? e}`);
+    return "corrupt";
+  }
+  let acceptedWithoutCorroboration = false; // FIX(Roast-65 · corroboration-birth)
+  if (!dbRoot) {
+    // ── FIX(Roast-65 · corroboration-birth): פער-מערכתי-מוצהר-פעם-אחת ──
+    // שכבת-שיתוף-ה-DB (blockHeader-פר-בלוק) נולדה-עכשיו (65-a HIGH-4) — היא לא הייתה
+    // קיימת-בטבלה (db:push-מעולם-לא-רץ-על-הסכמה-זו) וכל-הכתיבות נכשלו-בשקט 10-שעות
+    // (catch→dbOk=false). אפס-שורות = הפער מוכח-מערכתי (לא-שחיתות-גובה-בודד).
+    // קבלה-חד-פעמית רק-אם-ארבעת-האילוצים-מתקיימים; החל-מהבלוק-הראשון-החדש שורה-
+    // ראשונה-נכתבת-והנתיב-משתתק-לנצח (self-disabling). אין-זיוף-היסטוריה — יש-קבלה
+    // גלויה-מקבלת-סיכון-חסום: ≤חלון-חותם-אחד (12) מעבר-לעוגן-ציבורי + ביקורת-שימור.
+    let priorCount = -1;
+    try { priorCount = await db.blockHeader.count(); } catch { priorCount = -1; }
+    const extAnchor = readLatestAnchoredSeal();
+    const anchorH = extAnchor?.height ?? -1;
+    // FIX(Roast-65 · reorg-accept): הפער-חייב-להיות-בתוך-חלון-חותם-אחד — בשני-הכיוונים.
+    // מאחורי-העוגן (snapshot < anchor) = ריאורג-כן-מוצהר: השרשרת בונה-מחדש-את-הבלוקים
+    // שמעבר-לתמונה; קצה-העוגן-הקודם-נשאר-היסטוריה-ציבורית-של-טיפ-נטוש.
+    const gap = raw.state.height - anchorH;
+    const withinWindow = anchorH > 0 && Math.abs(gap) <= SEAL_EVERY;
+    if (priorCount === 0 && withinWindow) {
+      console.warn(`[saos-dex][ALERT] BOOT-ACCEPTANCE (one-time, corroboration-layer birth): no local blockHeaders EVER (0 rows — writes were silently failing pre-65); snapshot h${raw.state.height} vs last PUBLICLY-anchored seal h${anchorH} (${extAnchor!.chain} txid ${String(extAnchor!.txid).slice(0, 12)}…, stateRoot ${String(extAnchor!.stateRoot).slice(0, 12)}…) — gap ${gap > 0 ? "+" : ""}${gap} blocks${gap < 0 ? " — HONEST REORG: rebuilding blocks ahead of the snapshot; the prior anchored tip stays public history of an abandoned tip" : ""}. Trust bounded to ≤${SEAL_EVERY} blocks around public evidence + conservation audit + drift declaration. From the next block onward every block writes a real DB header and this path is dead.`);
+      pushReceipt(rt, "boot-acceptance-corroboration-birth", { snapshotH: raw.state.height, anchoredH: anchorH, anchor: extAnchor!.chain, txid: extAnchor!.txid, gap, at: Date.now() });
+      acceptedWithoutCorroboration = true;
+    } else {
+      console.error(`[saos-dex][ALERT] SNAPSHOT h${raw.state.height} HAS NO DB blockHeader TO CORROBORATE (DB down or evidence gap; priorCount=${priorCount}, anchorH=${anchorH}) — refusing load, evidence untouched`);
+      return "corrupt";
     }
-  } catch { /* אין-תמונת-מצב — ג'נזיס */ }
-  return false;
+  }
+  if (!acceptedWithoutCorroboration && dbRoot !== claimedRoot) {
+    console.error(`[saos-dex][ALERT] SNAPSHOT INTEGRITY FAILURE at h${raw.state.height}: stateRoot(loaded)=${claimedRoot.slice(0, 16)}… ≠ DB=${dbRoot!.slice(0, 16)}… — refusing load, evidence untouched (operator: explicit reset is the recovery path)`);
+    return "corrupt";
+  }
+  rt.st = raw.state;
+  // ── FIX(escrow-dust) — פיוס-ערבות בעת-טעינה (עם-כנות-חדשה) ──
+  // (1) נרמול: פקודות-ישנות בלי מד-נעילה מקבלות מד-נגזר (rem/notional(rem))
+  for (const o of rt.st.orders) {
+    if (typeof o.lockMu !== "number" || !Number.isSafeInteger(o.lockMu) || o.lockMu < 0) {
+      const rem = o.amount - o.filled;
+      o.lockMu = o.side === "sell" ? rem : notional(o.price, rem);
+    }
+  }
+  // (2) נגזרת-הנעילות מכל-מקורות-האמת (פקודות + DCA + טריגרים + CoW)
+  const orderLocks: Record<string, Record<string, number>> = {};
+  for (const o of rt.st.orders) {
+    if (!o.live) continue;
+    const a = o.side === "sell" ? o.base : o.quote;
+    const w = (orderLocks[o.owner] = orderLocks[o.owner] ?? {});
+    w[a] = (w[a] ?? 0) + o.lockMu;
+  }
+  // FIX(Task 56): תוכניות-DCA וטריגרים מחזיקות-ערבות-אמת (הפקדה-מלאה) —
+  // בלעדיהן כאן, הפיוס היה מוחק-את-הנעילות-שלהן בכל-טעינה = כסף-מובטח-שנעלם.
+  for (const p of Object.values(rt.st.dca ?? {})) {
+    if (!(p.remainingMu > 0)) continue;
+    const w = (orderLocks[p.owner] = orderLocks[p.owner] ?? {});
+    w[p.assetIn] = (w[p.assetIn] ?? 0) + p.remainingMu;
+  }
+  for (const t of Object.values(rt.st.trig ?? {})) {
+    const a = t.side === "sell" ? t.base : t.quote;
+    const effPx = t.limitPx > 0 ? t.limitPx : t.triggerPx;
+    const mu = t.side === "sell" ? t.amountMu : notional(effPx, t.amountMu);
+    if (!(mu > 0)) continue;
+    const w = (orderLocks[t.owner] = orderLocks[t.owner] ?? {});
+    w[a] = (w[a] ?? 0) + mu;
+  }
+  // FIX(Roast-64 · cow-escrow-wipe): הפיוס התעלם מנעילות-הזמנות-CoW-פתוחות —
+  // בתסריט-המצב-היחיד-שהותיר-אותן-חיות (חור-באמצע-סליקה) הפיוס היה מוחק
+  // את-הערבות → כסף-מובטח-נעשה-זמין → בסליקה addLock(-) → נעילה-שלילית → HALT.
+  // FIX(Roast-65-a · HIGH-4): נרמול-ה-cow-loop — lockMu חסר/NaN לא נכנס לנגזרת
+  // (היה-מצטבר כמו-שהוא → נעילה-רעילה → CanonicalError). חסר = דילוג + לוג-רועש:
+  // הפער ייתפס-בכנות בפיוס-למטה/בביקורת — לא ינורמל בשקט.
+  for (const o of rt.st.cow ?? []) {
+    if (typeof o.lockMu !== "number" || !Number.isSafeInteger(o.lockMu) || o.lockMu < 0) {
+      console.error(`[saos-dex][ALERT] cow order seq=${o.seq} of ${o.owner} has corrupt lockMu=${String(o.lockMu)} — excluded from derived escrow (loud, fail-closed)`);
+      continue;
+    }
+    const a = o.side === "sell" ? o.base : o.quote;
+    const w = (orderLocks[o.owner] = orderLocks[o.owner] ?? {});
+    w[a] = (w[a] ?? 0) + o.lockMu;
+  }
+  // (3) פיוס-כנה: הישן שכתב st.locked לנגזרת בכל-פער ("הרקונסיליאטור שמתקן במקום
+  // למות"). עכשיו: אבק (≤ESCROW_DUST_MU) מכוון-בשקט-מוצדק; פער-מעבר-לאבק נשמר
+  // כפי-שהוא (לא-נשכתב!) עם-לוג-רועש + קבלה — הביקורת תיתן-את-פסק-הדין; שדה-שקול-
+  // מושחת (שלילי/לא-שלם) מתוקן-רק-אז (זה-היחיד שהוכח-שבור).
+  const reconciled: string[] = [];
+  const preserved: string[] = [];
+  for (const [who, wallet] of Object.entries(rt.st.locked)) {
+    for (const a of Object.keys(wallet)) {
+      const stored = wallet[a];
+      const target = orderLocks[who]?.[a] ?? 0;
+      if (stored === target) continue;
+      if (!Number.isSafeInteger(stored) || stored < 0) {
+        reconciled.push(`${who}.${a}:corrupt(${stored})→${target}`);
+        wallet[a] = target;
+      } else if (Math.abs(stored - target) > ESCROW_DUST_MU) {
+        preserved.push(`${who}.${a}:stored ${stored} ≠ derived ${target} (Δ${stored - target}) — preserved, not rewritten`);
+      } else {
+        reconciled.push(`${who}.${a}:${stored}→${target}`);
+        wallet[a] = target;
+      }
+    }
+  }
+  if (reconciled.length > 0) {
+    console.info(`[saos-dex] escrow reconcile on load: ${reconciled.join(", ")}`);
+    pushReceipt(rt, "escrow-reconcile", { fixed: reconciled, at: Date.now() });
+  }
+  if (preserved.length > 0) {
+    console.error(`[saos-dex][ALERT] ESCROW MISMATCH BEYOND DUST ON LOAD (preserved, not silently rewritten — Roast-65-a HIGH-4): ${preserved.join(" · ")}`);
+    pushReceipt(rt, "escrow-preserved", { preserved, at: Date.now() });
+  }
+  // ── FIX(Roast-65 · drift-declaration): הצהרת-סחיפה-היסטורית — מוצהר-ולא-מוסתר ──
+  // אחרי-טעינה-מאומתת (stateRoot===DB) ופיוס-הערבויות: אם ביקורת-השימור נכשלת,
+  // הפערים מוצהרים-פעם-אחת בתוך-המצב-הקנוני (auditAdjustments) עם-מספרים-מדויקים
+  // ביומן-ובלוג-רועש. המבקר (settle.ledgerAudit) כולל-את-ההצהרה; סחיפה-חדשה-מעבר-
+  // להצהרה = כשל-ביקורת = HALT-בחותם (HIGH-2). אם-גם-אחרי-ההצהרה הביקורת-אדומה —
+  // המצב-שבור-מעבר-לסחיפה-היסטורית → דחיית-טעינה (corrupt), אף-ראיה לא נמחקת.
+  {
+    const { ledgerAudit, genesisTotals } = await import("./settle");
+    const pre = ledgerAudit(rt.st, genesisTotals());
+    if (!pre.ok) {
+      const adj = rt.st.auditAdjustments ?? (rt.st.auditAdjustments = {
+        note: "historical conservation drift from the pre-fix era (roast-63/64 bugs) — declared, not hidden; any NEW drift beyond this declaration halts at seal (65-a HIGH-2)",
+        atH: rt.st.height,
+        native: {}, lp: {}, feesSpentMu: 0,
+      });
+      adj.atH = rt.st.height;
+      const details: string[] = [];
+      for (const row of pre.assets) {
+        if (row.ok) continue;
+        const d = row.live - row.expected;
+        if (row.kind === "lp") {
+          const key = row.asset.slice(3);
+          adj.lp = adj.lp ?? {}; adj.lp[key] = (adj.lp[key] ?? 0) + d;
+          details.push(`lp:${key}=${d > 0 ? "+" : ""}${d}`);
+        } else {
+          adj.native = adj.native ?? {}; adj.native[row.asset] = (adj.native[row.asset] ?? 0) + d;
+          details.push(`${row.asset}=${d > 0 ? "+" : ""}${d}`);
+        }
+      }
+      if (!pre.fees.ok) {
+        // הצהרה-על-ההיסטוריה: spent_נדרש = feeMeterPlusProfit − pools (השדה
+        // feeMeterPlusProfit כבר-כולל-את-feeMinted — ראה-הערת-המבקר ב-settle.ts).
+        // FIX(Roast-65 · sign+double-count): שתי-הטעויות-הקודמות-שלי — סימן-הפוך
+        // וספירת-minted-כפול (השדה-כבר-כולל-אותו) — הוכחו-בטעינה (846,040 → 185,384).
+        // הערך-החתום-יכול-להיות-שלילי: זו-הצהרה-כנה-על-"עמלות-פנטום-בבריכות"-מהעידן
+        // שלפני-התיקונים (הבריכות-מדדו-סוואפים-שמומנו-מ-USDS-פנטום).
+        const delta = pre.fees.feeMeterPlusProfit - pre.fees.poolsTreasury;
+        adj.feesSpentMu = (adj.feesSpentMu ?? 0) + delta;
+        details.push(`feesSpent+=${delta > 0 ? "+" : ""}${delta} (phantom-pool-fees, declared)`);
+      }
+      const post = ledgerAudit(rt.st, genesisTotals());
+      if (!post.ok) {
+        console.error(`[saos-dex][ALERT] LEDGER BROKEN BEYOND DECLARABLE DRIFT at h${rt.st.height}: ${[...post.errors, ...post.negatives].slice(0, 3).join(" | ")} — refusing load, evidence untouched`);
+        return "corrupt";
+      }
+      rt.st.journal.push({
+        h: rt.st.height, t: 0, soldier: "treasury", action: "audit_adjustment_declared", profitMu: 0,
+        note: `drift-declaration @h${rt.st.height}: ${details.join(" · ")} — מוצהר-במצב-הקנוני; סחיפה-חדשה=HALT`,
+      });
+      pushReceipt(rt, "drift-declared", { details, atH: rt.st.height, at: Date.now() });
+      console.warn(`[saos-dex][ALERT] HISTORICAL DRIFT DECLARED at h${rt.st.height}: ${details.join(" · ")} — declared in canonical state (not hidden); new drift beyond declaration = HALT at seal`);
+    }
+  }
+  return "loaded";
 }
 
 function flushSnapshot(rt: ChainRT): void {
@@ -199,6 +358,18 @@ function flushSnapshot(rt: ChainRT): void {
 async function seal(rt: ChainRT, blockRoot: string): Promise<void> {
   const st = rt.st;
   if (rt.blockHashes.length === 0) return;
+  // FIX(Roast-65-a · HIGH-2): ביקורת-השימור רצה-עתה בתוך-החותם, לפני-כל-פרסום.
+  // הישן: invariant() נקרא רק בנתיבי-ספר/בריכה (טענות-צרות) ו-ledgerAudit רץ רק ב-GET
+  // /settle ו-/metrics (דוחות-קריאה עם-cache) — השרשרת הייתה ממשיכה לחתום 12-בלוקים-
+  // חותמות "תקינות" על מצב-מנופח ושרשרת-העדויות כולה מאמתת את השקר. עכשיו: !ok =
+  // InvariantViolation → HALT עם-פסק-דין-פורנזי (אין-חותמות-שלמות על-לדגר-שבור).
+  // ייבוא-דינמי — settle.ts מייבא-מ-chain.ts (getWallets) ואנחנו לא יוצרים-מעגל-סטטי.
+  const { ledgerAudit, genesisTotals } = await import("./settle");
+  const audit = ledgerAudit(st, genesisTotals());
+  if (!audit.ok) {
+    const forensic = [...audit.errors, ...audit.negatives].slice(0, 3).join(" | ") || "unknown";
+    throw new InvariantViolation(`ledger-audit-failed@seal h${st.height}: ${forensic}`);
+  }
   const root = merkleRoot(rt.blockHashes);
   const info: SealInfo = {
     fromHeight: st.height - rt.blockHashes.length + 1,
@@ -207,6 +378,8 @@ async function seal(rt: ChainRT, blockRoot: string): Promise<void> {
     leaves: rt.blockHashes.length,
     at: Date.now(),
     digest: "",
+    // FIX(Roast-65-a · MED-7): החלון-החתום עצמו — העדות למה שהשורש מחייב (היה-רק count)
+    blockHashes: [...rt.blockHashes],
   };
   info.digest = sha256(canon(info));
   /* ── Formal Assertions (Fail-Fast) — חוקי-הברזל לפני-פרסום-החותם ──
@@ -231,14 +404,21 @@ async function seal(rt: ChainRT, blockRoot: string): Promise<void> {
   rt.seals.unshift(info);
   rt.seals = rt.seals.slice(0, 24);
   pushReceipt(rt, "seal", info);
-  // עדי-חיילים: 4 חתימות attest על שורש-החותם (קוורום CHAIN_SPEC=3, אנחנו 4)
+  // FIX(Roast-65-a · LOW-9): תווית-אמת — אין-מפתחות ואין-חתימות במערכת-כולה.
+  // אלו ארבעה-רישומי-ג'ורנל (attest) מאותו-תהליך-שכתב-את-השורש-עצמו — הד-פנימי,
+  // לא "קוורום" ולא חתימות. נשמרים-כראית-יומן-בלבד (הערה-כנה גם-ב-note של הרישום).
   for (const s of ["soldier-1", "soldier-2", "soldier-3", "soldier-4"]) {
     rt.mempool.push({ type: "attest", issuer: s, nonce: sysNonce(st, `att-${s}`), claim: root.slice(0, 16) });
   }
   rt.blockHashes = [];
   try {
     await db.sealRecord.create({
-      data: { fromHeight: info.fromHeight, toHeight: info.toHeight, root: info.root, stateRoot: info.stateRoot, leavesCount: info.leaves, note: "SAOS-DEX checkpoint" },
+      data: {
+        fromHeight: info.fromHeight, toHeight: info.toHeight, root: info.root, stateRoot: info.stateRoot, leavesCount: info.leaves,
+        // FIX(Roast-65-a · MED-7): החלון-החתום נשמר-ל-DB (note = JSON של העלים) —
+        // שחזור-החותם אפשרי-גם-אחרי-ריסטארט (היה: החלון נעלם מיד-אחרי-החתימה)
+        note: canon({ kind: "SAOS-DEX checkpoint", blockHashes: info.blockHashes }),
+      },
     });
     rt.dbOk = true; // הצלחה מאשרת מחדש — הדגל לא נשאר דומם-לשלילה
   } catch { rt.dbOk = false; }
@@ -286,6 +466,7 @@ export function priceTruthFor(rt: ChainRT, base: string, quote: string): PriceTr
 
 function ladderCheck(rt: ChainRT): void {
   const st = rt.st;
+  if (rt.pendingLift) return; // FIX(Roast-65-a · MED-6): הרמה-קודמת עוד-לא-אושרה — אין-ערימת-כוונות
   if (st.height - st.ladder.lastLiftHeight < LADDER_EVERY) return;
   /* ── SETTLE-14 PRICE-TRUTH: הסולם-כמו-שדרה (keel), לא-מדרגות ──
    * היה: newRef = ref×1.005 בלי-קשר-לשוק — מדרגות-עולות-בלבד (2500→2686
@@ -307,14 +488,17 @@ function ladderCheck(rt: ChainRT): void {
   const step = Math.max(1, Math.min(Math.floor(ref * capPct), halfDev));
   const newRef = Math.max(1, ref + dir * step);
   const harvestMu = Math.min(st.ladder.stepCostMu, st.feeMeter);
-  rt.mempool.push({ type: "harvest", issuer: "treasury", nonce: sysNonce(st, "harv"), amount: harvestMu, memo: `keel-${dir > 0 ? "up" : "down"}` });
-  rt.mempool.push({ type: "asset_price", issuer: "treasury", nonce: sysNonce(st, "ladder"), asset: "SAOS", refPrice: newRef });
-  st.ladder.refPrice = newRef; // צפי-מקומי (ה-op יאשר על-הספר)
-  st.ladder.lastLiftHeight = st.height;
-  st.ladder.lifts++;
-  st.ladder.spentMu += harvestMu;
-  st.stats.ladders++;
-  pushReceipt(rt, "keel", { height: st.height, newRef, dir, devBps, step, harvestMu, twap: truth.twap, samples: truth.samples });
+  const harvestNonce = sysNonce(st, "harv");
+  const priceNonce = sysNonce(st, "ladder");
+  rt.mempool.push({ type: "harvest", issuer: "treasury", nonce: harvestNonce, amount: harvestMu, memo: `keel-${dir > 0 ? "up" : "down"}` });
+  rt.mempool.push({ type: "asset_price", issuer: "treasury", nonce: priceNonce, asset: "SAOS", refPrice: newRef });
+  // FIX(Roast-65-a · MED-6): הספרים לא נוגעים-כאן-עוד. הישן מוטט את st.ladder בשעת-הדחיפה
+  // (refPrice/lastLiftHeight/lifts/spentMu/stats.ladders) לפני-שה-ops אושרו — אם-harvest
+  // נדחה (אוצר/מד-עמלות ירדו-בין-הדחיפה לביצוע) המצב העיד הרמה-שלא-שולמה וה-op-log לא
+  // משחזר אותה. עכשיו: כוונה-בלבד (rt.pendingLift) — הספרים זזים רק-אחרי-r.ok של שני-
+  // ה-ops (buildBlock), ודחייה מתועדת-כנה בלי-שינוי-מצב.
+  rt.pendingLift = { newRef, harvestMu, h: st.height, harvestNonce, priceNonce };
+  pushReceipt(rt, "keel-intent", { height: st.height, newRef, dir, devBps, step, harvestMu, twap: truth.twap, samples: truth.samples });
 }
 
 async function buildBlock(rt: ChainRT): Promise<void> {
@@ -324,8 +508,30 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   let applied = 0;
   let rejected = 0;
   const rejSample: string[] = [];
+  // FIX(Roast-65-a · MED-6): מעקב-אישור-ה-ops-של-הרמה-הממתינה (harvest + asset_price)
+  let keelHarvest: boolean | null = null;
+  let keelPrice: boolean | null = null;
+  const trackKeel = (op: Op, ok: boolean): void => {
+    if (!rt.pendingLift) return;
+    if (op.nonce === rt.pendingLift.harvestNonce) keelHarvest = ok;
+    if (op.nonce === rt.pendingLift.priceNonce) keelPrice = ok;
+  };
   for (const op of ops) {
-    const r = applyOp(st, op, t0);
+    // FIX(Roast-65-a · MED-8): אטומיות-בלוק. הישן: זריקה-מ-applyOp באמצע-הלולאה הפילה
+    // את-כל-הבלוק אחרי-שה-ops-המוקדמים כבר שינו את st — מוטציות-חיות בלי blockHash/DB,
+    // 160-ה-ops נשפכו. עכשיו: try/catch-פר-op — כשל-לא-אינווריאנטי נרשם-כדחייה-כנה
+    // (אותו-נתיב של-r.err) והבלוק ממשיך-שלם. InvariantViolation עדיין-זורק (HALT-מוסדי).
+    let r: ReturnType<typeof applyOp>;
+    try {
+      r = applyOp(st, op, t0);
+    } catch (e) {
+      if (e instanceof InvariantViolation) throw e;
+      trackKeel(op, false);
+      rejected++;
+      if (rejSample.length < 5) rejSample.push(`${op.type}(${(op as { issuer?: string }).issuer ?? "?"}):${String(e instanceof Error ? e.message : e).slice(0, 60)}`);
+      continue;
+    }
+    trackKeel(op, r.ok);
     if (r.ok) {
       applied++;
       for (const ev of r.events ?? []) rt.tape.unshift({ ...ev, h: st.height });
@@ -336,6 +542,23 @@ async function buildBlock(rt: ChainRT): Promise<void> {
       // נראית ב-dev.log עם-הסיבה, והמונה-החי-חשוף ב-getState.rejectedLast.
       rejected++;
       if (rejSample.length < 5) rejSample.push(`${op.type}(${(op as { issuer?: string }).issuer ?? "?"}):${r.err}`);
+    }
+  }
+  // FIX(Roast-65-a · MED-6): אישור-הספרים-רק-אחרי-ששני-ה-ops-של-הכוונה אכן היו-בבלוק
+  // ואושרו. דחייה = לוג-רועש + קבלה-כנה, אפס-שינוי-ב-st.ladder (הכוונה נזרקת).
+  if (rt.pendingLift && keelHarvest !== null && keelPrice !== null) {
+    const pl = rt.pendingLift;
+    rt.pendingLift = null;
+    if (keelHarvest && keelPrice) {
+      st.ladder.refPrice = pl.newRef;
+      st.ladder.lastLiftHeight = pl.h;
+      st.ladder.lifts++;
+      st.ladder.spentMu += pl.harvestMu;
+      st.stats.ladders++;
+      pushReceipt(rt, "keel", { height: pl.h, newRef: pl.newRef, harvestMu: pl.harvestMu, confirmed: true });
+    } else {
+      console.warn(`[saos-dex][ALERT] keel lift at h${pl.h} NOT CONFIRMED (harvest=${keelHarvest} price=${keelPrice}) — ladder books untouched (Roast-65-a MED-6: no unpaid lifts in state)`);
+      pushReceipt(rt, "keel-rejected", { height: pl.h, newRef: pl.newRef, harvestOk: keelHarvest, priceOk: keelPrice });
     }
   }
   if (rejected > 0) {
@@ -365,7 +588,9 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   // אותו-חוק: בונה-הבלוקים הוא ה-keeper/solver — אפס-תשתית-חוץ, ריפליי-אמת.
   {
     const exec = (op: Op) => applyOp(st, op, t0);
-    const tickEvents = [...dcaTick(st, exec), ...trigTick(st, exec), ...protoRevTick(st, exec), ...cowSettle(st, exec, t0)];
+    // FIX(Roast-65-a · LOW-13): nowMs מוזרק-גם-ל-DCA/טריגרים — רישומי-הג'ורנל שלהם
+    // היו t:0 (זמן-מזויף) בניגוד-לתיקון-63/64 על-שאר-הנתיבים.
+    const tickEvents = [...dcaTick(st, exec, t0), ...trigTick(st, exec, t0), ...protoRevTick(st, exec), ...cowSettle(st, exec, t0)];
     for (const ev of tickEvents) rt.tape.unshift({ ...ev, h: st.height });
     feedPriceOracle(rt, tickEvents.length > 0 ? tickEvents : undefined, st.height);
     if (tickEvents.length > 0) rt.tape = rt.tape.slice(0, TAPE_CAP);
@@ -431,14 +656,18 @@ async function tick(rt: ChainRT): Promise<void> {
     if (rt.fuelSamples.length > 400) rt.fuelSamples.splice(0, rt.fuelSamples.length - 400);
     if (rt.tickCount % SNAPSHOT_EVERY === 0) flushSnapshot(rt);
   } catch (e) {
-    if (e instanceof InvariantViolation) {
+    // FIX(Roast-65-a · HIGH-1): CanonicalError (מצב-קנוני-רעיל — float/NaN/לא-שלם
+    // שחדר-למצב) היה-נופל-ל-catch-הגנרי: השרשרת המשיכה-להעלות-גובה-עיוור בכל-טיק
+    // בלי blockHash/seal/DB (halted=false), ו-getState/getMetrics/settle מתו 500 —
+    // שקט-מוחלט. עכשיו: אותו-משטר-כמו-InvariantViolation — HALT מוכרז עם-סיבה-פורנזית.
+    if (e instanceof InvariantViolation || e instanceof CanonicalError) {
       /* ── Fail-Fast מוסדי: הפרת-אינווריאנטה = מצב-עולם לא-מוגדר.
        * השרשרת מעלה-את-עצמה (HALT) — נשארת-חיה לקריאה/תצפית, אך מסרבת
        * לבנות בלוקים נוספים ממצב-חשוד. הזנקת-ALERT קשה לתצפית-תפעולית. */
       rt.halted = true;
       rt.haltReason = String(e.message).slice(0, 300); // פורנזי — חשוף ב-API ושרד-אתחול-מחדש
       if (rt.timer) { clearInterval(rt.timer); rt.timer = null; }
-      console.error(`[saos-dex][ALERT] INVARIANT VIOLATION — chain HALTED (fail-fast, refuses undefined state): ${e.message}`);
+      console.error(`[saos-dex][ALERT] INVARIANT VIOLATION / STATE-POISON — chain HALTED (fail-fast, refuses undefined state): ${e.message}`);
       return;
     }
     console.error("[saos-dex] tick error:", e instanceof Error ? e.message : e);
@@ -457,35 +686,52 @@ export function ensureChain(): ChainRT {
     fuelSamples: [],
     priceSamples: [],
     buildMsRolling: 0, opsPerSecRolling: 0, startedAt: Date.now(), lastBlockAt: 0,
-    faucetAt: {}, dbOk: true, halted: false, haltReason: null, version: 1,
+    dbOk: true, halted: false, haltReason: null, version: 1,
+    pendingLift: null, // FIX(Roast-65-a · MED-6)
     cachedRoot: null,
     rejectedLast: null,
   };
   g.__saosDexChain = rt;
-  // אתחול-אסינכרוני: תמונת-מצב → אחרת ג'נזיס; אחר-כך טיימר
+  // אתחול-אסינכרוני: תמונת-מצב (מאומתת) → אחרת ג'נזיס-מוצדק; אחר-כך טיימר
   void (async () => {
     const loaded = await loadSnapshot(rt);
-    if (!loaded) {
-      // ג'נזיס-טרי מחייב ניקוי-ראיות-DB (שורות-מריצה-קודמת = עדות-שקרית)
-      try {
-        await db.blockHeader.deleteMany({});
-        await db.sealRecord.deleteMany({});
-        await db.evidenceReceipt.deleteMany({});
-        await db.arenaJournal.deleteMany({});
-      } catch { rt.dbOk = false; }
-      // עוגן-ג'נזיס חתום מיד (בלוק-ראשון)
+    if (loaded === "corrupt") {
+      // FIX(Roast-65-a · HIGH-4): תמונה-קיימת-ופגומה = דחיית-אתחול fail-closed.
+      // הישן: !loaded → deleteMany על blockHeader+sealRecord+evidenceReceipt+arenaJournal
+      // (= טיהור-כל-שרשרת-העדויות) וג'נזיס-חדש בשקט. עכשיו: אף-ראיה לא נמחקת,
+      // אין-ג'נזיס-כפוי — השרשרת עוצרת-עם-haltReason-פורנזי (ה-DB כולו נשאר ראיה).
+      rt.halted = true;
+      rt.haltReason = "snapshot-integrity-failed: load refused, evidence preserved (operator reset is the explicit recovery path)";
+      console.error("[saos-dex][ALERT] BOOT REFUSED — snapshot failed integrity verification; chain HALTED without touching any evidence row. Recovery: explicit operator reset.");
+      return;
+    }
+    if (loaded === "absent") {
+      // אין-תמונה כלל: ג'נזיס לגיטימי רק אם-אין-עדויות-קודמות ב-DB — אחרת זה
+      // "ג'נזיס-מעל-היסטוריה" שמנותק את שרשרת-העדויות בשקט (השקר-הישן: deleteMany).
+      let prior = 0;
+      try { prior = await db.blockHeader.count(); } catch { rt.dbOk = false; }
+      if (prior > 0) {
+        rt.halted = true;
+        rt.haltReason = `genesis-refused: ${prior} block headers exist in DB but no snapshot — continuity cannot be fabricated; explicit operator reset required`;
+        console.error(`[saos-dex][ALERT] BOOT REFUSED — no snapshot but ${prior} block headers in DB; genesis would orphan that evidence. Chain HALTED, evidence untouched.`);
+        return;
+      }
+      // ג'נזיס-טרי אמת (בסיס-ריק בהכרח) — עוגן-ג'נזיס חתום מיד (בלוק-ראשון)
       await buildBlock(rt);
       pushReceipt(rt, "genesis", { root: stateRoot(rt.st), at: Date.now() });
-    } else {
-      // ראיות-מעבר-לתמונת-המצב הן-שאריות-מריצה-קודמת (נחתמו-אחרי-הסנפלוט האחרון
-      // ולא הספיקו-להיכלל) — ניקוי-כנה כדי-שהכתיבה-החוזרת לא תתנגש (unique-height)
-      try {
-        const stale = await db.blockHeader.deleteMany({ where: { height: { gt: rt.st.height } } });
-        if (stale.count > 0) console.info(`[saos-dex] purged ${stale.count} stale block headers beyond snapshot h${rt.st.height} (prior-run evidence)`);
-      } catch { rt.dbOk = false; }
+      console.info(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… (genesis — verified empty DB)`);
+      rt.timer = setInterval(() => void tick(rt), TICK_MS);
+      return;
     }
+    // ראיות-מעבר-לתמונת-המצב הן-שאריות-מריצה-קודמת (נחתמו-אחרי-הסנפלוט האחרון
+    // ולא הספיקו-להיכלל) — ניקוי-צר-וכנה בלבד: רק-גבהים-מעל-התמונה-המאומתת
+    // (הישן היה-מוכן-למחוק-הכל; כאן הכלל-הוא רק-הזנב שמעבר לגובה-המאומת)
+    try {
+      const stale = await db.blockHeader.deleteMany({ where: { height: { gt: rt.st.height } } });
+      if (stale.count > 0) console.info(`[saos-dex] purged ${stale.count} stale block headers beyond snapshot h${rt.st.height} (prior-run evidence)`);
+    } catch { rt.dbOk = false; }
     rt.timer = setInterval(() => void tick(rt), TICK_MS);
-    console.info(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… ${loaded ? "(snapshot)" : "(genesis)"}`);
+    console.info(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… (snapshot — verified vs DB stateRoot)`);
   })();
   return rt;
 }
@@ -521,9 +767,12 @@ export function nextNonce(prefix: string): string {
 
 export function operatorFaucet(): { ok: boolean; reason?: string } {
   const rt = ensureChain();
-  const last = rt.faucetAt["operator"] ?? 0;
+  // FIX(Roast-65-a · LOW-11): ה-cooldown עבר-למצב (st.faucetAt ב-DexState) — היה
+  // זיכרון-מודול: כל-ריסטארט איפס אותו → +1M SAOS+2.5M USDS-מהאוצר-פר-הפעלה-מחדש.
+  // במצב = שורד-ריסטארט, נכלל-בתמונה ובשורש.
+  const last = rt.st.faucetAt?.["operator"] ?? 0;
   if (Date.now() - last < 60_000) return { ok: false, reason: "cooldown-60s" };
-  rt.faucetAt["operator"] = Date.now();
+  rt.st.faucetAt = { ...(rt.st.faucetAt ?? {}), operator: Date.now() };
   rt.mempool.push({ type: "transfer", issuer: "treasury", nonce: sysNonce(rt.st, "faucet-s"), to: "operator", asset: "SAOS", amount: 1_000_000 });
   rt.mempool.push({ type: "transfer", issuer: "treasury", nonce: sysNonce(rt.st, "faucet-u"), to: "operator", asset: "USDS", amount: 2_500_000 });
   return { ok: true };
@@ -591,6 +840,7 @@ export function getPools() {
     key, a: p.a, b: p.b, ra: p.ra, rb: p.rb, lp: p.lp,
     mid: poolMid(p), swaps: p.swaps, feeAccruedTreasury: p.feeAccruedTreasury,
     k: p.ra * p.rb,
+    feeBps: effectiveFeeBps(p), // FIX(Roast-65-c · F4): העמלה-הדינמית-האפקטיבית חשופה-ל-UI (היה-חייב-ניחוש-של-30bps-קבוע)
   }));
 }
 
@@ -692,10 +942,15 @@ export function getProofs() {
   return {
     seals: rt.seals.slice(0, 8),
     latest,
-    leaves: latest ? rt.blockHashes.length : 0,
+    // FIX(Roast-65-a · MED-7): הישן הציג rt.blockHashes.length — החלון-הבא-שטרם-נחתם
+    // (0 מיד-אחרי-כל-חותם!) מתומכת-שקרית כ"עלי-החותם". עכשיו: מספר-העלים-החתומים.
+    leaves: latest ? latest.leaves : 0,
+    sealedLeaves: latest ? latest.blockHashes : [], // העלים-שנחתמו-בפועל (החלון-החתום)
     receipts: rt.receipts.slice(0, 10),
     howToVerify: [
-      "קח את רשימת hashי-הבלוקים (leaves) מה-API",
+      // FIX(Roast-65-a · MED-7): ההדרכה-הישנה כיוונה ל"רשימת-hashי-הבלוקים מה-API" —
+      // בפועל אלו היו החלון-החי-הבא (לא-החתום) והאימות-היה נכשל/מטעה לכל-אורך-מחזור-ה-12.
+      "קח את עלי-החותם-האחרון מ-/api/dex/proofs (leaves — החלון-החתום, מה-DB) או מ-sealedLeaves/latest.blockHashes",
       "FIX(Roast-64) סכמה-מוגנת-CVE-2012-2459: עלה = sha256(0x00‖leaf) · צומת = sha256(0x01‖L‖R) · עלה-אחרון-אי-זוגי מוכפל · שורש = sha256(0x02‖uint32le(מספר-עלים)‖top)",
       "השווה ל-root — שוויון = הבלוקים כלולים בחותם, בלי לסמוך עלינו",
     ],
@@ -707,9 +962,11 @@ export function getLatestSealLeaves(): string[] | null {
   const rt = ensureChain();
   const latest = rt.seals[0];
   if (!latest) return null;
-  // העלים של-החותם-האחרון נשמרים-עד-החותם-הבא — אנחנו מחזיקים את-החלון הנוכחי;
-  // לשחזור-חוצה-חלון: BlockHeader.hash ב-DB (ראיות-מתמשכות)
-  return rt.blockHashes;
+  // FIX(Roast-65-a · MED-7): הישן החזיר את החלון-הנוכחי-החי (הבא-שטרם-נחתם) וההערה
+  // "העלים נשמרים-עד-החותם-הבא" שיקרה פעמיים: הם נמחקו מיד-בחותם, ומעולם לא היו
+  // העלים-שנחתמו. עכשיו: העלים-החתומים-עצמם (SealInfo.blockHashes — נשמר-פר-חותם
+  // וגם-ב-DB ב-SealRecord.note). ההשוואה מול latest.root היא אמת.
+  return latest.blockHashes ?? null;
 }
 
 /** גרסה-מונוטונית של מצב-העולם (long-polling מבוסס-אירוע) */
@@ -811,10 +1068,11 @@ export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: numbe
 export async function resetChain(): Promise<void> {
   const rt = ensureChain();
   if (rt.timer) clearInterval(rt.timer);
-  rt.st = genesisState();
+  rt.st = genesisState(); // faucetAt/extClaims/feesSpentMu — כבר-בג'נזיס-הטרי (FIX(Roast-65-a · LOW-11))
   rt.mempool = []; rt.rt = new Map(); rt.tape = [];
   rt.blockHashes = []; rt.seals = []; rt.receipts = [];
-  rt.lastReceiptDigest = null; rt.tickCount = 0; rt.faucetAt = {};
+  rt.lastReceiptDigest = null; rt.tickCount = 0;
+  rt.pendingLift = null; // FIX(Roast-65-a · MED-6): כוונת-סולם של-העידן-הקודם אינה-רלוונטית
   // FIX(SETTLE-7 reset-hygiene): הטבעת-הדגימה לא-נוקתה — אחרי-reset החלון
   // ערבב-עידנים (dh שלילי → שריפה שלילית → ריצה-שלילית = טלמטריה-משקרת —
   // בדיוק-מה-SETTLE-5 ריפא). וגם: chain-מושהית (halted) נשארה-מתה-אחרי-reset

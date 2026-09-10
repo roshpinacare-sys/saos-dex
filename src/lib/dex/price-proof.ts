@@ -24,7 +24,7 @@
 import type { DexState } from "./kernel";
 import { getPool, poolMid, poolMidFor } from "./amm";
 import { sortBook } from "./book";
-import { assertAllowedHost } from "./fence";
+import { fencedFetch } from "./fence"; // FIX(Roast-65-b · H2): גדר + redirect:error מרוכזים
 import { onrampSnapshot } from "@/lib/onramp";
 
 // ─── פידים-חוץ-אמת — שרשרת-מקורות-ממוינת (Task 58: עמידות-ל-429/השבתות) ───────
@@ -117,11 +117,11 @@ function feedRt(): FeedRT {
 const EMPTY_USD: Record<FeedKey, number | null> = { steem: null, hive: null, hbd: null, blurt: null, eth: null, sol: null, bnb: null, trx: null, btc: null };
 
 async function fetchOne(s: FeedSource): Promise<Partial<Record<FeedKey, number | null>>> {
-  assertAllowedHost(s.url, s.where);
+  // FIX(Roast-65-b · H2): דרך-fencedFetch — גדר + redirect:error (פיד-עוין-שמנתה לא-משחזר-בקשות)
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), 8_000);
   try {
-    const r = await fetch(s.url, { signal: ac.signal, cache: "no-store", headers: { accept: "application/json" } });
+    const r = await fencedFetch(s.url, s.where, { signal: ac.signal, cache: "no-store", headers: { accept: "application/json" } });
     if (!r.ok) throw new Error(`${s.name} ${r.status}`);
     return s.parse(await r.json());
   } finally {
@@ -239,10 +239,10 @@ export function blurtProbe(): "ok" | "rpc-down" | "unknown" {
 }
 async function fetchBlurtHead(): Promise<BlurtHead | null> {
   try {
-    assertAllowedHost(BLURT_NODE, "price-proof/blurt");
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), 10_000);
-    const r = await fetch(BLURT_NODE, {
+    // FIX(Roast-65-b · H2): דרך-fencedFetch — גדר + redirect:error (ראש-BLURT)
+    const r = await fencedFetch(BLURT_NODE, "price-proof/blurt", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [[HEAD_ACCOUNT]], id: 1 }),
       signal: ac.signal, cache: "no-store",
@@ -262,7 +262,8 @@ async function fetchBlurtHead(): Promise<BlurtHead | null> {
     const bf = g.__saosBlurtBpFactor;
     if (bf.f === null || Date.now() - bf.at > 10 * 60_000) {
       try {
-        const pr = await fetch(BLURT_NODE, {
+        // FIX(Roast-65-b · H2): דרך-fencedFetch — גדר + redirect:error (גורם-BP-חי)
+        const pr = await fencedFetch(BLURT_NODE, "price-proof/blurt-factor", {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ jsonrpc: "2.0", method: "condenser_api.get_dynamic_global_properties", params: [], id: 1 }),
           signal: AbortSignal.timeout(10_000), cache: "no-store",

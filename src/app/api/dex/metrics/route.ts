@@ -77,7 +77,7 @@ export async function GET(req: Request) {
   // ── אינוואריאנטות (ברזל) ──
   push("saos_invariant_credits_ok", audit.credits.ok ? 1 : 0, "Σcredits+gasUsed−feeMinted === genesis");
   push("saos_invariant_escrow_ok", audit.escrow.ok ? 1 : 0, "Σlocks === Σorder lockMu, avail ≥ 0");
-  push("saos_invariant_fees_ok", audit.fees.ok ? 1 : 0, "poolsTreasury === feeMeter+profit+minted");
+  push("saos_invariant_fees_ok", audit.fees.ok ? 1 : 0, "poolsTreasury === feeMeter+profit+minted-feesSpent (FIX Roast-65-a HIGH-3d)");
   push("saos_invariant_negatives", audit.negatives.length, "accounts with negative balances (must stay 0)");
 
   // ── פסי-עיגון (relay) ──

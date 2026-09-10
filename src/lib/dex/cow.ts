@@ -222,7 +222,8 @@ function fallback(st: DexState, exec: Exec, o: CowOrder, rem: number, h: number,
   // cow_order לא-מחייב-יתרה-בעת-ההצבה (רק-נועל ערבות), והנעילה כבר-שוחררה
   // בראש-הסליקה → הכסף-כבר-פנוי-במלואו. addBal כאן היה **הדפסת-כסף**
   // (אינפלציה-של-Σיתרות → אודיט-שימור-נכשל → HALT). השאר-רק-רישום-כנה.
-  st.journal.push({ h, t: 0, soldier: "cow", action: "cow_refund", note: `cow-${o.seq}: שארית ${rem}µ ${assetIn} נשארת-פנויה-אצל-${o.owner} (${r2.err ?? "no-route"}) — לא-הוחזרה-כפול` });
+  // FIX(Roast-65-a · LOW-13): t:0 היה-זמן-מזויף — nowMs (זמן-הבלוק) מוזרק-כמו-כל-נתיבי-הסליקה.
+  st.journal.push({ h, t: nowMs, soldier: "cow", action: "cow_refund", note: `cow-${o.seq}: שארית ${rem}µ ${assetIn} נשארת-פנויה-אצל-${o.owner} (${r2.err ?? "no-route"}) — לא-הוחזרה-כפול` });
 }
 
 /** הדוח-החי ל-UI — הכל-מהמצב-האמת */

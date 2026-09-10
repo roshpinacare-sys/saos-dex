@@ -46,8 +46,10 @@ export function legToOp(leg: Leg, minOutBps: number, nonce: string): Op | null {
 const DCA_MAX_SLICES_PER_BLOCK = 2; // תקרת-פרוסות-פר-בלוק (דטרמיניסטי)
 
 /** טיק-DCA — נקרא מ-buildBlock (אחרי-ה-ops, לפני-העלאת-הגובה).
- * exec = applyOp ישירות-על-המצב-החי. מחזיר אירועי-מסחר-אמת לטייפ/עדות-מחיר. */
-export function dcaTick(st: DexState, exec: (op: Op) => ReturnType<typeof import("./kernel").applyOp>): TradeEvent[] {
+ * exec = applyOp ישירות-על-המצב-החי. מחזיר אירועי-מסחר-אמת לטייפ/עדות-מחיר.
+ * FIX(Roast-65-a · LOW-13): nowMs מוזרק-מ-buildBlock — רישומי-הג'ורנל כאן היו t:0
+ * (זמן-מזויף) בניגוד-לחוק-63/64 שקבע journal.t=זמן-הבלוק-בכל-הנתיבים האחרים. */
+export function dcaTick(st: DexState, exec: (op: Op) => ReturnType<typeof import("./kernel").applyOp>, nowMs: number): TradeEvent[] {
   const h = st.height;
   if (h <= 0) return [];
   const events: TradeEvent[] = [];
@@ -92,11 +94,11 @@ export function dcaTick(st: DexState, exec: (op: Op) => ReturnType<typeof import
         applied.lastH = h;
       }
       if (r.ok && r.events) events.push(...r.events);
-      st.journal.push({ h, t: 0, soldier: "dca", action: "dca_slice", note: `${prog.id} פרוסה-${(applied?.done ?? 1)}: ${slice}µ ${prog.assetIn}→${prog.assetOut}` });
+      st.journal.push({ h, t: nowMs, soldier: "dca", action: "dca_slice", note: `${prog.id} פרוסה-${(applied?.done ?? 1)}: ${slice}µ ${prog.assetIn}→${prog.assetOut}` });
     } else {
       // נדחה — הערבות חוזרת-לנעילה, התוכנית ממתינה-למחזור-הבא (כנות-מלאה)
       addLock(st, prog.owner, prog.assetIn, slice);
-      st.journal.push({ h, t: 0, soldier: "dca", action: "dca_slice_reject", note: `${prog.id}: ${r.err}` });
+      st.journal.push({ h, t: nowMs, soldier: "dca", action: "dca_slice_reject", note: `${prog.id}: ${r.err}` });
     }
     budget -= 1;
   }
@@ -108,7 +110,7 @@ const TRIG_MAX_FIRES_PER_BLOCK = 3; // תקרת-ביצועים-פר-בלוק (ד
 /** טיק-טריגרים — סריקה-כל-בלוק מול-המחיר-הקנוני (mid-בריכה).
  * sell נורה כשהמחיר ≤ trigger (stop-loss/take-profit על-עמדה-ארוכה);
  * buy נורה כשהמחיר ≥ trigger. תפוגה משחררת-ערבות-בכנות. */
-export function trigTick(st: DexState, exec: (op: Op) => ReturnType<typeof import("./kernel").applyOp>): TradeEvent[] {
+export function trigTick(st: DexState, exec: (op: Op) => ReturnType<typeof import("./kernel").applyOp>, nowMs: number): TradeEvent[] {
   const h = st.height;
   if (h <= 0) return [];
   const events: TradeEvent[] = [];
@@ -122,7 +124,7 @@ export function trigTick(st: DexState, exec: (op: Op) => ReturnType<typeof impor
       const effPx = trg.limitPx > 0 ? trg.limitPx : trg.triggerPx;
       addLock(st, trg.owner, lockAsset, -(trg.side === "sell" ? trg.amountMu : notional(effPx, trg.amountMu)));
       const map = { ...(st.trig ?? {}) }; delete map[trg.id]; st.trig = map;
-      st.journal.push({ h, t: 0, soldier: "trig", action: "trig_expire", note: `${trg.id} פג-תוקף, ערבות שוחררה` });
+      st.journal.push({ h, t: nowMs, soldier: "trig", action: "trig_expire", note: `${trg.id} פג-תוקף, ערבות שוחררה` });
       continue;
     }
     const pool = getPool(st, [trg.base, trg.quote].sort().join("/"));
@@ -146,11 +148,11 @@ export function trigTick(st: DexState, exec: (op: Op) => ReturnType<typeof impor
     // st.trig-החי-בעת-המחיקה.
     if (r.ok) {
       if (r.events) events.push(...r.events);
-      st.journal.push({ h, t: 0, soldier: "trig", action: "trig_fire", note: `${trg.id} נורה @${mid} (trigger ${trg.triggerPx})` });
+      st.journal.push({ h, t: nowMs, soldier: "trig", action: "trig_fire", note: `${trg.id} נורה @${mid} (trigger ${trg.triggerPx})` });
     } else {
       // נדחה — הערבה חוזרת, ניסיון-חוזר-בבלוק-הבא (כנות)
       addLock(st, trg.owner, lockAsset, lockMu);
-      st.journal.push({ h, t: 0, soldier: "trig", action: "trig_fire_reject", note: `${trg.id}: ${r.err}` });
+      st.journal.push({ h, t: nowMs, soldier: "trig", action: "trig_fire_reject", note: `${trg.id}: ${r.err}` });
       st.trig = { ...(st.trig ?? {}), [trg.id]: trg };
       budget -= 1;
       continue;

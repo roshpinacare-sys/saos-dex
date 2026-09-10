@@ -31,7 +31,7 @@ const sandboxDir = fs.mkdtempSync(path.join(os.tmpdir(), "saos-chaos-"));
 process.env.SAOS_DEX_STATE_DIR = sandboxDir;
 
 /* ── טיפוסי-עזר (type-only — לא גוררים את chain.ts לזמן-ריצה) ── */
-interface SealInfo { fromHeight: number; toHeight: number; root: string; stateRoot: string; leaves: number; at: number; digest: string }
+interface SealInfo { fromHeight: number; toHeight: number; root: string; stateRoot: string; leaves: number; at: number; digest: string; blockHashes: string[] } // FIX(Roast-65-a · MED-7): החותם נושא-את-החלון-החתום (עותק-קנוני-של-chain.SealInfo)
 interface BreakerView { state: string; failures: number; openedAt: number | null; trips: number }
 interface ChainStateView { enabled: boolean; status: string; lastError: string | null; anchored: number; verified: number; mismatches: number; breaker: BreakerView }
 interface RelayStatusView {
@@ -98,6 +98,9 @@ async function main(): Promise<void> {
       root: canonical.sha256(`chaos-block-root-${n}`),
       stateRoot: canonical.sha256(`chaos-state-root-${n}`),
       leaves: 12, at: Date.now(), digest: "",
+      // FIX(Roast-65-a · MED-7): SealInfo נושא-עתה את החלון-החתום (blockHashes) —
+      // עותק-סינתטי-עקבי לבדיקת-הכאוס (12-עלים מזויפים-דטרמיניסטית)
+      blockHashes: Array.from({ length: 12 }, (_, i) => canonical.sha256(`chaos-block-${n}-${i}`)),
     };
     info.digest = canonical.sha256(canonical.canon(info));
     return info;

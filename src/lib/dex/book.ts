@@ -44,7 +44,7 @@ export function sortBook(st: DexState, base: string, quote: string, side: "buy" 
  * פיוס-אבק, fail-closed על-consume-אחרי-נעילה). קוד-מת-כאן = מלכודת-דריפט:
  * עורך-עתידי "מתקן" פה ולא משנה-דבר. */
 
-export function cancelOrder(st: DexState, op: Op, consume: () => OpResult | null): OpResult {
+export function cancelOrder(st: DexState, op: Op, consume: () => OpResult | null, gas = 0): OpResult {
   const o = st.orders.find((x) => x.id === op.orderId);
   if (!o || !o.live) return { ok: false, err: "order-not-found", gas: 0 };
   if (o.owner !== op.issuer) return { ok: false, err: "not-owner", gas: 0 };
@@ -58,7 +58,8 @@ export function cancelOrder(st: DexState, op: Op, consume: () => OpResult | null
   // Formal Assertion: ביטול משחרר רק-נעילה שקיימת — נעילה שלילית = שחיתות-מצב
   invariant(lockedOf(st, o.owner, o.side === "sell" ? o.base : o.quote) >= 0, "escrow-underflow:cancel");
   o.live = false;
-  return { ok: true, gas: 0 };
+  // FIX(Roast-65-a · LOW-12): היה gas:0 למרות-consume-חייב 15 — החוזה {ok,gas} שיקר.
+  return { ok: true, gas };
 }
 
 /** matchBook — טייקר חוצה את הספר; מילוי במחיר-מייקר; שארית של limit נחה בספר.
@@ -80,6 +81,7 @@ export function matchBook(
   st: DexState, op: Op, nowMs: number,
   consume: () => OpResult | null,
   preLocked = false, // FIX(SETTLE-7): נתיב-"order" נועל-מראע בגרעין — כאן מדלגים על בדיקת-הזמין הכפולה
+  gas = 0, // FIX(Roast-65-a · LOW-12): הגז-שנחייב-בפועל (חוזה-{ok,gas} של-הגרעין — היה-מדווח 0)
 ): OpResult {
   const base = op.base, quote = op.quote, side = op.side;
   if (!base || !quote || (side !== "buy" && side !== "sell")) return { ok: false, err: "bad-fill", gas: 0 };
@@ -199,7 +201,7 @@ export function matchBook(
     });
   }
   st.orders = st.orders.filter((o) => o.live);
-  return { ok: true, gas: 0, events };
+  return { ok: true, gas, events }; // FIX(Roast-65-a · LOW-12): gas אמת (היה 0 אחרי-חיוב-חי)
 }
 
 /** order_gc — אוסף-גרוטאות פרוטוקולי (grid98): מונע נפיחת-מצב */
