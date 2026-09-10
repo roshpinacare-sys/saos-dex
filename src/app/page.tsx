@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Crown, Layers, Landmark, List, Lock,
+  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Crosshair, Crown, Layers, Landmark, List, Lock,
   RefreshCcw, Route as RouteIcon, ShieldCheck, Wallet, Zap, Waves, GaugeCircle, Droplets, Scale,
 } from "lucide-react";
 import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
@@ -1673,11 +1673,25 @@ interface TruthAsset {
   divBps: number | null; verdict: string; exitPath: string; blocker: string | null;
 }
 interface TruthStep { n: number; what: string; status: string; valueUsd: number | null; detail: string; zeroFee: boolean }
+interface RealVenueView {
+  ok: boolean;
+  account: string;
+  chain: string;
+  real: boolean;
+  balances: { steem: number; sbd: number; spOwn: number; spDelegatedOut: number };
+  steemUsd: number | null;
+  powerdown: { active: boolean; weeks: number; weeklySp: number; remainingSp: number; remainingWeeks: number; nextPayout: string | null; rcFuelSp: number };
+  book: { bestBid: number | null; bestAsk: number | null; spreadBps: number | null };
+  openOrders: { id: number; sell: string; receive: string; price: string; created: string }[];
+  fills: { at: string; side: string; paid: string; received: string; price: string }[];
+  verdict: string;
+}
 interface TruthView {
   ok: boolean; at: string; height: number; feedOk: boolean; feedStale: boolean;
   assets: TruthAsset[];
   rail: { wblurt: { listed: boolean; backingMu: number; liveBlurtMu: number; liveAccount: string; verified: boolean; mintedNowMu: number; note: string } };
   ladder: TruthStep[];
+  realVenue?: RealVenueView | { ok: false; error: string };
   totals: { estateRealUsd: number | null; estateLockedUsd: number | null; usdsSupplyMu: number; usdsRealCoveragePct: number | null; conclusion: string };
   honesty: string;
 }
@@ -1758,6 +1772,45 @@ function TruthPanel() {
               המסילה-האמת-הראשונה: כל-µWBLURT מגובה-1:1 ב-BLURT-אמת על-השרשרת (מאומת-חי מול-blurt-rpc בכל-קריאה) · burn→BLURT-אמת→שוק-חוץ · אפס-עמלת-העברה.
             </p>
           </div>
+
+          {/* ══ Task 62: חיילים-על-שוק-אמיתי · THE-REAL-GRID ══ */}
+          {t.realVenue && "balances" in t.realVenue && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3" data-testid="real-grid">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <span className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-amber-300" dir="ltr">
+                  <Crosshair className="h-3 w-3" /> THE-REAL-GRID · חיילים-על-{t.realVenue.chain}
+                </span>
+                <span className="flex items-center gap-2 font-mono text-[9px]" dir="ltr">
+                  <Pill tone="green">REAL-MARKET</Pill>
+                  {t.realVenue.powerdown.active && <Pill tone="gold">POWERDOWN-LIVE</Pill>}
+                </span>
+              </div>
+              <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-4" data-testid="real-grid-stats">
+                <Stat label="SP-זורם/שבוע" value={`${t.realVenue.powerdown.weeklySp.toFixed(1)} SP`} sub={t.realVenue.powerdown.nextPayout ? `תשלום-הבא ${t.realVenue.powerdown.nextPayout.slice(0, 10)}` : "—"} />
+                <Stat label="נותר-לשחרור" value={`${t.realVenue.powerdown.remainingSp.toFixed(0)} SP`} sub={`${t.realVenue.powerdown.remainingWeeks} שבועות · דלק-RC ${t.realVenue.powerdown.rcFuelSp.toFixed(0)} SP`} />
+                <Stat label="נזיל-על-השרשרת" value={`${t.realVenue.balances.steem.toFixed(3)} STEEM · ${t.realVenue.balances.sbd.toFixed(3)} SBD`} sub={t.realVenue.steemUsd !== null ? `STEEM $${t.realVenue.steemUsd.toFixed(4)} חי` : "מחיר-חוץ —"} />
+                <Stat label="ספר-אמת" value={t.realVenue.book.bestBid !== null && t.realVenue.book.bestAsk !== null ? `${t.realVenue.book.bestBid.toFixed(4)} / ${t.realVenue.book.bestAsk.toFixed(4)}` : "—"} sub={t.realVenue.book.spreadBps !== null ? `spread ${t.realVenue.book.spreadBps}bps · סוחרים-אמיתיים` : "STEEM/SBD"} />
+              </div>
+              <div className="mt-1.5 space-y-0.5 font-mono text-[9px]" dir="ltr" data-testid="real-grid-orders">
+                {t.realVenue.openOrders.length > 0 ? (
+                  t.realVenue.openOrders.map((o) => (
+                    <p key={o.id} className="rounded bg-zinc-950/60 px-2 py-1 text-emerald-300">
+                      LIVE ORDER #{o.id} · sell {o.sell} → receive {o.receive} @ {o.price} · created {o.created.slice(0, 10)}
+                    </p>
+                  ))
+                ) : (
+                  <p className="rounded bg-zinc-950/60 px-2 py-1 text-zinc-500">אין-הזמנה-חיה · ערוץ-ההזמנות-האמת פתוח (operator POST action=place)</p>
+                )}
+                {t.realVenue.fills.slice(0, 3).map((f, i) => (
+                  <p key={i} className="px-2 text-zinc-500">FILL {f.side} · {f.paid} → {f.received} @ {f.price} · {f.at.slice(0, 10)}</p>
+                ))}
+              </div>
+              <p className="mt-1 text-[9px] leading-snug text-zinc-600">
+                כנות-מלאה: הארנה-הפנימית (SAOS/USDS · WSTEEM/USDS) = סימולציה-ריבונית — הגריד-שם מתאמן אך אינו מרוויח כסף-אמת.
+                הזמנה-זו = הגריד-האמת-הראשונה: ספר-ציבורי-על-השרשרת, יישוב-מול-סוחרים-אמיתיים, אפס-עמלת-מסחר — דבר-גורר-דבר: כל-תשלום-שבועי-של-ה-SP זורם לגריד-האמת.
+              </p>
+            </div>
+          )}
 
           {/* סולם-היציאה */}
           <div className="space-y-1" data-testid="truth-ladder">
