@@ -53,7 +53,7 @@ function seedTargets(st: DexState): { key: string; pool: Pool; treasuryShareBps:
 /** הזרעת-USDS-לבריכה: שני-הצדדים-פרופורציונלית-ליחס-הרזרבות הנוכחי, LP-מוטבע
  * לאוצר — שכפול-מדויק של-מתמטיקת poolAdd אך-מהפרוטוקול-עצמו (בלי-עמלה-עצמית).
  * אם-לאוצר אין-מספיק-מהצד-השני — מצמצמים-לפי-הצד-המחסום (כנות, לא-הדפסה). */
-function seedPool(st: DexState, key: string, p: Pool, usdsBudgetMu: number): number {
+function seedPool(st: DexState, key: string, p: Pool, usdsBudgetMu: number, nowMs: number): number {
   if (usdsBudgetMu < ALE_MIN_SEED || p.ra <= 0 || p.rb <= 0) return 0;
   // איזה-צד-הוא-USDS (ממוין-אלפבתית — USDS יכול-להיות a או b)
   const usdsIsA = p.a === "USDS";
@@ -73,9 +73,14 @@ function seedPool(st: DexState, key: string, p: Pool, usdsBudgetMu: number): num
   addBal(st, "treasury", "USDS", -addUsds);
   addBal(st, "treasury", otherAsset, -addOther);
   if (usdsIsA) { p.ra += addUsds; p.rb += addOther; } else { p.rb += addUsds; p.ra += addOther; }
+  // FIX(Roast-66 · lp-supply-ghost): ההטבעה-הייתה-חצי-פעולה — addBal(LP) בלי p.lp +=
+  // → כל-pol_seed יצר-LP-רפאים: Σbal(LP|) גדל-והמונה-הקנוני של-הבריכה נשאר →
+  // implied = pool.lp − Σbal צנח-בכל-מחזור (הוכח-חי: HALT h20808, drift −4,448).
+  // עכשיו: שיקוף-מלא של-מתמטיקת poolAdd — המונה-והיתרה-זזים-יחד, אפס-רפאים.
+  p.lp += lpMint;
   addBal(st, "treasury", LP_ASSET_PREFIX + key, lpMint);
   st.journal.push({
-    h: st.height, t: 0, soldier: "ale", action: "pol_seed",
+    h: st.height, t: nowMs, soldier: "ale", action: "pol_seed",
     profitMu: addUsds, note: `POL-seed ${key}: +${addUsds}µ USDS +${addOther}µ ${otherAsset} → ${lpMint}µ LP`,
   });
   return addUsds;
@@ -86,7 +91,7 @@ function seedPool(st: DexState, key: string, p: Pool, usdsBudgetMu: number): num
  * אינו-גובה-עמלה-מעצמו — כנות): ממירים-USDS→otherAsset במתמטיקת-בריכה טהורה.
  * חגורת-בטיחות: פגיעה-במחיר-מוגבלת — swapIn ≤ rUsds/9 (≈סף-10% פגיעה).
  */
-function acquireOther(st: DexState, p: Pool, usdsWantedMu: number): number {
+function acquireOther(st: DexState, p: Pool, usdsWantedMu: number, nowMs: number): number {
   const usdsIsA = p.a === "USDS";
   const rIn = usdsIsA ? p.ra : p.rb;   // רזרבת-USDS
   const rOut = usdsIsA ? p.rb : p.ra;  // רזרבת-הצד-השני
@@ -100,7 +105,7 @@ function acquireOther(st: DexState, p: Pool, usdsWantedMu: number): number {
   addBal(st, "treasury", usdsIsA ? p.b : p.a, out);
   if (usdsIsA) { p.ra += swapIn; p.rb -= out; } else { p.rb += swapIn; p.ra -= out; }
   st.journal.push({
-    h: st.height, t: 0, soldier: "ale", action: "pol_acquire",
+    h: st.height, t: nowMs, soldier: "ale", action: "pol_acquire",
     note: `acquire ${out}µ ${usdsIsA ? p.b : p.a} ב-${swapIn}µ USDS (פגיעה-מוגבלת ≤10%)`,
   });
   return out;
@@ -109,7 +114,7 @@ function acquireOther(st: DexState, p: Pool, usdsWantedMu: number): number {
 /** ה-מחזור-האוטונומי — נקרא-מ-economyTick (buildBlock) על-כל-גובה.
  * יעדים: בריכות-המכילות-USDS (אנחנו-מזריעים-מהעמלות שהן-USDS), ממוינות
  * לפי-חלק-האוצר-העולה (הכי-דל-POL קודם) — דטרמיניסטי-מלא. */
-export function aleTick(st: DexState): void {
+export function aleTick(st: DexState, nowMs: number): void {
   const h = st.height;
   if (h <= 0 || h % ALE_EVERY !== 0) return;
   const targets = seedTargets(st).filter((t) => t.pool.a === "USDS" || t.pool.b === "USDS");
@@ -131,9 +136,9 @@ export function aleTick(st: DexState): void {
     if (slice < ALE_MIN_SEED) break;
     const t = targets[i];
     // שלב-א: רכישת-הצד-השני-מהבריכה (חצי-הסלייס — השני-נשאר-USDS-לזריעה)
-    acquireOther(st, t.pool, Math.floor(slice / 2));
+    acquireOther(st, t.pool, Math.floor(slice / 2), nowMs);
     // שלב-ב: זריעת-שני-הצדדים-כנזילות-בעלות-פרוטוקול
-    seeded += seedPool(st, t.key, t.pool, slice);
+    seeded += seedPool(st, t.key, t.pool, slice, nowMs);
   }
   if (seeded <= 0) return;
   const a = st.ale ?? { lastH: h, cycles: 0, seededMu: 0, seeds: 0, polBaseUsdsMu: 0 };

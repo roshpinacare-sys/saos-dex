@@ -271,7 +271,7 @@ export function protoRevSpreads(st: DexState) {
 /** הרצת-הארב — נקרא-מ-buildBlock (אחרי-ה-ops, לפני-העלאת-הגובה).
  * עד-PROTREV_MAX_RUNS_PER_BLOCK הרצות: הטובה-ביותר → batch אטומי (הכל-או-כלום)
  * שמסתיים-ב-USDS; הרווח-נמדד-מהיתרה-בפועל → revAux. */
-export function protoRevTick(st: DexState, exec: Exec): TradeEvent[] {
+export function protoRevTick(st: DexState, exec: Exec, nowMs: number): TradeEvent[] {
   const h = st.height;
   if (h <= 0) return [];
   const events: TradeEvent[] = [];
@@ -308,7 +308,7 @@ export function protoRevTick(st: DexState, exec: Exec): TradeEvent[] {
     const r = exec({ type: "batch", issuer: "treasury", nonce: `protorev-${h}-${run}`, ops: subs });
     if (!r.ok) {
       revAuxPatch(st, { rejections: (st.revAux?.rejections ?? 0) + 1 });
-      st.journal.push({ h, t: 0, soldier: "protorev", action: "prv_reject", note: `${best.kind}: ${r.err}` });
+      st.journal.push({ h, t: nowMs, soldier: "protorev", action: "prv_reject", note: `${best.kind}: ${r.err}` });
       break; // אותה-סטייה תידחה שוב — אין-טעם-לנסות-את-השאר בבלוק-הזה
     }
     if (r.events) events.push(...r.events);
@@ -320,10 +320,10 @@ export function protoRevTick(st: DexState, exec: Exec): TradeEvent[] {
         cycles: best.kind === "cycle" ? (st.revAux?.cycles ?? 0) + 1 : (st.revAux?.cycles ?? 0),
         lastH: h,
       });
-      st.journal.push({ h, t: 0, soldier: "protorev", action: "prv_run", profitMu: profit, note: `${best.kind} ${best.legs.map((l) => l.venue).join(">")} +${profit}µ (${best.edgeBps}bps)` });
+      st.journal.push({ h, t: nowMs, soldier: "protorev", action: "prv_run", profitMu: profit, note: `${best.kind} ${best.legs.map((l) => l.venue).join(">")} +${profit}µ (${best.edgeBps}bps)` });
     } else {
       revAuxPatch(st, { rejections: (st.revAux?.rejections ?? 0) + 1 });
-      st.journal.push({ h, t: 0, soldier: "protorev", action: "prv_reject", note: `no-profit ${r.err ?? ""}` });
+      st.journal.push({ h, t: nowMs, soldier: "protorev", action: "prv_reject", note: `no-profit ${r.err ?? ""}` });
       break;
     }
   }

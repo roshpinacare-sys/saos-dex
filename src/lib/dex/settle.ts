@@ -466,8 +466,8 @@ async function auditRail(rail: ChainName, identity: string): Promise<RailBalance
 
 /** אימות-עיגון-טרי: מעדיפים רשומה שכבר-אומתה (קריאה-חוזרת-על-עדות-מאונדקסת =
  * ההוכחה-הטריה-החזקה); נופלים לרשומה-חיה-בת-יותר-מ-45ש׳ (חלון-אינדוקס). */
-async function anchorSpotCheck(): Promise<AnchorSpot[]> {
-  const rs = relayStatus() as { records: { chain: ChainName; height: number; status: string; txid: string | null; stateRoot?: string; verified?: boolean | null; at: string }[] };
+async function anchorSpotCheck(rsAccount: string | null): Promise<AnchorSpot[]> {
+  const rs = relayStatus() as { records: { chain: ChainName; height: number; status: string; txid: string | null; stateRoot?: string; verified?: boolean | null; at: string; account?: string | null }[] };
   const chains: ChainName[] = ["steem", "hive", "tron", "eth", "sol"];
   const pick = (c: ChainName) =>
     rs.records.find((r) => r.chain === c && r.status === "anchored" && r.txid && r.stateRoot && r.verified === true)
@@ -475,13 +475,20 @@ async function anchorSpotCheck(): Promise<AnchorSpot[]> {
     ?? null;
   const picks = chains.map((c) => {
     const rec = pick(c);
-    return rec ? { c, height: rec.height, txid: rec.txid!, stateRoot: rec.stateRoot! } : null;
+    return rec ? { c, height: rec.height, txid: rec.txid!, stateRoot: rec.stateRoot!, account: rec.account ?? null } : null;
   });
   return Promise.all(picks.map(async (p, i) => {
     const c = chains[i]!;
     if (!p) return { rail: c, height: 0, ok: false, verified: false, detail: "no anchored record with txid" };
     try {
-      const v = await verifyOnChain(p.c, p.txid, { height: p.height, stateRoot: p.stateRoot });
+      // FIX(Roast-66 · realMoney-structural-lie): המבקר-כאן-קרא-verifyOnChain **בלי-account**
+      // — אחרי-חיזוק-F6-ב-relay (אימות-מחבר fail-closed) כל-עיגון-steem/hive קיבל
+      // "anchor account unknown" → realMoney.ok=false-תמידי, בזמן-שהרשומה-עצמה
+      // verified:true-דרך-המאמת-הפנימי. שני-מבקרים-סותרים = פסק-דין-מוסדי-אדום-תמידי.
+      // עכשיו: זרימת-אותו-חשבון-רשות שהמאמת-הפנימי משתמש-בו (rec.account → rt.account → HIVE_ANCHOR_ACCOUNT).
+      const expectedAccount = p.account
+        ?? (c === "steem" ? rsAccount : ((process.env.HIVE_ANCHOR_ACCOUNT || "").toLowerCase().trim() || rsAccount));
+      const v = await verifyOnChain(c, p.txid, { height: p.height, stateRoot: p.stateRoot, account: expectedAccount ?? undefined });
       return { rail: c, height: p.height, ok: v.ok, verified: v.ok, detail: v.detail.slice(0, 120) };
     } catch (e) {
       return { rail: c, height: p.height, ok: false, verified: false, detail: `verify error: ${e instanceof Error ? e.message.slice(0, 80) : "error"}` };
@@ -510,7 +517,7 @@ export async function realMoneyAudit(): Promise<RealMoneyReport> {
       }),
     ),
   );
-  const anchors = await anchorSpotCheck();
+  const anchors = await anchorSpotCheck(rs.account ?? null);
   const liveRails = rails.filter((r) => r.ok).length;
   const verifiedNow = anchors.filter((a) => a.verified).length;
   // FIX(Roast-63): "awaiting finalized block" (SOL) אינו-מיסמאץ' — טרם-אינדוקס/פיינליזציה

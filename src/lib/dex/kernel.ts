@@ -37,8 +37,12 @@ export const GAS_TABLE = {
   pool_xAdd: 180,
   pool_x: 220,
   pool_xRm: 120,
-  wrap_mint: 250,
-  wrap_burn: 250,
+  // FIX(Roast-66 · ZFB-zero-fee-bridge): wrap = מסדרון-הגשר (STEEM⇄WSTEEM · BLURT⇄WBLURT 1:1)
+  // — המנדט: גשר-עסקאות-על-כלל-הרשתות **ללא-עמלה**. היה 250-גז-קרדיטים-סמוי-על-המסילה
+  // (היה-מונע-ממשתמש-בלי-קרדיטים-לעטוף/לפדות — MED-66). עכשיו: אפס-גז-כמו-הריליי —
+  // מגן-הספאם-האמיתי הוא חובת-הגיבוי-1:1 (avail/backing fail-closed) ולא המחיר.
+  wrap_mint: 0,
+  wrap_burn: 0,
   asset_list: 70,
   asset_price: 40,
   harvest: 20,

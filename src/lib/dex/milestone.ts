@@ -149,8 +149,11 @@ async function beat(): Promise<void> {
       doses: rail.doses,
     };
     const r = await fleetSealNow(payload);
-    // 5) רישום-בפנקס-הציבורי + פיוס-קריאה-חוזרת (הפער-שנסגר: היה-bypass-שקט)
-    recordFleetAnchor(seal.height, seal.stateRoot, seal.digest, r.txid, r.account);
+    // FIX(Roast-66 · milestone-double-anchor): מהרגע-הזה-השידור-הציבורי-קרה — המארקר
+    // חייב-להישמר-לפני-כל-פעולה-שיכולה-לזרוק. הישן: recordFleetAnchor (קריאת-חוזר
+    // לפיוס) יכלה-לזרוק → catch-החיצוני-היה-משאיר-מארקר-ישן → הטיק-הבא (60ש׳) עובר
+    // gap/step ומעגן-**שוב**-את-אותה-אבן-דרך (ראיה-ציבורית-כפולה + RC). עכשיו:
+    // מארקר-נשמר-מיד; הפיוס-ב-try-משלו — כישלון-פיוס = אזהרה, לא-עיגון-כפול.
     m.lastAnchorAt = now;
     m.lastNetMu = netMu;
     m.lastHeight = seal.height;
@@ -161,6 +164,11 @@ async function beat(): Promise<void> {
     m.log.unshift({ at: new Date(now).toISOString(), height: seal.height, netMu, txid: r.txid, account: r.account });
     m.log = m.log.slice(0, LOG_CAP);
     saveMarker(m);
+    try {
+      recordFleetAnchor(seal.height, seal.stateRoot, seal.digest, r.txid, r.account);
+    } catch (recErr) {
+      console.warn(`[saos-milestone] anchor-ok-but-reconcile-failed (marker saved, no double anchor): ${String((recErr as Error)?.message || recErr).slice(0, 140)}`);
+    }
     console.info(`[saos-milestone] anchored rail-milestone h${seal.height} net=${netMu}µ via ${r.account} tx ${r.txid.slice(0, 12)}…`);
   } catch (e) {
     m.errors += 1;

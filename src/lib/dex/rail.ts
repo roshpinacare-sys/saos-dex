@@ -105,19 +105,24 @@ export interface RailDoseRec {
   midMu: number;
   anchorMu: number;
   premBps: number;
+  // FIX(Roast-66 · dose-truth): המנה-נרשמת-"pending"-בדחיפה ומתאשרת-רק-מתוצאת-הבלוק
+  // (היה: נספרה-כבוצעה-מיד — minOut-fail נספר-כמנה-וה-P&L/אבני-הדרך נפחו).
+  nonce?: string;
+  ok?: boolean | null;
 }
 
 interface RailRT {
   baseEquityMu: number | null; // הון-עוגן באתחול-התהליך (נטו-מתאפס-פר-ריצה — כנות)
   inflowMu: number; // הזרמות-מימון-מאז-האתחול (בשווי-עוגן µ-USDS)
-  doses: number;
+  doses: number; // FIX(Roast-66): מנות-ש**בוצעו** בפועל (r.ok) — לא-נספרות-עוד-בדחיפה
+  dosesPushed: number; // FIX(Roast-66): מנות-שנדחפו-לממפול (כולל-דחויות) — כנות-מלאה
   doseLog: RailDoseRec[];
 }
 // FIX(SETTLE-16 split-brain, הלקה-מ-SETTLE-12): RT-ברמת-מודול שוכפל-בין-מופעי-
 // מודול-שונים-של-dev-server (instrumentation מול-route) — הטלמטריה-הראתה-0-מנות
 // בזמן-שהמסילה-סחרה. globalThis = מופע-אחד-לכל-הבאנדלים (אותו-דפוס של ensureChain).
 const g = globalThis as unknown as { __saosRailRT?: RailRT; __saosRailLife?: Record<string, number> };
-const railRt: RailRT = g.__saosRailRT ?? (g.__saosRailRT = { baseEquityMu: null, inflowMu: 0, doses: 0, doseLog: [] });
+const railRt: RailRT = g.__saosRailRT ?? (g.__saosRailRT = { baseEquityMu: null, inflowMu: 0, doses: 0, dosesPushed: 0, doseLog: [] });
 
 /** מחיר-עוגן לסימון-הון (µ-USDS ל-1-יחידה; credits ו-USDS = 1000). */
 function markMu(st: DexState, a: string): number {
@@ -307,10 +312,25 @@ export function railTick(st: DexState, tick: number, pushOp: (op: Op) => void): 
     // minOut fail-closed על-ציטוט-חי (4% — רוחב-SETTLE-15)
     const q = quoteOut(p, assetIn, size);
     if (!q || q.out <= 0) continue;
-    const rec: RailDoseRec = { tick, pair: m.pair, side: sell ? "sell" : "buy", inMu: size, midMu: mid, anchorMu: anchor, premBps };
+    const rec: RailDoseRec = { tick, pair: m.pair, side: sell ? "sell" : "buy", inMu: size, midMu: mid, anchorMu: anchor, premBps, nonce: `rail-${m.id}-${tick}`, ok: null };
     pushOp({ type: "pool_swap", issuer: RAIL, nonce: `rail-${m.id}-${tick}`, pair: m.pair, assetIn, amount: size, minOut: Math.floor((q.out * RAIL_SLIP_BAND) / 100) });
-    railRt.doses++;
+    railRt.dosesPushed++;
     railRt.doseLog.push(rec);
     if (railRt.doseLog.length > 32) railRt.doseLog.splice(0, railRt.doseLog.length - 32);
+  }
+}
+
+/** FIX(Roast-66 · dose-truth): פיוס-תוצאות-המנות — נקרא-מ-buildBlock אחרי-ביצוע-ה-ops.
+ * מנה-שה-op-שלה אושר בגרעין (r.ok) נספרת-כבוצעה; נדחית-נשארת-בלוג-עם ok:false —
+ * כנות-מלאה: גם-הניסיונות (dosesPushed) וגם-הביצועים (doses) חשופים. */
+export function railReconcile(rs: { nonce: string; ok: boolean }[]): void {
+  if (rs.length === 0) return;
+  const byNonce = new Map(rs.map((x) => [x.nonce, x.ok]));
+  for (const rec of railRt.doseLog) {
+    if (rec.ok !== null || !rec.nonce) continue;
+    const ok = byNonce.get(rec.nonce);
+    if (ok === undefined) continue;
+    rec.ok = ok;
+    if (ok) railRt.doses++;
   }
 }

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getBridgeView, claimInbound, lockOutbound, markReleased, registerInbound } from "@/lib/dex/bridge";
+import { getBridgeView, claimInbound, lockOutbound, markReleased, registerInbound, startBridgeAutoKeeper, bridgeAutoStatus } from "@/lib/dex/bridge";
 import { consoleGuard } from "@/lib/dex/guard";
 import { operatorAuth } from "@/lib/operator-auth";
 
@@ -17,10 +17,13 @@ export const dynamic = "force-dynamic";
  *     ב-escrow להוצאה לרשת-חוץ.
  *   · release      {id, farTxid} — המפעיל מעיד שהחוזה-שלנו-שם שחרר (תיקוף-פר-רשת
  *     + קישור-נמען) — אחרת-נשאר-locked.
+ * FIX(Roast-66 · ZFB-keeper): ה-GET מקים-את-סולק-הכניסה-האוטומטי (פעם-אחת-לתהליך,
+ * globalThis-guard) — הפקדה-מקושרת נסלקת-לבד ברגע-ההוכחה, אפס-עמלה, אפס-גז.
  * הכסף-עצמו זז-רק-בגרעין (stateRoot/חותמות) — הפנקס הוא ראיה-חוץ-מצב. */
 
 export async function GET() {
-  return NextResponse.json({ ok: true, bridge: getBridgeView() });
+  startBridgeAutoKeeper(); // FIX(Roast-66): idempotent — מופע-אחד-לתהליך
+  return NextResponse.json({ ok: true, bridge: { ...getBridgeView(), auto: bridgeAutoStatus() } });
 }
 
 export async function POST(req: Request) {
