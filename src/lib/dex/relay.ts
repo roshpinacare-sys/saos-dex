@@ -787,7 +787,10 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
   const cs = job.chains[chain];
   // FIX(SETTLE-11): טיסה-מקדימה — מפתח-שאינו-רשות-על-השרשרת = השבתה-כנה (בלי-רכבת-דחיות)
   // הערה: הבדיקה לפני cs.attempts += 1 — לכן התנאי הוא ===0 (הניסיון-הראשון)
-  if (keys && (chain === "steem" || chain === "hive") && cs.attempts === 0 && !(await authorityOk(rt, keys, chain))) {
+  // FIX(Roast-69 · preflight-chaos-scope): טיסת-הבדיקה היא קריאת-רשת-אמת (get_accounts) —
+  // במחיצה-מוזרקת היא-דילגה-מעל-שער-הכאוס ונגעה-ברשת-בפועל (נתפס-בריצת-כאוס-חיה).
+  // בפרודקשן chaosPartitioned===false-תמיד — אפס-שינוי-התנהגות; במבחן: המחיצה-אמת-לכל-דבר.
+  if (keys && (chain === "steem" || chain === "hive") && cs.attempts === 0 && !chaosPartitioned(chain) && !(await authorityOk(rt, keys, chain))) {
     cs.done = true;
     rt.chainState[chain].enabled = false;
     rt.chainState[chain].status = "disabled";
