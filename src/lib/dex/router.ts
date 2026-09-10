@@ -230,8 +230,16 @@ export function routableMap(): RoutableEntry[] {
       out.push({ asset: a, tier: "hub", priceUsdsMu: 1000, routeDesc: "HUB — יחידת-החשבון", depthUsdsMu: 0 });
       continue;
     }
-    const q = quoteRoute(a, ROUTE_HUB, 1000); // 1000µ דגימה — מחיר-ייצוגי
-    if (!q || q.amountOutMu <= 0) {
+    // FIX(Roast-71 · adaptive-sample): דגימת-1000µ-קבועה נפלה-על-רצפת-האבק-בבריכות-
+    // זעירות (WBLURT≈1µ/יחידה → פלט-שלם=0 → quoteOut=null → tier-none-שקרי
+    // למרות-בריכה-חיה-ומסלול-מבצע). דגימה-מסתגלת: 1k → 10k → 100k —
+    // הראשונה-שמניבה-פלט-חי. כנות: מה-שנבדק-הוא-ביצוע-אמת, לא-קיום-בריכה.
+    let q: RouteQuote | null = null;
+    for (const sample of [1000, 10_000, 100_000]) {
+      const qq = quoteRoute(a, ROUTE_HUB, sample);
+      if (qq && qq.amountOutMu > 0) { q = qq; break; }
+    }
+    if (!q) {
       const ref = st.assets[a]?.refPrice ?? 0;
       out.push({ asset: a, tier: "none", priceUsdsMu: ref, routeDesc: "אין-מסלול-מבצע — רצפת-refPrice בלבד", depthUsdsMu: 0 });
       continue;
@@ -255,16 +263,35 @@ export function routableMap(): RoutableEntry[] {
     if (isRail) tier = "rail";
     else if (direct) tier = "deep";
     else tier = "micro";
-    out.push({ asset: a, tier, priceUsdsMu: q.effPriceMu, routeDesc: q.legs.map((l) => l.venue).join(" → "), depthUsdsMu: depth ?? 0 });
+    // FIX(Roast-71 · resting-mid): המחיר-המוצג = מחיר-מנוחה-של-הבריכה-הישירה
+    // (לא-המחיר-האפקטיבי-של-הדגימה — הוא-כולל-החלקה-מדגמית-ומטעה); רצפת-refPrice
+    // רק-כשהרצפה-השלמה-של-המחיר-היא-0 (נכסי-מיקרו-מחיר כמו WBLURT).
+    const mid = directMidUsdsMu(st, a);
+    const price = mid !== null && mid > 0 ? mid : (q.effPriceMu > 0 ? q.effPriceMu : (st.assets[a]?.refPrice ?? 0));
+    out.push({ asset: a, tier, priceUsdsMu: price, routeDesc: q.legs.map((l) => l.venue).join(" → "), depthUsdsMu: depth ?? 0 });
   }
   return out;
 }
 
-/** refPrice-כנן להערכת-עומק בלבד (לא-מחיר-מסחר). */
+/** מחיר-מנוחה-של-הבריכה-הישירה-מול-ההאב (µ-USDS ל-1 יחידת-הנכס), או-null. */
+function directMidUsdsMu(st: ReturnType<typeof getLiveState>, a: string): number | null {
+  const p = getPool(st, [a, ROUTE_HUB].sort().join("/"));
+  if (!p || p.ra <= 0 || p.rb <= 0) return null;
+  return p.a === a ? Math.floor((p.rb * 1000) / p.ra) : Math.floor((p.ra * 1000) / p.rb);
+}
+
+/** refPrice-כנן להערכת-עומק בלבד (לא-מחיר-מסחר).
+ * FIX(Roast-71): כשהמחיר-המחושב-מתאפס-בשלמים (נכסי-מיקרו-מחיר — WBLURT≈0.99µ),
+ * חוזרים-לרצפת-refPrice — אחרת-עומק-הבריכה-מתאפס-בשקר (בריכת-42µ-חיה-הוצגה-0). */
 function priceRef(a: string, st: ReturnType<typeof getLiveState>): number {
+  const floor = st.assets[a]?.refPrice ?? 0;
   if (a === "USDS") return 1000;
   const direct = getPool(st, [a, "USDS"].sort().join("/"));
-  if (direct) return direct.a === a ? Math.floor((direct.rb * 1000) / direct.ra) : Math.floor((direct.ra * 1000) / direct.rb);
+  if (direct) {
+    const mid = direct.a === a ? Math.floor((direct.rb * 1000) / direct.ra) : Math.floor((direct.ra * 1000) / direct.rb);
+    if (mid > 0) return mid;
+    return floor > 0 ? floor : 1; // רצפת-מניעת-אפס-לחישוב-עומק (לא-מחיר-מסחר)
+  }
   const viaSaos = getPool(st, [a, "SAOS"].sort().join("/"));
   const saosUsds = getPool(st, "SAOS/USDS");
   if (viaSaos && saosUsds) {
@@ -272,7 +299,7 @@ function priceRef(a: string, st: ReturnType<typeof getLiveState>): number {
     const su = Math.floor((saosUsds.rb * 1000) / saosUsds.ra);
     if (pm > 0 && su > 0) return Math.floor((pm * su) / 1000);
   }
-  return st.assets[a]?.refPrice ?? 0;
+  return floor;
 }
 
 // ─── תמחור-טוקני-LP: התועלת-ממה-שנראה-חסר-שווי ──────────────────────────────
