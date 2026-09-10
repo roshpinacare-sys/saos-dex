@@ -420,7 +420,7 @@ async function tronSealBroadcast(tronAddress: string, stateRoot: string, wif: st
 export async function verifyOnChain(
   chain: ChainName,
   txid: string,
-  expected: { height: number; stateRoot: string }
+  expected: { height: number; stateRoot: string; account?: string }
 ): Promise<{ ok: boolean; detail: string }> {
   // chaos-gate: מחיצה-מוזרקת מדמה ניתוק-RPC מלא — גם על נתיב-הקריאה (אמת-היקף-התקלה)
   if (chaosPartitioned(chain)) return { ok: false, detail: "not indexed: injected network partition (chaos)" };
@@ -439,10 +439,16 @@ export async function verifyOnChain(
       `${TRON_RPC}/wallet/gettransactionbyid`, { value: txid, visible: true }, 15000,
     ).catch(() => null);
     const extra = tx?.raw_data?.extra_data?.[0];
-    if (!extra) return { ok: true, detail: `confirmed in block ${info.blockNumber} · extra_data not surfaced by node` };
-    const payload = Buffer.from(extra, "hex").toString("utf8");
-    if (payload.includes(expected.stateRoot)) return { ok: true, detail: `confirmed in block ${info.blockNumber} · extra_data stateRoot match` };
-    return { ok: false, detail: `mismatch: extra_data on-chain lacks local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
+    // FIX(Roast-64-c · F5): "extra_data not surfaced" קיבל ok:true — עיגון-TRON נרשם
+    // "verified" בלי-שום-קריאת-חזרה-של-ה-payload (סתירה-ל-SECURITY INTENT). עתה:
+    // בלי-payload-גלוי = ok:false "payload-not-surfaced" — הרשומה נשארת-לא-מאומתת
+    // (לעולם לא מזויף-מאומת), ונכנסת-לתור-הפיוס.
+    if (!extra) return { ok: false, detail: `payload-not-surfaced: confirmed in block ${info.blockNumber} but node hides extra_data — record stays unverified (fail-closed)` };
+    // FIX(Roast-64-c · F5): השוואה מתוחמת-ופורשת — פענוח-ה-payload והשוואת-שוויון
+    // מדויק מול-ה-stateRoot (ביט-מול-ביט), לא-substring על-הגולם.
+    const payload = Buffer.from(extra, "hex").toString("utf8").trim();
+    if (payload === expected.stateRoot) return { ok: true, detail: `confirmed in block ${info.blockNumber} · extra_data stateRoot match (exact)` };
+    return { ok: false, detail: `mismatch: extra_data payload (${payload.slice(0, 12)}…) != local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
   }
 
   const nodes = chain === "steem" ? STEEM_NODES : HIVE_NODES;
@@ -454,6 +460,18 @@ export async function verifyOnChain(
     for (const entry of tx.operations as [string, Record<string, unknown>][]) {
       const [opName, opBody] = entry;
       if (opName !== "custom_json" || opBody?.id !== ANCHOR_ID) continue;
+      // FIX(Roast-64-c · F6): אימות-מחבר — ה-op-חייב לשאת את החשבון-שלנו ב-required_auths
+      // או ב-required_posting_auths. צד-ג' יכול-לפרסם custom_json זהה-עם אותו-ANCHOR_ID
+      // — בלי-בדיקת-רשות זה היה נספר-כ"מאומת". אין-חשבון-צפוי (לא-הוגדר) → לא-ניתן-לקשור → ok:false.
+      const expectedAccount = expected.account ?? null;
+      if (!expectedAccount) return { ok: false, detail: "mismatch: anchor account unknown — authority binding unverifiable (fail-closed)" };
+      const auths = [
+        ...((opBody.required_auths as unknown[] | undefined) ?? []),
+        ...((opBody.required_posting_auths as unknown[] | undefined) ?? []),
+      ].map((x) => String(x).toLowerCase());
+      if (!auths.includes(expectedAccount.toLowerCase())) {
+        return { ok: false, detail: `mismatch: custom_json not authorized by ${expectedAccount} (third-party anchor refused)` };
+      }
       let parsed: { height?: number; stateRoot?: string };
       try { parsed = JSON.parse(String(opBody.json)) as { height?: number; stateRoot?: string }; }
       catch { return { ok: false, detail: "mismatch: on-chain custom_json unparseable" }; }
@@ -621,7 +639,11 @@ async function verifyRecord(rt: RelayRT, rec: AnchorRecord): Promise<void> {
   for (let i = 0; i < VERIFY_TRIES; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, VERIFY_GAP_MS));
     try {
-      last = await verifyOnChain(rec.chain, rec.txid, { height: rec.height, stateRoot: rec.stateRoot });
+      // FIX(Roast-64-c · F6): חשבון-הרשות הצפוי מוזרם לאימות-המחבר —
+      // צי (fleet) = החייל-שחתם (rec.account) · steem = rt.account · hive/fleet = HIVE_ANCHOR_ACCOUNT.
+      const expectedAccount = rec.account
+        ?? (rec.chain === "steem" ? rt.account : ((process.env.HIVE_ANCHOR_ACCOUNT || "").toLowerCase().trim() || rt.account));
+      last = await verifyOnChain(rec.chain, rec.txid, { height: rec.height, stateRoot: rec.stateRoot, account: expectedAccount ?? undefined });
     } catch (e) {
       last = { ok: false, detail: String((e as Error)?.message || e).slice(0, 120) };
     }
@@ -696,10 +718,18 @@ function startReconciler(rt: RelayRT): void {
  * "Missing Posting Authority" בכל-חותם → breaker-פתוח-בשווא + רעש. עתה: גזירת-מפתח-ציבורי
  * מקומית + השוואה מול-רשות-החשבון ב-RPC ציבורי — אי-התאמה = השבתה-כנה fail-closed.
  * אין-מדידה (צומת-לא-זמין) = לא-חוסם — נבדק-בשידור (אותו-עיקרון rcMana). */
-const authChecked = new Map<"steem" | "hive", boolean>();
+/* FIX(Roast-64-c · F9): authorityOk היה fail-open (catch → true) ו-cache-לנצח
+ * (authChecked נקרא-פעם-אחת). עתה: cache עם-TTL-של-10-דקות · כשל-רשת-חד-פעמי
+ * = שומר-על-פסק-הדין-הקודם-בלבד (מתועד lastError, לא-נטען-כ"טרי") · ≥3-כשלי-רשת
+ * רצופים = fail-CLOSED עד-בדיקה-מוצלחת. */
+const AUTH_TTL_MS = 10 * 60_000;
+const AUTH_NETFAIL_MAX = 3;
+interface AuthCacheEntry { verdict: boolean; at: number; netFails: number; lastError: string | null }
+const authChecked = new Map<"steem" | "hive", AuthCacheEntry>();
 async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"): Promise<boolean> {
-  const hit = authChecked.get(chain);
-  if (hit !== undefined) return hit;
+  const prev = authChecked.get(chain);
+  // פסק-דין-מוצלח-טרי (בלי-שגיאה) — בתוקף-TTL
+  if (prev && prev.lastError === null && Date.now() - prev.at < AUTH_TTL_MS) return prev.verdict;
   try {
     const node = (chain === "steem" ? STEEM_NODES : HIVE_NODES)[0];
     const account = chain === "steem" ? keys.account : keys.hiveAccount;
@@ -714,13 +744,25 @@ async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"
     const a = r?.[0];
     const want = (auth === "posting" ? a?.posting?.key_auths?.[0]?.[0] : a?.active?.key_auths?.[0]?.[0]) ?? null;
     const ok = !!want && want === pub;
-    authChecked.set(chain, ok);
+    authChecked.set(chain, { verdict: ok, at: Date.now(), netFails: 0, lastError: null });
     if (!ok) {
       console.error(`[saos-relay][ALERT] authority-mismatch on ${chain}: המפתח-ב-.env אינו רשות-${auth} בשרשרת עבור ${account} — disabled fail-closed (נדרשת רוטציה/ייבוא-מפתח-נכון)`);
     }
     return ok;
-  } catch {
-    return true;
+  } catch (e) {
+    const netFails = (prev?.netFails ?? 0) + 1;
+    const lastError = String((e as Error)?.message ?? e).slice(0, 120);
+    if (netFails >= AUTH_NETFAIL_MAX) {
+      // ≥3-כשלי-רשת-רצופים → סגירה fail-closed עד-אימות-מוצלח (לא-עוד-fail-open-נצחי)
+      authChecked.set(chain, { verdict: false, at: Date.now(), netFails, lastError });
+      console.error(`[saos-relay][ALERT] authority-check unreachable ×${netFails} on ${chain} — fail-closed until successful re-check (${lastError})`);
+      return false;
+    }
+    // שגיאה-חד-פעמית: שומר-על-פסק-הדין-הקודם (אין-קודם → לא-חוסם — ייבדק-בשידור)
+    // אך לא-נשמר-כ"טרי" (lastError!=null → הבדיקה-תחזור-בניסיון-הבא) ומתועד.
+    if (prev) authChecked.set(chain, { ...prev, netFails, lastError });
+    else authChecked.set(chain, { verdict: true, at: Date.now(), netFails, lastError });
+    return prev?.verdict ?? true;
   }
 }
 

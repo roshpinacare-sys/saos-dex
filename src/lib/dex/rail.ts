@@ -39,6 +39,8 @@
  *
  * אפס-float במצב · אפס-מפתחות · קריאה-על-המצב-החי בלבד.
  */
+import fs from "fs";
+import path from "path";
 import type { DexState, Op, Asset } from "./kernel";
 import { getPool, quoteOut, poolMidFor } from "./amm";
 import { poolKey, avail } from "./kernel";
@@ -205,6 +207,38 @@ const LIFETIME_ENERGY = 300_000; // bot-c 100k + רכישות-חוזרות — �
 const LIFETIME_SAOS = 2_000_000; // הארנה/האוצר שופעים-SAOS — תקרה-כנה-לכל-חיי-התהליך
 const railLifetime: Record<string, number> = g.__saosRailLife ?? (g.__saosRailLife = { usds: 0, wsteem: 0, energy: 0, saos: 0 });
 
+/* ── FIX(Roast-64-c · F10): תקרות-החיים שורדות-הפעלות ──
+ * ההיסטוריה: המונים-חיו-ב-globalThis בלבד → כל-ריסטארט איפס אותם וה-"תקרות
+ * כנות" היו תיאטרון-פר-תהליך (ניתן-לזריעה-חוזרת-מלאה). עתה: state/rail-lifetime.json
+ * — נטען-באתחול-המודול (max עם הזיכרון — תקרה-לעולם-לא-מתאפסת), נשמר-אטומית
+ * (tmp+rename — אותו-משמעת של flushSnapshot) בכל-עדכון. */
+const RAIL_STATE_DIR = process.env.SAOS_DEX_STATE_DIR
+  ? path.resolve(process.env.SAOS_DEX_STATE_DIR)
+  : path.join(process.cwd(), "state");
+const RAIL_LIFETIME_FILE = path.join(RAIL_STATE_DIR, "rail-lifetime.json");
+const LIFETIME_KEYS = ["usds", "wsteem", "energy", "saos"] as const;
+
+function loadRailLifetime(): void {
+  try {
+    const raw = JSON.parse(fs.readFileSync(RAIL_LIFETIME_FILE, "utf8")) as Partial<Record<string, number>>;
+    for (const k of LIFETIME_KEYS) {
+      const v = Number(raw[k]);
+      if (Number.isFinite(v) && v >= 0) railLifetime[k] = Math.max(railLifetime[k] ?? 0, v); // max — אף-פעם-לא-איפוס
+    }
+  } catch { /* אין-קובץ — התחלה-נקייה */ }
+}
+
+function saveRailLifetime(): void {
+  try {
+    fs.mkdirSync(RAIL_STATE_DIR, { recursive: true });
+    const tmp = RAIL_LIFETIME_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(railLifetime, null, 1));
+    fs.renameSync(tmp, RAIL_LIFETIME_FILE);
+  } catch { /* כשל-שמירה לא מפיל את המסילה (ההזרמה-עצמה נרשמת-בגרעין) */ }
+}
+
+loadRailLifetime(); // אתחול-מודול — המוני-החיים חוזרים מהדיסק
+
 /** מקור-מימון: התיק-הקיים-הגדול קודם (דבר-גורר-דבר), אוצר-גיבוי. */
 function fundingSource(st: DexState, asset: "USDS" | "WSTEEM" | "ENERGY" | "SAOS"): string | null {
   const pools: Record<string, string[]> = {
@@ -234,6 +268,7 @@ function pushFunding(st: DexState, tick: number, pushOp: (op: Op) => void, asset
     pushOp({ type: "xfer_free", issuer: src, nonce: `rail-fund-${asset}-${tick}`, to: RAIL, asset, amount: amt });
   }
   railLifetime[lifetimeKey] += amt;
+  saveRailLifetime(); // FIX(Roast-64-c · F10): שמירה-אטומית — התקרה שורדת-ריסטארט
   // רישום-ההזרמה ל-P&L: המנה מוערכת-בעוגן בעת-הדחיפה (בלוק-אחד-קדימה — סטייה-זניחה)
   const px = markMu(st, asset);
   if (px > 0) railRt.inflowMu += Math.floor((amt * px) / 1000);

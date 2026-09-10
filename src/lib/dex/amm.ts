@@ -62,6 +62,9 @@ export function poolAdd(
   const amountA = op.amount ?? 0;
   if (!(amountA > 0)) return { ok: false, err: "bad-amount", gas: 0 };
   const amountB = p.ra > 0 ? Math.floor((p.rb * amountA) / p.ra) : 0;
+  // FIX(Roast-64 · one-sided-donate): ratio-floor ל-0 היה מאפשר pool_add-חד-צדדי
+  // — מפקיד-נכס-אחד ומקבל LP (max(1,…)) בשווי-שלילי-למשקים. fail-closed כמו-dust ב-poolRm.
+  if (!(amountB > 0)) return { ok: false, err: "dust-add", gas: 0 };
   if (avail(st, op.issuer, p.a) < amountA) return { ok: false, err: "insufficient-a", gas: 0 };
   if (avail(st, op.issuer, p.b) < amountB) return { ok: false, err: "insufficient-b", gas: 0 };
   const lpMint = p.ra > 0 ? Math.max(1, Math.floor((p.lp * amountA) / p.ra)) : Math.floor(Math.sqrt(amountA * amountB));
@@ -127,7 +130,10 @@ export function poolSwap(
     p.dynFeeBps = Math.min(DYN_FEE_MAX_BPS, Math.max(DYN_FEE_MIN_BPS, FEE_BPS + Math.floor(p.volBpsEwma / DYN_FEE_K)));
   }
 
-  const price = Math.floor((out * 1000) / amountIn); // µ-פלט ל-1µ-כניסה ×1000 = סקאלה
+  // FIX(Roast-64 · inverted-buy-price): המחיר-היה חושב בלי-כיוון — לקנייה (assetIn=
+  // ציטוט) האירוע נשא "כמה-בסיס-ל-1-ציטוט" (ההפך!) והזין את עדות-המחיר (priceSamples
+  // → TWAP → חותם-מחיר → סולם) בערך-הפוך. אותו-עניין ש-SETTLE-14 תיקן ב-quoteOut.
+  const price = inA ? Math.floor((out * 1000) / amountIn) : Math.floor((amountIn * 1000) / out);
   const ev: TradeEvent = {
     kind: "swap", base: (inA ? p.a : p.b) as never, quote: (inA ? p.b : p.a) as never,
     price, amountMu: amountIn, taker: op.issuer, at: nowMs,

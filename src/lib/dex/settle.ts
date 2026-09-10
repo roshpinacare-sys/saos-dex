@@ -119,9 +119,19 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
     if (!ok) errors.push(`native ${a}: live ${live} ≠ genesis ${expected}`);
   }
 
-  // (c) ערבות: locked === Σפקודות-חיות (מדויק) · avail ≥ 0 · אין-יתרות-שליליות
+  // (c) ערבות: locked === Σפקודות-חיות + נעילות-תוכניות (מדויק) · avail ≥ 0 · אין-יתרות-שליליות
+  // FIX(Roast-64 · auditor-reconciler-split): המבקר ספר רק-נעילות-ספר — אחרי-כל
+  // dca_create/trig_order/cow_order הביקורת הייתה מדווחת "escrow-שבור" שקרית
+  // (הפיוס-בטעינה כבר סופר את התוכניות). מאזינים עכשיו לאותם מקורות-אמת.
   const lockSum: Record<string, Record<string, number>> = {};
   let ordersSum = 0;
+  // FIX(Roast-64 · shadow-collision): שם-העזר שונה-מ-bump-של-סעיף-(b) — אותו-סקופ-פונקציה
+  const bumpLock = (owner: string, a: string, mu: number): void => {
+    if (!(mu > 0)) return;
+    const w = (lockSum[owner] = lockSum[owner] ?? {});
+    w[a] = (w[a] ?? 0) + mu;
+    ordersSum += mu;
+  };
   for (const o of st.orders) {
     if (!o.live) continue;
     const rem = o.amount - o.filled;
@@ -130,10 +140,19 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
     const mu = typeof o.lockMu === "number" && Number.isSafeInteger(o.lockMu) && o.lockMu >= 0
       ? o.lockMu
       : (o.side === "sell" ? rem : notional(o.price, rem));
-    if (mu <= 0) continue;
-    const w = (lockSum[o.owner] = lockSum[o.owner] ?? {});
-    w[o.side === "sell" ? o.base : o.quote] = (w[o.side === "sell" ? o.base : o.quote] ?? 0) + mu;
-    ordersSum += mu;
+    bumpLock(o.owner, o.side === "sell" ? o.base : o.quote, mu);
+  }
+  for (const p of Object.values(st.dca ?? {})) {
+    if (!(p.remainingMu > 0)) continue;
+    bumpLock(p.owner, p.assetIn, p.remainingMu);
+  }
+  for (const t of Object.values(st.trig ?? {})) {
+    const a = t.side === "sell" ? t.base : t.quote;
+    const effPx = t.limitPx > 0 ? t.limitPx : t.triggerPx;
+    bumpLock(t.owner, a, t.side === "sell" ? t.amountMu : notional(effPx, t.amountMu));
+  }
+  for (const o of st.cow ?? []) {
+    bumpLock(o.owner, o.side === "sell" ? o.base : o.quote, o.lockMu);
   }
   let lockedSum = 0;
   let availOk = true;

@@ -144,6 +144,24 @@ export async function solSealBroadcast(
   return { txid, address };
 }
 
+/* ── FIX(Roast-64-c · F8): פריקה-מתוחמת של ממו-העיגון מהלוגים ──
+ * ההיסטוריה: `logs.includes('"height":100')` התאים-גם-1001 (substring).
+ * עתה: מוצאים את ה-JSON הראשון-הניתן-לפריקה בלוגים (ה-{...}-הראשון שמכיל
+ * "height") ומשווים **מספרית** (height) ובשוויון-מדויק (stateRoot). */
+function memoJsonOf(logs: string[]): { height?: number; stateRoot?: string } | null {
+  for (const line of logs) {
+    const start = line.indexOf("{");
+    const end = line.lastIndexOf("}");
+    if (start < 0 || end <= start) continue;
+    try {
+      const o = JSON.parse(line.slice(start, end + 1)) as { height?: unknown; stateRoot?: unknown };
+      if (typeof o.height === "number" || typeof o.stateRoot === "string")
+        return { height: typeof o.height === "number" ? o.height : undefined, stateRoot: typeof o.stateRoot === "string" ? o.stateRoot : undefined };
+    } catch { /* רשומה-לא-JSON — הבא */ }
+  }
+  return null;
+}
+
 /* ── verifyOnChain: קריאה-חוזרת מה-RPC הציבורי והשוואת stateRoot ──
  * SPL Memo מתומן ללוג ("Program log: <memo>") — getTransaction מחזיר
  * logMessages ואנו משווים את ה-stateRoot+height ביט-מול-ביט מול-המקומי. */
@@ -168,11 +186,15 @@ export async function verifySolAnchor(
         endpoint, "getTransaction", [[txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }]], 15000,
       ).catch(() => null);
   if (!v && tx0?.meta?.logMessages?.length) {
-    const logs0 = tx0.meta.logMessages.join(" ");
-    if (logs0.includes(expected.stateRoot) && logs0.includes(`"height":${expected.height}`)) {
+    const logs0 = tx0.meta.logMessages;
+    const memo0 = memoJsonOf(logs0);
+    if (!memo0) return { ok: false, detail: "mismatch: no parseable anchor memo in logs (getTransaction fallback)" };
+    const rootOk0 = memo0.stateRoot === expected.stateRoot;
+    const heightOk0 = memo0.height === expected.height; // FIX(F8): השוואה-מספרית (לא substring)
+    if (rootOk0 && heightOk0) {
       return { ok: true, detail: "stateRoot verified on solana (via getTransaction fallback — history window)" };
     }
-    if (!logs0.includes(expected.stateRoot)) return { ok: false, detail: `mismatch: on-chain memo lacks local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
+    if (!rootOk0) return { ok: false, detail: `mismatch: on-chain memo lacks local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
   }
   if (!v) return { ok: false, detail: "not indexed: signature unknown to public node yet" };
   if (v.err !== null && v.err !== undefined) return { ok: false, detail: `mismatch: transaction failed on-chain (${JSON.stringify(v.err).slice(0, 80)})` };
@@ -184,9 +206,12 @@ export async function verifySolAnchor(
   const tx = await rpc<{ meta?: { logMessages?: string[] } | null }>(
     endpoint, "getTransaction", [[txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }]], 15000,
   ).catch(() => null);
-  const logs = (tx?.meta?.logMessages ?? []).join(" ");
-  if (!logs) return { ok: false, detail: "not indexed: awaiting finalized block" };
-  if (!logs.includes(expected.stateRoot)) return { ok: false, detail: `mismatch: on-chain memo lacks local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
-  if (!logs.includes(`"height":${expected.height}`)) return { ok: false, detail: `mismatch: on-chain memo height != local h${expected.height}` };
+  const logs = tx?.meta?.logMessages ?? [];
+  if (logs.length === 0) return { ok: false, detail: "not indexed: awaiting finalized block" };
+  // FIX(Roast-64-c · F8): פריקה-מתוחמת + השוואה-מספרית — לא עוד-substring
+  const memo = memoJsonOf(logs);
+  if (!memo) return { ok: false, detail: "mismatch: no parseable anchor memo in logs" };
+  if (memo.stateRoot !== expected.stateRoot) return { ok: false, detail: `mismatch: on-chain memo lacks local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
+  if (memo.height !== expected.height) return { ok: false, detail: `mismatch: on-chain memo height (${memo.height ?? "?"}) != local h${expected.height}` };
   return { ok: true, detail: `stateRoot verified on solana (slot ${v.slot})` };
 }

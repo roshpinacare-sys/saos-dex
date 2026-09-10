@@ -19,7 +19,7 @@
  *     עם מגן-minOut-2%) ואז הספר (פקודת-לימיט רגילה); כשל-קשה → החזר-כנה.
  */
 import type { DexState, Op, TradeEvent, CowOrder } from "./kernel";
-import { addBal, addLock, bal, notional } from "./kernel";
+import { addBal, addLock, avail, notional } from "./kernel";
 import { invariant } from "./invariant";
 import { walkRoutes } from "./router";
 import { legToOp } from "./triggers";
@@ -70,6 +70,11 @@ export function cowSettle(st: DexState, exec: Exec, nowMs: number): TradeEvent[]
       const buyVol = qBuys.reduce((s, o) => s + qtyOf(o), 0);
       const sellVol = qSells.reduce((s, o) => s + qtyOf(o), 0);
       const matched = Math.min(buyVol, sellVol);
+      // FIX(Roast-64 · remainder-ghost): מפת-ההקצאה-האמתית — floor+שארית-לאחרון,
+      // והשאריות-ל-fallback נגזרות-ממנה-בלבד (הזמנה-שלא-עברה-p* = 0-ממולא → הכל-fallback;
+      // בעבר floor-מחושב-מחדש נתן-שארית-כפולה-לאחרון → ביצוע-מעבר-לגודל-הפקודה).
+      // מוצהרת-ברמת-ההצטלבות — זמינה-גם-כשאין-התאמה (matched=0 → כל-הקבוצה-fallback).
+      const filledBy = new Map<number, number>();
 
       if (matched > 0) {
         // חלוקה-יחסית-קנונית: floor + השארית לאחרון-בסדר-הקנוני
@@ -86,6 +91,9 @@ export function cowSettle(st: DexState, exec: Exec, nowMs: number): TradeEvent[]
         };
         const buyAllocs = alloc(qBuys, buyVol).filter((x) => x.mu > 0);
         const sellAllocs = alloc(qSells, sellVol).filter((x) => x.mu > 0);
+        for (const x of buyAllocs) filledBy.set(x.o.seq, (filledBy.get(x.o.seq) ?? 0) + x.mu);
+        for (const x of sellAllocs) filledBy.set(x.o.seq, (filledBy.get(x.o.seq) ?? 0) + x.mu);
+
 
         // הקונים משלמים לפי p* — הסה"כ מחולק-למוכרים יחסית-לכמות (שימור-שלמים-מדויק)
         const totalBuyQuote = buyAllocs.reduce((s, x) => s + notional(clearPx, x.mu), 0);
@@ -99,9 +107,11 @@ export function cowSettle(st: DexState, exec: Exec, nowMs: number): TradeEvent[]
 
         let surplus = 0;
         // קונים: משלמים-p* (מתחת-לגבול — העודף נשאר אצלם), מקבלים-base
+        // FIX(Roast-64 · avail-not-bal): הבדיקה הייתה מול bal (כולל-נעילות-אחרות)
+        // — תשלום מתוך-כסף-נעול = avail-שלילי שהמבקר תופס רק-אחר-כך. avail-כנה.
         for (const { o, mu } of buyAllocs) {
           const pay = notional(clearPx, mu);
-          invariant(bal(st, o.owner, o.quote) >= pay, "cow-negative-balance:buyer");
+          invariant(avail(st, o.owner, o.quote) >= pay, "cow-insufficient:buyer");
           addBal(st, o.owner, o.quote, -pay);
           addBal(st, o.owner, o.base, mu);
           // FIX(Task 58 units): העודף בµ-ציטוט-אמת — notional כולל-/1000 (היה-×1000-שקרי)
@@ -111,7 +121,7 @@ export function cowSettle(st: DexState, exec: Exec, nowMs: number): TradeEvent[]
         for (let i = 0; i < sellAllocs.length; i++) {
           const { o, mu } = sellAllocs[i];
           const pay = sellQuotes[i];
-          invariant(bal(st, o.owner, o.base) >= mu, "cow-negative-balance:seller");
+          invariant(avail(st, o.owner, o.base) >= mu, "cow-insufficient:seller");
           addBal(st, o.owner, o.base, -mu);
           addBal(st, o.owner, o.quote, pay);
           surplus += Math.max(0, pay - notional(o.price, mu));
@@ -129,21 +139,22 @@ export function cowSettle(st: DexState, exec: Exec, nowMs: number): TradeEvent[]
           });
         }
         st.journal.push({
-          h, t: 0, soldier: "cow", action: "cow_match",
+          h, t: nowMs, soldier: "cow", action: "cow_match",
           profitMu: surplus,
           note: `${key}: matched ${matched}µ @ p*=${clearPx} (buys ${buyAllocs.length} · sells ${sellAllocs.length}) · surplus ${surplus}µ לסוחרים`,
         });
       }
 
-      // שאריות-קבוצה-חוצות (מהזמנות-שהשתתפו-חלקית או לא-עברו-את-p*)
+      // שאריות-קבוצה-חוצות — FIX(Roast-64): מהמפת-האמתית (לא-floor-מחושב-מחדש);
+      // הזמנה-שלא-עברה-את-p* = 0-ממולא (הכל-ל-fallback).
       for (const o of grp.buys) {
-        const got = Math.floor(matched * qtyOf(o) / Math.max(1, buyVol));
-        const rem = qtyOf(o) - (o.price >= (clearPx) ? got : 0);
+        const got = filledBy.get(o.seq) ?? 0;
+        const rem = qtyOf(o) - got;
         if (rem > 0) fallback(st, exec, o, rem, h, stats, events, nowMs);
       }
       for (const o of grp.sells) {
-        const got = Math.floor(matched * qtyOf(o) / Math.max(1, sellVol));
-        const rem = qtyOf(o) - (o.price <= (clearPx) ? got : 0);
+        const got = filledBy.get(o.seq) ?? 0;
+        const rem = qtyOf(o) - got;
         if (rem > 0) fallback(st, exec, o, rem, h, stats, events, nowMs);
       }
     } else {
@@ -158,24 +169,40 @@ export function cowSettle(st: DexState, exec: Exec, nowMs: number): TradeEvent[]
   return events;
 }
 
-/** ברירת-המחדל-הדטרמיניסטית לשארית: בריכות (batch אטומי, minOut 2%) → ספר → החזר-כנה. */
+/** ברירת-המחדל-הדטרמיניסטית לשארית: בריכות (batch אטומי, מגן-minOut) → ספר → החזר-כנה.
+ * FIX(Roast-64 · cow-fallback-units+limit):
+ *  · יחידות: rem הוא µ-בסיס-תמיד. לקנייה הכנסת-הראוטר הייתה rem (בסיס!) ככמות-
+ *    ציטוט → קניית-×price-עודף (רוקן-יתרות-קונים עד-2.5x). עכשיו: הקצאת-
+ *    ציטוט = notional(limit, rem), ה-minOut = rem (הבסיס-שהקונה-דורש).
+ *  · גבול-מחיר: ה-fallback דילג על-הגבול של-ההזמנה — הגן-2%-על-ציטוט-הבריכה
+ *    הנוכחי אינו-גבול-מחיר. עכשיו: נבדק-מראש שהציטוט-האפקטיבי של-המסלול מכבד
+ *    את הגבול (קנייה: מחיר ≤ limit · מכירה: מחיר ≥ limit) — אחרת-ספר בלבד. */
 function fallback(st: DexState, exec: Exec, o: CowOrder, rem: number, h: number, stats: NonNullable<DexState["cowStats"]>, events: TradeEvent[], nowMs: number): void {
   if (!(rem > 0)) return;
   const assetIn = o.side === "sell" ? o.base : o.quote;
   const assetOut = o.side === "sell" ? o.quote : o.base;
-  const routes = walkRoutes(assetIn, assetOut, rem);
+  // כמות-הכניסה-אמת: מכירה = rem בסיס · קנייה = תקציב-הציטוט-עד-הגבול
+  const inMu = o.side === "sell" ? rem : notional(o.price, rem);
+  const minOutMu = o.side === "sell" ? notional(o.price, rem) : rem; // הצד-השני-לפי-הגבול
+  const routes = walkRoutes(assetIn, assetOut, inMu);
   if (routes.length > 0) {
     routes.sort((a, b) => b.inMu - a.inMu);
-    const subs = routes[0].legs
-      .map((l, li) => legToOp(l, 200, `cow-fb-${o.seq}-${h}-${li}`))
-      .filter((x): x is Op => x !== null);
-    if (subs.length > 0) {
-      const r = exec({ type: "batch", issuer: o.owner, nonce: `cow-fb-${o.seq}-${h}`, ops: subs });
-      if (r.ok) {
-        stats.fallbackPool += rem;
-        if (r.events) events.push(...r.events);
-        st.journal.push({ h, t: 0, soldier: "cow", action: "cow_fallback_pool", note: `cow-${o.seq}: ${rem}µ ${assetIn}→${assetOut} דרך-הבריכות` });
-        return;
+    const best = routes[0];
+    // כיבוד-הגבול: out האפקטיבי של המסלול חייב לעמוד בגבול הפקודה (fail-closed)
+    if (!(best.inMu >= minOutMu)) {
+      st.journal.push({ h, t: nowMs, soldier: "cow", action: "cow_fallback_limit", note: `cow-${o.seq}: מסלול-בריכות ${best.inMu}µ < גבול-${minOutMu}µ — עובר-לספר` });
+    } else {
+      const subs = best.legs
+        .map((l, li) => legToOp(l, 200, `cow-fb-${o.seq}-${h}-${li}`))
+        .filter((x): x is Op => x !== null);
+      if (subs.length > 0) {
+        const r = exec({ type: "batch", issuer: o.owner, nonce: `cow-fb-${o.seq}-${h}`, ops: subs });
+        if (r.ok) {
+          stats.fallbackPool += rem;
+          if (r.events) events.push(...r.events);
+          st.journal.push({ h, t: nowMs, soldier: "cow", action: "cow_fallback_pool", note: `cow-${o.seq}: ${rem}µ ${assetIn}→${assetOut} דרך-הבריכות (${inMu}µ-כניסה, גבול-${minOutMu}µ)` });
+          return;
+        }
       }
     }
   }

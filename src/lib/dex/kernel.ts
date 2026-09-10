@@ -175,6 +175,9 @@ export interface DexState {
   journal: JournalEntry[];
   gasUsed: number;
   nextSeq: number;
+  relayOpen?: number; // FIX(Roast-64): מונה-דלתות-relay-פתוחות — relay_ack חייב-קישור (רשויות: תמונות-ישנות-בלעדיו)
+  rearmCounts?: { saos: number; usds: number; wsteem: number }; // FIX(Roast-64): תקרות-ה-rearm-במצב (היו-מודול — ריסטארט-מאפס)
+  botSeedCounts?: Record<string, { usds: number; saos: number }>; // FIX(Roast-64): תקרות-זריעת-בוטים-במצב (אותו-עיקרון)
   stats: { fills: number; swaps: number; opsTotal: number; ladders: number };
   // ── Task 54 · כלכלה (רשויות-כולן: תמונות-מצב-ישנות-בלעדיהן = undefined) ──
   ve?: Record<string, { amt: number; unlockH: number; weeks: number; atH: number }>; // עמדת-veSAOS-פר-חשבון
@@ -261,12 +264,24 @@ export const lockedOf = (st: DexState, who: string, a: string): number => st.loc
 export const avail = (st: DexState, who: string, a: string): number =>
   bal(st, who, a) - lockedOf(st, who, a);
 
+/** FIX(Roast-64 · CRITICAL prototype-pollution): חשבון בשם "__proto__" (או
+ * constructor/prototype) דרך-addBal/addLock/credits — הכתיבה הייתה נופלת על
+ * Object.prototype וכל-חשבון-קיים היה יורש יתרה-חינם (מדפסת-כסף — הוכחה-חיה
+ * ברוסט-64: transfer ל-"__proto__" → כל-ארנק רואה יתרה שלא הייתה לו). עכשיו:
+ * fail-closed — זיהוי-מסוכן זורק, בגרעין ובעזרי-המצב (הגנה-כפולה). */
+const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+export function safeAccountName(name: string, kind: string): void {
+  if (FORBIDDEN_KEYS.has(name)) throw new Error(`forbidden-account-name:${kind}:${name}`);
+}
+
 export function addBal(st: DexState, who: string, a: string, d: number): void {
   if (!Number.isSafeInteger(d)) throw new Error("non-integer balance delta");
+  if (FORBIDDEN_KEYS.has(who) || FORBIDDEN_KEYS.has(a)) throw new Error("forbidden-state-key");
   const b = (st.balances[who] = st.balances[who] ?? {});
   b[a] = (b[a] ?? 0) + d;
 }
 export function addLock(st: DexState, who: string, a: string, d: number): void {
+  if (FORBIDDEN_KEYS.has(who) || FORBIDDEN_KEYS.has(a)) throw new Error("forbidden-state-key");
   const l = (st.locked[who] = st.locked[who] ?? {});
   l[a] = (l[a] ?? 0) + d;
 }
@@ -276,7 +291,11 @@ export function chargeGas(st: DexState, who: string, gas: number): boolean {
   st.gasUsed += gas;
   return true;
 }
-/** dedupe-קשיח עם חלון-נע (מונע צמיחת-זיכרון בריצה ארוכה — מורשת WINDOW_FLUSH) */
+/** FIX(Roast-64 · replay-hole): החלון-הנע היה חור-ריפליי אמיתי — עסקה שהוזרחה
+ * מה-window (6000 ops ≈ דקות) הייתה מתקבלת שוב (יתרות שונות → העברה-כפולה).
+ * עכשיו: ה-Set הוא זיכרון-dedupe-מלא-לכל-חיי-התהליך (מעולם לא מוחק) — החלון נשאר
+ * רק-על-המערך-הקנוני (גודל-השורש); איפוס-זיכרון קורה רק בריסטארט (כמו כל-רשת
+ * שמחזיקה-dedupe בזיכרון). מסמך-בכנות: אחרי-ריסטארט ה-dedupe נבנה-מחדש מה-window. */
 const NONCE_WINDOW = 6000;
 // FIX(SETTLE-9 perf): st.nonces.includes היה סריקה O(window) לכל-op (21µs × 160 ops/בלוק
 // = ~3.3ms/בלוק). Set מקביל שומר-סנכרון מול-המערך (שניהם תמיד חד-ערכיים — המערך
@@ -292,9 +311,9 @@ function pushNonce(st: DexState, key: string): void {
   st.nonces.push(key);
   nonceSet(st).add(key);
   if (st.nonces.length > NONCE_WINDOW) {
-    const removed = st.nonces.splice(0, 1000);
-    const s = nonceSet(st);
-    for (const k of removed) s.delete(k);
+    // FIX(Roast-64 · replay-hole): העלים יוצאים מהמערך-הקנוני בלבד — ה-Set ממשיך
+    // לזכור לנצח (אפס-ריפליי). ראה-הערת-המודול מעלה.
+    st.nonces.splice(0, 1000);
   }
 }
 export const poolKey = (x: string, y: string): string => [x, y].sort().join("/");
@@ -430,11 +449,17 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
   if (gas === undefined) return { ok: false, err: "unknown-op", gas: 0 };
   const issuer = String(op.issuer ?? "").toLowerCase();
   if (!issuer || !op.nonce) return { ok: false, err: "issuer+nonce-required", gas: 0 };
+  // FIX(Roast-64 · prototype-pollution): זיהוי-מסוכן נדחה-בדלת (שים-לב: גם addBal/
+  // addLock מוגנים — הגנה-כפולה fail-closed). נמען-"__proto__" נדחה בדיוק-כך.
+  if (FORBIDDEN_KEYS.has(issuer)) return { ok: false, err: "forbidden-issuer", gas: 0 };
   // FIX(SETTLE-7 authz-split): נרמול-פעם-אחת בכניסה — כל-הנתיבים (יתרות/נעילות/
   // order-cap/ספר/בריכות) חייבים-לראות את אותו-מזהה. החור-ההיסטורי: issuer-גולמי
   // ("TREASURY") עבר בדיקת-funder-only במנוע-המנורמל אך נגע ביתרות-של-מזהה-אחר.
   op.issuer = issuer;
-  if (typeof op.to === "string") op.to = op.to.toLowerCase(); // אותו-עיקרון לנמענים — אין-חשבונות-רפאים בגלל-רישוי
+  if (typeof op.to === "string") {
+    op.to = op.to.toLowerCase(); // אותו-עיקרון לנמענים — אין-חשבונות-רפאים בגלל-רישוי
+    if (FORBIDDEN_KEYS.has(op.to)) return { ok: false, err: "forbidden-recipient", gas: 0 };
+  }
   const dedupeKey = `${issuer}:${op.nonce}`;
   if (nonceSet(st).has(dedupeKey)) return { ok: false, err: "replay-rejected", gas: 0 };
 
@@ -633,7 +658,10 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const code = LPAD_CODE_PREFIX + ticker;
       if (st.assets[code]) return { ok: false, err: "ticker-taken", gas: 0 };
       const active = Object.values(st.launch ?? {});
-      if (active.length >= LPAD_MAX_ACTIVE) return { ok: false, err: "launch-cap", gas: 0 };
+      // FIX(Roast-64 · launch-cap-brick): התקרה-הרשתית ספרה גם-השקות-שהסתיימו —
+      // אחרי-8-השקות-היסטוריות הרשת-כולה-הייתה-ננעלת-להשקות-לנצח (DoS-עצמי).
+      // עכשיו: רק-השקות-חיות-נספרות (עקבי-עם-התקרה-פר-בעלים שכבר-סננה !graduated).
+      if (active.filter((l) => !l.graduated).length >= LPAD_MAX_ACTIVE) return { ok: false, err: "launch-cap", gas: 0 };
       if (active.filter((l) => l.owner === issuer && !l.graduated).length >= LPAD_MAX_PER_OWNER)
         return { ok: false, err: "launch-owner-cap", gas: 0 };
       if (active.some((l) => l.ticker === ticker)) return { ok: false, err: "ticker-active", gas: 0 };
@@ -967,13 +995,19 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         // TRUTH-RAIL (Task 61): הטבעה-מגובה-חוץ — הגיבוי הוא נכס-אמת על-שרשרת-חוץ
         // (BLURT-אמת ב-headcorner). אוצר-בלבד + תביעה-חובה; מנוע-ה-Truth מאמת-חי
         // מול-RPC-ציבורי שהגיבוי באמת קיים — אם-לא, דגל-BACKING-BROKEN-פומבי.
+        // FIX(Roast-64 · double-mint): תביעה-ששימשה-כבר-נדחית — בלי-זה שתי-קריאות-
+        // rail באותו-חלון הטביעו פעמיים מול-גיבוי-אחד (ההוכחה-הקיימת מוחזרת-שוב).
+        // במקביל truth.ts שולח-claim-ייחודי-פר-טיק (height:deficit) — רובד-שני.
         if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas };
         if (!op.claim) return { ok: false, err: "external-claim-required", gas };
+        if (st.extBack?.[a]?.claim === op.claim) return { ok: false, err: "claim-already-used", gas };
         const ce = consume(); if (ce) return ce;
         st.backing[a] = (st.backing[a] ?? 0) + amt;
         addBal(st, issuer, a, amt);
         st.extBack = { ...(st.extBack ?? {}), [a]: { claim: op.claim, mu: (st.extBack?.[a]?.mu ?? 0) + amt, atH: st.height } };
-        st.journal.push({ h: st.height, t: 0, soldier: "treasury", action: "wrap_mint_ext", profitMu: amt, note: `external-backed mint ${amt}µ ${a} (${op.claim})` });
+        // FIX(Roast-64 · journal-mislabel): הרשומה הייתה עם t:0 (זמן-מזויף) ו-
+        // profitMu:amt (הטבעה-מגובה אינה רווח — זיהוי-שקר שהנפיח-כל-Σprofit).
+        st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "wrap_mint_ext", note: `external-backed mint ${amt}µ ${a} (${op.claim})` });
         return { ok: true, gas };
       }
       if (op.type === "wrap_mint") {
@@ -1025,11 +1059,17 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
     case "relay": {
       if (!op.to) return { ok: false, err: "relay-requires-destination", gas: 0 };
       pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — החינם הוא היתרון
+      // FIX(Roast-64): relay_ack-ללא-קישור — הדלת-והאישור-עכשיו קשורים-במונה:
+      // relay פותח (relayOpen++), relay_ack סוגר (חייב >0). אישור-בלי-דלת-פתוחה
+      // = רעש-פורמלי — נדחה כעת (fail-closed).
+      st.relayOpen = (st.relayOpen ?? 0) + 1;
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "relay", note: `→${op.to} ${(op.memo ?? "").slice(0, 30)}` });
       return { ok: true, gas: 0 };
     }
     case "relay_ack": {
+      if ((st.relayOpen ?? 0) <= 0) return { ok: false, err: "no-open-relay", gas: 0 };
       pushNonce(st, dedupeKey); st.stats.opsTotal++;
+      st.relayOpen = (st.relayOpen ?? 0) - 1;
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "relay_ack", note: (op.memo ?? "").slice(0, 30) });
       return { ok: true, gas: 0 };
     }
