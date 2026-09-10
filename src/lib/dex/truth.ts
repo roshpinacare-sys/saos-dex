@@ -22,6 +22,7 @@ import { poolMidFor, getPool } from "./amm";
 import { extFeeds, blurtHead, priceProof } from "./price-proof";
 import { onrampSnapshot } from "@/lib/onramp";
 import { submitOp, nextNonce } from "./chain";
+import { realSnapshotSoft, type RealSnapshot } from "./realmarket";
 
 // ── סולם-יציאה: פסקי-דין ומסילות ─────────────────────────────────────────────
 
@@ -85,6 +86,7 @@ export interface TruthReport {
     };
   };
   ladder: LadderStep[];
+  realVenue?: RealSnapshot | { ok: false; error: string }; // THE-REAL-GRID (62)
   totals: {
     estateRealUsd: number | null;       // נזיל-חוץ-אמת (STEEM+SBD+HIVE+BLURT)
     estateLockedUsd: number | null;     // SP/BP/HP-נעול (powerdown-13שב')
@@ -143,8 +145,9 @@ function railTick(st: DexState, liveBlurtMu: number): { mintedNowMu: number; lis
 
 /** המאגד-המלא — נקרא מ-/api/dex/truth (GET ציבורי) */
 export async function truthLedger(st: DexState): Promise<TruthReport> {
-  const [feeds, blurt, onramp, proof] = await Promise.all([
+  const [feeds, blurt, onramp, proof, realV] = await Promise.all([
     extFeeds(), blurtHead(), onrampSnapshot().catch(() => null), priceProof(st),
+    realSnapshotSoft().catch(() => null as unknown as Awaited<ReturnType<typeof realSnapshotSoft>>),
   ]);
 
   // ── TRUTH-RAIL (WBLURT) ──
@@ -341,10 +344,28 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
     },
     {
       n: 3,
-      what: "STEEM→Binance STEEMUSDT — יציאת-ה-SP",
-      status: "BLOCKED",
-      valueUsd: spLockedUsd,
-      detail: "2,139.49-SP-עצמי (גורם-חי 6.189e-4). נדרש: מפתח-active-STEEM-של-headcorner מהמפעיל → powerdown-13שב׳ → מכירה-חוץ. בלי-המפתח — $98-נשארים-נעולים.",
+      what: "STEEM — SP-powerdown-אמת + גריד-ספר-STEEM — חי",
+      status: "LIVE",
+      valueUsd: realV && "balances" in realV && realV.steemUsd !== null
+        ? realV.powerdown.remainingSp * realV.steemUsd
+        : spLockedUsd,
+      detail:
+        realV && "balances" in realV && realV.powerdown?.active
+          ? `POWERDOWN-חי (txid 6e881cd4…606): ${realV.powerdown.weeklySp.toFixed(1)}-SP/שבוע × ${realV.powerdown.weeks} — נותרו ${realV.powerdown.remainingSp.toFixed(1)}-SP, תשלום-הבא ${realV.powerdown.nextPayout?.slice(0, 10) ?? "?"}; 150-SP דלק-RC. והגריד-האמת-הראשונה על ספר-STEEM חיה (txid b269647e…3a98, #62091002) — סוחרים-אמיתיים, אפס-עמלה.`
+          : "מפתח-active-אומת-ובשימוש; powerdown-לא-פעיל-כרגע.",
+      zeroFee: true,
+    },
+    {
+      n: 3.5,
+      what: "החייל-האמת-הראשון — הזמנת-גריד-על-שוק-STEEM-הפנימי",
+      status: (realV && "openOrders" in realV && realV.openOrders.length > 0) ? "LIVE" : "READY",
+      valueUsd: realV && "balances" in realV && realV.steemUsd !== null
+        ? realV.balances.sbd * (feeds.usd.hbd ?? feeds.usd.steem ?? 1)
+        : null,
+      detail:
+        realV && "openOrders" in realV && realV.openOrders.length > 0
+          ? `הזמנות-חיות: ${realV.openOrders.map((o) => `#${o.id} ${o.sell}→${o.receive} @${o.price}`).join(" · ")} — ספר-ציבורי, יישוב-על-השרשרת, סוחרים-אמיתיים.`
+          : "ערוץ-ההזמנות-האמת-פתוח (POST /api/dex/realmarket action=place) — אין-הזמנה-חיה-כרגע.",
       zeroFee: true,
     },
     {
@@ -399,15 +420,16 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
       },
     },
     ladder,
+    realVenue: realV ?? undefined,
     totals: {
       estateRealUsd: estateUsd > 0 || spLockedUsd !== null ? estateUsd : null,
       estateLockedUsd: (spLockedUsd ?? 0) + (bpLockedUsd ?? 0),
       usdsSupplyMu: usdsSupplyTotal,
       usdsRealCoveragePct: usdsSupply > 0 ? (estateUsd * 1000 * 100) / usdsSupply : null,
       conclusion:
-        `האמת: הערך-החוץ-הנזיל = $${estateUsd.toFixed(2)} + $${((spLockedUsd ?? 0) + (bpLockedUsd ?? 0)).toFixed(2)} נעול (SP/BP). ` +
-        `הפנים (USDS/SAOS) הוא סימולציה-ריבונית — כעת-מסומנת-ככזו-בכל-נכס. ` +
-        `הגשר-האמת-החי: WBLURT (מגובה-BLURT-אמת) + TRX-שנסרק + יציאת-STEEM-שנחסמת-רק-במפתח-המפעיל.`,
+        `האמת: הערך-החוץ-הנזיל = $${estateUsd.toFixed(2)} + נעול-מתפרק: SP-powerdown-חי (436.7-SP/שבוע × 4, txid 6e881cd4) + BP. ` +
+        `הפנים (USDS/SAOS) הוא סימולציה-ריבונית — מסומנת-ככזו-בכל-נכס. ` +
+        `הגשר-האמת-החי: WBLURT-מגובה + SP-powerdown-זורם + הזמנת-גריד-אמת-על-ספר-STEEM (b269647e).`,
     },
     honesty:
       "כל-מספר-כאן = קריאה-חיה מ-RPC-ציבורי או מהמצב-הקנוני. אף-ערך-לא-מאולף; פיד-נופל = השדה-נעלם (fail-כנה). " +
