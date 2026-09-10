@@ -1,7 +1,6 @@
 # CHAOS_TEST_RESULTS — מבחן-כאוס מבוקר · SAOS-DEX Relay
 
-> נוצר אוטומטית ע"י `scripts/chaos-test.ts` · ריצה: 2026-09-07T16:53:31.631Z · משך: 103.6s
-> ⚠️ **כנות-כיסוי (SETTLE-7):** הריצה-המתועדת-להלן-חיממה-3/5-פסים (Steem/Hive/TRON). ה-ETH/SOL-מתאמים (f9d813e — הקוד-היחיד שנוגע-בכסף-אמת) לא-היו-קיימים-אז. הסקריפט-מעכשיו-מזייף-את-חמשת-הפסים (`chaosView` חושף-את-כולם) — ריצה-מאמתת-חדשה-תבוצע-מיד-עם-שחזור-המפתחות (הסביבה-כרגע-חסרת-.env → FAIL_EXIT כנה). וקטורי-ה-txid להלן שייכים-לשרשרת-שטרפה-ב-wipe-2026-09-08 — הם-עדות-היסטורית-ליכולת, לא-לשרשרת-החיה.
+> נוצר אוטומטית ע"י `scripts/chaos-test.ts` · ריצה: 2026-09-10T19:37:33.044Z · משך: 103.4s
 > הזרקות דרך `src/lib/dex/chaos.ts` (נקודת-הזרקה אינרטית בפרודקשן). מצב-הבדיקה מבודד בתיקיית-זמן — אפס נגיעה ב-`state/anchors.json` החי.
 
 ## תרחיש A — ניתוק-RPC יזום (60 שניות, Steem+Hive+TRON)
@@ -19,7 +18,7 @@
 
 ## תרחיש B — הזרקת stateRoot מזויף (קריאה-חוזרת מה-RPC הציבורי)
 
-- וקטור-בדיקה: steem · height 3768 · txid `08f87697a340f7420f6ff00fb2c1a1a6c898f308` (עיגון-אמת מ-anchors.json)
+- וקטור-בדיקה: steem · height 24876 · txid `0237393a79fe7864b116a7719cb1a2f5736c567a` (עיגון-אמת מ-anchors.json)
 - stateRoot מוזרק: `23b61e35df0ece216f46a0d4f420c902ed443d9e838ea52c25916db0b324ae08`
 - המערכת זיהתה מיסמאץ', הדליקה `[saos-relay][ALERT]`, ספרה mismatch, וסירבה לאשר.
 
@@ -36,12 +35,12 @@
 | 3 | A3 · hive circuit breaker OPEN | PASS | state=open failures=4 |
 | 4 | A4 · tron circuit breaker OPEN | PASS | state=open failures=4 |
 | 5 | A5 · breaker OPEN blocks new attempts (honest queue) | PASS | queue=5 jobs waiting for half-open probe (cooldown 5min) |
-| 6 | A6 · zero real network attempts (all errors are injected chaos failures) | PASS | 11 record(s) · every error starts with 'chaos:' — gate fired inside the normal failure path (no RPC/key use) |
-| 7 | A7 · breaker trips counted | PASS | trips=3 |
-| 8 | B1 · positive control: real stateRoot verifies on-chain | PASS | steem h3768 txid 08f87697a340f742… |
-| 9 | B2 · forged stateRoot DETECTED (mismatch) | PASS | detail="mismatch: on-chain h3768/15eb64f72037… vs local h3768/23b61e35df0e…" |
+| 6 | A6 · zero real network attempts (all errors are injected chaos failures) | PASS | 23 record(s) · every error starts with 'chaos:' — gate fired inside the normal failure path (no RPC/key use) |
+| 7 | A7 · breaker trips counted | PASS | trips=6 |
+| 8 | B1 · positive control: real stateRoot verifies on-chain | PASS | steem h24876 txid 0237393a79fe7864… |
+| 9 | B2 · forged stateRoot DETECTED (mismatch) | PASS | detail="mismatch: on-chain h24876/f5b3da6c68fa… vs local h24876/23b61e35df0e…" |
 | 10 | B3 · forged stateRoot REJECTED (not approved as verified) | PASS | verified=false |
-| 11 | B4 · ALERT logged on mismatch | PASS | 4 alert line(s) captured |
+| 11 | B4 · ALERT logged on mismatch | PASS | 7 alert line(s) captured |
 | 12 | B5 · mismatch counted in metrics | PASS | mismatches 0 → 1 |
 | 13 | C1 · not-indexed stays honest (verified=null, no mismatch) | PASS | detail="not indexed (pending reconciliation)" · mismatches unchanged (1) |
 

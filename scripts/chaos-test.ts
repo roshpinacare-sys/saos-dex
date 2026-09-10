@@ -88,7 +88,10 @@ async function main(): Promise<void> {
   // בכסף-אמת, f9d813e) היו-ללא-כיסויי-כאוס והסקריפט הציג-"13/13" על-זה.
   // eth/sol מזוינים-באותו-חלון: שידורים-בזמן-מחיצה חייבים-להיכשל-בכנות
   // (economic-wait/backoff), והמחיצה לא-רשאית-להפיל-את-התהליך.
-  for (const t of ["steem", "hive", "tron", "eth", "sol"] as const) chaos.armChaos(t, 60_000);
+  // FIX(Roast-69 · arm-fleet): המחיצה-כיסתה-5/6-יעדים — "fleet" לא-מוזרק-כלל (המגדר-ב-relay
+  // תומך-בו-מאז-Roast-65-b M9) → בזמן-"מחיצה" ניסיונות-הצי-עקפו-את-השער-והגיעו-עד-בדיקת-הכספת.
+  // הרשימה-עתה-מלאה-וכוללת-את-כל-היעדים-שה-relay מגדר.
+  for (const t of ["steem", "hive", "tron", "eth", "sol", "fleet"] as const) chaos.armChaos(t, 60_000);
 
   const SEALS_AT_SEC = [0, 15, 30, 45, 58]; // חותמות נכנסות גם בזמן-המחיצה (כמו-בפרודקשן)
   const makeSeal = (n: number): SealInfo => {
@@ -140,8 +143,26 @@ async function main(): Promise<void> {
   check("A3 · hive circuit breaker OPEN", stA.chains.hive.breaker.state === "open", `state=${stA.chains.hive.breaker.state} failures=${stA.chains.hive.breaker.failures}`);
   check("A4 · tron circuit breaker OPEN", stA.chains.tron.breaker.state === "open", `state=${stA.chains.tron.breaker.state} failures=${stA.chains.tron.breaker.failures}`);
   check("A5 · breaker OPEN blocks new attempts (honest queue)", stA.queue > 0, `queue=${stA.queue} jobs waiting for half-open probe (cooldown 5min)`);
-  const chaosOnly = stA.records.length > 0 && stA.records.every((r) => !r.error || r.error.startsWith("chaos:"));
-  check("A6 · zero real network attempts (all errors are injected chaos failures)", chaosOnly, `${stA.records.length} record(s) · every error starts with 'chaos:' — gate fired inside the normal failure path (no RPC/key use)`);
+  // FIX(Roast-69 · A6-evidence): הפירוט-היה-מחרוזת-סטטית-שנדפסה-גם-בכישלון — הסתיר-את-הבריחות-
+  // מהמחיצה ("הוכח-ע"י-A6" בעוד-A6-נכשל!). מעתה: הראיה-מחושבת.
+  // FIX(Roast-69 · A6-predicate): שתי-מחלקות-ראיה-מוכרות-שאינן-נגיעה-ברשת:
+  //  (1) "chaos:" — השער-ירה-בתוך-נתיב-הכשל-הרגיל (לפני-כל-רשת/מפתח);
+  //  (2) "fleet disabled:" — השבתה-שקטה-מקומית (אין-כספת-צי בסנדבוקס — בכוונה,
+  //      בידוד-מצב), אפס-רשת-אפס-מפתח. בלי-זה A6-צועק-זאב-על-ראיה-מקומית-כנה.
+  // כל-שאר = בריחה-אמת-מהמחיצה → FAIL-עם-רשימה.
+  const zeroNet = (e: string): boolean => e.startsWith("chaos:") || e.startsWith("fleet disabled:");
+  const offenders = stA.records
+    .filter((r) => r.error && !zeroNet(r.error))
+    .slice(0, 3)
+    .map((r) => `${r.chain}@h${r.height}: ${String(r.error).slice(0, 90)}`);
+  const chaosOnly = stA.records.length > 0 && stA.records.every((r) => !r.error || zeroNet(r.error));
+  check(
+    "A6 · zero real network attempts (all errors are injected chaos failures)",
+    chaosOnly,
+    offenders.length > 0
+      ? `offenders (${stA.records.filter((r) => r.error && !r.error.startsWith("chaos:")).length}): ${offenders.join(" | ")}`
+      : `${stA.records.length} record(s) · every error starts with 'chaos:' — gate fired inside the normal failure path (no RPC/key use)`,
+  );
   check("A7 · breaker trips counted", stA.metrics.breakerTrips >= 3, `trips=${stA.metrics.breakerTrips}`);
 
   /* ══ תרחיש B — הזרקת stateRoot מזויף ════════════════════════════════════ */
