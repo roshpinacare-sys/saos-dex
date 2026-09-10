@@ -5,7 +5,11 @@ import { operatorAuth } from "@/lib/operator-auth";
 
 export const dynamic = "force-dynamic";
 
-/** ניהול-בריכות: add נזילות (פרופורציונלי) או remove (pro-rata LP) */
+/** ניהול-בריכות:
+ *  · open   — פתיחת-בריכה-חדשה (Roast-71): זריעה-דו-צדדית-מהאוצר, LP=√k לאוצר.
+ *             מעשה-אוצר-ריבוני — issuer מוכתב-טריזור (treasury-only בגרעין).
+ *  · add    — הוספת-נזילות (פרופורציונלי) — מנפיק operator (ברירת-מחדל) או treasury.
+ *  · remove — פריקה pro-rata LP. */
 export async function POST(req: Request) {
   // P0(25-a): שער-מפעיל — מוטציה דורשת טוקן x-saos-operator (בלי DEX_OPERATOR_TOKEN: 503 fail-closed)
   const oa = operatorAuth(req);
@@ -16,17 +20,37 @@ export async function POST(req: Request) {
   if (g) return g;
 
   const body = (await req.json().catch(() => ({}))) as {
-    action?: "add" | "remove";
-    pair?: string; amountA?: number; lp?: number;
+    action?: "open" | "add" | "remove";
+    pair?: string; amountA?: number; amountB?: number; lp?: number; issuer?: string;
   };
   const pair = body.pair;
   if (!pair) return NextResponse.json({ ok: false, error: "pair-required" }, { status: 200 });
 
+  if (body.action === "open") {
+    // Roast-71 · POOL-OPEN: pair קנוני — amountA=צד-שמאל, amountB=צד-ימין.
+    const amountA = Math.floor(Number(body.amountA));
+    const amountB = Math.floor(Number(body.amountB));
+    if (!(amountA > 0) || !(amountB > 0)) {
+      return NextResponse.json({ ok: false, error: "bad-open (נדרש pair קנוני + amountA>0 + amountB>0)" }, { status: 200 });
+    }
+    const r = submitOp({
+      type: "pool_open", issuer: "treasury", nonce: nextNonce("po"),
+      pair, amount: amountA, amountB,
+    });
+    return NextResponse.json({ ok: r.queued, error: r.reason });
+  }
+
   if (body.action === "add") {
     const amountA = Math.floor(Number(body.amountA));
     if (!(amountA > 0)) return NextResponse.json({ ok: false, error: "bad-amount" }, { status: 200 });
+    // FIX(Roast-71 · issuer-whitelist): היה-מוכתב-operator — שהפיל-הוספות-אוצר
+    // (למשל-העמקת-ENERGY-מהיתרות-של-האוצר) על-insufficient. רשימה-סגורה fail-closed.
+    const issuer = String(body.issuer || "operator").toLowerCase();
+    if (issuer !== "operator" && issuer !== "treasury") {
+      return NextResponse.json({ ok: false, error: "bad-issuer" }, { status: 200 });
+    }
     const r = submitOp({
-      type: "pool_add", issuer: "operator", nonce: nextNonce("pa"),
+      type: "pool_add", issuer, nonce: nextNonce("pa"),
       pair, amount: amountA,
     });
     return NextResponse.json({ ok: r.queued, error: r.reason });

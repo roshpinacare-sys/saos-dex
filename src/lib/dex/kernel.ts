@@ -16,7 +16,7 @@
  */
 import { canon, sha256, stateRootOf } from "./canonical";
 import { cancelOrder, matchBook, gcOrders, type BookOrder } from "./book";
-import { poolAdd, poolSwap, poolRm } from "./amm";
+import { poolAdd, poolSwap, poolRm, LP_ASSET_PREFIX } from "./amm";
 
 // ─── טבלת-GAS (מפרט-הברזל + הרחבות 96–113 של kernel.cjs) ────────────────────
 // SETTLE-5 "לוח-זמנים-סיבולת": קיזוז-שריפה בפעולות-התדר-הגבוהות (סדר/ביטול/
@@ -32,6 +32,12 @@ export const GAS_TABLE = {
   fill: 60,
   order_gc: 30,
   pool_add: 180,
+  // Roast-71 · POOL-OPEN: פתיחת-בריכה-חדשה-בזמן-ריצה — אפס-גז (משפחת-הערוצים-הריבוניים:
+  // xfer_free/refuel/relay/wrap/batch). מגן-הספאם-האמיתי הוא **מבני** ולא-מחיר:
+  // אוצר-בלבד + זריעה-דו-צדדית-מלאה-מיתרות-האוצר + pair-קנוני + נגד-בריכה-קיימת.
+  // gas-על-op-אוצר-בלבד אינו-מוסיף-הגנה-ורק-מרעיב-את-ספר-הריבון (תשישות-מבנית —
+// אותו-דפוס-שתוקן-ב-ZFB-66-וב-קצבת-החיות-SETTLE-15).
+  pool_open: 0,
   pool_swap: 100,
   pool_rmw: 120,
   pool_xAdd: 180,
@@ -461,6 +467,7 @@ export interface Op {
   orderId?: number;
   // בריכות
   pair?: string; assetIn?: Asset; minOut?: number; lp?: number; kind?: "x";
+  amountB?: number; // Roast-71 · pool_open — זריעת-הצד-השני (pair קנוני: amount=צד-שמאל, amountB=צד-ימין)
   // veSAOS (Task 54)
   weeks?: number;
   // עטיפות/רשימות/עדים/דלתות
@@ -1029,6 +1036,35 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const c = consume(); if (c) return c;
       gcOrders(st); // FIX(SETTLE-9 dead-code): ה-events שנבנו-כאן היו void-תמיד — הוסרו (כנות: gc מנקה-מצב, אין-אירועי-סליל)
       return { ok: true, gas, events: [] };
+    }
+    case "pool_open": {
+      // Roast-71 · POOL-OPEN: פתיחת-בריכה-חדשה-בזמן-ריצה על נכסים-רשומים.
+      // עד-היום בריכות-נולדו-רק-בג'נזיס (seedPool-hardcoded) או-בחתימת-השקה
+      // (launchpad-graduation) — מה-שהשאיר נכסים-רשומים-עם-מחזיקים-אמת
+      // (WSBD/PHIVE/WBLURT) בלי-יציאה-כלל (tier-none בראוטר — בלי-המרה).
+      // פתיחת-בריכה = מעשה-ריבוני-של-האוצר: זריעה-דו-צדדית-מהיתרות-שלו,
+      // LP=√k כולו-לאוצר (כמו-ג'נזיס), fail-closed על-כל-שלב.
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas };
+      const oKey = String(op.pair ?? "");
+      if (!oKey) return { ok: false, err: "pair-required", gas: 0 };
+      const parts = oKey.split("/");
+      if (parts.length !== 2 || !parts[0] || !parts[1]) return { ok: false, err: "bad-pair", gas: 0 };
+      const canon = poolKey(parts[0], parts[1]);
+      if (oKey !== canon) return { ok: false, err: "non-canonical-pair", gas: 0 };
+      if (st.pools[canon]) return { ok: false, err: "pool-exists", gas: 0 };
+      if (!knownAsset(st, parts[0]) || !knownAsset(st, parts[1])) return { ok: false, err: "asset-not-listed", gas: 0 };
+      const amtA = op.amount ?? 0, amtB = op.amountB ?? 0;
+      if (!(amtA > 0) || !(amtB > 0)) return { ok: false, err: "dust-open", gas: 0 };
+      if (avail(st, "treasury", parts[0]) < amtA) return { ok: false, err: "insufficient-treasury", gas: 0 };
+      if (avail(st, "treasury", parts[1]) < amtB) return { ok: false, err: "insufficient-treasury", gas: 0 };
+      const c = consume(); if (c) return c;
+      const lpMint = Math.floor(Math.sqrt(amtA * amtB));
+      st.pools[canon] = { a: parts[0] as Asset, b: parts[1] as Asset, ra: amtA, rb: amtB, lp: lpMint, feeAccruedTreasury: 0, swaps: 0 };
+      addBal(st, "treasury", parts[0], -amtA);
+      addBal(st, "treasury", parts[1], -amtB);
+      addBal(st, "treasury", LP_ASSET_PREFIX + canon, lpMint);
+      st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "pool_open", note: `${canon} ${amtA}+${amtB}µ · LP ${lpMint}µ` });
+      return { ok: true, gas };
     }
     case "pool_add":
     case "pool_xAdd": {
