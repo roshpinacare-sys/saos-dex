@@ -143,20 +143,21 @@ export function pinnedHosts(): string[] {
 
 /* ── FIX(Roast-65-b · H1): fenceSelftest — הוכחת-ריצה שהגדר פתוחה בדיוק לקוראים-הלגיטימיים ──
  * מניפסט-הקוראים-הפנימיים (העתק-קנוני מוצהר — כמו-הפינים; מוצלב-מול-הקוד-ע"י fence-check):
- *  · hive-rail.signer — החותם-החיצוני: ברירת-המחדל http://127.0.0.1:3004/sign
- *    (Roast-65-b: פורט-3033 היה-הזיה-ללא-מאזין; ה-ADMIN_PORT-האמתי של
- *    mini-services/relay-service = 3004 · SAOS_EXTERNAL_SIGNER_URL עוקף).
- *  · loopback עם-פורט — פין-עירום מכסה (היה-נזרק-תמיד לפני-H1).
+ *  · loopback עם-פורט — פין-עירום מכסה (היה-נזרק-תמיד לפני-H1). Roast-73:
+ *    החותם-החוץ של hive-rail אינו-קיים-עוד (בוטל-כנה) — המסילה מבצעת-בדמון
+ *    (rail-exec) דרך-הגדר עצמה (HIVE/HE צמתים-מקובעים).
  *  · כל-השערים-החיצוניים-המקובעים (https).
  *  · אכיפת-scheme: http-מחוץ-ללופבק/ws/unpinned → נדחה. */
 export interface FenceCase { endpoint: string; expect: "allow" | "reject"; why: string }
 
 export function fenceCallerCases(): FenceCase[] {
   const cases: FenceCase[] = [
-    // hive-rail.signer — החותם-החיצוני (loopback http + פורט; ברירת-המחדל אחרי-Roast-65-b)
-    { endpoint: "http://127.0.0.1:3004/sign", expect: "allow", why: "hive-rail.signer — החותם-החיצוני (ADMIN_PORT-3004 של-relay-service, loopback-http מותר)" },
-    { endpoint: "http://127.0.0.1:3033/sign", expect: "allow", why: "hive-rail.signer — פין-עירום-מכסה-כל-פורט (הרגרסיה-של-H1: לפני-התיקון נזרק-תמיד)" },
-    { endpoint: "http://localhost:3004/sign", expect: "allow", why: "hive-rail.signer — localhost-פין-עירום-עם-פורט" },
+    // loopback-http-פין — בדיקות-התנהגות-רגרסיה (Roast-73 כנות: החותם-החוץ של
+    // hive-rail אינו-קיים-עוד — הביצוע עבר ל-rail-exec בתוך-הדמון; הפין-עצמו
+    // נשאר כלל-גדר-כללי למתקשרי-loopback לגיטימיים)
+    { endpoint: "http://127.0.0.1:3004/anything", expect: "allow", why: "loopback-http-פין (החותם-ההיסטורי של-hive-rail עזב — Roast-73; הפין-נשאר-כלל-גדר)" },
+    { endpoint: "http://127.0.0.1:3033/anything", expect: "allow", why: "loopback-http-פין-מכסה-כל-פורט (רגרסיית-H1: לפני-התיקון נזרק-תמיד)" },
+    { endpoint: "http://localhost:3004/anything", expect: "allow", why: "loopback-http-פין — localhost-כולל-פורט" },
     // relay.ts — גרפני + TRON
     { endpoint: "https://api.steemit.com", expect: "allow", why: "relay.STEEM_NODES[0] · onramp.STEEM_NODE · bridge.steem" },
     { endpoint: "https://api.justyy.com", expect: "allow", why: "relay.STEEM_NODES[1] · realmarket" },

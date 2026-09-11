@@ -26,6 +26,8 @@ import {
 } from "lucide-react";
 import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
 import { PriceChart } from "@/components/dex/chart";
+import { MobileNav, TopTabs, type ViewId } from "@/components/dex/nav";
+import { AgentView } from "@/components/dex/agent-view";
 
 /** קידומת-הגשר — כל-קריאת-רשת עוברת דרכה אל דמון-3010 */
 const BASE = "/saos-dex";
@@ -1311,7 +1313,7 @@ function FleetPanel() {
   const usable = fv?.usableCount ?? 0;
   const total = fv?.accounts.length ?? 0;
   return (
-    <div className="mt-4" data-testid="sovereign-fleet">
+    <div className="mt-4" id="sovereign-fleet" data-testid="sovereign-fleet">
       <Panel
         title="צי-עיגון-ריבוני · FLEET"
         icon={<ShieldCheck className="h-4 w-4 text-green-400" />}
@@ -1992,6 +1994,8 @@ function PortfolioBridgePanel() {
 export default function DexTerminal() {
   const { world, load, online } = useWorldStream();
   const [marketKey, setMarketKey] = useState<string>("");
+  // Roast-73 · תצוגות-הטרמינל: טרמינל (הכל-כמו-שהיה) + סוכן (קונסולת-סוכן-הסוואפ)
+  const [view, setView] = useState<ViewId>("terminal");
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   // P0(25-a): טוקן-מפעיל לפעולות-מוטציה — נטען מ-localStorage (מקומי-בלבד) ונשלח בכותרת x-saos-operator
@@ -2037,6 +2041,12 @@ export default function DexTerminal() {
   const relay = useRelayStream(world?.version);
   const myOrders = useMyOrders(world?.version);
 
+  // Roast-73 · קישורי-קפיצה מתצוגת-הסוכן: מעבר-לתצוגה + גלילה-חלקה לעוגן
+  const openSection = useCallback((target: ViewId, anchor: string) => {
+    setView(target);
+    setTimeout(() => { document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80);
+  }, []);
+
   const post = useCallback(async (url: string, body?: unknown) => {
     setBusy(true);
     try {
@@ -2080,7 +2090,7 @@ export default function DexTerminal() {
               : { tone: "red", text: "OFFLINE" };
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-950">
+    <div className="flex min-h-screen flex-col bg-zinc-950 pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0">
       {/* ─── Header מוסדי: לוגו טקסטואלי · מחיר-חי גדול · נורת-מערכת ─── */}
       <header className="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur" data-testid="terminal-header">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-3">
@@ -2134,6 +2144,10 @@ export default function DexTerminal() {
             </button>
           </div>
         </div>
+        {/* Roast-73 · ניווט-תצוגות (שולחני — טאבים דביקים מתחת לכותרת) */}
+        <div className="mx-auto hidden w-full max-w-[1600px] px-4 pb-2.5 md:block">
+          <TopTabs view={view} onNavigate={setView} />
+        </div>
       </header>
 
       {/* פאנל אימות-מפעיל — נפתח בלחיצה או אוטומטית בפגישת 401/503 */}
@@ -2174,6 +2188,7 @@ export default function DexTerminal() {
       )}
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4">
+        {view === "terminal" ? (<>
         {/* ═════ פאנל-הכתר: SAOS SOVEREIGN METRICS — ההוכחה החיה בראש-המסך ═════ */}
         <SovereignMetricsPanel showcase={showcase.data} loading={showcase.loading} rerun={showcase.rerun} />
 
@@ -2300,6 +2315,10 @@ export default function DexTerminal() {
 
         {/* ═════ SETTLE-13: צי-העיגון-הריבוני ═════ */}
         <FleetPanel />
+        </>) : (
+          /* ═════ Roast-73: קונסולת-סוכן-הסוואפ — תצוגת-"סוכן" ═════ */
+          <AgentView onNeedOperator={() => setOpPanel(true)} onOpenFleet={() => openSection("terminal", "sovereign-fleet")} />
+        )}
       </main>
 
       {/* ─── Footer דביק (mt-auto) — כנות-כלכלית ─── */}
@@ -2314,6 +2333,17 @@ export default function DexTerminal() {
           </span>
         </div>
       </footer>
+
+      {/* Roast-73 · סרגל-ניווט-תחתון נייד + גיליון-"עוד" (קישורי-קפיצה לחלקי-הטרמינל ולסוכן) */}
+      <MobileNav
+        view={view} onNavigate={setView}
+        quickJumps={[
+          { label: "צי-העיגון", icon: Anchor, onClick: () => openSection("terminal", "sovereign-fleet") },
+          { label: "מסילת-HIVE", icon: Waves, onClick: () => openSection("agent", "agent-rail") },
+          { label: "מטריצת-הצתה", icon: ShieldCheck, onClick: () => openSection("agent", "agent-ignition") },
+          { label: "יומן-הסוכן", icon: Bot, onClick: () => openSection("agent", "agent-journal") },
+        ]}
+      />
     </div>
   );
 }

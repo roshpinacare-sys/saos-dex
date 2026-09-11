@@ -74,7 +74,12 @@ const ALL_CHAINS: ChainName[] = ["steem", "hive", "tron", "eth", "sol", "fleet"]
 /* עיגון-כבד (gas/SOL) ועיגון-RC — רק החותם-החדש-ביותר מעוגן עליהם */
 const LATEST_ONLY: ChainName[] = ["hive", "tron", "eth", "sol", "fleet"];
 /* המתנה-כלכלית: RC מתחדש מהר; מימון (TRX/gas/SOL) הוא אירוע-תפעולי איטי */
-const econWaitMin = (c: ChainName): number => (c === "steem" || c === "hive" || c === "fleet" ? 20 : 30);
+// Roast-73 · FIX(fleet-rc-economics): היה-20דק' לשרשרות-RC — נמדד-חי: עיגון-אחד
+// בולע ~500M-RC והכנסת-ה-RC-המשותפת-של-הצי היא ~16.4B/יום (190k/ש׳) → קצב-20דק'
+// שורף-פי-2 מההכנסה ורוקן-את-כל-החיילים-עד-הקרקע (usable=0/11 — נמדד). קצב-מאוזן:
+// 45דק' ≈ 32/יום × ~500M = 16B/יום ≈ איזון-אמת. headcorner-לבדו (41.2B-max, 95k/ש׳)
+// ממשיך-להספיק-ל-hive — והמפעיל תמיד-יכול לעגן-ידנית (POST /fleet anchor) מעבר-לקצב.
+const econWaitMin = (c: ChainName): number => (c === "steem" || c === "hive" || c === "fleet" ? 45 : 30);
 export type AnchorStatus = "anchored" | "sent-unconfirmed" | "pending" | "failed";
 export type BreakerState = "closed" | "open" | "half-open";
 
@@ -348,14 +353,24 @@ function buildOp(account: string, payload: unknown, auth: "posting" | "active"):
 }
 
 /* ── שידור-גרפני אחיד: build ← sign(chain_id) ← broadcast_transaction_synchronous ──
- * SETTLE-13: מיוצא-למודול-הצי (fleet.ts) — נתיב-חתימה-אחד-מוסדי. */
-export async function grapheneSealBroadcast(node: string, chainId: string, account: string, payload: unknown, wif: string, auth: "posting" | "active") {
+ * SETTLE-13: מיוצא-למודול-הצי (fleet.ts) — נתיב-חתימה-אחד-מוסדי.
+ * Roast-73: הוכלל — grapheneOpsBroadcast מקבל מערך-ops מלא (custom_json עם-id
+ * נגזר, transfer_to_vesting, transfer…) ו-grapheneSealBroadcast הוא-עטיפה-דקה
+ * על-המסילה-הזאת עם ה-op-הקנוני של העיגון. אותו-מנוע, אפס-שכפול-חתימה. */
+export type GrapheneOp = [string, Record<string, unknown>];
+
+export async function grapheneOpsBroadcast(
+  node: string, chainId: string, account: string, ops: GrapheneOp[], wif: string,
+  _auth: "posting" | "active",
+) {
+  void _auth; // הסמכות נקבעת-בתוך ה-ops עצמם (required_auths/required_posting_auths)
+  if (ops.length === 0 || ops.length > 4) throw new Error("grapheneOpsBroadcast: 1..4 ops only (fail-closed)");
   const d = await dgp(node);
   const tx: GrapheneTx = {
     ref_block_num: d.head_block_number & 0xffff,
     ref_block_prefix: Buffer.from(d.head_block_id, "hex").readUInt32LE(4),
     expiration: new Date(new Date(d.time + "Z").getTime() + 60000).toISOString().slice(0, 19),
-    operations: [buildOp(account, payload, auth)],
+    operations: ops,
     extensions: [],
   };
   const prev = steem.config.get("chain_id");
@@ -371,6 +386,10 @@ export async function grapheneSealBroadcast(node: string, chainId: string, accou
   });
   if (res && res.id) return { txid: res.id, block: res.block_num ?? null, confirmed: true };
   throw new Error("sync-broadcast answered without id (honest)");
+}
+
+export async function grapheneSealBroadcast(node: string, chainId: string, account: string, payload: unknown, wif: string, auth: "posting" | "active") {
+  return grapheneOpsBroadcast(node, chainId, account, [buildOp(account, payload, auth)], wif, auth);
 }
 
 /* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = stateRoot) ── */
@@ -733,22 +752,40 @@ async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"
   try {
     const node = (chain === "steem" ? STEEM_NODES : HIVE_NODES)[0];
     const account = chain === "steem" ? keys.account : keys.hiveAccount;
-    const wif = chain === "steem" ? keys.steemWif : keys.hiveWif;
-    const auth = chain === "steem" ? keys.steemAuth : keys.hiveAuth;
-    // Task 54 · הפאב מה-WIF-הגולמי (מחושב-פעם-אחת בטעינה) — לא מהמנורמל (ראה FIX)
-    const pub = (chain === "steem" ? keys.steemPub : keys.hivePub)
-      ?? steem.auth.wifToPublic(wif); // נפילה-חזרה היסטורית (מנורמל) אם-הטעינה לא גזרה
+    // Roast-73 · FIX(steem-disable-root-cause): היה — WIF-אחד-קבוע (posting||active) מול
+    // key_auths[0]-בלבד → מפתח-פרסום-שפג-תוקפו השבית-את-שרשרת-שלמה fail-closed-לנצח
+    // ("authority-mismatch … disabled"). עתה: בחירת-חותם-חיה — לכל-מועמד (posting
+    // קודם — הרשאה-הפחותה; אחר-כך active) נבדקת-הסמכות-החיה-מול-כל-רשימת-המפתחות,
+    // והזוג-WIF+auth-המנצח נכתב-בחזרה-ל-keys (self-heal). אף-מועמד-לא-מאומת →
+    // fail-closed-כנה (בדיוק-כמו-קודם, אבל-בלי-לקבור-חותם-חי).
     const r = await rpc<{ posting: { key_auths: [string, number][] }; active: { key_auths: [string, number][] } }[]>(node, {
       jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [[account]], id: 1,
     }, 12000);
     const a = r?.[0];
-    const want = (auth === "posting" ? a?.posting?.key_auths?.[0]?.[0] : a?.active?.key_auths?.[0]?.[0]) ?? null;
-    const ok = !!want && want === pub;
-    authChecked.set(chain, { verdict: ok, at: Date.now(), netFails: 0, lastError: null });
-    if (!ok) {
-      console.error(`[saos-relay][ALERT] authority-mismatch on ${chain}: המפתח-ב-.env אינו רשות-${auth} בשרשרת עבור ${account} — disabled fail-closed (נדרשת רוטציה/ייבוא-מפתח-נכון)`);
+    const pubs = (arr?: [string, number][]): string[] => (arr ?? []).map((k) => k[0]);
+    const postingPubs = pubs(a?.posting?.key_auths);
+    const activePubs = pubs(a?.active?.key_auths);
+    const candidates: { wif: string; auth: "posting" | "active"; pub: string | null }[] = [];
+    const postWif = ((chain === "steem" ? process.env.STEEM_POSTING_WIF : process.env.HIVE_POSTING_WIF) ?? "").trim();
+    const actWif = ((chain === "steem" ? process.env.STEEM_ACTIVE_WIF : process.env.HIVE_ACTIVE_WIF) ?? "").trim();
+    if (postWif) { try { candidates.push({ wif: postWif, auth: "posting", pub: steem.auth.wifToPublic(postWif) }); } catch { /* skip */ } }
+    if (actWif) { try { candidates.push({ wif: actWif, auth: "active", pub: steem.auth.wifToPublic(actWif) }); } catch { /* skip */ } }
+    let chosen: { wif: string; auth: "posting" | "active"; pub: string | null } | null = null;
+    for (const c of candidates) {
+      if (!c.pub) continue;
+      const okNow = c.auth === "posting" ? postingPubs.includes(c.pub) : activePubs.includes(c.pub);
+      if (okNow) { chosen = c; break; }
     }
-    return ok;
+    if (!chosen) {
+      authChecked.set(chain, { verdict: false, at: Date.now(), netFails: 0, lastError: null });
+      console.error(`[saos-relay][ALERT] authority-mismatch on ${chain}: אף-מפתח-ב-.env אינו רשות-חיה של ${account} (posting גם active נבדקו) — disabled fail-closed (נדרשת רוטציה/ייבוא-מפתח-נכון)`);
+      return false;
+    }
+    // self-heal: הזוג-המנצח נכתב-בחזרה — השידור יחתום עליו עם הסמכות-החיה
+    if (chain === "steem") { keys.steemWif = chosen.wif; keys.steemAuth = chosen.auth; keys.steemPub = chosen.pub; }
+    else { keys.hiveWif = chosen.wif; keys.hiveAuth = chosen.auth; keys.hivePub = chosen.pub; }
+    authChecked.set(chain, { verdict: true, at: Date.now(), netFails: 0, lastError: null });
+    return true;
   } catch (e) {
     const netFails = (prev?.netFails ?? 0) + 1;
     const lastError = String((e as Error)?.message ?? e).slice(0, 120);
@@ -1088,13 +1125,14 @@ export function relaySeal(info: SealInfo): void {
 export async function relayAuditVerify(
   chain: ChainName,
   txid: string,
-  expected: { height: number; stateRoot: string }
+  expected: { height: number; stateRoot: string; account?: string } // Roast-73: account נוסע-לוקטור-הבדיקה (עיגוני-צי=חותם-החייל)
 ): Promise<{ ok: boolean; verified: boolean | null; detail: string }> {
   const rt = rtInit();
   const rec: AnchorRecord = {
     chain, height: expected.height, stateRoot: expected.stateRoot, digest: "",
     txid, status: "anchored", at: new Date().toISOString(), attempt: 1,
     verified: null, verifiedAt: null,
+    ...(expected.account ? { account: expected.account } : {}), // Roast-73
   };
   await verifyRecord(rt, rec);
   if (rec.verified === true) return { ok: true, verified: true, detail: "verified on-chain (read-back match)" };

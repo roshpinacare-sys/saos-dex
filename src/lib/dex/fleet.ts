@@ -36,7 +36,7 @@ const steemLib = steemLibRaw as unknown as SteemAuth;
 /* עלות-אמפירית-מדודה-חי (2026-09-09): עיגון-הצי-הראשון (haran, tx fa946dfb…) בלע
  * ~199M-RC מהמדד-החי — תואם-מדידת-jummper (157.7M-ל-op-קטן-יותר). הסף-להלן
  * מונע-ניסיונות-שידור-על-חשבונות-שאינם-יכולים-להרשות-את-ה-op (fail-closed-כלכלי). */
-const RC_MIN_FLEET = 200_000_000;         // עלות-op-מדודה (199M) + מרווח
+const RC_MIN_FLEET = 210_000_000;         // Roast-73: עלות-op-נמדדה-בדיוק-חי (206,379,561 — דחיית-צומת על 201M) + מרווח
 const PROBE_TTL_MS = 10 * 60_000;         // תוקף-בדיקת-סמכויות/RC
 const ACCT_BREAKER_TRIPS = 3;             // כשלים-רצופים-פר-חשבון → התקררות
 const ACCT_COOLDOWN_MS = 10 * 60_000;
@@ -111,24 +111,44 @@ interface FleetRT {
   probedAt: number | null;
   probing: boolean;
   rrIndex: number;
+  lastOpenTryAt: number; // Roast-73: מדידת-נסיון-פתיחה (retry-מדוד)
 }
 
 declare global {
   var __saosDexFleet: FleetRT | undefined;
 }
 
+const OPEN_RETRY_MS = 30_000; // Roast-73: נסיון-פתיחה-מחדש-מדוד — כספת-שמופיעה-בריצה מחמשת-את-הצי-בלי-הפעלה-מחדש
+
 function fleetInit(): FleetRT {
-  if (globalThis.__saosDexFleet) return globalThis.__saosDexFleet;
+  if (globalThis.__saosDexFleet) {
+    const rt = globalThis.__saosDexFleet;
+    // FIX(Roast-73): היה — כשל-פתיחה-ראשון נקבע-לנצח (openError-cache) וכספת
+    // שהופיעה-בהמשך-הריצה לא-החייתה-את-הצי. עכשיו: retry-מדוד-כל-30ש׳ — אותו-
+    // fail-closed (אין-כספת → אין-מפתחות), אבל-אמת-ריצה-ולא-גזירה-של-בוט-אחד.
+    if (!rt.openedOk && (!rt.lastOpenTryAt || Date.now() - rt.lastOpenTryAt >= OPEN_RETRY_MS)) {
+      rt.lastOpenTryAt = Date.now();
+      rt.openError = null;
+      tryOpen(rt);
+    }
+    return rt;
+  }
   const rt: FleetRT = {
     openedAt: null, openedOk: false, openError: null, sealedAt: null,
     accounts: new Map(), probedAt: null, probing: false, rrIndex: 0,
+    lastOpenTryAt: Date.now(),
   };
   globalThis.__saosDexFleet = rt;
+  tryOpen(rt);
+  return rt;
+}
+
+function tryOpen(rt: FleetRT): void {
   try {
     const dir = vaultDir();
     if (!dir) {
       rt.openError = "vault-not-present (agent/keys/fleet_keys.enc) — fleet quiet-disabled";
-      return rt;
+      return;
     }
     const bundle = openVault(dir);
     rt.openedOk = true;
@@ -140,13 +160,15 @@ function fleetInit(): FleetRT {
       try {
         pubOk = steemLib.auth.wifToPublic(a.keys.posting!.wif) === a.keys.posting!.pub;
       } catch { pubOk = false; }
-      rt.accounts.set(a.username, {
-        postingWif: pubOk ? a.keys.posting!.wif : "",   // לא-מאומת → לא-נשמר
-        postingPub: a.keys.posting!.pub,
-        authorityOk: null, rcEffective: null,
-        failCount: 0, lastFailAt: null,
-        anchoredCount: 0, lastTxid: null, lastAnchorAt: null,
-      });
+      if (!rt.accounts.has(a.username)) {
+        rt.accounts.set(a.username, {
+          postingWif: pubOk ? a.keys.posting!.wif : "",   // לא-מאומת → לא-נשמר
+          postingPub: a.keys.posting!.pub,
+          authorityOk: null, rcEffective: null,
+          failCount: 0, lastFailAt: null,
+          anchoredCount: 0, lastTxid: null, lastAnchorAt: null,
+        });
+      }
     }
     const n = [...rt.accounts.values()].filter((a) => a.postingWif).length;
     console.info(`[saos-fleet] vault opened: ${rt.accounts.size} accounts, ${n} self-verified posting keys (memory-only)`);
@@ -154,7 +176,6 @@ function fleetInit(): FleetRT {
     rt.openError = String((e as Error)?.message || e).slice(0, 160);
     console.error(`[saos-fleet][ALERT] vault open failed (fail-closed): ${rt.openError}`);
   }
-  return rt;
 }
 
 /* ── הגדרה-סינכרונית (ל-rtInit של-הרליי — בלי-IO) ──────────────────────────── */

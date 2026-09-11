@@ -12,11 +12,12 @@ export const dynamic = "force-dynamic";
  *   תצוגה-חיה (ציבורית, ללא-מפתחות): מאזני HIVE נזיל/HP/RC + טוקני Hive-Engine
  *   + המסלול-המוצע (sell → withdraw → powerup) לפי המאזנים בפועל.
  *
- * POST /api/dex/convert  (שער-מפעיל + שער-קונסולה)
+ * POST /api/dex/hive-rail  (שער-מפעיל + שער-קונסולה)
  *   body: { account, action: "sell"|"withdraw"|"powerup"|"transfer",
  *           symbol?, quantity?, price?, amount?, to? }
- *   ביצוע-אמיתי דרך החותם-החיצוני (ל-Dex אף-מפתח; החותם מאמת-סמכות מול-השרשרת
- *   ומסרב fail-closed על אי-התאמה). החזר: {txid} ציבורי או שגיאה מוסברת.
+ *   FIX(Roast-73): ביצוע-אמיתי דרך המבצע-הריבוני-בדמון (rail-exec) — החותם-החוץ
+ *   ההיסטורי אינו-קיים עוד. אותן-ערבויות: אימות-סמכות-חי מול-השרשרת + תחומי-
+ *   יתרה-חיים + שער-RC. החזר: {txid} ציבורי או שגיאה מוסברת.
  *
  * תוצר-הבעלים (2026-09-08): "מערכת dex שצריכה לדעת להמיר מה שצריך — תשתמש בזה".
  */
@@ -30,7 +31,7 @@ export async function GET(req: Request) {
   try {
     const preview = await accountPreview(account);
     if (!preview) return NextResponse.json({ ok: false, error: "account-not-found" }, { status: 404 });
-    return NextResponse.json({ ok: true, rail: "hive-token→SWAP.HIVE→HIVE→HP", executor: "external-signer (authority-gated)", ...preview });
+    return NextResponse.json({ ok: true, rail: "hive-token→SWAP.HIVE→HIVE→HP", executor: "sovereign-in-daemon (rail-exec · authority-gated · roast-73)", ...preview });
   } catch (e) {
     return NextResponse.json({ ok: false, error: `preview-failed: ${String((e as Error)?.message ?? e).slice(0, 120)}` }, { status: 502 });
   }
@@ -53,7 +54,7 @@ export async function POST(req: Request) {
   const action = body.action as RailAction;
   if (!/^[a-z0-9\-.]{3,16}$/.test(account)) return NextResponse.json({ ok: false, error: "bad-account" }, { status: 400 });
   if (!action || !ACTIONS.includes(action)) return NextResponse.json({ ok: false, error: `bad-action (allowlist: ${ACTIONS.join(",")})` }, { status: 400 });
-  if (!railConfigured()) return NextResponse.json({ ok: false, error: "rail-not-configured (SAOS_EXTERNAL_SIGNER_TOKEN missing) — fail-closed" }, { status: 503 });
+  if (!railConfigured()) return NextResponse.json({ ok: false, error: "rail-not-configured (HIVE_ANCHOR_ACCOUNT/HIVE_ACTIVE_WIF missing) — fail-closed" }, { status: 503 });
 
   if (action === "sell" && (!body.symbol || !body.quantity || !body.price)) {
     return NextResponse.json({ ok: false, error: "sell requires symbol, quantity, price" }, { status: 400 });
