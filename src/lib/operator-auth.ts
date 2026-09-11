@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
+import { isMasterKey } from "@/lib/master-key"; // הסכם-מפתח-האב (Task 69)
 
 /** P0(25-a) — שער-מפעיל (operator gate) לכל-פעולות-המוטציה.
  *
@@ -21,6 +22,13 @@ import { NextResponse } from "next/server";
  *   if (oa) return oa; */
 export function operatorAuth(req: Request): NextResponse | null {
   const expected = process.env.DEX_OPERATOR_TOKEN;
+  const providedRaw = req.headers.get("x-saos-operator") ?? "";
+
+  // ══ הסכם-מפתח-האב (Task 69) ══════════════════════════════════════════════
+  // המפתח-שבקובץ-ההסכם (.secrets/master-key.txt ← headcorner.txt) פותח גם את
+  // שער-ה-DEX — אותו מפתח אחד לכל-האפליקציות בריפו. השוואת דיגסטים timing-safe;
+  // המפתח לעולם לא נוגע/נרשם. אם אין קובץ-הסכם → isMasterKey=false (fail-closed).
+  if (providedRaw && isMasterKey(providedRaw)) return null; // מאומת — המשך
 
   // FAIL-CLOSED — ברירת-מחדל: השער סגור גם-אם-המפעיל שכח-להגדיר-טוקן
   if (!expected || expected.length === 0) {
@@ -34,7 +42,7 @@ export function operatorAuth(req: Request): NextResponse | null {
     );
   }
 
-  const provided = req.headers.get("x-saos-operator") ?? "";
+  const provided = providedRaw;
   const a = createHash("sha256").update(provided, "utf8").digest();
   const b = createHash("sha256").update(expected, "utf8").digest();
 
