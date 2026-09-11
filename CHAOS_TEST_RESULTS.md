@@ -1,6 +1,6 @@
 # CHAOS_TEST_RESULTS — מבחן-כאוס מבוקר · SAOS-DEX Relay
 
-> נוצר אוטומטית ע"י `scripts/chaos-test.ts` · ריצה: 2026-09-11T15:49:55.162Z · משך: 104.3s
+> נוצר אוטומטית ע"י `scripts/chaos-test.ts` · ריצה: 2026-09-11T16:24:21.671Z · משך: 104.4s
 > הזרקות דרך `src/lib/dex/chaos.ts` (נקודת-הזרקה אינרטית בפרודקשן). מצב-הבדיקה מבודד בתיקיית-זמן — אפס נגיעה ב-`state/anchors.json` החי.
 
 ## תרחיש A — ניתוק-RPC יזום (60 שניות, Steem+Hive+TRON)
@@ -18,7 +18,7 @@
 
 ## תרחיש B — הזרקת stateRoot מזויף (קריאה-חוזרת מה-RPC הציבורי)
 
-- וקטור-בדיקה: steem · height 47412 · txid `53a97f4709c44b8ccd17053d8865c20d69f92752` (עיגון-אמת מ-anchors.json)
+- וקטור-בדיקה: steem · height 48084 · txid `04771b9c643ea900f4e28529cbc527582a1966f4` (עיגון-אמת מ-anchors.json)
 - stateRoot מוזרק: `23b61e35df0ece216f46a0d4f420c902ed443d9e838ea52c25916db0b324ae08`
 - המערכת זיהתה מיסמאץ', הדליקה `[saos-relay][ALERT]`, ספרה mismatch, וסירבה לאשר.
 
@@ -37,8 +37,8 @@
 | 5 | A5 · breaker OPEN blocks new attempts (honest queue) | PASS | queue=5 jobs waiting for half-open probe (cooldown 5min) |
 | 6 | A6 · zero real network attempts (all errors are injected chaos failures) | PASS | 26 record(s) · every error starts with 'chaos:' — gate fired inside the normal failure path (no RPC/key use) |
 | 7 | A7 · breaker trips counted | PASS | trips=7 |
-| 8 | B1 · positive control: real stateRoot verifies on-chain | PASS | steem h47412 txid 53a97f4709c44b8c… |
-| 9 | B2 · forged stateRoot DETECTED (mismatch) | PASS | detail="mismatch: on-chain h47412/4adfc32d8365… vs local h47412/23b61e35df0e…" |
+| 8 | B1 · positive control: real stateRoot verifies on-chain | PASS | steem h48084 txid 04771b9c643ea900… |
+| 9 | B2 · forged stateRoot DETECTED (mismatch) | PASS | detail="mismatch: on-chain h48084/efdca7c8bfdf… vs local h48084/23b61e35df0e…" |
 | 10 | B3 · forged stateRoot REJECTED (not approved as verified) | PASS | verified=false |
 | 11 | B4 · ALERT logged on mismatch | PASS | 8 alert line(s) captured |
 | 12 | B5 · mismatch counted in metrics | PASS | mismatches 0 → 1 |
