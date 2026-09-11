@@ -35,14 +35,23 @@ const EXEC_ISSUERS = ["operator", "treasury", "arena", "portfolio-b"] as const;
 
 /* ── טיפוסים (מראה-API — זהה ל-server /api/dex/agent) ───────────────────────── */
 interface AgentStep { at: string; step: string; ok: boolean; detail: string; txid?: string }
-interface AgentRun { id: string; at: string; kind: string; status: "done" | "failed"; steps: AgentStep[] }
+interface AgentRun { id: string; at: string; kind: string; status: "done" | "failed"; steps: AgentStep[]; intent?: Record<string, unknown> }
+/* Roast-74 · מסילה-רב-רשתית: סטטוס-פר-רשת חי מה-API (networks) + תאימות-אחורה לhive */
+type RailNet = "hive" | "steem" | "blurt";
+interface RailNetInfo {
+  wif: boolean; authorityOk: boolean | null; authorityError?: string;
+  rcEffective: number | null; rcOk: boolean | null; rcAvailable: boolean;
+  liquid: number | null; engineAlive: boolean; engineBalances?: Record<string, string>;
+  ops: string[]; gap: string; note: string;
+}
 interface RailStatus {
   configured: boolean; account: string | null; note?: string;
+  networks?: Partial<Record<RailNet, RailNetInfo>>;
+  ops: string[]; bounds: { rcMin: number; hiveTxFloor?: number; txFloors?: Partial<Record<RailNet, number>>; memoMax: number };
+  honesty: string; probeError?: string;
   authorityOk: boolean | null; authorityCheckedAt?: string | null;
   rcEffective?: number | null; rcOk?: boolean;
   engineBalances?: Record<string, string>; hiveLiquid?: number;
-  ops: string[]; bounds: { rcMin: number; hiveTxFloor: number; memoMax: number };
-  honesty: string; probeError?: string;
 }
 interface FleetAccountMini {
   account: string; hasVerifiedKey: boolean; authorityOk: boolean | null;
@@ -95,12 +104,22 @@ function IgnitionBadge({ state }: { state: IgnitionRow["state"] }) {
   return <Pill tone="zinc">ממתין</Pill>;
 }
 
+/** קישור-txid-כנה-פר-רשת: Hive→hiveblocks · Steem→steemscan · Blurt→אין-סריקה-חיה (מדוד) */
+function txLink(txid: string, run?: AgentRun) {
+  const net = String((run?.intent?.network as string) ?? "hive").toLowerCase();
+  if (net === "steem") return { href: `https://steemscan.com/transaction/${txid}`, label: null };
+  if (net === "blurt") return { href: null, label: "אין-סריקה-חיה-ל-Blurt (מדוד) — אימות-מול-צומת-rpc.blurt.blog" };
+  return { href: `https://hiveblocks.com/tx/${txid}`, label: null };
+}
+
 /** לוג-צעדים-חי (ריצה/יומן): צעד · תוצאה · פירוט · txid-אמת-קליקבילי */
-function RunSteps({ steps }: { steps: AgentStep[] }) {
+function RunSteps({ steps, run }: { steps: AgentStep[]; run?: AgentRun }) {
   if (steps.length === 0) return <p className="px-1 py-1 font-mono text-[10px] text-zinc-600">אין-צעדים-להצגה</p>;
   return (
     <div className="space-y-1">
-      {steps.map((s, i) => (
+      {steps.map((s, i) => {
+        const link = s.txid ? txLink(s.txid, run) : null;
+        return (
         <div key={`${s.step}-${i}`} className="flex items-start gap-2 rounded-md border border-zinc-800 bg-zinc-900/70 px-2.5 py-1.5">
           <StatusDot tone={s.ok ? "green" : "red"} />
           <div className="min-w-0 flex-1">
@@ -108,18 +127,22 @@ function RunSteps({ steps }: { steps: AgentStep[] }) {
               <span className="font-mono text-[10px] font-bold text-zinc-200" dir="ltr">{s.step}</span>
               <span className="text-[10px] leading-snug text-zinc-400 break-words">{s.detail}</span>
             </div>
-            {s.txid && (
+            {link?.href && (
               <a
-                href={`https://hiveblocks.com/tx/${s.txid}`} target="_blank" rel="noreferrer"
+                href={link.href} target="_blank" rel="noreferrer"
                 className="mt-0.5 inline-flex items-center gap-1 font-mono text-[9px] text-amber-400 underline-offset-2 hover:underline" dir="ltr"
               >
-                tx {shortHash(s.txid, 14)} <ExternalLink className="h-2.5 w-2.5" aria-hidden />
+                tx {shortHash(s.txid!, 14)} <ExternalLink className="h-2.5 w-2.5" aria-hidden />
               </a>
+            )}
+            {link && !link.href && s.txid && (
+              <span className="mt-0.5 block font-mono text-[9px] text-zinc-500" dir="ltr">tx {shortHash(s.txid, 14)} · {link.label}</span>
             )}
           </div>
           <span className="shrink-0 font-mono text-[8.5px] text-zinc-600" dir="ltr">{timeOf(s.at)}</span>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -145,7 +168,7 @@ function RunCard({ run, defaultOpen }: { run: AgentRun; defaultOpen?: boolean })
           {open ? <ChevronUp className="h-3 w-3 text-zinc-500" aria-hidden /> : <ChevronDown className="h-3 w-3 text-zinc-500" aria-hidden />}
         </span>
       </button>
-      {open && <div className="border-t border-zinc-800/80 p-2"><RunSteps steps={run.steps} /></div>}
+      {open && <div className="border-t border-zinc-800/80 p-2"><RunSteps steps={run.steps} run={run} /></div>}
     </div>
   );
 }
@@ -166,12 +189,27 @@ export function AgentView({ onNeedOperator, onOpenFleet }: { onNeedOperator: () 
   const [swapBusy, setSwapBusy] = useState<"plan" | "exec" | null>(null);
   const [swapMsg, setSwapMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // ── מסילה ──
+  // ── מסילה (Roast-74: רב-רשתית) ──
+  const [railNet, setRailNet] = useState<RailNet>("hive");
+  const [railAction, setRailAction] = useState<string>("withdraw");
   const [railQty, setRailQty] = useState("");
+  const [railTo, setRailTo] = useState("");
+  const [railPrice, setRailPrice] = useState("");
   const [railPlan, setRailPlan] = useState<(RailPlanResp & { sig: string }) | null>(null);
   const [railRun, setRailRun] = useState<AgentRun | null>(null);
   const [railBusy, setRailBusy] = useState<"plan" | "exec" | null>(null);
   const [railMsg, setRailMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  /** פעולות-האפשריות-לרשת-שנבחרה (מהאמת-חי — networks[n].ops) */
+  const railNetInfo = status?.rail?.networks?.[railNet];
+  const railOps = railNetInfo?.ops ?? (railNet === "blurt" ? ["powerup", "transfer"] : ["sell", "withdraw", "powerup", "transfer"]);
+  useEffect(() => {
+    if (!railOps.includes(railAction)) setRailAction(railOps.includes("withdraw") ? "withdraw" : railOps[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [railNet]);
+  const railNeedsEngine = railAction === "sell" || railAction === "withdraw";
+  const railBase = railNet === "hive" ? "HIVE" : railNet === "steem" ? "STEEM" : "BLURT";
+  const railEngineSym = railNet === "steem" ? "SWAP.STEEM" : "SWAP.HIVE";
 
   /** רענון-מצב-הסוכן (GET ציבורי — בדיוק-כמו-FleetPanel: interval פשוט) */
   const load = useCallback(async (): Promise<boolean> => {
@@ -255,15 +293,22 @@ export function AgentView({ onNeedOperator, onOpenFleet }: { onNeedOperator: () 
     finally { setSwapBusy(null); void load(); }
   };
 
-  /* ── מסילה: תכנון-משיכה ── */
-  const railSig = `withdraw|${railQty}`;
+  /* ── מסילה: תכנון (רשת+פעולה נבחרות) ── */
+  const railSig = `${railNet}|${railAction}|${railQty}|${railTo}|${railPrice}`;
+  const railBody = (kind: "plan-rail" | "rail"): Record<string, unknown> => {
+    const body: Record<string, unknown> = { kind, network: railNet, action: railAction };
+    const q = Number(railQty);
+    if (railQty.trim() !== "" && Number.isFinite(q) && q > 0) {
+      if (railNeedsEngine) body.quantity = q; else body.amount = q;
+    }
+    if (railAction === "sell" && railPrice.trim() !== "" && Number(railPrice) > 0) body.price = Number(railPrice);
+    if (railAction === "transfer" && railTo.trim() !== "") body.to = railTo.trim();
+    return body;
+  };
   const doRailPlan = async () => {
     setRailBusy("plan"); setRailMsg(null); setRailPlan(null); setRailRun(null);
     try {
-      const body: Record<string, unknown> = { kind: "plan-rail", action: "withdraw" };
-      const q = Number(railQty);
-      if (railQty.trim() !== "" && Number.isFinite(q) && q > 0) body.quantity = q;
-      const j = (await postAgent(body)) as unknown as RailPlanResp;
+      const j = (await postAgent(railBody("plan-rail"))) as unknown as RailPlanResp;
       if (j.ok) setRailPlan({ ...j, sig: railSig });
       else {
         const gate = gateMsg(j.error);
@@ -273,23 +318,20 @@ export function AgentView({ onNeedOperator, onOpenFleet }: { onNeedOperator: () 
     finally { setRailBusy(null); void load(); }
   };
 
-  /* ── מסילה: ביצוע-משיכה (חייב-תוכנית-תקפה) ── */
+  /* ── מסילה: ביצוע (חייב-תוכנית-תקפה-על-אותם-פרמטרים) ── */
   const railPlanFresh = railPlan !== null && railPlan.sig === railSig;
   const doRail = async () => {
     if (!railPlanFresh) return;
     setRailBusy("exec"); setRailMsg(null);
     try {
-      const body: Record<string, unknown> = { kind: "rail", action: "withdraw" };
-      const q = Number(railQty);
-      if (railQty.trim() !== "" && Number.isFinite(q) && q > 0) body.quantity = q;
-      const j = (await postAgent(body)) as unknown as RunResp;
+      const j = (await postAgent(railBody("rail"))) as unknown as RunResp;
       if (j.run) setRailRun(j.run);
-      if (j.ok) setRailMsg({ ok: true, text: "המשיכה-שודרה לרשת-Hive — txid בפירוט-למטה" });
+      if (j.ok) setRailMsg({ ok: true, text: `הפעולה-שודרה לרשת-${railNet.toUpperCase()} — txid בפירוט-למטה` });
       else {
         const gate = gateMsg(j.error);
-        setRailMsg({ ok: false, text: gate ?? `המשיכה-נדחתה: ${j.error ?? "unknown"}` });
+        setRailMsg({ ok: false, text: gate ?? `הביצוע-נדחה: ${j.error ?? "unknown"}` });
       }
-    } catch { setRailMsg({ ok: false, text: "כשל-רשת בביצוע-המשיכה" }); }
+    } catch { setRailMsg({ ok: false, text: "כשל-רשת בביצוע-המסילה" }); }
     finally { setRailBusy(null); void load(); }
   };
 
@@ -314,7 +356,7 @@ export function AgentView({ onNeedOperator, onOpenFleet }: { onNeedOperator: () 
 
         {/* ═══ (b) פס-היכולות — מצב-אמת-צבוע-כנה ═══ */}
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5" data-testid="agent-capabilities">
-          {(["swap", "railHive", "door", "fleet", "oracle"] as const).map((k) => {
+          {(["swap", "rail", "door", "fleet", "oracle"] as const).map((k) => {
             const raw = status?.capabilities?.[k];
             const tone = raw ? capTone(raw) : "zinc";
             const cls = tone === "green" ? "border-green-500/40 bg-green-500/[0.06]"
@@ -326,10 +368,10 @@ export function AgentView({ onNeedOperator, onOpenFleet }: { onNeedOperator: () 
                 <div className="flex items-center justify-between gap-2">
                   <span className="flex items-center gap-1.5 font-mono text-[10px] font-black uppercase tracking-widest text-zinc-200">
                     {k === "swap" && <Activity className="h-3 w-3 text-amber-400" aria-hidden />}
-                    {k === "railHive" && <Waves className="h-3 w-3 text-amber-400" aria-hidden />}
+                    {k === "rail" && <Waves className="h-3 w-3 text-amber-400" aria-hidden />}
                     {k === "fleet" && <Anchor className="h-3 w-3 text-amber-400" aria-hidden />}
                     {k === "oracle" && <ShieldCheck className="h-3 w-3 text-amber-400" aria-hidden />}
-                    {k === "swap" ? "SWAP" : k === "railHive" ? "RAIL·HIVE" : k.toUpperCase()}
+                    {k === "swap" ? "SWAP" : k === "rail" ? "RAIL·3NET" : k.toUpperCase()}
                   </span>
                   <span className={`font-mono text-[9px] font-bold uppercase ${stateCls}`} dir="ltr">
                     {raw ? capStateWord(raw) : "…"}
@@ -474,9 +516,9 @@ export function AgentView({ onNeedOperator, onOpenFleet }: { onNeedOperator: () 
         )}
       </Panel>
 
-      {/* ═══ (d) מסילת-HIVE (אמת) ═══ */}
+      {/* ═══ (d) מסילת-הרשתות (אמת · HIVE/STEEM/BLURT) ═══ */}
       <div id="agent-rail" data-testid="agent-rail">
-        <Panel title="מסילת-HIVE (אמת) · RAIL-EXEC" icon={<Waves className="h-4 w-4 text-amber-400" />}>
+        <Panel title="מסילת-הרשתות (אמת) · RAIL-EXEC" icon={<Waves className="h-4 w-4 text-amber-400" />}>
           {!rail ? (
             <p className="py-2 text-center font-mono text-[11px] text-zinc-600">מודד-מסילה…</p>
           ) : !rail.configured ? (
@@ -486,33 +528,66 @@ export function AgentView({ onNeedOperator, onOpenFleet }: { onNeedOperator: () 
             </div>
           ) : (
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" data-testid="agent-rail-status">
-                <Stat label="חשבון-מסילה" value={<span dir="ltr">{rail.account ?? "—"}</span>} sub={rail.note} />
-                <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2">
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">סמכות-active (חי)</div>
-                  <div className="mt-0.5">
-                    {rail.authorityOk === true && <Pill tone="green">אומתה מהשרשרת</Pill>}
-                    {rail.authorityOk === false && <Pill tone="red">נכשלה — אפס-שידור</Pill>}
-                    {rail.authorityOk === null && <Pill tone="zinc">לא-נמדדה</Pill>}
-                  </div>
-                  {rail.authorityCheckedAt && <div className="mt-0.5 font-mono text-[9px] text-zinc-600" dir="ltr">{timeOf(rail.authorityCheckedAt)}</div>}
-                </div>
-                <Stat label="RC-יעיל" value={
-                  <span className="flex items-center gap-1.5" dir="ltr">
-                    {rcAsM(rail.rcEffective)}
-                    {rail.rcOk === true && <Pill tone="green">תקין</Pill>}
-                    {rail.rcOk === false && <Pill tone="red">מתחת-לרצפה</Pill>}
-                  </span>
-                } sub={`רצפת-המסילה ${rcAsM(rail.bounds?.rcMin ?? 200_000_000)}`} />
-                <Stat label="HIVE-נזיל (חי)" value={<span dir="ltr">{rail.hiveLiquid !== undefined && rail.hiveLiquid !== null ? (rail.hiveLiquid >= 0 ? rail.hiveLiquid.toFixed(3) : "לא-נמדד") : "—"}</span>}
-                  sub={rail.hiveLiquid === -1 ? "צומת-לא-נגיש (fail-closed)" : "מהשרשרת בזמן-אמת"} />
+              {/* בורר-רשת — סטטוס-חי-פר-רשת */}
+              <div className="grid grid-cols-3 gap-1.5" data-testid="agent-rail-networks">
+                {(["hive", "steem", "blurt"] as const).map((net) => {
+                  const ni = rail.networks?.[net];
+                  const active = railNet === net;
+                  const stateTone = !ni?.wif ? "border-zinc-800 bg-zinc-900/60 text-zinc-500"
+                    : ni.authorityOk === true ? "border-green-500/40 bg-green-500/[0.06] text-green-300"
+                      : ni.authorityOk === false ? "border-red-500/40 bg-red-500/[0.06] text-red-300"
+                        : "border-amber-500/40 bg-amber-500/[0.06] text-amber-300";
+                  return (
+                    <button
+                      key={net} type="button" onClick={() => setRailNet(net)}
+                      className={`rounded-lg border px-2.5 py-2 text-right transition-colors ${stateTone} ${active ? "ring-1 ring-amber-500/60" : "hover:border-zinc-600"}`}
+                      data-testid={`agent-rail-net-${net}`}
+                      aria-pressed={active}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-mono text-[11px] font-black uppercase tracking-widest" dir="ltr">{net}</span>
+                        <span className="font-mono text-[9px]" dir="ltr">
+                          {ni?.wif ? (ni.authorityOk === true ? "AUTH-OK" : ni.authorityOk === false ? "AUTH-BLOCK" : "…") : "WIF-חסר"}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 truncate font-mono text-[9px] opacity-80" dir="ltr">
+                        {ni?.liquid != null ? `${ni.liquid.toFixed(3)} ${net.toUpperCase()}` : "—"} · {ni?.engineAlive ? "ENGINE" : "NO-ENGINE"}
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
 
-              {/* יתרות-מנוע-חיות (Hive-Engine) */}
-              {rail.engineBalances && Object.keys(rail.engineBalances).length > 0 && (
+              {/* סטטוס-הרשת-הנבחרת */}
+              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" data-testid="agent-rail-status">
+                <Stat label="חשבון-מסילה" value={<span dir="ltr">{rail.account ?? "—"}</span>} sub={railNetInfo?.note ?? rail.note} />
+                <div className="rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-2">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">סמכות-active (חי · {railNet})</div>
+                  <div className="mt-0.5">
+                    {railNetInfo?.authorityOk === true && <Pill tone="green">אומתה מהשרשרת</Pill>}
+                    {railNetInfo?.authorityOk === false && <Pill tone="red">נכשלה — אפס-שידור</Pill>}
+                    {railNetInfo?.authorityOk == null && <Pill tone="zinc">לא-נמדדה</Pill>}
+                  </div>
+                  {railNetInfo?.gap && <p className="mt-1 font-mono text-[9px] leading-snug text-zinc-500">{railNetInfo.gap}</p>}
+                </div>
+                <Stat label={railNetInfo?.rcAvailable === false ? "RC (לא-רלוונטי — מדוד)" : "RC-יעיל"} value={
+                  <span className="flex items-center gap-1.5" dir="ltr">
+                    {railNetInfo?.rcAvailable === false ? <span className="font-mono text-[10px] text-zinc-500">N/A</span> : <>
+                      {rcAsM(railNetInfo?.rcEffective)}
+                      {railNetInfo?.rcOk === true && <Pill tone="green">תקין</Pill>}
+                      {railNetInfo?.rcOk === false && <Pill tone="red">מתחת-לרצפה</Pill>}
+                    </>}
+                  </span>
+                } sub={`רצפת-המסילה ${rcAsM(rail.bounds?.rcMin ?? 200_000_000)}`} />
+                <Stat label={`${railBase}-נזיל (חי)`} value={<span dir="ltr">{railNetInfo?.liquid != null ? railNetInfo.liquid.toFixed(3) : "לא-נמדד"}</span>}
+                  sub={railNetInfo?.engineAlive ? "מנוע-חי" : "ללא-מנוע (מדוד)"} />
+              </div>
+
+              {/* יתרות-מנוע-חיות (רק-לרשת-עם-מנוע) */}
+              {(railNetInfo?.engineBalances ?? (railNet === "hive" ? rail.engineBalances : undefined)) && Object.keys(railNetInfo?.engineBalances ?? rail.engineBalances ?? {}).length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5" data-testid="agent-rail-balances">
                   <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-zinc-500">יתרות-Engine:</span>
-                  {Object.entries(rail.engineBalances).slice(0, 8).map(([sym, bal]) => (
+                  {Object.entries(railNetInfo?.engineBalances ?? rail.engineBalances ?? {}).slice(0, 8).map(([sym, bal]) => (
                     <span key={sym} className="rounded-md border border-zinc-800 bg-zinc-950/70 px-2 py-0.5 font-mono text-[10px] text-zinc-300" dir="ltr">
                       {sym} {bal}
                     </span>
@@ -520,31 +595,66 @@ export function AgentView({ onNeedOperator, onOpenFleet }: { onNeedOperator: () 
                 </div>
               )}
               <p className="font-mono text-[9px] text-zinc-600" dir="ltr">
-                ops: {rail.ops?.join(" · ") ?? "—"} · rcMin {rcAsM(rail.bounds?.rcMin)} · hiveTxFloor {rail.bounds?.hiveTxFloor ?? "—"} · memoMax {rail.bounds?.memoMax ?? "—"}
+                ops({railNet}): {railOps.join(" · ")} · rcMin {rcAsM(rail.bounds?.rcMin)} · txFloor {rail.bounds?.txFloors?.[railNet] ?? "—"} · memoMax {rail.bounds?.memoMax ?? "—"}
               </p>
               <p className="text-[10px] leading-snug text-zinc-500">{rail.honesty}</p>
 
-              {/* פעולה-מוגדרת-מראש: משיכת-SWAP.HIVE → HIVE */}
+              {/* פעולה-רב-רשתית: פעולה+כמות+פרמטרים */}
               <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3" data-testid="agent-rail-withdraw">
                 <div className="flex flex-wrap items-end gap-2">
-                  <label className="block flex-1 min-w-[160px]">
-                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">כמות SWAP.HIVE (ריק = כל-היתרה)</span>
+                  <label className="block min-w-[120px]">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">פעולה</span>
+                    <select
+                      value={railAction} onChange={(e) => setRailAction(e.target.value)}
+                      aria-label="פעולת-המסילה"
+                      className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 font-mono text-xs text-zinc-100 outline-none focus:border-amber-500/60"
+                      data-testid="agent-rail-action"
+                    >
+                      {railOps.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </label>
+                  <label className="block flex-1 min-w-[140px]">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                      {railNeedsEngine ? `${railEngineSym} (ריק = כל-היתרה)` : `כמות ${railBase}`}
+                    </span>
                     <input
                       value={railQty} onChange={(e) => setRailQty(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" dir="ltr"
-                      placeholder="0.000" aria-label="כמות SWAP.HIVE למשיכה"
+                      placeholder="0.000" aria-label="כמות לפעולה"
                       className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 font-mono text-xs text-zinc-100 outline-none focus:border-amber-500/60"
                       data-testid="agent-rail-qty"
                     />
                   </label>
+                  {railAction === "sell" && (
+                    <label className="block min-w-[110px]">
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">מחיר-מגביל</span>
+                      <input
+                        value={railPrice} onChange={(e) => setRailPrice(e.target.value.replace(/[^0-9.]/g, ""))} inputMode="decimal" dir="ltr"
+                        placeholder="0.000" aria-label="מחיר-מגביל למכירה"
+                        className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 font-mono text-xs text-zinc-100 outline-none focus:border-amber-500/60"
+                        data-testid="agent-rail-price"
+                      />
+                    </label>
+                  )}
+                  {railAction === "transfer" && (
+                    <label className="block min-w-[140px]">
+                      <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-zinc-500">אל (חשבון)</span>
+                      <input
+                        value={railTo} onChange={(e) => setRailTo(e.target.value.replace(/[^a-z0-9\-.]/g, ""))} dir="ltr"
+                        placeholder="account" aria-label="חשבון-יעד להעברה"
+                        className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 font-mono text-xs text-zinc-100 outline-none focus:border-amber-500/60"
+                        data-testid="agent-rail-to"
+                      />
+                    </label>
+                  )}
                   <GoldButton tone="gold" onClick={() => void doRailPlan()} disabled={railBusy !== null} testid="agent-rail-plan-btn">
-                    <span className="inline-flex items-center gap-1.5"><ArrowDownRight className="h-3.5 w-3.5" aria-hidden />{railBusy === "plan" ? "מתכנן…" : "תכנן-משיכת-SWAP.HIVE"}</span>
+                    <span className="inline-flex items-center gap-1.5"><ArrowDownRight className="h-3.5 w-3.5" aria-hidden />{railBusy === "plan" ? "מתכנן…" : `תכנן-${railAction}`}</span>
                   </GoldButton>
                   <GoldButton tone="green" onClick={() => void doRail()} disabled={!railPlanFresh || railBusy !== null} testid="agent-rail-execute-btn">
-                    {railBusy === "exec" ? "משדר…" : "בצע-משיכה"}
+                    {railBusy === "exec" ? "משדר…" : `בצע-${railAction}`}
                   </GoldButton>
                 </div>
                 {!railPlanFresh && railPlan !== null && (
-                  <p className="mt-2 font-mono text-[10px] text-amber-400">הכמות-השתנתה מאז-התכנון — תכנן שוב לפני-ביצוע</p>
+                  <p className="mt-2 font-mono text-[10px] text-amber-400">הפרמטרים-השתנו מאז-התכנון — תכנן שוב לפני-ביצוע</p>
                 )}
 
                 {/* תוצאת-תוכנית-מסילה */}

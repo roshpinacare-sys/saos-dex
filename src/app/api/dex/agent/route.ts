@@ -19,6 +19,9 @@ export const dynamic = "force-dynamic";
  * יומן. fail-closed-בכל-שכבה; שגיאות-כנות-ומפורטות. */
 
 const RAIL_ACTIONS: RailAction[] = ["sell", "withdraw", "powerup", "transfer"];
+const RAIL_NETWORKS_ALLOW = ["hive", "steem", "blurt"] as const;
+
+type RailNet = (typeof RAIL_NETWORKS_ALLOW)[number];
 
 export async function GET() {
   return NextResponse.json(await agentStatus());
@@ -57,6 +60,9 @@ export async function POST(req: Request) {
     const railReq: RailRequest = {
       account: String(body.account ?? "__sovereign__"), // rail-exec כופף-את-החשבון-לזהות-הריבונית
       action,
+      network: RAIL_NETWORKS_ALLOW.includes(String(body.network ?? "hive").toLowerCase() as RailNet)
+        ? (String(body.network ?? "hive").toLowerCase() as RailNet)
+        : "hive",
       symbol: body.symbol ? String(body.symbol).toUpperCase() : undefined,
       quantity: body.quantity === undefined ? undefined : Number(body.quantity),
       price: body.price === undefined ? undefined : Number(body.price),
@@ -65,10 +71,10 @@ export async function POST(req: Request) {
     };
     if (kind === "plan-rail") {
       const plan = await planRail(railReq);
-      return NextResponse.json({ ...plan, kind, network: "HIVE" });
+      return NextResponse.json({ ...plan, kind, network: railReq.network });
     }
     const r = await runRail(railReq);
-    return NextResponse.json({ ok: r.ok, error: r.error ?? null, run: r.run ?? null, kind, network: "HIVE" }, { status: 200 });
+    return NextResponse.json({ ok: r.ok, error: r.error ?? null, run: r.run ?? null, kind, network: railReq.network }, { status: 200 });
   }
 
   return NextResponse.json({

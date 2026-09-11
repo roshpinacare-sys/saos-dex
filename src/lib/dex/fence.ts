@@ -49,6 +49,10 @@ const PINNED_HOSTS = new Set<string>([
   "api.coinpaprika.com", "min-api.cryptocompare.com", "api.binance.com",
   /* Task 4 · BLURT — הרשת-השלישית (blurtHead חי ב-price-proof) */
   "blurt-rpc.saboin.com",
+  /* Roast-74 · מסילת-BLURT-רב-רשתית — הצומת-החי-היחיד-שנמדד (blurt.world אבד NXDOMAIN)
+   * + מנוע-Steem (הראשי-מת; הפין-שומר-על-נתיב-ה-fail-closed-הממומש) */
+  "rpc.blurt.blog",
+  "api.steem-engine.net",
   /* TRON */
   "api.trongrid.io",
   /* ETH — ברירות-מחדל של ETH_RPCS */

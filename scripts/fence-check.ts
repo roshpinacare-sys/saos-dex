@@ -33,6 +33,8 @@ const FETCH_WITHOUT_FENCE_ALLOWED = new Set([
 /* שערים שמופיעים ב-src אך מיועדים-תצוגה-בלבד (קישורי-EXPLORER — אף-fetch אליהם) */
 const DISPLAY_ONLY = new Set([
   "steemworld.org", "hiveblocks.com", "tronscan.org", "etherscan.io", "solscan.io", "explorer.solana.com",
+  /* Roast-74 · מסילת-הרשתות: סרק-Steem לתצוגת-txid (Blurt: אין-סריקה-חיה — מוצהר-בקוד) */
+  "steemscan.com",
 ]);
 
 const BAD: { re: RegExp; why: string }[] = [

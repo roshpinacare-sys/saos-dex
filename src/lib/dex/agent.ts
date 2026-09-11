@@ -176,7 +176,7 @@ export async function runRail(req: RailRequest): Promise<{ ok: boolean; run?: Ag
   const id = `ag-${++g.seq}-${Date.now().toString(36)}`;
   const run: AgentRun = {
     id, at: new Date().toISOString(), kind: "rail",
-    intent: { ...req, note: "רשת-HIVE · מבצע-ריבוני-בדמון" } as Record<string, unknown>,
+    intent: { ...req, note: `רשת-${(req.network ?? "hive").toUpperCase()} · מבצע-ריבוני-בדמון` } as Record<string, unknown>,
     status: "failed", steps: [],
   };
   const step = (ok: boolean, stepName: string, detail: string, txid?: string) =>
@@ -189,7 +189,7 @@ export async function runRail(req: RailRequest): Promise<{ ok: boolean; run?: Ag
   if (!plan.ok) { journalPush(run); return { ok: false, run, error: plan.error }; }
 
   const res = await railExecute(req);
-  step(res.ok, "broadcast", res.ok ? `שודר-לרשת-Hive (block ${res.block ?? "?"})` : res.error ?? "broadcast-failed", res.txid);
+  step(res.ok, "broadcast", res.ok ? `שודר-לרשת-${(req.network ?? "hive").toUpperCase()} (block ${res.block ?? "?"})` : res.error ?? "broadcast-failed", res.txid);
   run.status = res.ok ? "done" : "failed";
   journalPush(run);
   return res.ok ? { ok: true, run } : { ok: false, run, error: res.error };
@@ -209,23 +209,28 @@ export interface IgnitionRow {
   what: string;
   gap: string;
 }
+/* Roast-74: המטריצה-נבנית-מהאמת-החיה-שנמדדה (לא-מהצהרות):
+ * — STEEM_ACTIVE_WIF נבחן-חי מול-authority-החי (active/posting/owner) = לא-שולט.
+ * — blurt.world + api.steem-engine.com = NXDOMAIN גלובלי (מדוד-דרך-DoH).
+ * — BLURT: מפתח-כספת זהה למפתח-על-השרשרת (הצלבה-מלאה) → חמוש.
+ */
 function ignitionMatrix(): IgnitionRow[] {
   const env = (k: string) => Boolean((process.env[k] || "").trim());
   return [
     {
       network: "HIVE", state: "armed", keys: env("HIVE_ACTIVE_WIF") && env("HIVE_ANCHOR_ACCOUNT"),
       what: "מסילת-המרה-אמת (rail-exec · אימות-סמכות-חי) + עיגון-צי (fleet)",
-      gap: "נזילות-פיזית-זעירה (SWAP.HIVE≈0.072 על-החשבונות) — המסילה-מאומתת-על-מיקרו",
+      gap: "נזילות-פיזית-זעירה (SWAP.HIVE≈0.072) — המסילה-מאומתת-על-מיקרו (txid 46ed2f58)",
     },
     {
       network: "STEEM", state: "pending", keys: env("STEEM_ACTIVE_WIF"),
-      what: "מסדרון-עיגון 1:1 בגרעין (WSTEEM) + מסילת-STEEM (rail עתידי-על-אותו-דפוס-גרפני)",
-      gap: "המסילה-הפיזית חסומה-כנה עד בדיקת-ערבויות-משלה (3.381 STEEM נזיל-על-השרשרת)",
+      what: "מסדרון-עיגון 1:1 בגרעין (WSTEEM) + מסילת-STEEM-ממומשת-ב-rail-exec (אותו-דפוס-גרפני)",
+      gap: "הזהות-חסומה-כנה: STEEM_ACTIVE_WIF-אינו-שולט ב-headcorner (נמדד-חי-מול-השרשרת) — נדרש-מפתח-מהמפעיל · Steem-Engine-ראשי-מת (NXDOMAIN) · RC-שופע (~3.4T)",
     },
     {
-      network: "BLURT", state: "pending", keys: env("STEEM_ACTIVE_WIF"),
-      what: "WBLURT בגרעין + מפתחות-headcorner-blurt בכספת",
-      gap: "מסילה-פיזית-עתידית (42.8 BLURT על-השרשרת) — אחרי-HIVE",
+      network: "BLURT", state: "armed", keys: env("BLURT_ACTIVE_WIF"),
+      what: "מסילת-BLURT-חמושה (powerup/transfer · chain_id-מ-@beblurt/dblurt · rpc.blurt.blog) — WBLURT-בגרעין",
+      gap: "אין-Engine (blurt.world-אבד) — אין-המרת-pegged · אין-rc_api (מדוד) — שער-RC-לא-רלוונטי · נזיל 41+ BLURT",
     },
     {
       network: "TRON", state: "needs-fuel", keys: env("STEEM_ACTIVE_WIF"),
@@ -260,7 +265,7 @@ export async function agentStatus(): Promise<Record<string, unknown>> {
     ok: true,
     capabilities: {
       swap: "live (batch אטומי + חציית-אורקל)",
-      railHive: rail.configured ? "armed (אימות-סמכות-חי + שער-RC)" : "dead (אין-זהות-ריבונית-בסביבה)",
+      rail: rail.configured ? "armed (HIVE-חי · BLURT-חמוש · STEEM-חסום-זהות-מדוד)" : "dead (אין-זהות-ריבונית-בסביבה)",
       door: "live (peg-in/peg-out/open-pool/refresh-oracle — /api/dex/door)",
       fleet: fleet.configured ? `live (${fleet.usableCount} חיילים-שמישים)` : `quiet-disabled (${fleet.openError ?? "vault-unavailable"})`,
       oracle: "live (לולאת-חוץ-מצב 60ש׳ — בתוך-ה-stateRoot)",
