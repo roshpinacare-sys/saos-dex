@@ -45,12 +45,18 @@ type SteemLib = {
 
 const steem = steemLib as unknown as SteemLib;
 const ZERO_CHAIN_ID = "0000000000000000000000000000000000000000000000000000000000000000";
+/* Roast-74: מזהה-השרשרת-של-Steem (ג'נזיס = אפסים) — מיוצא למבצע-המסילה-הרב-רשתי */
+export const STEEM_CHAIN_ID = ZERO_CHAIN_ID;
 
 /* ── קבועים ── */
 export const ANCHOR_ID = "saos-dex.anchor.v1";
 export const HIVE_CHAIN_ID = "beeab0de00000000000000000000000000000000000000000000000000000000";
 export const STEEM_NODES = ["https://api.steemit.com", "https://api.justyy.com"];
 export const HIVE_NODES = ["https://api.hive.blog", "https://api.deathwing.me"];
+/* Roast-74 · מדוד-חי: blurt.world אבד (NXDOMAIN גלובלי) — הצומת-החי-היחיד-שנמדד.
+ * chain_id נלקח-מה-SDK-הרשמי-העדכני (@beblurt/dblurt 0.17.0 — 64-hex). */
+export const BLURT_NODES = ["https://rpc.blurt.blog"];
+export const BLURT_CHAIN_ID = "cd8d90f29ae273abec3eaa7731e25934c63eb654d55080caff2ebb7f5df6381f";
 const TRON_RPC = "https://api.trongrid.io";
 const RC_MIN = 1_000_000;          // מינימום-שמרטות לפני שידור (custom_json ~190B « 1M)
 const RETRY_MAX = 6;
@@ -302,10 +308,12 @@ async function scalarOf(wif: string): Promise<Uint8Array> {
 /* ── JSON-RPC ── */
 async function rpc<T>(endpoint: string, body: unknown, timeoutMs = 20000): Promise<T> {
   // FIX(SETTLE-11): גדר-ריבונית — שער-לא-מקובע = חסימה fail-closed · FIX(Roast-65-b · H2): דרך-fencedFetch (redirect:error)
+  // FIX(Roast-74 · מדוד-חי): Cloudflare מציב אתגר-HTML מול-סוכן-המשתמש-הדיפולטי-של-undici —
+  // סוכן-משתמש-מפורש פותר (rpc.blurt.blog; בדיקה: curl/bun עוברים, undici-ללא-UA מקבל <html>).
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fencedFetch(endpoint, "relay.rpc", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctrl.signal });
+    const res = await fencedFetch(endpoint, "relay.rpc", { method: "POST", headers: { "Content-Type": "application/json", "user-agent": "saos-dex-rail/1.0 (+sovereign-dex)" }, body: JSON.stringify(body), signal: ctrl.signal });
     const json = (await res.json()) as { result?: T; error?: { message?: string } };
     if (json.error) throw new Error(json.error.message || "rpc error");
     return json.result as T;
@@ -594,6 +602,13 @@ export function recordFleetAnchor(
 function persist(rt: RelayRT): void {
   try {
     fs.mkdirSync(STATE_DIR, { recursive: true });
+    /* FIX(Roast-74): עדות-עיגון-מאומתת-אחרונה — מצביע-בר-קיימא לביקורת/כאוס.
+     * anchors.json מתחלף (pending-רעננים דוחפים החוצה confirmed) ומותיר-את-חדר-הבדיקה
+     * בלי-וקטור-קריאה-חוזרת; last-anchor.json שומר-את-העיגון-האמת-האחרון-שהתקבל. */
+    try {
+      const la = [...rt.records].find((r) => r.status === "anchored" && typeof r.txid === "string" && r.txid.length >= 40 && typeof r.stateRoot === "string" && r.stateRoot.length === 64);
+      if (la) fs.writeFileSync(path.join(STATE_DIR, "last-anchor.json"), JSON.stringify({ chain: la.chain, txid: la.txid, height: la.height, stateRoot: la.stateRoot, account: la.account ?? rt.account, at: la.at }, null, 1) + "\n");
+    } catch { /* כתיבה-נכשלה — העדות-עדיין-ב-anchors.json ועל-השרשרת */ }
     const chainOut = (ALL_CHAINS as ChainName[]).map((c) => {
       const last = rt.records.find((r) => r.chain === c);
       const anchored = rt.records.find((r) => r.chain === c && r.status === "anchored");

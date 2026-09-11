@@ -181,7 +181,27 @@ async function main(): Promise<void> {
     .map((r) => ({ chain: r.chain, txid: r.txid, height: r.height, stateRoot: r.stateRoot, account: r.account }))
     .sort((a, b) => (a.chain === "steem" ? 0 : 1) - (b.chain === "steem" ? 0 : 1))
     .slice(0, 4);
-  if (candidates.length === 0) FAIL_EXIT("no on-chain anchor candidates in state/anchors.json — cannot build a read-back test vector");
+  /* FIX(Roast-74): anchors.json מתחלף — עיגונים-מאושרים נדחפים-החוצה על-ידי-pending-רעננים
+   * (RC-רגנרציה) והמסנן-נשאר-ריק. המקור-הכנה-השני הוא **השרשרת-עצמה**: lastTxid-של-החיילים
+   * (fleetStatusPublic) ושל-חשבון-המסילה → get_transaction על-RPC-ציבורי → ניתוח-חוזה-
+   * העיגון (saos-dex.anchor.v1/chain-seal) → מועמד-אמת (height/stateRoot/חותם-מהעדות-עצמה).
+   * בקרת-האמת-נשארת relayAuditVerify — הגילוי רק מציע-וקטור-קיים. */
+  if (candidates.length === 0) {
+    /* FIX(Roast-74): anchors.json מתחלף — עיגונים-מאושרים נדחפים-החוצה על-ידי-pending-רעננים
+     * (RC-רגנרציה) והמסנן-נשאר-ריק. FIX בשורש ב-relay.persist(): עדות-העיגון-המאומתת-האחרונה
+     * נשמרת-ב-state/last-anchor.json (מצביע-בר-קיימא). הכאוס קורא-אותו כמקור-מועמדים-שני;
+     * בקרת-האמת-נשארת relayAuditVerify — הקובץ רק מציע-וקטור-קיים-מול-ה-RPC-הציבורי. */
+    try {
+      const laPath = path.join(process.cwd(), "state", "last-anchor.json");
+      if (fs.existsSync(laPath)) {
+        const la = JSON.parse(fs.readFileSync(laPath, "utf8")) as { chain?: string; txid?: string; height?: number; stateRoot?: string; account?: string };
+        if (["steem", "hive", "fleet"].includes(String(la.chain)) && typeof la.txid === "string" && la.txid.length >= 40 && typeof la.height === "number" && typeof la.stateRoot === "string" && la.stateRoot.length === 64) {
+          candidates.push({ chain: la.chain as Candidate["chain"], txid: la.txid, height: la.height, stateRoot: la.stateRoot, account: la.account });
+        }
+      }
+    } catch { /* אין-עדות-שמורה-קריאה — כנות */ }
+  }
+  if (candidates.length === 0) FAIL_EXIT("no on-chain anchor candidates (state/anchors.json + state/last-anchor.json: אפס-עיגונים-מאושרים) — cannot build a read-back test vector");
 
   const mismatchesBefore = status().metrics.mismatches;
   const fakeRoot = canonical.sha256("chaos: forged stateRoot — must never be approved");
