@@ -88,6 +88,7 @@ export type OpKind = keyof typeof GAS_TABLE;
 export const FEE_BPS = 30; // עמלי-30bps כמו-הבריכה-הילידית (dex-facts)
 export const TREASURY_CUT_PCT = 30; // 30% מהעמלה → אוצר (רווח-מונוטוני, grid98)
 export const REFUEL_CAP = 100_000; // תקרת-עירוי-פר-פקודה — גם-אם-האוצר נחטף, הנזק מגודל
+export const FUEL_ASK_MIN = 2_000; // FIX(roast-81): סף-בקשה-מועילה — מתחת-לזה (אבק-גז) לא-מבקשים-עירוי
 // FIX(roast-79 · fuel-death-spiral): הבוטים נכנסו-לסולם-הממנים — נמדדו-חי כמחזיקי-
 // הרזרבה-האמתיים (bot-a 924k · bot-b 420k · bot-c 309k — 1.65M מג'נזיס שלא-נשרף)
 // בזמן-שהסולם-הישן (אוצר 8µ · ארנה 25.9k · מפעיל 2k) היה-מת-מבנית. העברה-טהורה
@@ -115,7 +116,11 @@ export const REV_FLOOR = 200_000;       // רצפת-רווח-אוצר שהראו
 export const REV_BURN_PCT = 40;         // → קנייה-מהבריכה-ושריפה
 export const REV_VE_PCT = 40;           // → קרן-veSAOS
 export const ROUTER_USDS_FLOOR = 1_000_000; // רצפת-USDS-אוצר — הראוטר לא מרוקן
-export const REV_MIN_CYCLE = 10_000;    // מתחת-לזה — אין-מחזור (עמלות-אבק נשארות)
+// FIX(roast-81 · router-dust-lock): היה 10,000 — נמדד-חי: revAux=9,124µ (רווח-אמת-מדוד)
+// תקוע-מתחת-לשער → הראוטר-ישן-מאז-h33,000 (12,000+ בלוקים), השריפה-קפואה-על-206,741µ,
+// קרן-ה-ve-יבשה-6-אפוקים. אותו-דפוס-של-roast-79 (שער-המזרקה): שער-נגד-אבק היה-החלטת-
+// תזמון, לא-אבטחה — האבטחה-היא-הרצפות (REV_FLOOR · ROUTER_USDS_FLOOR) והגיבוי-הכפול.
+export const REV_MIN_CYCLE = 1_000;     // מתחת-לזה — אין-מחזור (עמלות-אבק נשארות)
 export const DYN_FEE_MIN_BPS = 4;       // עמלה-דינמית: רצפה
 export const DYN_FEE_MAX_BPS = 1_500;   // עמלה-דינמית: תקרה
 export const DYN_FEE_K = 4;             // fee = base + vol/4 (0.25bps-ל-bps-תנודה)
@@ -142,20 +147,28 @@ export const COW_MAX_PENDING_PER_ISSUER = 16; // הזמנות-אצווה-פתו�
 export const COW_FALLBACK_MIN_OUT_BPS = 200;  // מגן-minOut לברירת-המחדל של המסלול (2%)
 
 export type FuelFunder = (typeof FUEL_FUNDERS)[number];
-/** ממנה-דלק מדורג (SETTLE-5/9 · roast-79): arena → bot-a/b/c → treasury → operator.
- * FIX(SETTLE-9 dedup): הסולם היה מועתק-בשלמותו בין mm.ts ל-settle/route.ts —
- * לוגיקת-כסף-קונצנזוסית חייבת לחיות במקום-אחד (הדריפט פה = דליפה-כלכלית).
- * exclude — לא-לממן-עצמי (הארנה אסור-שתממן-את-עצמה: המנוע דוחה rTo==issuer). */
+/** סדר-הסולם (SETTLE-5/9 · roast-79): arena → bot-a/b/c → treasury → operator.
+ * FIX(roast-79 · fuel-death-spiral): סדר-הקדימות הוא-התרופה. היה: ארנה→אוצר→מפעיל —
+ * נמדד-חי: שלושתם מתים (25.9k שאינו-עובר-מבחן-amt+10k · 8 · 2k) בזמן-שהבוטים
+ * מחזיקים 1.65M. עכשיו: ארנה → בוטים (מרווח לבריאות-המממן) → אוצר → מפעיל. */
+export const FUNDER_ORDER: FuelFunder[] = ["arena", "bot-a", "bot-b", "bot-c", "treasury", "operator"];
+/** FIX(roast-81 · afford-single-source): יכולת-המימון-המקסימלית של ממנה — אותם-מרווחי-
+ * ברזל של-funderFor (ארנה/בוטים שומרים-רצפת-10k לבריאות-המממן; האוצר/המפעיל ניתנים-עד-
+ * תום-היתרה). SETTLE-9 dedup: המרווחים חיים-פה-בלבד — הדריפט-פה = דליפה-כלכלית. */
+export const FUNDER_KEEP = 10_000;
+export function funderAfford(st: DexState, who: FuelFunder): number {
+  const cr = st.credits[who] ?? 0;
+  const keep = who === "treasury" || who === "operator" ? 0 : FUNDER_KEEP;
+  return Math.max(0, cr - keep);
+}
+/** ממנה-דלק מדורג (SETTLE-5/9 · roast-79 · roast-81-refactor-טהור):
+ * exclude — לא-לממן-עצמי (הארנה אסור-שתממן-את-עצמה: המנוע דוחה rTo==issuer).
+ * התנהגות-זהה-במדויק לקודם — רק-המרווחים עברו-למקור-אמת-אחד (funderAfford). */
 export function funderFor(st: DexState, amt: number, exclude?: string): FuelFunder {
-  const cr = (n: string) => st.credits[n] ?? 0;
-  // FIX(roast-79 · fuel-death-spiral): סדר-הקדימות הוא-התרופה. היה: ארנה→אוצר→מפעיל —
-  // נמדד-חי: שלושתם מתים (25.9k שאינו-עובר-מבחן-amt+10k · 8 · 2k) בזמן-שהבוטים
-  // מחזיקים 1.65M. עכשיו: ארנה → בוטים (מרווח amt+10k לבריאות-המממן) → אוצר → מפעיל.
-  if (exclude !== "arena" && cr("arena") >= amt + 10_000) return "arena";
-  for (const b of ["bot-a", "bot-b", "bot-c"] as const) {
-    if (exclude !== b && cr(b) >= amt + 10_000) return b;
+  for (const f of FUNDER_ORDER) {
+    if (f === exclude) continue;
+    if (funderAfford(st, f) >= amt) return f;
   }
-  if (exclude !== "treasury" && cr("treasury") >= amt) return "treasury";
   return "operator";
 }
 
