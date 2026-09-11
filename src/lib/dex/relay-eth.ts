@@ -167,7 +167,17 @@ export async function ethSealBroadcast(
   if (balance < floor) {
     throw new Error(`unfunded: ${Number(balance / 10n ** 12n)} mwei < gas floor ${Number(floor / 10n ** 12n)} mwei — pending funding (armed, intent signed)`);
   }
-
+  /* roast-77 · שערי-דלק-מדידים (המשמורת-היא-גם-דלק-העיגון — השחיקה-החיה 0.0019→0.0002-ETH
+   * הוכיחה-שבלי-שערים-המסילה-שורפת-את-עצמה): תקרת-גז + רצפת-דלק — מעל-התקרה/מתחת-הרצפה
+   * = המתנה-כלכלית-כנה, לא-שריפה. */
+  const GAS_CEILING_WEI = 2_000_000_000n; // 2 gwei — מעל-זה העיגון-לא-שווה-את-הדלק
+  const FUEL_FLOOR_WEI = 120_000_000_000_000n; // 0.00012 ETH — מתחת-זה מנוע-עיגון-יתר
+  if (gasPrice > GAS_CEILING_WEI) {
+    throw new Error(`gas-ceiling: ${Number(gasPrice / 10n ** 9n)} gwei > ${Number(GAS_CEILING_WEI / 10n ** 9n)} — economic hold (fuel economy, roast-77)`);
+  }
+  if (balance - floor < FUEL_FLOOR_WEI) {
+    throw new Error(`unfunded: fuel ${Number((balance - floor) / 10n ** 12n)} mwei < reserve floor ${Number(FUEL_FLOOR_WEI / 10n ** 12n)} — economic hold (protect remaining fuel)`);
+  }
   const to = Buffer.from(address.replace(/^0x/, "").toLowerCase(), "hex");
   const dataBytes = Buffer.from(data, "hex");
   /* EIP-1559 [chainId,nonce,tip,fee,gas,to,value,data,accessList(+yParity,r,s)] —
