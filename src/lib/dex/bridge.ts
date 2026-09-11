@@ -54,6 +54,9 @@ const RPC: Record<string, string> = {
   bsc: "https://bsc-rpc.publicnode.com",
   steem: "https://api.steemit.com",
   hive: "https://api.hive.blog",
+  // Roast-83 · BLURT — המסילה-השמינית: אותו-גרעין-גרפני (condenser) — roast-74 מדד-חי
+  // את rpc.blurt.blog (blurt.world NXDOMAIN). המאמת-מפעיל-מחדש את אותו-נתיב של steem/hive.
+  blurt: "https://rpc.blurt.blog",
   tron: "https://api.trongrid.io",
   sol: "https://api.mainnet-beta.solana.com",
 };
@@ -81,6 +84,7 @@ export function proofOk(chain: string, s: string): boolean {
   switch (chain) {
     case "steem":
     case "hive":
+    case "blurt": // Roast-83 · BLURT-txids בפורמט-STEEM (40-hex) — נמדד-חי ב-roast-82
       return RE_HEX40.test(t);
     case "eth":
     case "bsc":
@@ -157,8 +161,15 @@ export async function verifyFarTx(chain: string, txid: string, expect: FarExpect
       if (wei < BigInt(expect.farAmount.trim())) return { verified: false, note: "amount-short-on-chain — refused" };
       return { verified: true, note: `receipt ok @ block ${txN} · depth ${headN - txN} · bound: to+value` };
     }
-    if (chain === "steem" || chain === "hive") {
-      const r = await jsonRpc<{ result?: { operations?: [string, Record<string, unknown>][] } | null }>(RPC[chain]!, { jsonrpc: "2.0", id: 1, method: "condenser_api.get_transaction", params: [[tx]] });
+    // Roast-83 · BLURT מצטרף-לנתיב-הגרפני — אותו-condenser_api.get_transaction, אותם-חוקי-קישור
+    // (נמען+סכום+מקור+ממו מול-הכוונה-הרשומה). הערה: BLURT אינו-מחזיר מידע-עומק-בשרשרת-זו —
+    // אימות-הקישור-עצמו זהה-ל-steem/hive (כולל-העברות-savings/vesting) — כנות-מלאה.
+    if (chain === "steem" || chain === "hive" || chain === "blurt") {
+      // Roast-83 · מדד-חי מול-rpc.blurt.blog: ה-condenser-של-BLURT דורש params **שטוחים**
+      // ([txid]) — הסגנון-המקונן-של-STEEM/HIVE ([[txid]]) זורק "Bad Cast: array_type to string".
+      // זהו-הפער-היחיד-בין-השרשראות-בנתיב-זה; צורת-התוצאה (result.operations) זהה.
+      const txParams = chain === "blurt" ? [tx] : [[tx]];
+      const r = await jsonRpc<{ result?: { operations?: [string, Record<string, unknown>][] } | null }>(RPC[chain]!, { jsonrpc: "2.0", id: 1, method: "condenser_api.get_transaction", params: txParams as never });
       const ops = r?.result?.operations;
       if (!Array.isArray(ops)) return { verified: false, note: "tx-not-found (טרם-אינדוקס-או-לא-קיים)" };
       // FIX(F1): נדרש-op-העברה-המקושר לנמען הרשום; סכום/ממו/מקור נאכפים כשהכוונה מקודדת אותם
@@ -297,7 +308,7 @@ export const BRIDGE_ACCOUNT = "bridge"; // escrow-ריבוני — יתרות-נ
 export const BRIDGE_CLAIM_CAP = 2_000_000; // תקרת-תשלום/נעילה-פר-כוונה (µ) — גבול-נזק
 /** החוזה-שלנו-שם: SAOSRelay על ETH-mainnet (מבוקר-חי: eth_getCode + sha256 runtime — סבב-12-a). */
 export const FAR_CONTRACT = { chain: "eth", name: "SAOSRelay", address: "0xa52D85cAa4C04C15cE60d0c582e8C138d16678E6", note: "events-only anchor() — שחרור-ממומש דורש gas-ממומן (כנות)" };
-export const FAR_CHAINS = ["eth", "bsc", "tron", "sol", "steem", "hive", "saosnet"] as const;
+export const FAR_CHAINS = ["eth", "bsc", "tron", "sol", "steem", "hive", "blurt", "saosnet"] as const; // Roast-83: +blurt (השמינית)
 export type FarChain = (typeof FAR_CHAINS)[number];
 
 const BRIDGE_FILE = path.join(process.cwd(), "state", "bridge.json");
@@ -400,8 +411,8 @@ function farAmountOk(chain: string, v: string): boolean {
   if (chain === "eth" || chain === "bsc" || chain === "tron" || chain === "sol" || chain === "saosnet") {
     return /^\d+$/.test(t) && t.length <= 40; // יחידות-מינימום (wei/sun/atoms)
   }
-  if (chain === "steem" || chain === "hive") {
-    return parseAsset(t) !== null; // "10.000 STEEM"
+  if (chain === "steem" || chain === "hive" || chain === "blurt") {
+    return parseAsset(t) !== null; // "10.000 STEEM" / "30.290 BLURT"
   }
   return false;
 }
