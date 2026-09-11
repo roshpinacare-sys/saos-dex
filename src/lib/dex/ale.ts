@@ -126,10 +126,16 @@ export function aleTick(st: DexState, nowMs: number): void {
     ALE_MAX_PER_CYCLE,
   );
   if (budget < ALE_MIN_SEED) return;
-  // חלוקה-מדודה: 60% ליעד-הכי-דל, 40% לבא-אחריו (אם-יש) — עומק-ראשון-לזרע
-  const first = Math.floor((budget * 60) / 100);
-  const rest = budget - first;
-  const slices = [first, rest];
+  // חלוקה-מדודה: 60% ליעד-הכי-דל, 40% לבא-אחריו (אם-יש) — עומק-ראשון-לזרע.
+  // FIX(roast-81 · ale-split-deadlock): הפיצול-60/40 חייב-שתי-מנות-מעל-המינימום —
+  // נמדד-חי: budget=7,256 → first=4,353<5,000 → break → ALE-ישן-5,600+בלוקים
+  // (מאז-h39,600) בזמן-שלאוצר-היו-29,025µ-חופשיים-לזריעה. עכשיו: תקציב-שאינו-
+  // מספיק-לשתי-מנות → מנה-אחת ליעד-הכי-דל; הפיצול-60/40 נשאר-לתקציבים-גדולים.
+  // אותו-מינימום (ALE_MIN_SEED), אותה-סדר-עדיפויות — רק-המוות-של-התקציב-הקטן-נפתר.
+  const twoSlices = budget >= 2 * ALE_MIN_SEED;
+  const first = twoSlices ? Math.floor((budget * 60) / 100) : budget;
+  const rest = twoSlices ? budget - first : 0;
+  const slices = twoSlices ? [first, rest] : [budget];
   let seeded = 0;
   for (let i = 0; i < slices.length && i < targets.length; i++) {
     const slice = slices[i];

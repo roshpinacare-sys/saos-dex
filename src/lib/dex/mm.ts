@@ -12,7 +12,7 @@
  * (שורד-תמונות-מצב; רשויות-ישנות = undefined → 0-כנה).
  */
 import type { DexState, Op, Asset } from "./kernel";
-import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, funderFor, poolKey, avail, notional } from "./kernel";
+import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDER, funderAfford, poolKey, avail, notional } from "./kernel";
 import { sortBook } from "./book";
 import { poolMid, poolMidFor, getPool } from "./amm";
 import { railTick, RAIL_OWNED_POOLS } from "./rail";
@@ -280,6 +280,8 @@ export function arenaTick(
   // → החיילים מתים-מוקדם → אין-מסחר → אין-עמלות → אין-מזרקה → אין-דלק. החלון הוקדם
   // ל-4 (וגם-טיק 1–2 מיד-אחרי-boot): התזמון בלבד — ההעברות-עצמן טהורות-ומוגבלות.
   if (tick <= 2 || tick % 4 === 0) {
+    // FIX(roast-81 · afford-race): ספר-תקציב-פר-טיק (ראה-למטה) — אפס-חפירה-מעבר-לרצפת.
+    const fuelBudget = new Map<string, number>();
     // THE-FOUNTAIN: אוצר-ריק? הטבעה-עצמית מגובה-עמלות-מדודות (profit-שהוכר +
     // feeMeter-מעל-רצפת-הסולם, מדוד-תקרה) — המסחר-עצמו מחזיר-את-הדלק-ששרף.
     // קודם-ההטבעה, אחר-כך העירוי.
@@ -288,28 +290,43 @@ export function arenaTick(
     // הגרעין (kernel mint_fuel) עדיין אוכף בעצמו את הגיבוי-הכפול, הרצפה (8k) והתקרה —
     // כאן-רק-החלטת-תזמון-כלכלית, לא-שכבת-אבטחה.
     const trCr = st.credits["treasury"] ?? 0;
-    const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, Math.floor(((st.feeMeter ?? 0) - LADDER_FUEL_FLOOR) / 2));
+    // FIX(roast-81 · fountain-half-throttle): ה-/2 כאן היה-חנק-כפול-מעל-אכיפת-הגרעין
+    // (mint_fuel כבר-אוכף-בעצמו רצפת-8k + תקרה). נמדד-חי: fuelAvail=577<שער-1,000
+    // בזמן-שהגרעין-הרשה-1,154 → מזרקה-יבשה, האוצר-תקוע-על-8µ-גז, ו-ProtoRev —
+    // מנוע-הארב-שרץ-כ-batch-אוצר — מת-מרעב-גז (revAux.rejections=5,181).
+    // עכשיו: אותו-מדד-בדיוק-של-הגרעין — האכיפה-במקום-אחד.
+    const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
     if (trCr < 10_000 && fuelAvail > 1_000) {
       const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
       if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-${tick}`, to: "treasury", amount: mint });
     }
     for (const ag of [...soldiers, "arena", "bot-a", "bot-b", "bot-c", "rail"]) {
       const c = st.credits[ag] ?? 0;
-      // FIX(SETTLE-15 fuel-oscillation, נתפס-בלוג-הדחיות): סף-4k עם-חלון-16-טיק
-      // איפשר לחיילים-פעילים להגיע-ל-0-בין-הבדיקות (נמדד: 23-27-דחיות/בלוק
-      // insufficient-credits בשיא). סף-10k = מילוי-מוקדם-בחלון-אחד, אפס-דחיות;
-      // זו-העברה-טהורה (אפס-הטבעה) — השריפה-הכוללת-לא-משתנה, רק-התזמון-מוקדם.
+      // FIX(SETTLE-15 fuel-oscillation, נתפס-בלוג-הדחיות): סף-10k = מילוי-מוקדם-בחלון-אחד,
+      // אפס-דחיות; זו-העברה-טהורה (אפס-הטבעה) — השריפה-הכוללת-לא-משתנה, רק-התזמון-מוקדם.
       if (c < 10_000) {
-        const amt = Math.min(30_000 - c, REFUEL_CAP);
-        if (amt <= 0) continue;
-        // ממנה-מדורג (SETTLE-5/9 + roast-79 — funderFor אחד בגרעין): ארנה → בוטים →
- // אוצר (עמלות — THE-FOUNTAIN) → מפעיל-אנושי (קו-הגנה-האחרון).
-        // FIX(SETTLE-7): הארנה עצמה נוספה-לרשימת-המקבלים — היא משלמת-גז על
-        // pegkeeper וממנת-את-כולם ומעולם-לא-קיבלה-עירוי. אסור-שתממן-את-עצמה
-        // (המנוע דוחה rTo==issuer) — לכן-הממנה-שלה הוא אוצר/מפעיל בלבד.
-        // FIX(roast-79): exclude=ag לכל-המקבלים (לא-רק-ארנה) — עכשיו-שהבוטים בסולם,
-        // בוט-שצריך-עירוי היה-יכול-להיבחר-כממנה-של-עצמו (דחיית-bad-refuel מיותרת).
-        const funder = funderFor(st, amt, ag);
+        const need = Math.min(30_000 - c, REFUEL_CAP);
+        if (need <= 0) continue;
+        // FIX(roast-81 · affordability-ask): היה-בקשה-קבועה (30k−c) שהגרעין דוחה-בכנות
+        // כשאף-ממנה לא עומד-במרווח — נמדד-חי: Σcredits=54,793µ מול-דרישה-קבועה-של-~240k
+        // → סירול-דחיות-נצחי, הספר-ריק-מציטוטים, וחיילים-עשירים-בטוקנים-ועניים-בגז
+        // (soldier-1: 2.1M-SAOS+3.8M-USDS · 10µ-קרדיטים) לא-מצטטים. עכשיו: הבקשה
+        // מתכווננת-ליכולת-הממנה-בפועל — אותו-סדר-סולם-ואותם-מרווחי-ברזל (funderAfford
+        // מקור-אמת-אחד בגרעין); מתחת-ל-FUEL_ASK_MIN לא-מבקשים (אבק-גז); אסור-לממן-עצמי
+        // (f≠ag — SETTLE-7). הגרעין נשאר-האוכף-המלא (fail-closed).
+        // FIX(roast-81 · afford-race): כל-הדחיפות-באותו-טיק קוראות-את-אותו-st.credits
+        // לפני-היישום — נמדד-חי: bot-a (14,940) מומן-3×4,940-בטיק-אחד ונשחק-עד-0
+        // (עבר-על-רצפת-ה-10k-שלו). עכשיו: ספר-תקציב-פר-טיק — כל-דחיפה-מנכה-מהיכולת
+        // שנתפסה, אף-ממנה-לא-נחפר-מעבר-לרצפת-שלו.
+        let funder: string | null = null;
+        let amt = 0;
+        for (const f of FUNDER_ORDER) {
+          if (f === ag) continue;
+          const afford = funderAfford(st, f) - (fuelBudget.get(f) ?? 0);
+          if (afford >= Math.min(need, FUEL_ASK_MIN)) { funder = f; amt = Math.min(need, afford); break; }
+        }
+        if (!funder || amt <= 0) continue;
+        fuelBudget.set(funder, (fuelBudget.get(funder) ?? 0) + amt);
         pushOp({ type: "refuel", issuer: funder, nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
       }
     }
