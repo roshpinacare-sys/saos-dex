@@ -72,19 +72,29 @@ export interface OracleCross {
   verdict: "no-oracle" | "aligned" | "divergent";
   note: string;
 }
-function oracleCross(assetIn: string, effPriceMu: number): OracleCross {
+/** FIX(Roast-75 · units-v2): החצייה הקודמת (effPrice×1000) הייתה נכונה רק
+ * לנכסי-גרעין בקנה-מיקרו (1e6µ=יחידה). נכסי-הדלת (WTRX/WSOL) מוטבעים
+ * בקנה-מילי (1000µ=יחידה — 1-lamport=1e-6µ מרוסט-72) — עליהם ה-×1000
+ * הכפיל-פי-1000-שגוי. עכשיו: השוואה-ישירה של µ-USDS-ל-µ-נכס משני-הצדדים
+ * (measured מהכמויות-בפועל · oracle עם-גשר-סקייל-פר-נכס) — כנות-מספרית. */
+function oracleScaleMu(asset: string): number {
+  return asset === "WTRX" || asset === "WSOL" ? 1000 : 1_000_000;
+}
+function oracleCross(assetIn: string, assetOut: string, amountInMu: number, amountOutMu: number, effPriceMu: number): OracleCross {
+  const x = assetIn === "USDS" ? assetOut : assetIn; // צד-הנכס-מול-האורקל
+  const measuredPerMu = assetIn === "USDS"
+    ? (amountOutMu > 0 ? amountInMu / amountOutMu : 0)   // µ-USDS ל-1µ-נכס
+    : (amountInMu > 0 ? amountOutMu / amountInMu : 0);   // µ-USDS ל-1µ-נכס
   const st = getLiveState();
-  const o = st.oracle?.[assetIn];
-  if (!o || !(o.mu > 0)) {
+  const o = st.oracle?.[x];
+  if (!o || !(o.mu > 0) || !(measuredPerMu > 0)) {
     return { effPriceMu, oracleMu: null, oracleAtH: null, spreadBps: null, verdict: "no-oracle", note: "אין-מחיר-אורקל-לנכס-זה (עדיין) — הביצוע מתבסס-על-הבריכות-בלבד" };
   }
-  // FIX(Roast-73 · units): effPriceMu של-הראוטר הוא יחס ×1000 (µ-יציאה ל-1000µ-כניסה);
-  // האורקל מאוחסן µ-USDS ל-1-יחידת-נכס. ההצלבה-הכנה מחייבת המרה: perUnit = effPrice×1000.
-  const perUnitMu = effPriceMu * 1000;
-  const spreadBps = Math.round(((perUnitMu - o.mu) / o.mu) * 10_000);
+  const oraclePerMu = o.mu / oracleScaleMu(x); // µ-USDS ל-1µ-נכס (גשר-סקייל)
+  const spreadBps = Math.round(((measuredPerMu - oraclePerMu) / oraclePerMu) * 10_000);
   const verdict: OracleCross["verdict"] = Math.abs(spreadBps) <= 200 ? "aligned" : "divergent";
   return {
-    effPriceMu: perUnitMu, oracleMu: o.mu, oracleAtH: o.atH, spreadBps, verdict,
+    effPriceMu, oracleMu: o.mu, oracleAtH: o.atH, spreadBps, verdict,
     note: verdict === "aligned"
       ? `הציטוט-מיושר-לאורקל (${spreadBps}bps · h${o.atH})`
       : `הציטוט-זז-מהאורקל (${spreadBps > 0 ? "+" : ""}${spreadBps}bps · h${o.atH}) — זו-אמת-שוק: הבריכות-חיות-ומתומחרות-בעצמן; פסק-הדין נמסר-כנה-למפעיל`,
@@ -119,7 +129,7 @@ export function planSwap(assetIn: string, assetOut: string, amount: number, minO
     routeVenues: plan.routeVenues,
     expectOutMu: plan.expectOutMu,
     effPriceMu: plan.effPriceMu,
-    oracle: oracleCross(assetIn, plan.effPriceMu ?? 0),
+    oracle: oracleCross(assetIn, assetOut, amount, plan.expectOutMu ?? 0, plan.effPriceMu ?? 0),
     balance: { issuer, asset: assetIn, availableMu: have, enough: have >= amount },
     opsCount: plan.sub.length,
     honesty,
@@ -223,9 +233,9 @@ function ignitionMatrix(): IgnitionRow[] {
       gap: "נזילות-פיזית-זעירה (SWAP.HIVE≈0.072) — המסילה-מאומתת-על-מיקרו (txid 46ed2f58)",
     },
     {
-      network: "STEEM", state: "pending", keys: env("STEEM_ACTIVE_WIF"),
-      what: "מסדרון-עיגון 1:1 בגרעין (WSTEEM) + מסילת-STEEM-ממומשת-ב-rail-exec (אותו-דפוס-גרפני)",
-      gap: "הזהות-חסומה-כנה: STEEM_ACTIVE_WIF-אינו-שולט ב-headcorner (נמדד-חי-מול-השרשרת) — נדרש-מפתח-מהמפעיל · Steem-Engine-ראשי-מת (NXDOMAIN) · RC-שופע (~3.4T)",
+      network: "STEEM", state: "armed", keys: env("STEEM_ACTIVE_WIF"),
+      what: "מסדרון-עיגון 1:1 בגרעין (WSTEEM) + מסילת-STEEM-חיה (rail-exec · אימות-סמכות-חי)",
+      gap: "מוצתת-roast-75: הסמכות-החיה-היא-חומר-headcorner-archive-מהכספת (הפרכת-חסימת-74) — powerup-0.1-STEEM-אמת · txid cfb5031d · block 109,474,189 · נזיל 3.281 · Steem-Engine-ראשי-מת (NXDOMAIN) · RC-שופע (~3.0T)",
     },
     {
       network: "BLURT", state: "armed", keys: env("BLURT_ACTIVE_WIF"),
@@ -235,17 +245,17 @@ function ignitionMatrix(): IgnitionRow[] {
     {
       network: "TRON", state: "needs-fuel", keys: env("STEEM_ACTIVE_WIF"),
       what: "דלת-פקדות-חיה (peg-door) — זהות-פקדה ריבונית + אימות-RPC + הטבעה-אטומית (WTRX)",
-      gap: "עיגון-TRON 0.3 TRX + הפקדה-הראשונה (~18.3 TRX = 5$) — ממתין-למפעיל",
+      gap: "נמדד-75: זהות-הפקדה-ריקה (0-sun) וגם-12-ארנקי-TRON-של-הצי-ריקים — עיגון-0.3-TRX + הפקדת-~18.3-TRX (5$) ממתינים-למפעיל",
     },
     {
-      network: "SOL", state: "needs-fuel", keys: env("SOL_PRIVATE_KEY"),
-      what: "דלת-פקדות-חיה (WSOL) — משמורת-815,000-lamports-כבר-על-הכתובת!",
-      gap: "81,880-lamports-לרצפת-העיגון (0.000082-SOL) — ואז-peg-in-מלא",
+      network: "SOL", state: "live", keys: env("SOL_PRIVATE_KEY"),
+      what: "דלת-פקדות-חיה (WSOL) + בריכת-USDS/WSOL-חיה-במחיר-אורקל + סוואפים-אמת",
+      gap: "מוצתת-roast-75: ריכוז-צי-10-ארנקים→זהות-הפקדה (60,715,000-lamports · רצפת-העיגון-מרוצה-×67) · 10-peg-ins→50µ-WSOL-מוטבעים · בריכה-@99.16$ · סוואפ-דו-כיווני-אמת על-הגרעין",
     },
     {
       network: "ETH", state: "pending", keys: env("ETH_PRIVATE_KEY"),
-      what: "אורקל-ETH-חי-על-השרשרת + זהות-wallet:headcorner-evm",
-      gap: "meta-tx-v2 (שידור-עיגון) — בתור-ההצתה",
+      what: "אורקל-ETH-חי-על-השרשרת + זהות-wallet:cashmachine-evm (נמדד-חי)",
+      gap: "מלאי-רואה-חשבון-75: 12-ארנקי-EVM-של-הצי-בכספת — 11-ממומנים (~0.0023-ETH-בסך-הכל) · ריכוז-אפשרי-אבל-עמלות-הגז-יבלעו ~5% · meta-tx-v2-בתור-ההצתה",
     },
     {
       network: "BTC", state: "pending", keys: true,
@@ -265,7 +275,7 @@ export async function agentStatus(): Promise<Record<string, unknown>> {
     ok: true,
     capabilities: {
       swap: "live (batch אטומי + חציית-אורקל)",
-      rail: rail.configured ? "armed (HIVE-חי · BLURT-חמוש · STEEM-חסום-זהות-מדוד)" : "dead (אין-זהות-ריבונית-בסביבה)",
+      rail: rail.configured ? "armed (HIVE-חי · BLURT-חמוש · STEEM-חי-roast-75-txid-cfb5031d)" : "dead (אין-זהות-ריבונית-בסביבה)",
       door: "live (peg-in/peg-out/open-pool/refresh-oracle — /api/dex/door)",
       fleet: fleet.configured ? `live (${fleet.usableCount} חיילים-שמישים)` : `quiet-disabled (${fleet.openError ?? "vault-unavailable"})`,
       oracle: "live (לולאת-חוץ-מצב 60ש׳ — בתוך-ה-stateRoot)",

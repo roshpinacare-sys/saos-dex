@@ -43,7 +43,7 @@ interface RelayStatusView {
 // FIX(Roast-73): fleet-נכלל (עיגון-Hive-מלא-של-החיילים) + account-נוסע-בוקטור
 // (בלי-זה-verifyOnChain מסרב-כנה: "not authorized by headcorner" — וזה-התנהגות-נכונה,
 //  המסגרת-פשוט-לא-העבירה-את-החותם-הצפוי)
-interface Candidate { chain: "steem" | "hive" | "fleet"; txid: string; height: number; stateRoot: string; account?: string }
+interface Candidate { chain: "steem" | "hive" | "fleet" | "sol"; txid: string; height: number; stateRoot: string; account?: string }
 
 const FAIL_EXIT = (msg: string): never => { console.error(`[chaos] FATAL: ${msg}`); process.exit(1); };
 
@@ -177,7 +177,7 @@ async function main(): Promise<void> {
   // רשומות-"fleet" — עיגון-Hive-custom_json מלא (אותו-verifyOnChain קורא-חזרה).
   // המסנן מקבל-מעכשיו steem|hive|fleet — כל-עיגון-גרפני-אמת-על-השרשרת.
   const candidates: Candidate[] = (real.records ?? [])
-    .filter((r) => (r.chain === "steem" || r.chain === "hive" || r.chain === "fleet") && typeof r.txid === "string" && r.txid.length >= 40 && typeof r.height === "number" && typeof r.stateRoot === "string" && r.stateRoot.length === 64)
+    .filter((r) => (r.chain === "steem" || r.chain === "hive" || r.chain === "fleet" || r.chain === "sol") && typeof r.txid === "string" && r.txid.length >= 40 && typeof r.height === "number" && typeof r.stateRoot === "string" && r.stateRoot.length === 64)
     .map((r) => ({ chain: r.chain, txid: r.txid, height: r.height, stateRoot: r.stateRoot, account: r.account }))
     .sort((a, b) => (a.chain === "steem" ? 0 : 1) - (b.chain === "steem" ? 0 : 1))
     .slice(0, 4);
@@ -195,7 +195,7 @@ async function main(): Promise<void> {
       const laPath = path.join(process.cwd(), "state", "last-anchor.json");
       if (fs.existsSync(laPath)) {
         const la = JSON.parse(fs.readFileSync(laPath, "utf8")) as { chain?: string; txid?: string; height?: number; stateRoot?: string; account?: string };
-        if (["steem", "hive", "fleet"].includes(String(la.chain)) && typeof la.txid === "string" && la.txid.length >= 40 && typeof la.height === "number" && typeof la.stateRoot === "string" && la.stateRoot.length === 64) {
+        if (["steem", "hive", "fleet", "sol"].includes(String(la.chain)) && typeof la.txid === "string" && la.txid.length >= 40 && typeof la.height === "number" && typeof la.stateRoot === "string" && la.stateRoot.length === 64) {
           candidates.push({ chain: la.chain as Candidate["chain"], txid: la.txid, height: la.height, stateRoot: la.stateRoot, account: la.account });
         }
       }
