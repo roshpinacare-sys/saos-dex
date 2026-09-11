@@ -40,6 +40,15 @@ function parse(content: string): { label: string; key: string } | null {
   return { label: lines[0].toLowerCase(), key: lines[1] };
 }
 
+// FIX(Task-69b · מעידה-אמתית של המפעיל): אותו מפתח-פרטי נעטף במעטפות שונות —
+// צורת-הצגה של Blurt (P5KQ… ≡ 5KQ… — אותו מפתח, קידומת-תצוגה בלבד) ורווחים
+// שנדבקים בהעתקה. ההסכם = המפתח-הפרטי, לא המעטפת: כל צורת-הדבקה חוקית נכנסת.
+export function normalizeKeyForm(s: string): string {
+  let k = s.replace(/\s+/g, '');
+  if (k.length >= 2 && k[0] === 'P' && /^[5KL]/.test(k[1])) k = k.slice(1);
+  return k;
+}
+
 /** מידע-ההסכם (דיגסט בלבד!) או null אם אין הסכם. נטען-פעם-אחת ונשמר בזיכרון. */
 export function masterInfo(): MasterInfo | null {
   if (cached !== undefined) return cached;
@@ -51,7 +60,7 @@ export function masterInfo(): MasterInfo | null {
       if (!st.isFile() || st.size === 0 || st.size > 4096) continue;
       const parsed = parse(fs.readFileSync(p, 'utf8'));
       if (!parsed || parsed.key.length < 8) continue;
-      cached = { label: parsed.label, digest: sha256Hex(parsed.key), source: path.basename(p) };
+      cached = { label: parsed.label, digest: sha256Hex(normalizeKeyForm(parsed.key)), source: path.basename(p) };
       break;
     } catch { /* מועמד הבא */ }
   }
@@ -68,11 +77,12 @@ export function masterFingerprint(): string | null {
   return masterInfo()?.digest.slice(0, 16) ?? null;
 }
 
-/** האם `candidate` הוא מפתח-האב? השוואת דיגסטים timing-safe — אין דליפת-תוכן/אורך. */
+/** האם `candidate` הוא מפתח-האב? השוואת דיגסטים timing-safe — אין דליפת-תוכן/אורך.
+ * מקבל כל צורת-מעטפת: עם/בלי קידומת-P, עם/בלי רווחים (ראה normalizeKeyForm). */
 export function isMasterKey(candidate: string): boolean {
   const m = masterInfo();
   if (!m || !candidate) return false;
-  const a = Buffer.from(sha256Hex(candidate.trim()), 'utf8');
+  const a = Buffer.from(sha256Hex(normalizeKeyForm(candidate)), 'utf8');
   const b = Buffer.from(m.digest, 'utf8');
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
