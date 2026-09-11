@@ -164,11 +164,23 @@ export async function solSealBroadcast(
  * "height") ומשווים **מספרית** (height) ובשוויון-מדויק (stateRoot). */
 function memoJsonOf(logs: string[]): { height?: number; stateRoot?: string } | null {
   for (const line of logs) {
-    const start = line.indexOf("{");
-    const end = line.lastIndexOf("}");
+    // FIX(Roast-75 · memo-log-unescape): תוכנית-SPL-Memo-מתומנת את התוכן בלוג
+    // ("Memo (len N): \"{\\\"protocol\\\"...}\"") — הבייטים-על-השרשרת-נקיים,
+    // אך-שורת-הלוג-כוללת-מרכאות-עוטפות+מילוט. בלי-פענוח-המילוט JSON.parse
+    // נכשל-תמיד → כל-העוגנים-נשארים-"pending reconciliation" לנצח.
+    let content = line;
+    const memoIdx = line.indexOf("Memo (len");
+    if (memoIdx >= 0) {
+      content = line.slice(line.indexOf(":", memoIdx) + 1).trim();
+      if (content.startsWith('"') && content.endsWith('"') && content.length >= 2) {
+        content = content.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      }
+    }
+    const start = content.indexOf("{");
+    const end = content.lastIndexOf("}");
     if (start < 0 || end <= start) continue;
     try {
-      const o = JSON.parse(line.slice(start, end + 1)) as { height?: unknown; stateRoot?: unknown };
+      const o = JSON.parse(content.slice(start, end + 1)) as { height?: unknown; stateRoot?: unknown };
       if (typeof o.height === "number" || typeof o.stateRoot === "string")
         return { height: typeof o.height === "number" ? o.height : undefined, stateRoot: typeof o.stateRoot === "string" ? o.stateRoot : undefined };
     } catch { /* רשומה-לא-JSON — הבא */ }
@@ -197,7 +209,7 @@ export async function verifySolAnchor(
   const tx0 = v
     ? null
     : await rpc<{ meta?: { logMessages?: string[] } | null }>(
-        endpoint, "getTransaction", [[txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }]], 15000,
+        endpoint, "getTransaction", [txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }], 15000,
       ).catch(() => null);
   if (!v && tx0?.meta?.logMessages?.length) {
     const logs0 = tx0.meta.logMessages;
@@ -218,7 +230,7 @@ export async function verifySolAnchor(
     return { ok: false, detail: `awaiting finalized block (now: ${v.confirmationStatus})` };
   }
   const tx = await rpc<{ meta?: { logMessages?: string[] } | null }>(
-    endpoint, "getTransaction", [[txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }]], 15000,
+    endpoint, "getTransaction", [txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }], 15000,
   ).catch(() => null);
   const logs = tx?.meta?.logMessages ?? [];
   if (logs.length === 0) return { ok: false, detail: "not indexed: awaiting finalized block" };
