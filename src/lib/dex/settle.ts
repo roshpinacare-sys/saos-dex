@@ -504,7 +504,7 @@ export async function realMoneyAudit(): Promise<RealMoneyReport> {
   const fleetSt = (rs as { fleet?: { accounts?: { usable?: boolean; account?: string }[] } }).fleet;
   const fleetIdentity = fleetSt?.accounts?.find((a) => a.usable && a.account)?.account ?? null;
   const identity: Record<ChainName, string | null> = {
-    steem: rs.account, hive: rs.account,
+    steem: rs.account, hive: rs.account, blurt: rs.account,
     tron: rs.tronIdentity, eth: rs.identities?.eth ?? null, sol: rs.identities?.sol ?? null,
     // SETTLE-13: זהות-הצי = החייל-המשמש-חתימה (סבב) — כנות: אין-זהות-אחת
     fleet: fleetIdentity,

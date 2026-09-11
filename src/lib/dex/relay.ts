@@ -78,8 +78,11 @@ const RECONCILE_FIRST_MS = 8_000;   // מחזור-ראשון — מיד-אחרי
 const RECONCILE_BATCH = 3;          // עד-3 אימותים-בדיעבד למחזור
 
 /* ── סוגים ── */
-export type ChainName = "steem" | "hive" | "tron" | "eth" | "sol" | "fleet";
-const ALL_CHAINS: ChainName[] = ["steem", "hive", "tron", "eth", "sol", "fleet"];
+/* Roast-82 · מסילת-BLURT — השרשרת-השביעית: BLURT (fork-גרפני-של-Steem) ללא-מערכת-RC-כלל
+ * (אימות-חי: get_accounts אינו-מחזיר rc_manabar) — עיגון-אפס-עלות-אמת. הצומת-וה-chain_id
+ * נמדדו-חי-ב-roast-74; המפתח (BLURT_ACTIVE_WIF) בכספת; החשבון headcorner חי על BLURT. */
+export type ChainName = "steem" | "hive" | "blurt" | "tron" | "eth" | "sol" | "fleet";
+const ALL_CHAINS: ChainName[] = ["steem", "hive", "blurt", "tron", "eth", "sol", "fleet"];
 /* עיגון-כבד (gas/SOL) ועיגון-RC — רק החותם-החדש-ביותר מעוגן עליהם */
 const LATEST_ONLY: ChainName[] = ["hive", "tron", "eth", "sol", "fleet"];
 /* המתנה-כלכלית: RC מתחדש מהר; מימון (TRX/gas/SOL) הוא אירוע-תפעולי איטי */
@@ -231,6 +234,8 @@ export function assignEpoch(height: number): string {
 type RelayKeys = {
   account: string; steemWif: string; steemAuth: "posting" | "active";
   hiveAccount: string; hiveWif: string; hiveAuth: "posting" | "active";
+  // Roast-82: BLURT — active-בלבד (אין-מפתח-פרסום-בכספת), אותו-חשבון headcorner
+  blurtWif: string | null; blurtPub: string | null;
   ethKey: string | null; solKey: string | null;
   ethExpected: string | null; solExpected: string | null;
   // Task 54 · FIX(authority-pub): פאב-האימות נגזר-מה-WIF-הגולמי (פורמט-דחוס K/L) —
@@ -283,7 +288,7 @@ async function wifNormalized(wif: string): Promise<string | null> {
 // קודם-הוא-נשטף-בכל-קריאה-מחדש-של-האובייקט.
 let keysMemo: { sig: string; keys: RelayKeys | null } | null = null;
 async function loadKeys(): Promise<RelayKeys | null> {
-  const sig = ["SAOS_RELAY_AGENT_ACCOUNT", "STEEM_POSTING_WIF", "STEEM_ACTIVE_WIF", "HIVE_POSTING_WIF", "HIVE_ACTIVE_WIF", "ETH_PRIVATE_KEY", "SOL_PRIVATE_KEY", "ETH_EXPECTED_ADDRESS", "SOL_EXPECTED_ADDRESS", "HIVE_ANCHOR_ACCOUNT"]
+  const sig = ["SAOS_RELAY_AGENT_ACCOUNT", "STEEM_POSTING_WIF", "STEEM_ACTIVE_WIF", "HIVE_POSTING_WIF", "HIVE_ACTIVE_WIF", "BLURT_ACTIVE_WIF", "ETH_PRIVATE_KEY", "SOL_PRIVATE_KEY", "ETH_EXPECTED_ADDRESS", "SOL_EXPECTED_ADDRESS", "HIVE_ANCHOR_ACCOUNT"]
     .map((k) => `${k}=${(process.env[k] ?? "").length}`) // אורכים-בלבד — אפס-ערכי-מפתח בלוג/מחרוזת
     .join("|");
   if (keysMemo && keysMemo.sig === sig) return keysMemo.keys;
@@ -304,6 +309,19 @@ async function loadKeysUncached(): Promise<RelayKeys | null> {
   const steemRaw = steemPost || (process.env.STEEM_ACTIVE_WIF || "").trim();
   const hiveRaw = hivePost || (process.env.HIVE_ACTIVE_WIF || "").trim();
   if (!account || !steemRaw || !hiveRaw) return null;
+  // Roast-82: BLURT — אופציונלי-בטעינה (השרשרת-מושבתת-בשקט-בלעדו, אותו-דפוס-SETTLE-11)
+  // FIX(prefix): steem-js מנרמל-פאב-עם-קידומת-STM-ברירת-מחדל; BLURT רושמת-BLT. אותו-גוף-מפתח
+  // (נמדד-חי: STM5HhJD…≡BLT5HhJD…=ה-active-של-headcorner) — רק-הקידומת-שונה. מציבים-BLT-סביב-הגזירה.
+  const blurtRaw = (process.env.BLURT_ACTIVE_WIF || "").trim() || null;
+  let blurtPub: string | null = null;
+  if (blurtRaw) {
+    const prevPfx = steem.config.get("address_prefix");
+    try {
+      steem.config.set("address_prefix", "BLT");
+      blurtPub = steem.auth.wifToPublic(blurtRaw) || null;
+    } catch { blurtPub = null; }
+    finally { try { steem.config.set("address_prefix", prevPfx ?? "STM"); } catch { /* keep */ } }
+  }
   // Task 54 · FIX(sign-wif): החתימה על ה-WIF-הגולמי (דחוס K/L) — נמדד-חי 2026-09-09:
   // הספרייה הנוכחית גוזרת פאב-שגוי מהפורמט-המנורמל 5K (גם ב-wifToPublic וגם בחתימה
   // → "Missing Active Authority" על-השרשרת). הגולמי: פאב-נכון + חתימה-מאומתת.
@@ -329,16 +347,17 @@ async function loadKeysUncached(): Promise<RelayKeys | null> {
   let hivePub: string | null = null;
   try { steemPub = steem.auth.wifToPublic(steemRaw) || null; } catch { steemPub = null; }
   try { hivePub = steem.auth.wifToPublic(hiveRaw) || null; } catch { hivePub = null; }
-  return { account, steemWif, steemAuth, hiveAccount, hiveWif, hiveAuth, ethKey, solKey, ethExpected, solExpected, steemPub, hivePub };
+  return { account, steemWif, steemAuth, hiveAccount, hiveWif, hiveAuth, blurtWif: blurtRaw, blurtPub, ethKey, solKey, ethExpected, solExpected, steemPub, hivePub };
 }
 
 /* בדיקת-נוכחות-סינכרונית (ל-rtInit — בלי-פענוח) */
-function keysConfigured(): { main: boolean; eth: boolean; sol: boolean; account: string | null } {
+function keysConfigured(): { main: boolean; blurt: boolean; eth: boolean; sol: boolean; account: string | null } {
   const account = (process.env.SAOS_RELAY_AGENT_ACCOUNT || "").toLowerCase().trim() || null;
   const steemWif = (process.env.STEEM_POSTING_WIF || process.env.STEEM_ACTIVE_WIF || "").trim();
   const hiveWif = (process.env.HIVE_POSTING_WIF || process.env.HIVE_ACTIVE_WIF || "").trim();
   return {
     main: !!(account && steemWif && hiveWif),
+    blurt: !!(process.env.BLURT_ACTIVE_WIF || "").trim(),
     eth: !!(process.env.ETH_PRIVATE_KEY || "").trim(),
     sol: !!(process.env.SOL_PRIVATE_KEY || "").trim(),
     account,
@@ -474,6 +493,28 @@ export async function grapheneSealBroadcast(node: string, chainId: string, accou
   return grapheneOpsBroadcast(node, chainId, account, [buildOp(account, payload, auth)], wif, auth);
 }
 
+/* ── Roast-82: BLURT — SDK-הרשמי (@beblurt/dblurt) בלבד ──
+ * נמדד-חי: steem-js חותם-טקס-תקני-לכאורה (פאב-נגזר-תואם-BLT5HhJD…, חתימה-65B,
+ * chain_id-מאומת-מול-get_config) והשרשרת דוחה "tx_missing_active_auth" — בעוד
+ * ה-SDK-הרשמי משדר-מיד-ומאומת. פער-סריאליזציה/חתימה-שקט-בין-הספריות — הנתיב-הקנוני-של-BLURT-הוא-הפתרון.
+ * client-singleton על-הצומת-הקנוני (BLURT_NODES[0]); ה-op-נבנה-דרך-buildOp (אותו-ANCHOR_ID-קנוני). */
+let blurtSdkMemo: { client: import("@beblurt/dblurt").Client; PrivateKey: typeof import("@beblurt/dblurt").PrivateKey } | null = null;
+async function blurtSdk() {
+  if (!blurtSdkMemo) {
+    const m = await import("@beblurt/dblurt");
+    blurtSdkMemo = { client: new m.Client(BLURT_NODES[0]), PrivateKey: m.PrivateKey };
+  }
+  return blurtSdkMemo;
+}
+async function blurtSealBroadcast(account: string, payload: unknown, wif: string): Promise<{ txid: string }> {
+  const sdk = await blurtSdk();
+  const key = sdk.PrivateKey.fromString(wif);
+  const op = buildOp(account, payload, "active");
+  const res = await sdk.client.broadcast.sendOperations([op] as unknown as Parameters<typeof sdk.client.broadcast.sendOperations>[0], key);
+  if (res && typeof res.id === "string" && res.id.length >= 40) return { txid: res.id };
+  throw new Error("blurt broadcast answered without id (honest)");
+}
+
 /* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = stateRoot) ── */
 async function tronSealBroadcast(tronAddress: string, stateRoot: string, wif: string): Promise<{ txid: string }> {
   // FIX(SETTLE-11): גדר-ריבונית · FIX(Roast-65-b · H2): ה-GET-יתרה עובר-גם-הוא-דרך-fencedFetch (redirect:error)
@@ -552,7 +593,7 @@ export async function verifyOnChain(
     return { ok: false, detail: `mismatch: extra_data payload (${payload.slice(0, 12)}…) != local stateRoot ${expected.stateRoot.slice(0, 12)}…` };
   }
 
-  const nodes = chain === "steem" ? STEEM_NODES : HIVE_NODES;
+  const nodes = chain === "steem" ? STEEM_NODES : chain === "blurt" ? BLURT_NODES : HIVE_NODES;
   for (const node of nodes) {
     const tx = await rpc<{ operations?: unknown[] }>(node, {
       jsonrpc: "2.0", method: "condenser_api.get_transaction", params: [txid], id: 1,
@@ -642,7 +683,7 @@ function configuredHost(chain: ChainName): string | null {
   if (chain === "tron") return hostOf(TRON_RPC);
   if (chain === "eth") return hostOf(process.env.ETH_RPC_URL ?? ETH_RPCS[0]); // FIX(SETTLE-11): fallback = ברירת-המחדל האמתית (הישנה הייתה-שער-לא-מקובע)
   if (chain === "sol") return hostOf(process.env.SOL_RPC_URL ?? "https://api.mainnet-beta.solana.com");
-  return hostOf((chain === "steem" ? STEEM_NODES : HIVE_NODES)[0]);
+  return hostOf((chain === "steem" ? STEEM_NODES : chain === "blurt" ? BLURT_NODES : HIVE_NODES)[0]);
 }
 
 /* ── רישום-ציבורי (state/anchors.json — הוכחות בלבד, אפס סודות) ── */
@@ -690,6 +731,7 @@ function persist(rt: RelayRT): void {
       const EXPLORER: Record<ChainName, (id: string) => string> = {
         steem: (id) => `https://steemworld.org/tx/${id}`,
         hive: (id) => `https://hiveblocks.com/tx/${id}`,
+        blurt: (id) => `https://blocks.blurt.world/tx/${id}`,
         tron: (id) => `https://tronscan.org/#/transaction/${id}`,
         eth: (id) => `https://etherscan.io/tx/${id}`,
         sol: (id) => `https://solscan.io/tx/${id}`,
@@ -834,14 +876,14 @@ function startReconciler(rt: RelayRT): void {
 const AUTH_TTL_MS = 10 * 60_000;
 const AUTH_NETFAIL_MAX = 3;
 interface AuthCacheEntry { verdict: boolean; at: number; netFails: number; lastError: string | null }
-const authChecked = new Map<"steem" | "hive", AuthCacheEntry>();
-async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"): Promise<boolean> {
+const authChecked = new Map<"steem" | "hive" | "blurt", AuthCacheEntry>();
+async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive" | "blurt"): Promise<boolean> {
   const prev = authChecked.get(chain);
   // פסק-דין-מוצלח-טרי (בלי-שגיאה) — בתוקף-TTL
   if (prev && prev.lastError === null && Date.now() - prev.at < AUTH_TTL_MS) return prev.verdict;
   try {
-    const node = (chain === "steem" ? STEEM_NODES : HIVE_NODES)[0];
-    const account = chain === "steem" ? keys.account : keys.hiveAccount;
+    const node = chain === "steem" ? STEEM_NODES[0] : chain === "blurt" ? BLURT_NODES[0] : HIVE_NODES[0];
+    const account = chain === "hive" ? keys.hiveAccount : keys.account;
     // Roast-73 · FIX(steem-disable-root-cause): היה — WIF-אחד-קבוע (posting||active) מול
     // key_auths[0]-בלבד → מפתח-פרסום-שפג-תוקפו השבית-את-שרשרת-שלמה fail-closed-לנצח
     // ("authority-mismatch … disabled"). עתה: בחירת-חותם-חיה — לכל-מועמד (posting
@@ -856,10 +898,16 @@ async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"
     const postingPubs = pubs(a?.posting?.key_auths);
     const activePubs = pubs(a?.active?.key_auths);
     const candidates: { wif: string; auth: "posting" | "active"; pub: string | null }[] = [];
-    const postWif = ((chain === "steem" ? process.env.STEEM_POSTING_WIF : process.env.HIVE_POSTING_WIF) ?? "").trim();
-    const actWif = ((chain === "steem" ? process.env.STEEM_ACTIVE_WIF : process.env.HIVE_ACTIVE_WIF) ?? "").trim();
+    // Roast-82: BLURT — אין-מפתח-פרסום-בכספת (רק-active), לכן postWif=ריק ו-actWif=BLURT_ACTIVE_WIF
+    // FIX(prefix): גזירת-פאב-עם-קידומת-BLT-כשמדובר-ב-BLURT (ההשוואה-מול-key_auths-על-השרשרת)
+    const blurtPfx = chain === "blurt";
+    const prevPfx = steem.config.get("address_prefix");
+    if (blurtPfx) steem.config.set("address_prefix", "BLT");
+    const postWif = chain === "steem" ? (process.env.STEEM_POSTING_WIF ?? "").trim() : chain === "hive" ? (process.env.HIVE_POSTING_WIF ?? "").trim() : "";
+    const actWif = chain === "steem" ? (process.env.STEEM_ACTIVE_WIF ?? "").trim() : chain === "hive" ? (process.env.HIVE_ACTIVE_WIF ?? "").trim() : (process.env.BLURT_ACTIVE_WIF ?? "").trim();
     if (postWif) { try { candidates.push({ wif: postWif, auth: "posting", pub: steem.auth.wifToPublic(postWif) }); } catch { /* skip */ } }
     if (actWif) { try { candidates.push({ wif: actWif, auth: "active", pub: steem.auth.wifToPublic(actWif) }); } catch { /* skip */ } }
+    if (blurtPfx) { try { steem.config.set("address_prefix", prevPfx ?? "STM"); } catch { /* keep */ } }
     let chosen: { wif: string; auth: "posting" | "active"; pub: string | null } | null = null;
     for (const c of candidates) {
       if (!c.pub) continue;
@@ -873,7 +921,8 @@ async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"
     }
     // self-heal: הזוג-המנצח נכתב-בחזרה — השידור יחתום עליו עם הסמכות-החיה
     if (chain === "steem") { keys.steemWif = chosen.wif; keys.steemAuth = chosen.auth; keys.steemPub = chosen.pub; }
-    else { keys.hiveWif = chosen.wif; keys.hiveAuth = chosen.auth; keys.hivePub = chosen.pub; }
+    else if (chain === "hive") { keys.hiveWif = chosen.wif; keys.hiveAuth = chosen.auth; keys.hivePub = chosen.pub; }
+    else { keys.blurtWif = chosen.wif; keys.blurtPub = chosen.pub; }
     authChecked.set(chain, { verdict: true, at: Date.now(), netFails: 0, lastError: null });
     return true;
   } catch (e) {
@@ -904,7 +953,7 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     rt.chainState[chain].lastError = "relay keys missing — quiet-disabled (no record, no breaker, no retry)";
     return;
   }
-  if ((chain === "eth" && !keys?.ethKey) || (chain === "sol" && !keys?.solKey)) {
+  if ((chain === "eth" && !keys?.ethKey) || (chain === "sol" && !keys?.solKey) || (chain === "blurt" && !keys?.blurtWif)) {
     job.chains[chain].done = true;
     rt.chainState[chain].enabled = false;
     rt.chainState[chain].status = "disabled";
@@ -917,11 +966,11 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
   // FIX(Roast-69 · preflight-chaos-scope): טיסת-הבדיקה היא קריאת-רשת-אמת (get_accounts) —
   // במחיצה-מוזרקת היא-דילגה-מעל-שער-הכאוס ונגעה-ברשת-בפועל (נתפס-בריצת-כאוס-חיה).
   // בפרודקשן chaosPartitioned===false-תמיד — אפס-שינוי-התנהגות; במבחן: המחיצה-אמת-לכל-דבר.
-  if (keys && (chain === "steem" || chain === "hive") && cs.attempts === 0 && !chaosPartitioned(chain) && !(await authorityOk(rt, keys, chain))) {
+  if (keys && (chain === "steem" || chain === "hive" || chain === "blurt") && cs.attempts === 0 && !chaosPartitioned(chain) && !(await authorityOk(rt, keys, chain))) {
     cs.done = true;
     rt.chainState[chain].enabled = false;
     rt.chainState[chain].status = "disabled";
-    rt.chainState[chain].lastError = `authority-mismatch: המפתח-ב-.env אינו רשות-השרשרת של ${chain === "steem" ? keys.account : keys.hiveAccount} — disabled (fail-closed, נדרשת רוטציה/ייבוא-מפתח-נכון)`;
+    rt.chainState[chain].lastError = `authority-mismatch: המפתח-ב-.env אינו רשות-השרשרת של ${chain === "hive" ? keys.hiveAccount : keys.account} — disabled (fail-closed, נדרשת רוטציה/ייבוא-מפתח-נכון)`;
     return;
   }
   const b = rt.chainState[chain].breaker;
@@ -933,7 +982,7 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
   // EPOCH-PATCH-SPEC §4: ה-epoch-הוקצה-כבר-ב-relaySeal (פעם-אחת-לעבודה) — כאן-רק-נצרך,
   // לפני-בניית-ה-payload ולפני-כל-רישום
   const epoch = job.epoch;
-  const anchorAccount = chain === "steem" ? keys?.account : keys?.hiveAccount;
+  const anchorAccount = chain === "hive" ? keys?.hiveAccount : keys?.account;
   const rec: AnchorRecord = {
     chain, epoch, height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest,
     txid: null, status: "pending", at: job.at, attempt: cs.attempts,
@@ -1004,7 +1053,14 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
       const r = await solSealBroadcast(payload, keys.solKey, solClaimsFloorLamports());
       rec.txid = r.txid;
       rec.status = "anchored";
-    } else if (chain === "steem" || chain === "hive") {
+    } else if (chain === "steem" || chain === "hive" || chain === "blurt") {
+      if (chain === "blurt") {
+        // Roast-82: ל-BLURT אין-RC-כלל (אומת-חי) — אין-שער-משאבים; חתימה-דרך-ה-SDK-הרשמי-בלבד
+        const r = await blurtSealBroadcast(anchorAccount!, payload, keys!.blurtWif!);
+        rt.chainState[chain].endpointHost = hostOf(BLURT_NODES[0]);
+        rec.txid = r.txid;
+        rec.status = "anchored";
+      } else {
       const nodes = chain === "steem" ? STEEM_NODES : HIVE_NODES;
       const chainId = chain === "steem" ? ZERO_CHAIN_ID : HIVE_CHAIN_ID;
       const wif = chain === "steem" ? keys!.steemWif : keys!.hiveWif;
@@ -1018,6 +1074,7 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
       rt.chainState[chain].endpointHost = hostOf(nodes[0]); // FIX(CROSS-F-04): השער בפועל — נרשם
       rec.txid = r.txid;
       rec.status = "anchored";
+      }
     } else {
       throw new Error(`chain ${chain} has no anchor path (unreachable)`);
     }
@@ -1172,7 +1229,7 @@ function rtInit(): RelayRT {
   });
   const rt: RelayRT = {
     jobs: [], processing: false, records: [],
-    chainState: { steem: mk(cfg.main), hive: mk(cfg.main), tron: mk(cfg.main), eth: mk(cfg.eth), sol: mk(cfg.sol), fleet: mk(fleetConfigured()) },
+    chainState: { steem: mk(cfg.main), hive: mk(cfg.main), blurt: mk(cfg.blurt), tron: mk(cfg.main), eth: mk(cfg.eth), sol: mk(cfg.sol), fleet: mk(fleetConfigured()) },
     metrics: { broadcasts: 0, verified: 0, mismatches: 0, breakerTrips: 0, economicWaits: 0, lastVerifyLatencyMs: null },
     account: cfg.account,
     tronAddress: null,
@@ -1206,6 +1263,7 @@ export function relaySeal(info: SealInfo): void {
       chains: {
         steem: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
         hive: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
+        blurt: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
         tron: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
         eth: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
         sol: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },

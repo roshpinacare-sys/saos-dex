@@ -70,7 +70,7 @@ interface WorldResp {
   proofs: { seals: SealInfo[]; receipts: { kind: string; digest: string; at: number }[]; blockWindow: number };
   tape: TapeEv[];
 }
-type RelayChain = "steem" | "hive" | "tron" | "eth" | "sol" | "fleet";
+type RelayChain = "steem" | "hive" | "blurt" | "tron" | "eth" | "sol" | "fleet";
 /* SETTLE-13: צי-עיגון-ריבוני — טלמטריה-ציבורית (אפס-סודות) */
 interface FleetAccountView { account: string; hasVerifiedKey: boolean; authorityOk: boolean | null; rcEffective: number | null; rcOk: boolean; failCount: number; anchoredCount: number; lastTxid: string | null; lastAnchorAt: string | null; usable: boolean }
 interface FleetView { configured: boolean; openError: string | null; sealedAt: string | null; probedAt: string | null; probeStale: boolean; accounts: FleetAccountView[]; usableCount: number }
@@ -775,7 +775,7 @@ function SettlementDeskPanel({ report, loading, refresh, stabilize, stabilizing 
 
 // ─── פאנל: System Health & Relay (testid=system-health-panel) — טור-ימין ────
 function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; relay: RelayView | null; mempool: number }) {
-  const breakers = relay ? (["steem", "hive", "tron", "eth", "sol", "fleet"] as const).map((c) => relay.chains[c]?.breaker.state).filter((s): s is "closed" | "open" | "half-open" => !!s) : [];
+  const breakers = relay ? (["steem", "hive", "blurt", "tron", "eth", "sol", "fleet"] as const).map((c) => relay.chains[c]?.breaker.state).filter((s): s is "closed" | "open" | "half-open" => !!s) : [];
   const breakerOpen = breakers.includes("open");
   const breakerHalf = breakers.includes("half-open");
   const mismatched = (relay?.metrics.mismatches ?? 0) > 0;
@@ -825,7 +825,7 @@ function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; 
       </div>
 
       <div className="mt-2 space-y-1.5" dir="ltr">
-        {relay ? (["steem", "hive", "tron", "eth", "sol", "fleet"] as const).map((c) => {
+        {relay ? (["steem", "hive", "blurt", "tron", "eth", "sol", "fleet"] as const).map((c) => {
           const ch = relay.chains[c];
           if (!ch) return null; // שרת-ישן ללא-השרשראות-החדשות — לא קורסים
           const last = relay.records.find((r) => r.chain === c && r.txid);
