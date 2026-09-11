@@ -26,12 +26,14 @@ import { createHash } from "node:crypto";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { solIdentity } from "./relay-sol";
+import { ethIdentity } from "./relay-eth";
 import { fencedFetch } from "./fence";
 import type { DexState } from "./kernel";
 import { poolMidFor } from "./amm";
 
 const TRON_RPC = "https://api.trongrid.io";
 const SOL_RPC = "https://api.mainnet-beta.solana.com";
+const ETH_RPC = "https://ethereum-rpc.publicnode.com";
 
 /** דלק-עיגון: TRON חוסם-מתחת-0.3 TRX (relay.tronSealBroadcast) · SOL חוסם-מתחת
  * לפטור-משכרות+עמלה+מרווח (roast-67 · sol-rent-floor). */
@@ -62,6 +64,7 @@ function b58decode(s: string): Uint8Array {
 export interface DoorIdentities {
   tron: string | null;
   sol: string | null;
+  evm: string | null;
   note: string;
 }
 
@@ -86,14 +89,19 @@ export function tronIdentityFromWif(wif: string): string | null {
 export function depositIdentities(): DoorIdentities {
   const wif = process.env.STEEM_ACTIVE_WIF || "";
   const solKey = (process.env.SOL_PRIVATE_KEY || "").trim();
+  const ethKey = (process.env.ETH_PRIVATE_KEY || "").trim();
   let tron: string | null = null;
   if (wif.length >= 51) tron = tronIdentityFromWif(wif);
   let sol: string | null = null;
   if (solKey.length >= 32) {
     try { sol = solIdentity(solKey).address; } catch { sol = null; }
   }
+  let evm: string | null = null;
+  if (ethKey.length >= 32) {
+    try { evm = ethIdentity(ethKey).address; } catch { evm = null; } // אותה-זהות wallet:cashmachine — אומתה-חי ב-roast-76 (ריכוז-10-txids)
+  }
   return {
-    tron, sol,
+    tron, sol, evm,
     note: "זהויות-פקדה ריבוניות — נגזרות מהזרע-הריבוני (אותו-דפוס wallets-registry); המפתח-הפרטי אף-פעם לא עוזב את הסביבה",
   };
 }
@@ -175,7 +183,7 @@ export async function verifySolDeposit(txid: string, expectedAddr: string): Prom
 }
 
 /* ── יתרות-משמורת-חי (TTL-60ש׳ · fail-soft) ── */
-export interface Custody { tronSun: number | null; solLamports: number | null; at: number; note: string }
+export interface Custody { tronSun: number | null; solLamports: number | null; evmWei: number | null; at: number; note: string }
 interface CustodyRT { at: number; data: Custody | null; inflight: Promise<Custody> | null }
 const gC = globalThis as unknown as { __saosDoorCustody?: CustodyRT };
 function custodyRt(): CustodyRT {
@@ -184,7 +192,7 @@ function custodyRt(): CustodyRT {
 }
 
 async function fetchCustody(ids: DoorIdentities): Promise<Custody> {
-  const [tronSun, solLamports] = await Promise.all([
+  const [tronSun, solLamports, evmWei] = await Promise.all([
     (async (): Promise<number | null> => {
       if (!ids.tron) return null;
       try {
@@ -205,10 +213,22 @@ async function fetchCustody(ids: DoorIdentities): Promise<Custody> {
         return j?.result?.value ?? null;
       } catch { return null; }
     })(),
+    (async (): Promise<number | null> => {
+      if (!ids.evm) return null;
+      try {
+        const r = await fencedFetch(ETH_RPC, "peg-door.evm-bal", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [ids.evm, "latest"] }),
+          signal: AbortSignal.timeout(12_000), cache: "no-store",
+        });
+        const j = (await r.json()) as { result?: string };
+        return j?.result ? Number(BigInt(j.result)) : null;
+      } catch { return null; }
+    })(),
   ]);
   return {
-    tronSun, solLamports, at: Date.now(),
-    note: "יתרות-המשמורת-האמת על-כתובות-הפקדה — הגיבוי-הפיזי של העוגנים (WTRX/WSOL)",
+    tronSun, solLamports, evmWei, at: Date.now(),
+    note: "יתרות-המשמורת-האמת על-כתובות-הפקדה — הגיבוי-הפיזי של העוגנים (WTRX/WSOL/WETH) — אצל-EVM המשמורת היא גם דלק-העיגון-עצמו (אותה-זהות-כמו-ה-relay)",
   };
 }
 
@@ -251,7 +271,7 @@ export interface DoorReport {
 export async function doorReport(st: DexState): Promise<DoorReport> {
   const ids = depositIdentities();
   const custody = await custodySnapshot(ids).catch(() => ({
-    tronSun: null, solLamports: null, at: Date.now(), note: "מדידת-משמורת נכשלה — fail-כנה",
+    tronSun: null, solLamports: null, evmWei: null, at: Date.now(), note: "מדידת-משמורת נכשלה — fail-כנה",
   }));
 
   const pegRow = (asset: "WTRX" | "WSOL", pair: string, feedAsset?: string): PegRow => {
