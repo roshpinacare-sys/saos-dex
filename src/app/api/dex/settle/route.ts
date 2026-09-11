@@ -100,8 +100,8 @@ export async function POST(req: Request) {
     if (c < 8_000) {
       const amt = Math.min(30_000 - c, REFUEL_CAP);
       if (amt > 0) {
-        // ממנה-מדורג (SETTLE-5/9 — funderFor אחד בגרעין): ארנה → אוצר → מפעיל
-        const funder = funderFor(st, amt);
+        // ממנה-מדורג (SETTLE-5/9 + roast-79 — funderFor אחד בגרעין): ארנה → בוטים → אוצר → מפעיל
+        const funder = funderFor(st, amt, ag);
         const r = submitOp({ type: "refuel", issuer: funder, nonce: `settle-refuel-${ag}-${Date.now().toString(36)}`, to: ag, amount: amt });
         pushed.push({ kind: "refuel", detail: r.queued ? `${ag} +${amt}µ credits ← ${funder} (had ${c})` : `rejected: ${r.reason}` });
       }

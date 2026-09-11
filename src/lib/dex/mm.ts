@@ -275,13 +275,21 @@ export function arenaTick(
   // הזרמה מהאוצר. **העברה-טהורה (אפס-הטבעה)** — Σcredits נשמר. בלי-זה הגריד
   // מת-מוות-מבני: gas יורד-מונוטונית, החיילים מפסיקים-לצטט, הספר מתרוקן,
   // הספרד-נעלמת והשוק מפסיק-לשבת. תיקון-שורש לתשישות-הכלכלה-הסימולטיבית.
-  if (tick % 16 === 0) {
+  // FIX(roast-79 · fuel-death-spiral, נמדד-חי): החלון-16-טיק היה-חלק-ממעגל-מוות —
+  // הדמון-מת-בסביבה-הזו אחרי-כמה-עשרות-שניות, לפני-הטיק-ה-16 (ציטוט-החיילים מתחיל-בטיק-1!)
+  // → החיילים מתים-מוקדם → אין-מסחר → אין-עמלות → אין-מזרקה → אין-דלק. החלון הוקדם
+  // ל-4 (וגם-טיק 1–2 מיד-אחרי-boot): התזמון בלבד — ההעברות-עצמן טהורות-ומוגבלות.
+  if (tick <= 2 || tick % 4 === 0) {
     // THE-FOUNTAIN: אוצר-ריק? הטבעה-עצמית מגובה-עמלות-מדודות (profit-שהוכר +
     // feeMeter-מעל-רצפת-הסולם, מדוד-תקרה) — המסחר-עצמו מחזיר-את-הדלק-ששרף.
     // קודם-ההטבעה, אחר-כך העירוי.
+    // FIX(roast-79): השער fuelAvail>20k היה-חסם-מבני — נמדד fuelAvail=18,618
+    // (מתחת-ל-20k) = מזרקה-יבשה-לנצח בזמן-שלטרשורה-היה-גיבוי-אמת. השער הורד-ל-1k:
+    // הגרעין (kernel mint_fuel) עדיין אוכף בעצמו את הגיבוי-הכפול, הרצפה (8k) והתקרה —
+    // כאן-רק-החלטת-תזמון-כלכלית, לא-שכבת-אבטחה.
     const trCr = st.credits["treasury"] ?? 0;
     const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, Math.floor(((st.feeMeter ?? 0) - LADDER_FUEL_FLOOR) / 2));
-    if (trCr < 10_000 && fuelAvail > 20_000) {
+    if (trCr < 10_000 && fuelAvail > 1_000) {
       const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
       if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-${tick}`, to: "treasury", amount: mint });
     }
@@ -294,12 +302,14 @@ export function arenaTick(
       if (c < 10_000) {
         const amt = Math.min(30_000 - c, REFUEL_CAP);
         if (amt <= 0) continue;
-        // ממנה-מדורג (SETTLE-5/9 — funderFor אחד בגרעין): ארנה (רזרבה-עמוקה) → אוצר
- // (עמלות — THE-FOUNTAIN) → מפעיל-אנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון).
+        // ממנה-מדורג (SETTLE-5/9 + roast-79 — funderFor אחד בגרעין): ארנה → בוטים →
+ // אוצר (עמלות — THE-FOUNTAIN) → מפעיל-אנושי (קו-הגנה-האחרון).
         // FIX(SETTLE-7): הארנה עצמה נוספה-לרשימת-המקבלים — היא משלמת-גז על
         // pegkeeper וממנת-את-כולם ומעולם-לא-קיבלה-עירוי. אסור-שתממן-את-עצמה
         // (המנוע דוחה rTo==issuer) — לכן-הממנה-שלה הוא אוצר/מפעיל בלבד.
-        const funder = funderFor(st, amt, ag === "arena" ? "arena" : undefined);
+        // FIX(roast-79): exclude=ag לכל-המקבלים (לא-רק-ארנה) — עכשיו-שהבוטים בסולם,
+        // בוט-שצריך-עירוי היה-יכול-להיבחר-כממנה-של-עצמו (דחיית-bad-refuel מיותרת).
+        const funder = funderFor(st, amt, ag);
         pushOp({ type: "refuel", issuer: funder, nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
       }
     }

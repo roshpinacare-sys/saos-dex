@@ -276,7 +276,23 @@ async function wifNormalized(wif: string): Promise<string | null> {
 /* ── מפתחות: זיכרון-בלבד מ-.env (Next טוען אוטומטית; הקובץ gitignored-אומת) ──
  * FIX(SETTLE-11): WIF-ים מנורמלים בטעינה לפורמט-גרפני (לא-דחוס) — שני הפורמטים
  * (51/52 תווים) נתמכים; פליטה-פסולה → null + ALERT כנה (fail-closed). */
+// FIX(roast-79 · keys-memo): loadKeys נקרא-בכל-ריצת-processQueue (כל-חותם) והיה
+// מפרק-מחדש-את-אותו-.env ומריץ-שוב wifToPublic על-מפתחות-פסולים (WARN ×כל-חותם —
+// נמדד 12/12). env הוא-סטטי-בזמן-ריצה → מטמון-מודול לפי-חתימת-הקלטים. בונוס-תקנה:
+// ה-self-heal של-authorityOk (כתיבת-ה-WIF-המנצח-בחזרה) שרד-עכשיו-בין-חותמים —
+// קודם-הוא-נשטף-בכל-קריאה-מחדש-של-האובייקט.
+let keysMemo: { sig: string; keys: RelayKeys | null } | null = null;
 async function loadKeys(): Promise<RelayKeys | null> {
+  const sig = ["SAOS_RELAY_AGENT_ACCOUNT", "STEEM_POSTING_WIF", "STEEM_ACTIVE_WIF", "HIVE_POSTING_WIF", "HIVE_ACTIVE_WIF", "ETH_PRIVATE_KEY", "SOL_PRIVATE_KEY", "ETH_EXPECTED_ADDRESS", "SOL_EXPECTED_ADDRESS", "HIVE_ANCHOR_ACCOUNT"]
+    .map((k) => `${k}=${(process.env[k] ?? "").length}`) // אורכים-בלבד — אפס-ערכי-מפתח בלוג/מחרוזת
+    .join("|");
+  if (keysMemo && keysMemo.sig === sig) return keysMemo.keys;
+  const keys = await loadKeysUncached();
+  keysMemo = { sig, keys };
+  return keys;
+}
+
+async function loadKeysUncached(): Promise<RelayKeys | null> {
   const account = (process.env.SAOS_RELAY_AGENT_ACCOUNT || "").toLowerCase().trim();
   // FIX(CROSS-F-01, saos-jummper מדוד): עדיפות-מפתח-פרסום (POSTING) על-פני-ACTIVE.
   // עיגון-custom_json אינו-צריך-סמכות-כספים: ACTIVE יכולה-להעביר-כל-נכס-בחשבון;
