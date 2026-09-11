@@ -253,9 +253,9 @@ function ignitionMatrix(): IgnitionRow[] {
       gap: "מוצתת-roast-75: ריכוז-צי-10-ארנקים→זהות-הפקדה (60,715,000-lamports · רצפת-העיגון-מרוצה-×67) · 10-peg-ins→50µ-WSOL-מוטבעים · בריכה-@99.16$ · סוואפ-דו-כיווני-אמת על-הגרעין",
     },
     {
-      network: "ETH", state: "pending", keys: env("ETH_PRIVATE_KEY"),
-      what: "אורקל-ETH-חי-על-השרשרת + זהות-wallet:cashmachine-evm (נמדד-חי)",
-      gap: "מלאי-רואה-חשבון-75: 12-ארנקי-EVM-של-הצי-בכספת — 11-ממומנים (~0.0023-ETH-בסך-הכל) · ריכוז-אפשרי-אבל-עמלות-הגז-יבלעו ~5% · meta-tx-v2-בתור-ההצתה",
+      network: "ETH", state: "armed", keys: env("ETH_PRIVATE_KEY"),
+      what: "דלת-פקדות-חמושה — זהות-פקדה EVM חיה (wallet:cashmachine · אותה-זהות relay) + אורקל-ETH-חי-על-השרשרת",
+      gap: "מוצת-roast-76: ריכוז-צי-10-ארנקים→זהות-הפקדה (10-txids-ציבוריים · משמורת-חיה-על-הדלת · ~0.0019-ETH) — הפקדה-הבאה/משיכת-מטא-טרנזקציה-בתור-ההצתה-המלאה",
     },
     {
       network: "BTC", state: "pending", keys: true,
