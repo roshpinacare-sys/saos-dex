@@ -91,6 +91,8 @@ export type BreakerState = "closed" | "open" | "half-open";
 
 export interface AnchorRecord {
   chain: ChainName;
+  /** EPOCH-PATCH-SPEC: מזהה-גלגול-מונה-הגבהים — (epoch,height) ייחודי-חוצה-ריסטארטים */
+  epoch: string;
   height: number;
   stateRoot: string;
   digest: string;
@@ -142,6 +144,8 @@ interface ChainJobState { attempts: number; rcWaits: number; nextTryAt: number; 
 interface SealJob {
   info: SealInfo;
   at: string;
+  /** EPOCH-PATCH-SPEC: נקבע-פעם-אחת-לעבודה (לא-פר-שרשרת!) — שומר-על שוויון-בייטים-בין-השרשראות */
+  epoch: string;
   chains: Record<ChainName, ChainJobState>;
 }
 
@@ -168,6 +172,42 @@ const STATE_DIR = process.env.SAOS_DEX_STATE_DIR
   ? path.resolve(process.env.SAOS_DEX_STATE_DIR)
   : path.join(process.cwd(), "state");
 const ANCHORS_FILE = path.join(STATE_DIR, "anchors.json");
+
+/* ── Epoch lifecycle (EPOCH-PATCH-SPEC · מיושם-מהמפרט של saos-jummper · roast-76) ──
+ * `height` מתחיל-מחדש-עם-כל-גלגול-תהליך — (epoch,height) הוא-המפתח-היחיד-הייחודי-חוצה-ריסטארטים.
+ * Bump-על-גובה-לא-עולה (ולא-על-ריסטארט): ריסטארט-עם-שחזור-מצב אינו-נצפה-מבפנים;
+ * גובה-לא-עולה כן-נצפה — והוא-התנאי-היחיד שבו-יכולה-להיווצר-התנגשות-על-השרשרת.
+ * Bump-מיותר-עולה-epoch-אחד-ולא-יוצר-סתירה; היעדר-bump-כשצריך = פיצול-ציבורי-קבוע. */
+type EpochState = { epochIndex: number; lastHeight: number | null };
+const EPOCH_FILE = path.join(STATE_DIR, "epoch.json");
+
+function loadEpoch(): EpochState {
+  try {
+    const s = JSON.parse(fs.readFileSync(EPOCH_FILE, "utf8")) as EpochState;
+    if (!Number.isInteger(s.epochIndex) || s.epochIndex < 0) throw new Error("bad epochIndex");
+    if (s.lastHeight !== null && (!Number.isInteger(s.lastHeight) || s.lastHeight < 0)) throw new Error("bad lastHeight");
+    return s;
+  } catch {
+    return { epochIndex: 0, lastHeight: null };
+  }
+}
+
+function saveEpoch(s: EpochState): void {
+  try { fs.mkdirSync(STATE_DIR, { recursive: true }); fs.writeFileSync(EPOCH_FILE, JSON.stringify(s)); } catch { /* נשאיר-בזיכרון — כתיבה-נכשלת לא-מפילה-עיגון */ }
+}
+
+/** מחזיר-את-מחרוזת-ה-epoch לגובה-זה, עם-bump-מוקדם-אם-חובה. */
+export function assignEpoch(height: number): string {
+  if (!Number.isInteger(height) || height < 0) throw new Error(`assignEpoch: height must be a non-negative integer, got ${height}`);
+  const s = loadEpoch();
+  if (s.lastHeight === null || height > s.lastHeight) {
+    saveEpoch({ epochIndex: s.epochIndex, lastHeight: height });
+  } else {
+    s.epochIndex += 1;
+    saveEpoch({ epochIndex: s.epochIndex, lastHeight: height });
+  }
+  return `e${loadEpoch().epochIndex}`;
+}
 
 /* ── חוזה-מפתחות-מנורמל (SETTLE-11) ── */
 type RelayKeys = {
@@ -589,7 +629,8 @@ export function recordFleetAnchor(
 ): void {
   const rt = rtInit();
   const rec: AnchorRecord = {
-    chain: "fleet", height, stateRoot, digest, txid, status: "anchored",
+    // EPOCH-PATCH-SPEC: עיגוני-צי-ידניים מגיעים-מחוץ-למונה-האוטומטי — נושאים-את-ה-epoch-החי-של-הגובה
+    chain: "fleet", epoch: assignEpoch(height), height, stateRoot, digest, txid, status: "anchored",
     at: new Date().toISOString(), attempt: 1, account,
     verified: null, verifiedAt: null,
   };
@@ -855,9 +896,12 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     return;
   }
   cs.attempts += 1;
+  // EPOCH-PATCH-SPEC §4: ה-epoch-הוקצה-כבר-ב-relaySeal (פעם-אחת-לעבודה) — כאן-רק-נצרך,
+  // לפני-בניית-ה-payload ולפני-כל-רישום
+  const epoch = job.epoch;
   const anchorAccount = chain === "steem" ? keys?.account : keys?.hiveAccount;
   const rec: AnchorRecord = {
-    chain, height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest,
+    chain, epoch, height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest,
     txid: null, status: "pending", at: job.at, attempt: cs.attempts,
     verified: null, verifiedAt: null,
   };
@@ -870,8 +914,11 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
       throw new Error(`chaos: injected network partition on ${chain} — rpc unreachable (fault-injection)`);
     }
     // payload קנוני משותף לכל-השרשראות — אותם בייטים על כל שרשרת (עיגון-עצמו-עקבי)
+    // EPOCH-PATCH-SPEC: epoch-בתוך-ה-payload-הקנוני (לא-באתרי-קריאה-פר-שרשרת) — שומר-על
+    // שוויון-בייטים-בין-שרשראות וסוגר-את-התנגשות-הגבהים-אחרי-ריסטארטים
     const payload = {
       protocol: "saos-dex/v1", action: "chain-seal", at: job.at,
+      epoch,
       height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest,
     };
     if (chain === "tron") {
@@ -1040,7 +1087,8 @@ function restoreRecords(rt: RelayRT): void {
       if (!r || typeof r.chain !== "string" || typeof r.height !== "number" || !r.txid || typeof r.stateRoot !== "string") continue;
       if (!(r.chain === "steem" || r.chain === "hive" || r.chain === "tron" || r.chain === "eth" || r.chain === "sol" || r.chain === "fleet")) continue;
       clean.push({
-        chain: r.chain, height: r.height, stateRoot: r.stateRoot, digest: String(r.digest ?? ""),
+        chain: r.chain, epoch: typeof r.epoch === "string" && /^e\d+$/.test(r.epoch) ? r.epoch : "e0-pre", // רשומות-טרום-הפאץ' — מסומנות-בכנות
+        height: r.height, stateRoot: r.stateRoot, digest: String(r.digest ?? ""),
         txid: r.txid, status: (r.status === "anchored" ? "anchored" : "pending"),
         at: String(r.at ?? new Date().toISOString()), attempt: Number(r.attempt ?? 1),
         account: typeof r.account === "string" ? r.account : undefined,
@@ -1116,8 +1164,11 @@ export function relaySeal(info: SealInfo): void {
     if (rt.jobs.length >= QUEUE_CAP) rt.jobs.pop(); // החדש-חשוב מהישן — הישן נזרק
     // חותמות-ישנות של עיגון-כבד/RC מסומנות done — רק החותם החדש-ביותר נעגן עליהן (תקציב RC/gas/SOL)
     for (const j of rt.jobs) for (const c of LATEST_ONLY) j.chains[c].done = true;
+    // EPOCH-PATCH-SPEC §4: assignEpoch-פעם-אחת-לעבודה-המשותפת — ה-payload שייבנה-ממנו
+    // יישאר-בייטים-זהים-על-כל-השרשראות (הקריאה-פר-שרשרת הייתה-מפרה-את-המאפיין)
+    const epoch = assignEpoch(info.toHeight);
     rt.jobs.unshift({
-      info, at: new Date().toISOString(),
+      info, at: new Date().toISOString(), epoch,
       chains: {
         steem: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
         hive: { attempts: 0, rcWaits: 0, nextTryAt: 0, done: false },
@@ -1144,7 +1195,7 @@ export async function relayAuditVerify(
 ): Promise<{ ok: boolean; verified: boolean | null; detail: string }> {
   const rt = rtInit();
   const rec: AnchorRecord = {
-    chain, height: expected.height, stateRoot: expected.stateRoot, digest: "",
+    chain, epoch: "e0-pre", height: expected.height, stateRoot: expected.stateRoot, digest: "", // מאמת-מקריאה-חוזרת — לא-רישום-מונה-חדש (לא-נוגע-במונה)
     txid, status: "anchored", at: new Date().toISOString(), attempt: 1,
     verified: null, verifiedAt: null,
     ...(expected.account ? { account: expected.account } : {}), // Roast-73
@@ -1174,7 +1225,8 @@ export function relayStatus(): Record<string, unknown> {
       c, { ...rt.chainState[c], endpointHost: rt.chainState[c].endpointHost ?? configuredHost(c) },
     ])),
     records: rt.records.slice(0, 60).map((r) => ({
-      chain: r.chain, height: r.height, status: r.status, txid: r.txid, at: r.at, attempt: r.attempt,
+      chain: r.chain, epoch: r.epoch, // EPOCH-PATCH-SPEC: גלוי-לציבור — (epoch,height)=המפתח-הייחודי
+      height: r.height, status: r.status, txid: r.txid, at: r.at, attempt: r.attempt,
       account: r.account, // SETTLE-13: חתים-הצי-הריבוני (שם-חשבון-ציבורי-בלבד)
       stateRoot: r.stateRoot, // עדות-ציבורית — נדרשת לאימות-עיגון-טרי בעמדת-הסליקה
       verified: typeof r.verified === "boolean" ? r.verified : null, verifiedAt: r.verifiedAt ?? null,
