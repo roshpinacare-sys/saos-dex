@@ -94,7 +94,7 @@ async function main(): Promise<void> {
   // FIX(Roast-69 · arm-fleet): המחיצה-כיסתה-5/6-יעדים — "fleet" לא-מוזרק-כלל (המגדר-ב-relay
   // תומך-בו-מאז-Roast-65-b M9) → בזמן-"מחיצה" ניסיונות-הצי-עקפו-את-השער-והגיעו-עד-בדיקת-הכספת.
   // הרשימה-עתה-מלאה-וכוללת-את-כל-היעדים-שה-relay מגדר.
-  for (const t of ["steem", "hive", "tron", "eth", "sol", "fleet"] as const) chaos.armChaos(t, 60_000);
+  for (const t of ["steem", "hive", "blurt", "tron", "eth", "sol", "fleet"] as const) chaos.armChaos(t, 60_000);
 
   const SEALS_AT_SEC = [0, 15, 30, 45, 58]; // חותמות נכנסות גם בזמן-המחיצה (כמו-בפרודקשן)
   const makeSeal = (n: number): SealInfo => {

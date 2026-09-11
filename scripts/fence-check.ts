@@ -35,6 +35,8 @@ const DISPLAY_ONLY = new Set([
   "steemworld.org", "hiveblocks.com", "tronscan.org", "etherscan.io", "solscan.io", "explorer.solana.com",
   /* Roast-74 · מסילת-הרשתות: סרק-Steem לתצוגת-txid (Blurt: אין-סריקה-חיה — מוצהר-בקוד) */
   "steemscan.com",
+  /* Roast-82 · מסילת-BLURT: סרק-השרשרת-השביעית לתצוגת-txid (blocks.blurt.world — אף-fetch) */
+  "blocks.blurt.world",
 ]);
 
 const BAD: { re: RegExp; why: string }[] = [
