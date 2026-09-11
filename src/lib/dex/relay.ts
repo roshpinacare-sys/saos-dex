@@ -29,6 +29,9 @@ import steemLib from "steem";
 import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor, ETH_RPCS } from "./relay-eth";
 import { solSealBroadcast, verifySolAnchor, solIdentity } from "./relay-sol";
 import { fencedFetch } from "./fence"; // FIX(SETTLE-11)+FIX(Roast-65-b · H2): כל-ה-fetch-ים-דרך-הגדר (redirect:error מרוכז)
+// roast-78 · רצפת-הגנת-גיבוי: קריאת-התביעות-המוטבעות (st.backing) מהמצב-הקנוני-החי.
+// אין-מעגל: chain.ts אינו-מייבא את relay.ts (אומת).
+import { getLiveState } from "./chain";
 
 type GrapheneTx = {
   ref_block_num: number;
@@ -86,6 +89,21 @@ const LATEST_ONLY: ChainName[] = ["hive", "tron", "eth", "sol", "fleet"];
 // 45דק' ≈ 32/יום × ~500M = 16B/יום ≈ איזון-אמת. headcorner-לבדו (41.2B-max, 95k/ש׳)
 // ממשיך-להספיק-ל-hive — והמפעיל תמיד-יכול לעגן-ידנית (POST /fleet anchor) מעבר-לקצב.
 const econWaitMin = (c: ChainName): number => (c === "steem" || c === "hive" || c === "fleet" ? 45 : 30);
+
+/* roast-78 · רצפת-הגנת-הגיבוי — התביעות-המוטבעות של WSOL ב-lamports.
+ * מתמטיקת-הטבעה (peg-door verifySolDeposit): amountMu = floor(lamports/1e6)
+ * ⇒ 1µ-תביעה = 1e6-lamports גיבוי-פיזי. st.backing נעול 1:1 בגרעין (fail-closed),
+ * ולכן הרצפה = backing.WSOL × 1e6. עיגון-SOL שורף 5,000-lamports מהמשמורת —
+ * אותה-משמורת-היא הגיבוי-הפיזי. השער: אסור שהשריפה תצלול מתחת-לתביעות. */
+function solClaimsFloorLamports(): number {
+  try {
+    const st = getLiveState();
+    const claimsMu = Math.max(0, Math.floor(st.backing?.WSOL ?? 0));
+    return claimsMu * 1_000_000;
+  } catch {
+    return 0; // אין-מצב-חי → אין-רצפה-מחושבת; הרצפה-הקנונית (rent+fee) נשארת
+  }
+}
 export type AnchorStatus = "anchored" | "sent-unconfirmed" | "pending" | "failed";
 export type BreakerState = "closed" | "open" | "half-open";
 
@@ -967,7 +985,7 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
         rt.solAddress = id.address;
         console.info(`[saos-relay] sol identity armed: ${id.address} (SPL-memo anchoring, fee-gated)`);
       }
-      const r = await solSealBroadcast(payload, keys.solKey);
+      const r = await solSealBroadcast(payload, keys.solKey, solClaimsFloorLamports());
       rec.txid = r.txid;
       rec.status = "anchored";
     } else if (chain === "steem" || chain === "hive") {
@@ -993,7 +1011,7 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     // מ-RPC-ציבורי) אינם כשל-מערכת — הם המתנה-כלכלית כנה. ספירתם ככשל-קשי
     // יצרה-מעגל-שבירה: breaker נפתח ×7 על-רכבת-בריאה שרק-מוגבלת-תדר.
     // SETTLE-13: "no usable account" (צי: כל-החשבונות-RC-קר/בהתקררות) = המתנה-כלכלית-גם-כן
-    const economic = /rc-low|has not enough RC|unfunded|gas-ceiling|rate limit|too many requests|quota|\b429\b|no usable account/i.test(msg);
+    const economic = /rc-low|has not enough RC|unfunded|backing-floor|gas-ceiling|rate limit|too many requests|quota|\b429\b|no usable account/i.test(msg);
     if (economic) {
       // חוסר-תקציב = המתנה כלכלית כנה — לא כשל-מערכת (לא נספר ל-breaker); בדיקה-מחדש תקופתית
       cs.attempts = 0;

@@ -130,5 +130,41 @@ console.log("╔═ peg-selftest — דלת-המטבעות (THE-COIN-DOOR) ═�
   check("stateRoot deterministic on recompute", r1 === r2);
 }
 
+// 14. roast-78 · רצפת-הגנת-הגיבוי — הכרעות-טהורות (סדר-ההגנות)
+{
+  const { solBackingFloorDecision } = await import("../src/lib/dex/relay-sol");
+  // א. שריפה-מותרת: מעל-התביעות בהפרש-גדול (המצב-החי: 59.7M מול-רצפה 50M)
+  {
+    const d = solBackingFloorDecision(59_705_000, 50_000_000, 890_880);
+    check("floor ok when headroom large", d.allow && d.code === "ok", d.detail);
+  }
+  // ב. backing-floor: השריפה תצלול מתחת-לתביעות — חסימה-כנה (הגנת-העיגון-ה-1:1)
+  {
+    const d = solBackingFloorDecision(50_003_000, 50_000_000, 890_880);
+    check("backing-floor blocks burn into claims", !d.allow && d.code === "backing-floor", d.detail);
+    check("backing-floor message honest", /backing-floor/.test(d.detail) && /economic hold/.test(d.detail));
+  }
+  // ג. גבול-בדיוק: balance − fee == רצפה → מותר (שורפים-עד-הרצפה, לא-מתחתיה)
+  {
+    const d = solBackingFloorDecision(50_005_000, 50_000_000, 890_880);
+    check("burn down to exactly the floor allowed", d.allow && d.code === "ok", d.detail);
+  }
+  // ד. unfunded: אין-אפילו-לרצפה-הקנונית (קודם היה-נורה-ראשון — עתה backing-floor קודם)
+  {
+    const d = solBackingFloorDecision(400_000, 0, 890_880);
+    check("unfunded fires without claims floor", !d.allow && d.code === "unfunded", d.detail);
+  }
+  // ה. סדר-ההגנות: משמורת-ענייה + תביעות-גבוהות → backing-floor קודם ל-unfunded
+  {
+    const d = solBackingFloorDecision(400_000, 50_000_000, 890_880);
+    check("backing-floor precedes unfunded in protection order", !d.allow && d.code === "backing-floor", d.detail);
+  }
+  // ו. אפס-רצפה (תאימות-לאחור): התנהגות-כמו-roast-67 — רק-הרצפה-הקנונית
+  {
+    const d = solBackingFloorDecision(1_000_000_000, 0, 890_880);
+    check("zero floor keeps legacy behavior", d.allow && d.code === "ok", d.detail);
+  }
+}
+
 console.log(`╚═ ${pass} pass · ${fail} fail — h${h()} ═╝`);
 if (fail > 0) process.exit(1);

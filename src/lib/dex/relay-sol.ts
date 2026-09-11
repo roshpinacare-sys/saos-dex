@@ -111,12 +111,52 @@ function buildMemoMessage(signer32: Uint8Array, memoProgram32: Uint8Array, block
   ]);
 }
 
+/* ── roast-78 · רצפת-הגנת-גיבוי (backing-protection floor) ──
+ * ההיסטוריה-החיה: משמורת-SOL 60.29M→59.705M-lamports ביממה (10-עיגונים/שעה ×
+ * 5,000-lamports) — והמשמורת **היא גם הגיבוי-הפיזי של התביעות-המוטבעות** (WSOL:
+ * st.backing × 1e6-lamports ל-µ). בלי-שער, העיגון-השקט שוחק את-הגיבוי עד-פגיעה
+ * אמיתית בעיגון-ה-1:1 (~8-ימים-מאז-77). הדפוס-זהה-לשערי-הדלק-של-ETH (roast-77):
+ * מתחת-לרצפה = המתנה-כלכלית-כנה (economic hold), לא-כשל-breaker.
+ * טהור-לבדיקה (peg-selftest): מחזיר קוד-הכרעה מדויק לפי-סדר-ההגנות:
+ *   1. backing-floor — השריפה-תצלול מתחת-לתביעות (הגנה-על-העיגון) · לפני-הכל
+ *   2. unfunded — אין-אפילו-לתשלום rent-exempt+עמלה (הרצפה-הקנונית מ-roast-67)
+ *   3. ok — שריפה-מותרת: נשארים מעל-התביעות אחרי-העמלה */
+export interface SolFloorDecision {
+  allow: boolean;
+  code: "ok" | "backing-floor" | "unfunded";
+  detail: string;
+}
+export function solBackingFloorDecision(
+  balance: number,
+  claimsFloorLamports: number,
+  rentMin: number,
+): SolFloorDecision {
+  const afterFee = balance - SIGNATURE_FEE_LAMPORTS;
+  if (claimsFloorLamports > 0 && afterFee < claimsFloorLamports) {
+    return {
+      allow: false, code: "backing-floor",
+      detail: `backing-floor: burning ${SIGNATURE_FEE_LAMPORTS} lamports would dip custody to ${afterFee} < minted-claims floor ${claimsFloorLamports} (backing 1:1 protection, roast-78) — economic hold (anchor paused, backing protected)`,
+    };
+  }
+  const needed = rentMin + SIGNATURE_FEE_LAMPORTS + RENT_MARGIN_LAMPORTS;
+  if (balance < needed) {
+    return {
+      allow: false, code: "unfunded",
+      detail: `unfunded: ${balance} lamports < rent-exempt ${rentMin} + fee ${SIGNATURE_FEE_LAMPORTS} = ${needed} — pending top-up (${needed - balance} lamports missing ≈ ${(needed - balance) / 1e9} SOL) — armed, memos signed (zero cost)`,
+    };
+  }
+  return { allow: true, code: "ok", detail: `burn allowed: ${balance} → ${afterFee} (claims floor ${claimsFloorLamports} respected)` };
+}
+
 /* ── שידור-עיגון חי (self-memo anchor) ──
  * חסם-מימון: getBalance ≥ rentExempt+fee+margin — אחרת "unfunded" מדויק (המתנה-כלכלית
- * כנה אצל ה-Relay, לא-כשל-breaker). ה-blockhash נלקח מה-RPC רגע-לפני. */
+ * כנה אצל ה-Relay, לא-כשל-breaker). ה-blockhash נלקח מה-RPC רגע-לפני.
+ * roast-78: claimsFloorLamports — רצפת-הגנת-הגיבוי (תביעות-מוטבעות ב-lamports);
+ * מותנה (0/undefined = ללא-רצפה — לא-מומלץ, נשמר-לתאימות-לאחור). */
 export async function solSealBroadcast(
   payload: unknown,
   secretHex: string,
+  claimsFloorLamports?: number,
 ): Promise<{ txid: string; address: string }> {
   /* שער-מדיניות (המפעיל): מקבל "1" או "true" — SOL_BROADCAST_ENABLED=true
    * מפעיל שידור-חי אמת (5000 lamports לחתימה, חוסם-היתרה קודם). */
@@ -138,10 +178,10 @@ export async function solSealBroadcast(
       .then((r) => (typeof r === "number" && r > 0 ? r : RENT_EXEMPT_FALLBACK))
       .catch(() => RENT_EXEMPT_FALLBACK),
   ]);
-  const needed = rentMin + SIGNATURE_FEE_LAMPORTS + RENT_MARGIN_LAMPORTS;
-  if (balance < needed) {
-    throw new Error(`unfunded: ${balance} lamports < rent-exempt ${rentMin} + fee ${SIGNATURE_FEE_LAMPORTS} = ${needed} — pending top-up (${needed - balance} lamports missing ≈ ${(needed - balance) / 1e9} SOL) — armed, memos signed (zero cost)`);
-  }
+  // roast-78: סדר-ההגנות — רצפת-הגיבוי קודמת לרצפה-הקנונית (היא-גבוהה-ממנה בפועל:
+  // תביעות-50µ = 50M-lamports » rent+fee ~897k).
+  const d = solBackingFloorDecision(balance, Math.max(0, Math.floor(claimsFloorLamports ?? 0)), rentMin);
+  if (!d.allow) throw new Error(d.detail);
 
   const bh = await rpc<{ value: { blockhash: string; lastValidBlockHeight: number } }>(
     endpoint, "getLatestBlockhash", [{ commitment: "confirmed" }], 15000,

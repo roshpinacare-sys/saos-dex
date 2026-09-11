@@ -251,6 +251,12 @@ export interface PegRow {
   pool: { key: string; ra: number; rb: number; midMu: number | null } | null;
   spreadBps: number | null;   // mid מול oracle
   verdict: "NO-POOL" | "NO-ORACLE" | "CONVERGED" | "DRIFT" | "DIVERGENT" | null;
+  /* roast-78 · שקיפות-גיבוי-פיזי: המשמורת-היא-גם-דלק-העיגון — כמה-גיבוי-נשאר
+   * מעל-התביעות וכמה-עיגונים-חינם נותרו לפני-רצפת-ההגנה. null = לא-רלוונטי/לא-נמדד. */
+  custodyLamports: number | null;   // משמורת-פיזית (WSOL בלבד; WTRX-מוחזר-null)
+  claimsLamports: number | null;    // תביעות-מוטבעות ב-lamports (backingMu × 1e6)
+  headroomLamports: number | null;  // משמורת − תביעות (דלק-העיגון-החופשי)
+  runwayAnchors: number | null;     // עיגונים-נותרים עד-רצפת-ההגנה (headroom/5,000)
 }
 
 export interface DoorReport {
@@ -274,6 +280,7 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
     tronSun: null, solLamports: null, evmWei: null, at: Date.now(), note: "מדידת-משמורת נכשלה — fail-כנה",
   }));
 
+  const SOL_ANCHOR_FEE = 5_000; // lamports לעיגון-ממו-עצמי (roast-67/78 — נמדד-חי)
   const pegRow = (asset: "WTRX" | "WSOL", pair: string, feedAsset?: string): PegRow => {
     const o = st.oracle?.[feedAsset ?? asset] ?? null;
     const pool = st.pools[pair] ?? null;
@@ -286,6 +293,16 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
       spreadBps = Math.round(((midMu - o.mu) / o.mu) * 10_000);
       verdict = Math.abs(spreadBps) < 300 ? "CONVERGED" : Math.abs(spreadBps) < 1_500 ? "DRIFT" : "DIVERGENT";
     }
+    // roast-78 · שקיפות-הגיבוי: חשוב-רק ל-WSOL (המשמורת-ה-SOL היא-גם-דלק-העיגון)
+    const custodyLamports = asset === "WSOL" ? custody.solLamports : null;
+    const claimsLamports = asset === "WSOL" ? Math.max(0, Math.floor(st.backing[asset] ?? 0)) * 1_000_000 : null;
+    const headroomLamports = custodyLamports !== null && claimsLamports !== null
+      ? custodyLamports - claimsLamports : null;
+    const runwayAnchors = headroomLamports === null
+      ? null
+      : headroomLamports > 0
+        ? Math.floor(headroomLamports / SOL_ANCHOR_FEE)
+        : 0;
     return {
       asset,
       oracleMu: o?.mu ?? null, oracleAtH: o?.atH ?? null, oracleSrc: o?.src ?? null,
@@ -293,6 +310,7 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
       extClaimMu: st.extBack?.[asset]?.mu ?? 0,
       pool: pool ? { key: pair, ra: pool.ra, rb: pool.rb, midMu: midMu ?? null } : null,
       spreadBps, verdict,
+      custodyLamports, claimsLamports, headroomLamports, runwayAnchors,
     };
   };
 
@@ -317,7 +335,7 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
       sol: {
         haveLamports: custody.solLamports, needLamports: SOL_RENT_FLOOR_LAMPORTS,
         gapLamports: custody.solLamports === null ? null : Math.max(0, SOL_RENT_FLOOR_LAMPORTS - custody.solLamports),
-        note: "עיגון-SOL דורש פטור-משכרות+עמלה (896,880 lamports) — נמדד-חי ב-roast-67",
+        note: "עיגון-SOL דורש פטור-משכרות+עמלה (896,880 lamports) — נמדד-חי ב-roast-67 · roast-78: רצפת-הגנת-גיבוי-פעילה — השריפה-נעצרת-כנה ברצף-התביעות-המוטבעות (ראה peg[WSOL].runwayAnchors)",
       },
     },
     peg: [pegRow("WTRX", "USDS/WTRX"), pegRow("WSOL", "USDS/WSOL")],
