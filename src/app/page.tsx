@@ -2158,6 +2158,10 @@ export default function DexTerminal() {
               אימות-מפעיל (P0): כל-פעולת-מוטציה דורשת את DEX_OPERATOR_TOKEN מה-.env של השרת, בכותרת x-saos-operator.
               הטוקן נשמר אצלך-בלבד (localStorage) — אף-שרת שלישי לא רואה אותו.
             </p>
+            {/* הסכם-מפתח-האב (Task 69): אותו מפתח פותח את כל האפליקציות בריפו */}
+            <p className="mt-1 text-[11px] text-amber-200/70">
+              הסכם-מפתח-האב: מפתח-האב שלך (קובץ-ההסכם) מתקבל כאן בדיוק כמו בפלטפורמה — מפתח אחד פותח הכל.
+            </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <input
                 type="password"
