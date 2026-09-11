@@ -88,7 +88,11 @@ export type OpKind = keyof typeof GAS_TABLE;
 export const FEE_BPS = 30; // עמלי-30bps כמו-הבריכה-הילידית (dex-facts)
 export const TREASURY_CUT_PCT = 30; // 30% מהעמלה → אוצר (רווח-מונוטוני, grid98)
 export const REFUEL_CAP = 100_000; // תקרת-עירוי-פר-פקודה — גם-אם-האוצר נחטף, הנזק מגודל
-export const FUEL_FUNDERS = ["treasury", "arena", "operator"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor") + המפעיל-האנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון, SETTLE-5)
+// FIX(roast-79 · fuel-death-spiral): הבוטים נכנסו-לסולם-הממנים — נמדדו-חי כמחזיקי-
+// הרזרבה-האמתיים (bot-a 924k · bot-b 420k · bot-c 309k — 1.65M מג'נזיס שלא-נשרף)
+// בזמן-שהסולם-הישן (אוצר 8µ · ארנה 25.9k · מפעיל 2k) היה-מת-מבנית. העברה-טהורה
+// בלבד (אפס-הטבעה) — Σcredits נשמר, רק-הלוגיסטיקה חיה. הסדר-בפועל נקבע-ב-funderFor.
+export const FUEL_FUNDERS = ["treasury", "arena", "bot-a", "bot-b", "bot-c", "operator"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor") + הבוטים (מחזיקי-רזרבה) + המפעיל-האנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון, SETTLE-5)
 export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter≥8000 להרמה — המטבע לא ירעיב-אותו
 export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
 export const FREE_XFER_CAP = 2_000_000; // THE-SWEEP (SETTLE-12): תקרת-העברה-חינם-פר-פקודה (2,000 יחידות) — החינם הוא המוצר, התקרה היא גבול-הנזק
@@ -138,13 +142,19 @@ export const COW_MAX_PENDING_PER_ISSUER = 16; // הזמנות-אצווה-פתו�
 export const COW_FALLBACK_MIN_OUT_BPS = 200;  // מגן-minOut לברירת-המחדל של המסלול (2%)
 
 export type FuelFunder = (typeof FUEL_FUNDERS)[number];
-/** ממנה-דלק מדורג (SETTLE-5/9): arena → treasury → operator.
+/** ממנה-דלק מדורג (SETTLE-5/9 · roast-79): arena → bot-a/b/c → treasury → operator.
  * FIX(SETTLE-9 dedup): הסולם היה מועתק-בשלמותו בין mm.ts ל-settle/route.ts —
  * לוגיקת-כסף-קונצנזוסית חייבת לחיות במקום-אחד (הדריפט פה = דליפה-כלכלית).
  * exclude — לא-לממן-עצמי (הארנה אסור-שתממן-את-עצמה: המנוע דוחה rTo==issuer). */
 export function funderFor(st: DexState, amt: number, exclude?: string): FuelFunder {
   const cr = (n: string) => st.credits[n] ?? 0;
+  // FIX(roast-79 · fuel-death-spiral): סדר-הקדימות הוא-התרופה. היה: ארנה→אוצר→מפעיל —
+  // נמדד-חי: שלושתם מתים (25.9k שאינו-עובר-מבחן-amt+10k · 8 · 2k) בזמן-שהבוטים
+  // מחזיקים 1.65M. עכשיו: ארנה → בוטים (מרווח amt+10k לבריאות-המממן) → אוצר → מפעיל.
   if (exclude !== "arena" && cr("arena") >= amt + 10_000) return "arena";
+  for (const b of ["bot-a", "bot-b", "bot-c"] as const) {
+    if (exclude !== b && cr(b) >= amt + 10_000) return b;
+  }
   if (exclude !== "treasury" && cr("treasury") >= amt) return "treasury";
   return "operator";
 }
