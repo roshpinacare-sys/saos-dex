@@ -97,15 +97,17 @@ for (const f of files) {
 }
 
 /* FIX(Roast-65-b · H1): בדיקת-ריצה — הגדר חייבת-להיות פתוחה-בדיוק לקוראים-הלגיטימיים
- * (hive-rail.signer עם-פורט, loopback-pins, כל-השערים-המקובעים, אכיפת-https/ws)
- * וסגורה לכל-השאר. כולל-הצלבה-חיה מול-hive-rail.signerEndpointUrl() — אם-הפין
- * והקוד-יסטו-זה-מזה, הסריקה-תיכשל. */
+ * (loopback-pins, כל-השערים-המקובעים, אכיפת-https/ws) וסגורה לכל-השאר.
+ * Roast-73: הצלבה-חיה מול-railExecEndpoints() — נקודות-הקצה-האמת של מבצע-המסילה
+ * (החותם-החוץ ההיסטורי בוטל-כנה; אם-הפינים-והקוד-יסטו-זה-מזה, הסריקה-תיכשל). */
 const extra: FenceCase[] = [];
 try {
-  const { signerEndpointUrl } = await import("../src/lib/hive-rail");
-  extra.push({ endpoint: signerEndpointUrl(), expect: "allow", why: "hive-rail.signerEndpointUrl() — נקודת-החתימה-החיה (הצלבה-מול-מניפסט-הקוראים)" });
+  const { railExecEndpoints } = await import("../src/lib/dex/rail-exec");
+  for (const ep of railExecEndpoints()) {
+    extra.push({ endpoint: ep, expect: "allow", why: "railExecEndpoints() — נקודת-ביצוע-חיה של-מבצע-המסילה-הריבוני (הצלבה-מול-מניפסט-הגדר)" });
+  }
 } catch (e) {
-  console.error(`[fence-check] SELFTEST-WIRE-FAILED — לא ניתן לטעון את נקודת-החתימה של hive-rail: ${String((e as Error)?.message ?? e).slice(0, 120)}`);
+  console.error(`[fence-check] SELFTEST-WIRE-FAILED — לא ניתן לטעון את נקודות-הקצה של rail-exec: ${String((e as Error)?.message ?? e).slice(0, 120)}`);
   violations += 1;
 }
 const st = fenceSelftest(extra);
@@ -113,7 +115,7 @@ if (!st.ok) {
   for (const f of st.failures) console.error(`[fence-check] SELFTEST-FAIL ${f}`);
   violations += st.failures.length;
 } else {
-  console.log(`[fence-check] selftest: ${st.ran} מקרי-גדר עברו (allow/reject בדיוק-כמדיניות · כולל-signerEndpointUrl חי)`);
+  console.log(`[fence-check] selftest: ${st.ran} מקרי-גדר עברו (allow/reject בדיוק-כמדיניות · כולל-railExecEndpoints חי)`);
 }
 
 if (violations > 0) {

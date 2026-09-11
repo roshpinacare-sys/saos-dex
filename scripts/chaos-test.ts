@@ -40,7 +40,10 @@ interface RelayStatusView {
   chains: Record<"steem" | "hive" | "tron", ChainStateView>;
   records: { chain: string; height: number; status: string; txid: string | null; attempt: number; verified: boolean | null; error?: string }[];
 }
-interface Candidate { chain: "steem" | "hive"; txid: string; height: number; stateRoot: string }
+// FIX(Roast-73): fleet-נכלל (עיגון-Hive-מלא-של-החיילים) + account-נוסע-בוקטור
+// (בלי-זה-verifyOnChain מסרב-כנה: "not authorized by headcorner" — וזה-התנהגות-נכונה,
+//  המסגרת-פשוט-לא-העבירה-את-החותם-הצפוי)
+interface Candidate { chain: "steem" | "hive" | "fleet"; txid: string; height: number; stateRoot: string; account?: string }
 
 const FAIL_EXIT = (msg: string): never => { console.error(`[chaos] FATAL: ${msg}`); process.exit(1); };
 
@@ -170,10 +173,14 @@ async function main(): Promise<void> {
 
   const realAnchorsPath = path.join(process.cwd(), "state", "anchors.json");
   const real = JSON.parse(fs.readFileSync(realAnchorsPath, "utf8")) as { records?: (Candidate & { chain: string; verified: boolean | null })[] };
+  // FIX(Roast-73): הצי-חזר-לחיים (כספת-נבנתה-מחדש) והעיגונים-החיים-האחרונים הם
+  // רשומות-"fleet" — עיגון-Hive-custom_json מלא (אותו-verifyOnChain קורא-חזרה).
+  // המסנן מקבל-מעכשיו steem|hive|fleet — כל-עיגון-גרפני-אמת-על-השרשרת.
   const candidates: Candidate[] = (real.records ?? [])
-    .filter((r) => (r.chain === "steem" || r.chain === "hive") && typeof r.txid === "string" && r.txid.length >= 40 && typeof r.height === "number" && typeof r.stateRoot === "string" && r.stateRoot.length === 64)
+    .filter((r) => (r.chain === "steem" || r.chain === "hive" || r.chain === "fleet") && typeof r.txid === "string" && r.txid.length >= 40 && typeof r.height === "number" && typeof r.stateRoot === "string" && r.stateRoot.length === 64)
+    .map((r) => ({ chain: r.chain, txid: r.txid, height: r.height, stateRoot: r.stateRoot, account: r.account }))
     .sort((a, b) => (a.chain === "steem" ? 0 : 1) - (b.chain === "steem" ? 0 : 1))
-    .slice(0, 4) as Candidate[];
+    .slice(0, 4);
   if (candidates.length === 0) FAIL_EXIT("no on-chain anchor candidates in state/anchors.json — cannot build a read-back test vector");
 
   const mismatchesBefore = status().metrics.mismatches;
@@ -184,14 +191,14 @@ async function main(): Promise<void> {
 
   for (const cand of candidates) {
     // בקרה-חיובית קודם — ודא שה-txid קריא-מה-RPC הציבורי עם השורש-האמת
-    const realRes = await relay.relayAuditVerify(cand.chain, cand.txid, { height: cand.height, stateRoot: cand.stateRoot });
+    const realRes = await relay.relayAuditVerify(cand.chain, cand.txid, { height: cand.height, stateRoot: cand.stateRoot, account: cand.account });
     if (!realRes.ok) { log("skip", `${cand.chain} txid ${cand.txid.slice(0, 12)}… not verifiable right now (${realRes.detail.slice(0, 60)}) — trying next candidate`); continue; }
     chosen = cand;
     positiveOk = true;
     log("control", `positive control OK on ${cand.chain} h${cand.height} · txid ${cand.txid.slice(0, 16)}… verified via public RPC`);
 
     // עתה ההזרקה — אותו-txid, stateRoot מזויף
-    fakeRes = await relay.relayAuditVerify(cand.chain, cand.txid, { height: cand.height, stateRoot: fakeRoot });
+    fakeRes = await relay.relayAuditVerify(cand.chain, cand.txid, { height: cand.height, stateRoot: fakeRoot, account: cand.account });
     break;
   }
 
