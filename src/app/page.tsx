@@ -201,7 +201,7 @@ interface SettleResp {
     agents: { agent: string; score: number; pass: boolean; conservationAfterEach: boolean; tasks: { task: string; ok: boolean; note: string }[] }[];
   };
   realMoney: {
-    ok: boolean; liveRails: number; verifiedNow: number;
+    ok: boolean; liveRails: number; totalRails?: number; verifiedNow: number;
     rails: { rail: string; identity: string; native: string; extra: string; ok: boolean; detail: string }[];
     anchors: { rail: string; height: number; ok: boolean; verified: boolean; detail: string }[];
   };
@@ -688,12 +688,12 @@ function SettlementDeskPanel({ report, loading, refresh, stabilize, stabilizing 
             </div>
           </div>
 
-          {/* (2) כסף-אמת: 5-רשתות חיות */}
+          {/* (2) כסף-אמת: מסילות-חיות — FIX(70-b ·3): המונה-חי, לא-"5" קשיח */}
           <div className="rounded-lg border border-zinc-800 bg-zinc-900/70 p-3" data-testid="settle-realmoney">
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Real Money · 5 Rails Live</h3>
+              <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Real Money · Rails Live</h3>
               <span className={`font-mono text-[10px] font-bold ${s.realMoney.ok ? "text-emerald-300" : "text-amber-300"}`}>
-                {s.realMoney.liveRails}/5 live · {s.realMoney.verifiedNow} verified now
+                {s.realMoney.liveRails}/{s.realMoney.totalRails ?? s.realMoney.rails.length} live · {s.realMoney.verifiedNow} verified now
               </span>
             </div>
             <div className="max-h-56 space-y-1 overflow-y-auto pr-1" dir="ltr">

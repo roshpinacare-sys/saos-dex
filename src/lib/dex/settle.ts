@@ -378,6 +378,7 @@ export interface RealMoneyReport {
   rails: RailBalance[];
   anchors: AnchorSpot[];
   liveRails: number;           // כמה-רשתות ענו-חי
+  totalRails: number;          // FIX(70-b ·2): המונה-הכולל — לא-קשיח-ב-UI
   verifiedNow: number;         // כמה-עיגונים אומתו-כרגע-בקריאה-חוזרת
   ok: boolean;                 // ≥1 rail חי && 0 mismatch
 }
@@ -407,18 +408,31 @@ const num = (s: string): number => parseFloat(String(s).replace(/[^\d.]/g, "")) 
 async function auditRail(rail: ChainName, identity: string): Promise<RailBalance> {
   const at = new Date().toISOString();
   try {
-    if (rail === "steem" || rail === "hive") {
-      const node = rail === "steem" ? "https://api.steemit.com" : "https://api.hive.blog";
-      const r = await jfetch<{ result: { balance: string; sbd_balance?: string; hbd_balance?: string; vesting_shares: string }[] }>(
+    if (rail === "steem" || rail === "hive" || rail === "blurt") {
+      // FIX(70-b ·1): BLURT היה-נופל לענף-ה-SOL — שאילתת-getBalance-סולנית על-שם-גרפן
+      // החזירה "0.000000000 SOL" ירוק (חיובי-שקר). עתה: ענף-גרפן אמיתי (אותו-מבנה-condenser),
+      // צמתים-חיים מ-blurtwallet (blurt.world מת). BLURT אין-דבט — רק-נזיל+VESTS.
+      const NODES: Record<string, string> = {
+        steem: "https://api.steemit.com",
+        hive: "https://api.hive.blog",
+        // rpc.blurt.blog — הצומת-החי-שנמדד (Roast-74) · מקובע-כבר-ב-PINNED_HOSTS
+        blurt: "https://rpc.blurt.blog",
+      };
+      const node = NODES[rail];
+      const r = await jfetch<{ result?: { balance: string; sbd_balance?: string; hbd_balance?: string; vesting_shares: string }[]; error?: { message: string } }>(
         node, { jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [[identity]], id: 1 });
+      if (r.error) throw new Error(r.error.message);
       const acc = r.result?.[0];
       if (!acc) throw new Error("account not found");
-      const sym = rail === "steem" ? "STEEM" : "HIVE";
-      const debt = num(rail === "steem" ? acc.sbd_balance ?? "0" : acc.hbd_balance ?? "0");
+      const sym = rail === "steem" ? "STEEM" : rail === "hive" ? "HIVE" : "BLURT";
+      const debtSym = rail === "steem" ? "SBD" : rail === "hive" ? "HBD" : null;
+      const debt = debtSym ? num(rail === "steem" ? acc.sbd_balance ?? "0" : acc.hbd_balance ?? "0") : null;
       return {
         rail, identity, ok: true,
         native: `${num(acc.balance).toFixed(3)} ${sym}`,
-        extra: `${debt.toFixed(3)} ${rail === "steem" ? "SBD" : "HBD"} · ${Math.floor(num(acc.vesting_shares)).toLocaleString("en-US")} VESTS`,
+        extra: debtSym && debt !== null
+          ? `${debt.toFixed(3)} ${debtSym} · ${Math.floor(num(acc.vesting_shares)).toLocaleString("en-US")} VESTS`
+          : `${Math.floor(num(acc.vesting_shares)).toLocaleString("en-US")} VESTS`,
         detail: node.replace("https://", ""), at,
       };
     }
@@ -447,9 +461,10 @@ async function auditRail(rail: ChainName, identity: string): Promise<RailBalance
     }
     // sol
     const rpc = process.env.SOL_RPC_URL || "https://api.mainnet-beta.solana.com";
-    const r = await jfetch<{ result: { value: number } }>(rpc, {
+    const r = await jfetch<{ result: { value: number }; error?: { message: string } }>(rpc, {
       jsonrpc: "2.0", id: 1, method: "getBalance", params: [identity],
     });
+    if (r.error) throw new Error(r.error.message); // FIX(70-b): אף-קריאת-רשת לא מניחה-ok בשקט
     const lam = r.result?.value ?? 0;
     return {
       rail, identity, ok: true,
@@ -520,9 +535,11 @@ export async function realMoneyAudit(): Promise<RealMoneyReport> {
   const anchors = await anchorSpotCheck(rs.account ?? null);
   const liveRails = rails.filter((r) => r.ok).length;
   const verifiedNow = anchors.filter((a) => a.verified).length;
+  // FIX(70-b ·2): המונה-הכולל עובר-חי — ה-UI לא קודס "5" על-7 מסילות
+  const totalRails = rails.length;
   // FIX(Roast-63): "awaiting finalized block" (SOL) אינו-מיסמאץ' — טרם-אינדוקס/פיינליזציה
   const mismatches = anchors.filter((a) => !a.ok && a.height > 0 && !a.detail.includes("not indexed") && !a.detail.includes("awaiting finalized block")).length;
-  return { rails, anchors, liveRails, verifiedNow, ok: liveRails >= 1 && mismatches === 0 };
+  return { rails, anchors, liveRails, totalRails, verifiedNow, ok: liveRails >= 1 && mismatches === 0 };
 }
 
 /* ── 4. יציבות-שוק: האם-הכל-יושב (מחירים-מתכנסים, ספרד-צמודה, עומק-דו-צדדי) ── */
