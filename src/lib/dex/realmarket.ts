@@ -67,15 +67,17 @@ async function rpc<T>(node: string, body: unknown, timeoutMs = 8_000): Promise<T
 }
 
 async function rpcAny<T>(method: string, params: unknown[]): Promise<T> {
-  let last = "no-node";
+  // FIX(70 ·שידור-כנה): היה-רק-השגיאה-האחרונה — צומת-מת (404-גוף-ריק) מעליף
+  // את-הודעת-השרשרת-האמיתית של-הצמתים-החיים. עתה: כל-השגיאות-נאספות-ומדווחות.
+  const errs: string[] = [];
   for (const node of STEEM_NODES) {
     try {
       return await rpc<T>(node, { jsonrpc: "2.0", id: 1, method, params });
     } catch (e) {
-      last = e instanceof Error ? e.message : String(e);
+      errs.push(`${new URL(node).host}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  throw new Error(`all-steem-nodes-failed: ${last}`);
+  throw new Error(`all-steem-nodes-failed · ${errs.join(" | ")}`);
 }
 
 /* ── חתימה-ושידור (הנתיב-המוכח-על-השרשרת) ───────────────────────────────── */
