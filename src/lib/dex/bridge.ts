@@ -40,6 +40,47 @@ import { fencedFetch } from "./fence"; // FIX(SETTLE-11)+FIX(Roast-65-b · H2): 
 
 export type FarVerify = { verified: boolean; note: string };
 
+// FIX(R17-b·M5): מונה-תהליך-מונוטוני — חלק-ממזהה-הכוונה; מבטל-התנגשויות-מזהים
+// שהיו-אפשריות-עם Date.now()+אורך-המערך (אורך-משתנה-עם-גלישת-חלון-הפנקס).
+let intentSeq = 0;
+
+/* ── FIX(R17-b·H3): פיוס-גשר-מול-תוצאת-הבלוק-בפועל ──────────────────────────
+ * ה-claim/lock מסמנים paid/locked בעת-התור (submitOp = תור-בלבד) — אבל-ה-xfer_free
+ * יכול-להידחות-בבלוק (escrow-צמוד/יתרה-התדלדלה). buildBlock מדווח-תוצאות-פר-nonce;
+ * עתה-הגשר נסגר-על-האמת: ok → הנונס-נוקה (הסטטוס-קביל) · reject → היפוך-כנה:
+ *  · claim-נדחה: חזרה-ל-pending + seenRemove (ההפקדה-לא-נסלקה — הכסף-לא-זז) →
+ *    ה-keeper ינסה-שוב-כשה-escrow-ימומן. היה: "paid"+רישום-קבוע = הפקדה-נתקעת-לנצח.
+ *  · lock-נדחה: "lock-failed" כנה (היה: "locked" שקרי — המפעיל-עלול-לשגר-חוץ-מול-
+ *    נעילה-שלא-התרחשה).
+ * קריסה-בין-התור-לפיוס → pendingNonce-נשאר-על-הכוונה (ראיה-לאי-סגירה) — fail-safe:
+ * הכיוון-השמרני (אי-ודאות נראית, לא-תשלום-כפול). */
+export function bridgeReconcile(results: { nonce: string; ok: boolean }[]): void {
+  if (results.length === 0) return;
+  const byNonce = new Map(results.map((r) => [r.nonce, r.ok]));
+  const l = readLedger();
+  let touched = false;
+  for (const intent of l.intents) {
+    if (!intent.pendingNonce || !byNonce.has(intent.pendingNonce)) continue;
+    const ok = byNonce.get(intent.pendingNonce)!;
+    intent.pendingNonce = undefined; // סגירה-בכל-מקרה — הפיוס-נעשה
+    if (ok) {
+      // paid/locked-קבילים — אין-שינוי-סטטוס
+    } else if (intent.dir === "in" && intent.status === "paid") {
+      intent.status = "pending";
+      intent.ourTxRef = undefined;
+      intent.verifiedNote = "claim-rejected-in-block — הוחזר-לתור (R17-b·H3: הכסף-לא-זז; הרישום-הקבוע-נוקה)";
+      if (intent.proofRef) seenRemove(intent.proofRef);
+    } else if (intent.dir === "out" && intent.status === "locked") {
+      intent.status = "lock-failed";
+      intent.ourTxRef = undefined;
+      intent.verifiedNote = "lock-rejected-in-block — הנעילה-לא-התרחשה, היתרה-נשארה-אצל-הנועל (R17-b·H3)";
+    }
+    intent.updatedAt = Date.now();
+    touched = true;
+  }
+  if (touched) writeLedger(l);
+}
+
 /** FIX(Roast-64-c · F1): קישור-הכוונה — הציפיות-הרשומות-בעת-היצירה, שהמסילה
  * מחויבת-להוכיח על-השרשרת-החוץ לפני-כסף. כל-שדה שאינו-רשום הוא דחייה-כנה. */
 export interface FarExpect {
@@ -325,7 +366,10 @@ export interface BridgeIntent {
   farMemo?: string;     // FIX(F1): תזכיר-צפוי (steem/hive)
   farSource?: string;   // FIX(F1): בעלים-המקור-הצפוי (tron/steem)
   proofRef?: string;    // txid/hash-על-הרשת-החוץ (תיקוף-פר-רשת — F3)
-  status: "pending" | "claiming" | "paid" | "locked" | "released"; // FIX(R16-a·M4): claiming = חכירת-תביעה-חוצת-await
+  // FIX(R17-b·H3): נונס-ה-op-שנדחף-לתור — קושר-את-הכוונה-לתוצאת-הבלוק-בפועל;
+  // bridgeReconcile סוגר-אותו (ok→נוקה · reject→היפוך-ל-pending+הסרת-רישום).
+  pendingNonce?: string;
+  status: "pending" | "claiming" | "paid" | "locked" | "released" | "lock-failed"; // FIX(R16-a·M4): claiming = חכירת-תביעה-חוצת-await · FIX(R17-b·H3): lock-failed = הנעילה-נדחתה-בבלוק (הספרים-לא-זזו)
   ourTxRef?: string; // עדות-פעולה-מהגרעין (מזהה-ה-op)
   verified?: boolean; // FIX(Roast-63): האם-ההוכחה-אומתה-על-השרשרת-החוץ
   verifiedNote?: string; // פירוט-האימות (כנות-מלאה)
@@ -403,6 +447,16 @@ function seenAdd(proofRef: string, intentId: string, dir: "in" | "out"): void {
   seenSave();
 }
 
+// FIX(R17-b·H3): היפוך-סליקה-שנדחתה-בבלוק — בלי-זה proofRef נשאר-ברישום-הקבוע
+// וההפקדה-נתקעת-לנצח (התביעה-החוזרת-נחסמת-כ"כפילות" בעוד-הכסף-מעולם-לא-זז).
+function seenRemove(proofRef: string): void {
+  const m = seenLoad();
+  if (Object.prototype.hasOwnProperty.call(m, proofRef)) {
+    delete m[proofRef];
+    seenSave();
+  }
+}
+
 void seenLoad(); // טעינה-באתחול-המודול (לפני-כל-תביעה)
 
 /** תיקוף-farAmount-פר-רשת בעת-הרישום (fail-closed — פורמט-פסול = דחייה). */
@@ -470,13 +524,20 @@ export function registerInbound(p: {
   if (!farAddress) return { ok: false, error: "far-address-required (FIX-Roast-64-c: אין-תשלום-על-tx-לא-מקושר-לנמען-רשום)" };
   const farAmount = p.farAmount ? String(p.farAmount).trim().slice(0, 64) : undefined;
   if (farAmount !== undefined && !farAmountOk(chain, farAmount)) return { ok: false, error: "bad-farAmount (יחידות-מינימום ל-eth/bsc/tron/sol · מחרוזת-נכס ל-steem/hive)" };
-  const proofRef = String(p.proofRef).trim().toLowerCase();
+  // FIX(R17-b·H2): SOL-base58 **רגיש-רישיות** — ה-toLowerCase-העיוור כאן ובשחרור
+  // שבר-כל-חתימת-SOL (fail-closed: "signature-not-found" לנצח). R16-a·M3 תיקן-את-הדלת
+  // אך-ההערה-"bridge.ts:473 כבר-נרמל" הייתה שקר-תיקוני. עתה: נרמול-מותנה-שרשרת —
+  // hex (steem/hive/blurt/eth/bsc/tron) מנורמל, base58 (sol) נשמר כמו-שהוא.
+  const proofRef = chain === "sol" ? String(p.proofRef).trim() : String(p.proofRef).trim().toLowerCase();
   const l = readLedger();
   // FIX(F2): אנטי-כפילות בשני-הכיוונים — חלון-הפנקס **וגם** הרישום-הקבוע
   if (l.intents.some((i) => i.proofRef === proofRef)) return { ok: false, error: "duplicate-proofRef (אנטי-שימוש-כפול)" };
   if (seenHas(proofRef)) return { ok: false, error: "duplicate-proofRef (רישום-קבוע — כבר-נסלק/נשחרר)" };
+  // FIX(R17-b·M5): מזהה-הכוונה היה Date.now()+אורך-המערך — התנגשות-אפשרית
+  // (שתי-רישומים-באותו-מילישנייה עם אורך-שווה) → claimInbound פועל-על-הראשונה-בלבד.
+  // עתה: מונה-תהליך-מונוטוני-מייחד-תמיד.
   const intent: BridgeIntent = {
-    id: `in-${Date.now().toString(36)}-${l.intents.length.toString(36)}`,
+    id: `in-${Date.now().toString(36)}-${(intentSeq++).toString(36)}`,
     dir: "in", chain, asset: p.asset as Asset, amountMu,
     party: beneficiary, farAddress, farAmount,
     farMemo: p.farMemo ? String(p.farMemo).slice(0, 200) : undefined,
@@ -529,11 +590,17 @@ export async function claimInbound(p: { id: string }): Promise<BridgeErr> {
   }
   const st = getLiveState();
   if (bal(st, BRIDGE_ACCOUNT, intent.asset) < intent.amountMu) { intent.status = "pending"; intent.updatedAt = Date.now(); writeLedger(l); return { ok: false, error: "escrow-shortfall (ה-escrow-לא-ממומן-מספיק)" }; }
-  const r = submitOp({ type: "xfer_free", issuer: BRIDGE_ACCOUNT, nonce: nextNonce("brg"), to: intent.party, asset: intent.asset, amount: intent.amountMu });
+  // FIX(R17-b·H3): הנונס-נשמר-על-הכוונה — תוצאת-הבלוק-בפועל תפוסה ע"י
+  // bridgeReconcile (דרך buildBlock): ok → נשאר-paid · reject → חזרה-ל-pending
+  // + הסרת-הרישום-הקבוע (היה: "paid"+רישום-בעת-התור-בלבד → הפקדה-נתקעת-לנצח
+  // כש-escrow-צמוד דוחה-את-ה-xfer_free-בבלוק).
+  const claimNonce = nextNonce("brg");
+  const r = submitOp({ type: "xfer_free", issuer: BRIDGE_ACCOUNT, nonce: claimNonce, to: intent.party, asset: intent.asset, amount: intent.amountMu });
   if (!r.queued) { intent.status = "pending"; intent.updatedAt = Date.now(); writeLedger(l); return { ok: false, error: r.reason ?? "queue-rejected" }; }
+  intent.pendingNonce = claimNonce;
   intent.status = "paid"; intent.ourTxRef = `xfer_free:${intent.id}`; intent.updatedAt = Date.now();
   writeLedger(l);
-  if (intent.proofRef) seenAdd(intent.proofRef, intent.id, "in"); // FIX(F2): רישום-קבוע-בסליקה
+  if (intent.proofRef) seenAdd(intent.proofRef, intent.id, "in"); // FIX(F2): רישום-קבוע-בסליקה (fail-safe: מנע-כפילות גם-אם-הבלוק-ידחה-והreconcile-ייפוך)
   return { ok: true, intent };
 }
 
@@ -555,17 +622,23 @@ export function lockOutbound(p: {
   if (farAmount !== undefined && !farAmountOk(chain, farAmount)) return { ok: false, error: "bad-farAmount (יחידות-מינימום ל-eth/bsc/tron/sol · מחרוזת-נכס ל-steem/hive)" };
   const st = getLiveState();
   if (bal(st, issuer, p.asset) < amountMu) return { ok: false, error: "insufficient" };
-  const r = submitOp({ type: "xfer_free", issuer, nonce: nextNonce("blo"), to: BRIDGE_ACCOUNT, asset: p.asset as Asset, amount: amountMu });
+  // FIX(R17-b·H3): גם-הנעילה-מסומנת-"locked"-בעת-התור — אם-ה-xfer_free-נדחה-בבלוק
+  // (יתרה-התדלדלה-בין-הבדיקה-לביצוע) המפעיל-היה-משגר-כספים-חוץ-מול-נעילה-שלא-הייתה.
+  // עתה: pendingNonce על-הכוונה → bridgeReconcile הופך-reject ל-"lock-failed"-כנה.
+  const lockNonce = nextNonce("blo");
+  const r = submitOp({ type: "xfer_free", issuer, nonce: lockNonce, to: BRIDGE_ACCOUNT, asset: p.asset as Asset, amount: amountMu });
   if (!r.queued) return { ok: false, error: r.reason ?? "queue-rejected" };
   const l = readLedger();
+  // FIX(R17-b·M5): אותו-מזהה-מונוטוני-גם-ליציאה
   const intent: BridgeIntent = {
-    id: `out-${Date.now().toString(36)}-${l.intents.length.toString(36)}`,
+    id: `out-${Date.now().toString(36)}-${(intentSeq++).toString(36)}`,
     dir: "out", chain, asset: p.asset as Asset, amountMu,
     party: issuer, farAddress, farAmount,
     farMemo: p.farMemo ? String(p.farMemo).slice(0, 200) : undefined,
     farSource: p.farSource ? String(p.farSource).trim().slice(0, 96) : undefined,
     status: "locked", ourTxRef: `xfer_free:${issuer}→bridge`, at: Date.now(), updatedAt: Date.now(),
   };
+  intent.pendingNonce = lockNonce;
   l.intents.push(intent); writeLedger(l);
   return { ok: true, intent };
 }
@@ -578,7 +651,7 @@ export async function markReleased(p: { id: string; farTxid: string }): Promise<
   const farTxid = String(p.farTxid || "").trim();
   // FIX(F3): תיקוף-farTxid-פר-רשת
   if (!proofOk(intent.chain, farTxid)) return { ok: false, error: `bad-farTxid (40-hex ל-steem/hive · 64-hex ל-eth/bsc/tron · base58 ל-SOL)` };
-  const ref = farTxid.toLowerCase();
+  const ref = intent.chain === "sol" ? farTxid : farTxid.toLowerCase(); // FIX(R17-b·H2): base58-רגיש-רישיות
   // FIX(F2): אנטי-כפילות מהרישום-הקבוע (שני-הכיוונים)
   if (seenHas(ref)) return { ok: false, error: "duplicate-proofRef (רישום-קבוע — כבר-נסלק/נשחרר)" };
   // FIX(Roast-63+64-c): השחרור-מסומן-"released" רק-אחרי-אימות-מחויב של ה-txid-על-השרשרת-החוץ
@@ -619,9 +692,13 @@ async function bridgeAutoTick(): Promise<void> {
   autoRt.inflight = true;
   try {
     const l = readLedger();
+    // FIX(R17-b·M3): slice(-2) לקח-את **החדשים** בעוד-ההערה-מתארת-"הישנות-ראשונה" —
+    // תחת-זרם-רישומים-מתמשך הכוונות-הישנות-הורעבו-לנצח. עתה: מיון-לפי-זמן-יצירה
+    // (at — יציב, לא-מושפע-מהחכרות-חכירה) + שניים-הראשונים — הסדר-המוצהר-בפועל.
     const cands = l.intents
       .filter((i) => i.dir === "in" && i.status === "pending" && i.farAddress && i.farAmount)
-      .slice(-2); // הישנות-ראשונה, ≤2-פר-פעימה — אפס-לחץ-RPC
+      .sort((a, b) => a.at - b.at)
+      .slice(0, 2); // הישנות-ראשונה, ≤2-פר-פעימה — אפס-לחץ-RPC
     if (cands.length === 0) { autoRt.lastAction = "idle"; return; }
     for (const intent of cands) {
       const r = await claimInbound({ id: intent.id });
