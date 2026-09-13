@@ -20,8 +20,10 @@ import { merkleRoot, sha256, canon, CanonicalError } from "./canonical";
 import { invariant, InvariantViolation } from "./invariant";
 import { arenaTick, fairPrice, DEFAULT_PARAMS, type ArenaParams, type SoldierRT, MARKETS } from "./mm";
 import { railSummary, bindLiveState, railReconcile } from "./rail";
+import { bridgeReconcile } from "./bridge"; // FIX(R17-b·H3): פיוס-גשר-מול-תוצאת-בלוק
 import { milestoneSummary } from "./milestone";
 import { poolMid, poolMidFor, getPool, quoteOut, LP_ASSET_PREFIX, effectiveFeeBps } from "./amm";
+import { lpValuation } from "./router"; // FIX(R17-b·M4): תמחור-LP-אמת במפקד-הסוכנים (קריאה-רק-בזמן-ריצה)
 import { sortBook } from "./book";
 import { dcaTick, trigTick } from "./triggers";
 import { protoRevTick } from "./protorev";
@@ -571,6 +573,12 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   const trackRail = (op: Op, ok: boolean): void => {
     if (op.nonce.startsWith("rail-")) railResults.push({ nonce: op.nonce, ok });
   };
+  // FIX(R17-b·H3): אותו-מעקב-ל-ops-הגשר (brg-*/blo-*) — paid/locked נסגרים-על-האמת
+  // (reject → היפוך-ל-pending/lock-failed + ניקוי-הרישום-הקבוע), לא-על-התור.
+  const bridgeResults: { nonce: string; ok: boolean }[] = [];
+  const trackBridge = (op: Op, ok: boolean): void => {
+    if (op.nonce.startsWith("brg-") || op.nonce.startsWith("blo-")) bridgeResults.push({ nonce: op.nonce, ok });
+  };
   for (const op of ops) {
     // FIX(Roast-65-a · MED-8): אטומיות-בלוק. הישן: זריקה-מ-applyOp באמצע-הלולאה הפילה
     // את-כל-הבלוק אחרי-שה-ops-המוקדמים כבר שינו את st — מוטציות-חיות בלי blockHash/DB,
@@ -583,12 +591,14 @@ async function buildBlock(rt: ChainRT): Promise<void> {
       if (e instanceof InvariantViolation) throw e;
       trackKeel(op, false);
       trackRail(op, false);
+      trackBridge(op, false);
       rejected++;
       if (rejSample.length < 5) rejSample.push(`${op.type}(${(op as { issuer?: string }).issuer ?? "?"}):${String(e instanceof Error ? e.message : e).slice(0, 60)}`);
       continue;
     }
     trackKeel(op, r.ok);
     trackRail(op, r.ok);
+    trackBridge(op, r.ok);
     if (r.ok) {
       applied++;
       for (const ev of r.events ?? []) rt.tape.unshift({ ...ev, h: st.height });
@@ -603,6 +613,8 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   }
   // FIX(Roast-66 · dose-truth): פיוס-המנות-של-המסילה אחרי-הבלוק (ספירה-בהצלחה-בלבד)
   if (railResults.length > 0) railReconcile(railResults);
+  // FIX(R17-b·H3): פיוס-הגשר — סטטוסי-paid/locked נסגרים-מול-תוצאת-הבלוק-בפועל
+  if (bridgeResults.length > 0) bridgeReconcile(bridgeResults);
   // FIX(Roast-65-a · MED-6): אישור-הספרים-רק-אחרי-ששני-ה-ops-של-הכוונה אכן היו-בבלוק
   // ואושרו. דחייה = לוג-רועש + קבלה-כנה, אפס-שינוי-ב-st.ladder (הכוונה נזרקת).
   if (rt.pendingLift && keelHarvest !== null && keelPrice !== null) {
@@ -870,6 +882,17 @@ export function ensureChain(): ChainRT {
       const staleSeals = await db.sealRecord.deleteMany({ where: { toHeight: { gt: rt.st.height } } });
       if (staleSeals.count > 0) console.info(`[saos-dex] purged ${staleSeals.count} stale seal records beyond snapshot h${rt.st.height}`);
     } catch { rt.dbOk = false; }
+    // FIX(R17-b·L2): שרשרת-ה-digest-של-הקבלות הייתה מתאפסת-בכל-הפעמה
+    // (lastReceiptDigest=null באתחול) → כל-קבלה-חדשה נקשרה-ל-null והרצף-הפורנזי
+    // נשבר-בשקט בכל-restart (בדיוק-ה-artifact ש-R15-b גילה-ותיעד-כ-linkageLost).
+    // עתה: הידרציה-מהשורה-האחרונה-ב-DB — ההמשכיות נשמרת-על-פני-הפעמות.
+    try {
+      const lastRec = await db.evidenceReceipt.findFirst({ orderBy: { createdAt: "desc" }, select: { digest: true } });
+      if (lastRec?.digest) {
+        rt.lastReceiptDigest = lastRec.digest;
+        console.info(`[saos-dex] receipt-digest chain rehydrated (${lastRec.digest.slice(0, 12)}…) — linkage continues across restarts (R17-b·L2)`);
+      }
+    } catch { rt.dbOk = false; }
     if (!rt.timer) rt.timer = setInterval(() => void tick(rt), TICK_MS); // FIX(R16-a·m5)
     rt.pendingLoad = false; // FIX(R16-a·m5): סוף-הטעינה — reset מותר מעתה
     console.info(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… (snapshot — verified vs DB stateRoot)`);
@@ -1024,12 +1047,23 @@ export function getCensus(): { name: string; role: string; credits: number; equi
   const role = (n: string): string =>
     n === "treasury" ? "central-bank" : n === "operator" ? "human" : n === "arena" ? "pegkeeper" : n.startsWith("soldier") ? "grid-mm" : "noise";
   return getWallets().map((w) => {
+    // FIX(R17-b·M4): איזון-LP היה-מדורג-0 (ל-tokens-LP אין-refPrice) — אפס-מזויף
+    // במפקד-הסוכנים בעוד-שווי-אמת-קיים (חלק-יחסי-מהרזרבות). עתה: LP עובר-דרך
+    // lpValuation (שווי-1000µ-LP × ההחזקה). ידוע: ייבוא-מ-router (הוא-עצמו-ייבא-מ-chain)
+    // — קריאה-רק-בזמן-ריצה, אין-שימוש-טופ-לבל, ולכן-המעגל-בטוח (אומת-ב-boot).
+    let lpEquity = 0;
+    for (const [a, v] of Object.entries(w.balances)) {
+      if (!a.startsWith("LP|")) continue;
+      const lv = lpValuation(a);
+      if (lv && lv.lpMu > 0) lpEquity += Math.floor((v * lv.valueUsdsMuPer1000) / 1000);
+    }
     const equity =
       (w.balances["USDS"] ?? 0) +
       Math.floor(((w.balances["SAOS"] ?? 0) * fair) / 1000) +
       Object.entries(w.balances)
-        .filter(([a]) => a !== "USDS" && a !== "SAOS")
-        .reduce((s, [a, v]) => s + Math.floor((v * (st.assets[a]?.refPrice ?? 0)) / 1000), 0);
+        .filter(([a]) => a !== "USDS" && a !== "SAOS" && !a.startsWith("LP|"))
+        .reduce((s, [a, v]) => s + Math.floor((v * (st.assets[a]?.refPrice ?? 0)) / 1000), 0) +
+      lpEquity;
     const liveOrders = st.orders.filter((o) => o.live && o.owner === w.name).length;
     return { name: w.name, role: role(w.name), credits: w.credits, equity, liveOrders, balances: w.balances, locked: w.locked };
   });
@@ -1220,8 +1254,15 @@ export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: numbe
   return res;
 }
 
+// FIX(R17-b·M2): reset מקביל — שתי-POST /reset היו עוברות-יחד את-השערים (busy/pendingLoad
+// נבדקו-בתחילה אך-לא-נקבעו) → deleteMany-כפול, ג'נזיס-כפול, blockHeader.create-שקט-נכשל
+// (dbOk=false-רעש) ו-buildBlock-אחד רץ-מול-rt.st-שהוחלף. עתה: דגל-in-flight נקבע-מיד
+// ומשוחרר-ב-finally — ה-reset-השני מקבל-429-כנה.
+let resetInFlight = false;
+
 export async function resetChain(): Promise<void> {
   const rt = ensureChain();
+  if (resetInFlight) throw new Error("reset-in-flight: another reset is running — retry in a moment (R17-b·M2)");
   // FIX(R15-a · reset-race): reset יכל להחליף rt.st בג'נזיס בזמן ש-buildBlock מושהה
   // על-DB-await-של-המצב-הישן → בלוק-מהמצב-המנותק נכתב-ל-DB-הטרי. עתה: נדחה-כנה
   // בזמן-בנייה (הפעלה-חוזרת אחרי-הטיק-עובדת).
@@ -1229,7 +1270,9 @@ export async function resetChain(): Promise<void> {
   // FIX(R16-a·m5): reset מול-טעינת-אתחול-אסינכרונית — ה-loader היה דורס את הג'נזיס-הטרי
   // בתמונת-המצב (טיפ-מנותק) ומכפיל-טיימר. עתה: נדחה-כנה עד-שהטעינה מסתיימת.
   if (rt.pendingLoad) throw new Error("reset deferred: boot-time snapshot load in flight — retry in a moment (fail-closed)");
-  if (rt.timer) clearInterval(rt.timer);
+  resetInFlight = true;
+  try {
+    if (rt.timer) clearInterval(rt.timer);
   rt.st = genesisState(); // faucetAt/extClaims/feesSpentMu — כבר-בג'נזיס-הטרי (FIX(Roast-65-a · LOW-11))
   rt.mempool = []; rt.rt = new Map(); rt.tape = [];
   rt.blockHashes = []; rt.seals = []; rt.receipts = [];
@@ -1255,6 +1298,10 @@ export async function resetChain(): Promise<void> {
   await buildBlock(rt);
   pushReceipt(rt, "genesis", { root: stateRoot(rt.st), at: Date.now() });
   if (!rt.timer) rt.timer = setInterval(() => void tick(rt), TICK_MS);
+  } finally {
+    // FIX(R17-b·M2): שחרור-הדגל בכל-נתיב-יציאה — כישלון-DB/בנייה לא נועל-שרשרת-לנצח
+    resetInFlight = false;
+  }
 }
 
 export { notional, sortBook, LP_ASSET_PREFIX };

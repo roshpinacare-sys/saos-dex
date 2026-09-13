@@ -225,6 +225,10 @@ export interface DexState {
   // FIX(Roast-65-a · LOW-10): טבעת-חסומה של-תביעות-חוץ-בשימוש (ה-dedupe היה slot-יחיד
   // ב-extBack[a].claim — רצף-טענות C1,C2,C1 עבר). רשויות: תמונות-ישנות.
   extClaims?: string[];
+  // FIX(R17-b·M1): טבעת-גלובלית-אחת (256) שוחקת-אחרי-256-תביעות-חדשות — תביעה-ישנה
+  // של-נכס-X נשכחת-מהטבעת ועולה-שוב (דדופ-שכבתי-רק-עם extBack.claim-האחרון = הגנה-רקובה).
+  // עתה: טבעת-פר-נכס (64-אחרונות-פר-נכס) — הדדופ-נשאר-חזק-גם-אחרי-מאות-תביעות.
+  extClaimsBy?: Record<string, string[]>;
   // FIX(Roast-65 · drift-declaration): הצהרת-סחיפה-היסטורית — פערי-שימור-שנצברו-בעידן
   // שלפני-התיקונים (מדפסות-שתוקנו ב-63/64). העיקרון: **מוצהר-ולא-מוסתר** — המבקר
   // (settle.ledgerAudit) כולל-את-הסכומים-המוצהרים-בלבד; כל-סחיפה-חדשה-מעבר-להצהרה
@@ -857,7 +861,11 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const side = op.side;
       const base = op.base, quote = op.quote;
       const px = op.price ?? 0, amt = op.amount ?? 0;
-      if ((side !== "buy" && side !== "sell") || !knownAsset(st, base) || !knownAsset(st, quote) || base === quote)
+      // FIX(R17-b·L3): cow_order קיבל-knownAsset (כולל-LB|* מוגדלים) בעוד-ה-fallback
+      // (פקודת-order) מקבל-רק-ASSETS-קבוע → פקודת-CoW-על-נכס-השקה תמיד-נכשלת-ב-fallback
+      // ("bad-order-params") ומוחזרת-cow_refund — נתיב-מת-שהפקיד-עמלת-גז-חינם. עתה:
+      // נעול-ל-ASSETS — עקביות-מלאה-בין-ה-CoW-ל-fallback-שלו (השקות ממשיכות-דרך-העקומה-שלהן).
+      if ((side !== "buy" && side !== "sell") || !(ASSETS as string[]).includes(base as string) || !(ASSETS as string[]).includes(quote as string) || base === quote)
         return { ok: false, err: "bad-order-params", gas: 0 };
       if (!(px > 0) || !(amt > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
       // FIX(Roast-65-a · HIGH-1): שער-שלמים גם-על-CoW — אותו-חור בדיוק (price/amount
@@ -1155,12 +1163,17 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         // שכבה-שנייה (תאימות-תמונות-ישנות).
         if ((st.extClaims ?? []).includes(op.claim)) return { ok: false, err: "claim-already-used", gas };
         if (st.extBack?.[a]?.claim === op.claim) return { ok: false, err: "claim-already-used", gas };
+        // FIX(R17-b·M1): שכבה-שלישית — טבעת-פר-נכס. הטבעת-הגלובלית (256) שוחקת-אחרי-
+        // 256-תביעות-מכל-הנכסים; טבעת-הנכס (64) שוחקת-רק-אחרי-64-תביעות-של-אותו-נכס —
+        // חזרה-על-claim-ישן-חייבת-כעת 64-תביעות-חוץ-אמת-של-אותו-נכס (עלות-אמת, לא-בג-חינם).
+        if ((st.extClaimsBy?.[a] ?? []).includes(op.claim)) return { ok: false, err: "claim-already-used", gas };
         const ce = consume(); if (ce) return ce;
         // FIX(R15-a): addBal קודם — אם-הוא-זורק, ה-backing לא-נגע (היה: backing+= קודם,
         // addBal זרק → גיבוי-נרשם בלי-יתרה = מצב-סותר).
         addBal(st, issuer, a, amt);
         st.backing[a] = (st.backing[a] ?? 0) + amt;
         st.extClaims = [...(st.extClaims ?? []), op.claim].slice(-256); // FIX(Roast-65-a · LOW-10): טבעת-חסומה — גידול-מצב חסום, אין-זליגת-זיכרון
+        st.extClaimsBy = { ...(st.extClaimsBy ?? {}), [a]: [...(st.extClaimsBy?.[a] ?? []), op.claim].slice(-64) }; // FIX(R17-b·M1)
         st.extBack = { ...(st.extBack ?? {}), [a]: { claim: op.claim, mu: (st.extBack?.[a]?.mu ?? 0) + amt, atH: st.height } };
         // FIX(Roast-64 · journal-mislabel): הרשומה הייתה עם t:0 (זמן-מזויף) ו-
         // profitMu:amt (הטבעה-מגובה אינה רווח — זיהוי-שקר שהנפיח-כל-Σprofit).

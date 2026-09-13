@@ -67,8 +67,33 @@ export function cowSettle(st: DexState, exec: Exec, nowMs: number): TradeEvent[]
       const clearPx = Math.floor((bestBuy!.price + bestSell!.price) / 2);
       const qBuys = grp.buys.filter((o) => o.price >= clearPx);
       const qSells = grp.sells.filter((o) => o.price <= clearPx);
-      const buyVol = qBuys.reduce((s, o) => s + qtyOf(o), 0);
-      const sellVol = qSells.reduce((s, o) => s + qtyOf(o), 0);
+      // FIX(R17-b·H1 · איסור-מילוי-עצמי): ה-CoW התאים-נפחית בלי-בדיקת-בעלים — אזרח-אחד
+      // עם-שתי-פקודות-מנוגדות-זעירות-במחירים-קיצוניים היה ממלא-את-עצמו **באפס-עמלה**
+      // (עלות-הכל: ~120µ גז) ומזרים fill-events לפייד-האורקל → TWAP → סולם-ה-keel
+      // (refPrice זז עד 0.5%/בלוק) = מניפולציה-כמעט-חינמית על-מחיר-האמת — בניגוד
+      // לכלל-הברזל-של-הספר (book.ts:130 "איסור-מילוי-עצמי"). עתה: נטרול-חפיפה-פר-בעלים —
+      // החלק-העצמי-של-כל-אזרח מושמט-מההתאמה (שני-הצדדים) וזורם-ל-fallback (שם הוא
+      // יסוחר-מול-אחרים בעמלה-מלאה, או יוחזר כנה) — אין-מילוי-עצמי, אין-אורקל-מזויף.
+      const buyByOwner = new Map<string, number>();
+      const sellByOwner = new Map<string, number>();
+      for (const o of qBuys) buyByOwner.set(o.owner, (buyByOwner.get(o.owner) ?? 0) + qtyOf(o));
+      for (const o of qSells) sellByOwner.set(o.owner, (sellByOwner.get(o.owner) ?? 0) + qtyOf(o));
+      const selfOverlap = new Map<string, number>();
+      for (const [owner, bv] of buyByOwner) {
+        const sv = sellByOwner.get(owner) ?? 0;
+        const ov = Math.min(bv, sv);
+        if (ov > 0) selfOverlap.set(owner, ov);
+      }
+      // כמות-אפקטיבית-פר-פקודה: חלק-החפיפה-העצמית מופחת-יחסית-מהפקודות-של-אותו-בעלים
+      const effOf = (o: CowOrder): number => {
+        const ov = selfOverlap.get(o.owner);
+        if (!ov || ov <= 0) return qtyOf(o);
+        const mine = (o.side === "buy" ? buyByOwner : sellByOwner).get(o.owner) ?? 0;
+        if (mine <= 0) return qtyOf(o);
+        return Math.max(0, qtyOf(o) - Math.floor((qtyOf(o) * ov) / mine));
+      };
+      const buyVol = qBuys.reduce((s, o) => s + effOf(o), 0);
+      const sellVol = qSells.reduce((s, o) => s + effOf(o), 0);
       const matched = Math.min(buyVol, sellVol);
       // FIX(Roast-64 · remainder-ghost): מפת-ההקצאה-האמתית — floor+שארית-לאחרון,
       // והשאריות-ל-fallback נגזרות-ממנה-בלבד (הזמנה-שלא-עברה-p* = 0-ממולא → הכל-fallback;
@@ -85,20 +110,24 @@ export function cowSettle(st: DexState, exec: Exec, nowMs: number): TradeEvent[]
         // (תמיד-אפשרי: Σroom = vol ≥ matched) — מה שלא-ניתן-לחלק זורם-ל-fallback
         // באופן-טבעי דרך rem = qtyOf − got.
         const alloc = (orders: CowOrder[], vol: number): { o: CowOrder; mu: number }[] => {
-          const out: { o: CowOrder; mu: number }[] = orders.map((o) => ({ o, mu: Math.floor((matched * qtyOf(o)) / vol) }));
+          const out: { o: CowOrder; mu: number }[] = orders.map((o) => ({ o, mu: Math.floor((matched * effOf(o)) / vol) }));
           let residual = matched - out.reduce((s, x) => s + x.mu, 0);
           let guard = orders.length + 1;
           while (residual > 0 && guard-- > 0) {
             let moved = 0;
             for (const e of out) {
               if (residual <= 0) break;
-              const room = qtyOf(e.o) - e.mu;
+              const room = effOf(e.o) - e.mu;
               if (room > 0) { const add = Math.min(room, residual); e.mu += add; residual -= add; moved += add; }
             }
             if (moved === 0) break;
           }
           // residual>0 כאן = בלתי-אפשרי מתמטית (Σroom≥matched) — מוזרם-ל-fallback בכנות
-          if (residual > 0) filledBy.set(-1, (filledBy.get(-1) ?? 0) + residual);
+          // FIX(R17-b·L4): הענף-המת-הזה קיבל-שקט — עתה עדות-כנה ביומן גם-עבורו.
+          if (residual > 0) {
+            filledBy.set(-1, (filledBy.get(-1) ?? 0) + residual);
+            st.journal.push({ h, t: nowMs, soldier: "cow", action: "cow_residual_unallocatable", profitMu: 0, note: `${key}: residual ${residual}µ unallocatable (Σroom<matched — mathematically impossible; streamed to fallback honestly, R17-b·L4)` });
+          }
           return out;
         };
         const buyAllocs = alloc(qBuys, buyVol).filter((x) => x.mu > 0);
