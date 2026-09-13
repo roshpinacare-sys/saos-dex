@@ -82,11 +82,35 @@ function openVault(dir: string): VaultBundle {
   const bundle = JSON.parse(plain) as { sealedAt?: string; files?: Record<string, string> } & Partial<VaultBundle>;
   const vaultJson = bundle.files?.["keys/vault.json"];
   if (!vaultJson) throw new Error("fleet vault: keys/vault.json member missing");
-  const parsed = JSON.parse(vaultJson) as { accounts?: VaultAccount[] };
-  const accounts = (parsed.accounts ?? [])
-    .filter((a) => a && typeof a.username === "string" && a.keys?.posting?.wif && a.keys?.posting?.pub)
-    .map((a) => ({ username: a.username, keys: a.keys }));
+  const accounts = accountsFromJson(vaultJson);
+  // FIX(R12 · fleet-vault-format): דור KEYS-ACCESS-2026-09-12 (R11) חתם מעטפת
+  // שה-member "keys/vault.json" בה הוא-מפקד-מצונן (מפה-לפי-שם, בלי-חומר-חתימה)
+  // ולא-מערך-מפתחות-חי כמו-בדור-הקודם (reseal-fleet-vault). הצי חייב חומר-חתימה
+  // אמת — כשה-member המוטמע מצונן ניפול ל-vault.json החי-על-הדיסק (אותה תיקייה
+  // chmod-600 gitignored — מדיניות-הבעלים 2026-09-10 "זה אצלך בקבצים").
+  // fail-closed נשמר: אף-מקור-לא-נותן-חומר-חתימה → אפס-חשבונות-שמישים → צי-שקט.
+  if (accounts.length === 0) {
+    const diskPath = path.join(dir, "vault.json");
+    try {
+      if (fs.existsSync(diskPath)) {
+        const diskAccounts = accountsFromJson(fs.readFileSync(diskPath, "utf8"));
+        if (diskAccounts.length > 0) return { at: String(bundle.sealedAt ?? bundle.at ?? ""), accounts: diskAccounts };
+      }
+    } catch { /* fail-closed — השגיאה-המקורית-מהמעטפת תישמר */ }
+  }
+  if (accounts.length === 0) throw new Error("fleet vault: no usable signing keys (embedded member redacted + no live vault.json)");
   return { at: String(bundle.sealedAt ?? bundle.at ?? ""), accounts };
+}
+
+/* מקבל-שתי-הצורות: מערך-דור-ישן או מפה-לפי-שם-דור-R11 — מחזיר רק-שמישות-לחתימה */
+function accountsFromJson(json: string): VaultAccount[] {
+  let parsed: { accounts?: unknown } | null = null;
+  try { parsed = JSON.parse(json) as { accounts?: unknown }; } catch { return []; }
+  const raw: unknown = parsed?.accounts;
+  const list: unknown[] = Array.isArray(raw) ? raw : raw && typeof raw === "object" ? Object.entries(raw as Record<string, unknown>).map(([k, v]) => ({ username: k, ...(typeof v === "object" && v ? v : {}) })) : [];
+  return (list as Partial<VaultAccount>[])
+    .filter((a) => a && typeof a.username === "string" && !!a.keys?.posting?.wif && !!a.keys?.posting?.pub)
+    .map((a) => ({ username: a.username as string, keys: a.keys as VaultAccount["keys"] }));
 }
 
 /* ── מצב-זמן-ריצה (שורד-HMR דרך-globalThis; אפס-סודות-במצב-הציבורי) ─────────── */
