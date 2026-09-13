@@ -325,7 +325,7 @@ export interface BridgeIntent {
   farMemo?: string;     // FIX(F1): תזכיר-צפוי (steem/hive)
   farSource?: string;   // FIX(F1): בעלים-המקור-הצפוי (tron/steem)
   proofRef?: string;    // txid/hash-על-הרשת-החוץ (תיקוף-פר-רשת — F3)
-  status: "pending" | "paid" | "locked" | "released";
+  status: "pending" | "claiming" | "paid" | "locked" | "released"; // FIX(R16-a·M4): claiming = חכירת-תביעה-חוצת-await
   ourTxRef?: string; // עדות-פעולה-מהגרעין (מזהה-ה-op)
   verified?: boolean; // FIX(Roast-63): האם-ההוכחה-אומתה-על-השרשרת-החוץ
   verifiedNote?: string; // פירוט-האימות (כנות-מלאה)
@@ -492,28 +492,45 @@ function expectOf(i: BridgeIntent): FarExpect {
   return { farAddress: i.farAddress, farAmount: i.farAmount, farMemo: i.farMemo, farSource: i.farSource };
 }
 
+/** FIX(R16-a·M4 · claim-lease): TOCTOU-חוצה-await — הבדיקה pending→נשמרה **לפני**
+ * verifyFarTx (רשת ~10-20ש׳) והתשלום אחריה; ה-keeper (כל-20ש׳) וה-POST-של-המפעיל
+ * יכלו לעבור יחד את הבדיקה ולשלם **פעמיים** מה-escrow. עתה: לפני-ה-await הכוונה
+ * נחתמת "claiming" **בדיסק**; אחרי-ה-await קריאה-טרייה — מי-שאיבד-את-החכירה נעצר.
+ * כישלון-אימות/escrow/תור → שחרור-חכירה-חזרה-ל-pending (ה-keeper ממשיך-כנה).
+ * קריסה-באמצע-await → lease-אקספירציה (90ש׳) מחזיר-לתור אוטומטית. */
+const CLAIM_LEASE_MS = 90_000;
+
 export async function claimInbound(p: { id: string }): Promise<BridgeErr> {
-  const l = readLedger();
-  const intent = l.intents.find((i) => i.id === String(p.id || ""));
+  let l = readLedger();
+  let intent = l.intents.find((i) => i.id === String(p.id || ""));
   if (!intent || intent.dir !== "in") return { ok: false, error: "intent-not-found" };
-  if (intent.status !== "pending") return { ok: false, error: `bad-state:${intent.status}` };
+  const staleClaim = intent.status === "claiming" && Date.now() - intent.updatedAt > CLAIM_LEASE_MS;
+  if (intent.status !== "pending" && !staleClaim) return { ok: false, error: `bad-state:${intent.status}` };
+  if (staleClaim) { intent.status = "pending"; intent.verifiedNote = "claim-lease-expired — הוחזר-לתור"; intent.updatedAt = Date.now(); writeLedger(l); }
   // FIX(F2): סליקה-כפולה נחסמת גם-מהרישום-הקבוע (גם-אם-הכוונה גלשה-מחלון-הפנקס)
   if (intent.proofRef && seenHas(intent.proofRef)) {
     intent.verifiedNote = "duplicate-proofRef-registry — סליקה-כפולה-נחסמה (fail-closed)";
     intent.updatedAt = Date.now(); writeLedger(l);
     return { ok: false, error: "duplicate-proofRef (רישום-קבוע — כבר-נסלק/נשחרר)" };
   }
+  // FIX(R16-a·M4): חכירה-נשמרת **לפני** הרשת — המתחרה-השני רואה claiming מיד
+  intent.status = "claiming"; intent.updatedAt = Date.now(); writeLedger(l);
   // FIX(Roast-63+64-c): אין-תשלום בלי אימות-חוץ **מחויב** (קיום+הצלחה+נמען+סכום+עומק)
   const v = await verifyFarTx(intent.chain, intent.proofRef ?? "", expectOf(intent));
+  // FIX(R16-a·M4): קריאה-טרייה-מהדיסק אחרי-הרשת — החכירה-עדיין-שלנו?
+  l = readLedger();
+  intent = l.intents.find((i) => i.id === String(p.id || ""));
+  if (!intent) return { ok: false, error: "intent-vanished-mid-claim" };
+  if (intent.status !== "claiming") return { ok: false, error: `lost-claim-lease:${intent.status} (סלק-מקביל נחסם)` };
   intent.verified = v.verified; intent.verifiedNote = v.note;
   if (!v.verified) {
-    intent.updatedAt = Date.now(); writeLedger(l);
+    intent.status = "pending"; intent.updatedAt = Date.now(); writeLedger(l); // שחרור-חכירה — ה-keeper ינסה-שוב
     return { ok: false, error: `proof-unverified (${v.note}) — ההוכחה-לא-נקשרה-לכוונה-על-השרשרת-החוץ` };
   }
   const st = getLiveState();
-  if (bal(st, BRIDGE_ACCOUNT, intent.asset) < intent.amountMu) { intent.updatedAt = Date.now(); writeLedger(l); return { ok: false, error: "escrow-shortfall (ה-escrow-לא-ממומן-מספיק)" }; }
+  if (bal(st, BRIDGE_ACCOUNT, intent.asset) < intent.amountMu) { intent.status = "pending"; intent.updatedAt = Date.now(); writeLedger(l); return { ok: false, error: "escrow-shortfall (ה-escrow-לא-ממומן-מספיק)" }; }
   const r = submitOp({ type: "xfer_free", issuer: BRIDGE_ACCOUNT, nonce: nextNonce("brg"), to: intent.party, asset: intent.asset, amount: intent.amountMu });
-  if (!r.queued) { intent.updatedAt = Date.now(); writeLedger(l); return { ok: false, error: r.reason ?? "queue-rejected" }; }
+  if (!r.queued) { intent.status = "pending"; intent.updatedAt = Date.now(); writeLedger(l); return { ok: false, error: r.reason ?? "queue-rejected" }; }
   intent.status = "paid"; intent.ourTxRef = `xfer_free:${intent.id}`; intent.updatedAt = Date.now();
   writeLedger(l);
   if (intent.proofRef) seenAdd(intent.proofRef, intent.id, "in"); // FIX(F2): רישום-קבוע-בסליקה

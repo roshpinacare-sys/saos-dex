@@ -346,6 +346,14 @@ export function safeAccountName(name: string, kind: string): void {
   if (FORBIDDEN_KEYS.has(name)) throw new Error(`forbidden-account-name:${kind}:${name}`);
 }
 
+/** FIX(R16-a·m8): √k-שלמים — ra·rb מעל-2^53 הוא-צף-לא-מדויק (מניית-LP-סוטה);
+ * עתה: מכפלה-לא-בטוחה = √ra·√rb (בלי-גלישה). תחום-היחידות-הקיים (µ) אינו-נוגע
+ * בתקרה — זו-הגנת-עומק, לא-תיקון-התנהגות. */
+export function sqrtLp(ra: number, rb: number): number {
+  const p = ra * rb;
+  return Number.isSafeInteger(p) ? Math.floor(Math.sqrt(p)) : Math.floor(Math.sqrt(ra) * Math.sqrt(rb));
+}
+
 export function addBal(st: DexState, who: string, a: string, d: number): void {
   if (!Number.isSafeInteger(d)) throw new Error("non-integer balance delta");
   if (FORBIDDEN_KEYS.has(who) || FORBIDDEN_KEYS.has(a)) throw new Error("forbidden-state-key");
@@ -472,7 +480,7 @@ export function genesisState(): DexState {
   const seedPool = (x: Asset, y: Asset, rx: number, ry: number) => {
     const p = mk(x, y, rx, ry);
     p.ra = p.a === x ? rx : ry; p.rb = p.a === x ? ry : rx;
-    p.lp = Math.floor(Math.sqrt(p.ra * p.rb)); // x*y=k → lp=√k
+    p.lp = sqrtLp(p.ra, p.rb); // x*y=k → lp=√k — FIX(R16-a·m8)
     st.pools[poolKey(x, y)] = p;
     addBal(st, "treasury", p.a, 0); // ensure entry
   };
@@ -786,7 +794,10 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const netIn = usdsIn - feeIn;
       const creatorFee = Math.floor((feeIn * LPAD_CREATOR_PCT) / 100);
       const platFee = feeIn - creatorFee;
-      const vq = launchVq(st, l) + netIn; // הווירטואלי: בסיס-דועך (LBP) + צבירה-אמת
+      // FIX(R16-a·M1): vq כבר-כלל את netIn (launchVq = בסיס-דועך + vqAccumMu) — ההוספה השנייה
+      // במונה-המחיר הייתה מנפיחה את הדנומינטור פי-2 (קונים מקבלים ~0.44× מהעקומה במקס-קנייה).
+      // עתה: אותו משוואת-עקומה בדיוק כמו-צד-המכירה (vq*t/(vq+t) ↔ vb*netIn/(vq+netIn)).
+      const vq = launchVq(st, l); // הווירטואלי: בסיס-דועך (LBP) + צבירה-אמת — תמחור-בלבד
       const vb = l.supplyMu - l.soldMu;
       const tokensOut = vb > 0 ? Math.floor((vb * netIn) / (vq + netIn)) : 0;
       if (!(tokensOut > 0)) return { ok: false, err: "bad-quote", gas: 0 };
@@ -1102,7 +1113,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (avail(st, "treasury", parts[0]) < amtA) return { ok: false, err: "insufficient-treasury", gas: 0 };
       if (avail(st, "treasury", parts[1]) < amtB) return { ok: false, err: "insufficient-treasury", gas: 0 };
       const c = consume(); if (c) return c;
-      const lpMint = Math.floor(Math.sqrt(amtA * amtB));
+      const lpMint = sqrtLp(amtA, amtB); // FIX(R16-a·m8)
       st.pools[canon] = { a: parts[0] as Asset, b: parts[1] as Asset, ra: amtA, rb: amtB, lp: lpMint, feeAccruedTreasury: 0, swaps: 0 };
       addBal(st, "treasury", parts[0], -amtA);
       addBal(st, "treasury", parts[1], -amtB);
@@ -1202,6 +1213,9 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // — treasury-op יכול היה לכתוב st.assets["__proto__"] ולהרעיל-אב-טיפוס (אותה-מחלקה
       // Roast-64 סגרה ל-accounts). הגנת-עומק בדלת-ה-op.
       if (FORBIDDEN_KEYS.has(a)) return { ok: false, err: "forbidden-asset", gas };
+      // FIX(R16-a·m9): תקרת-אורך כמו-oracle_set — קוד-נכס-בלתי-מוגבל היה-נכנס-למצב-הקנוני
+      // (נפיחות-שורש-קנוני/עלות-קנוניזציה). עתה: ≤24-תווים, בדיוק-כמו-האורקל.
+      if (a.length > 24) return { ok: false, err: "bad-asset-length", gas };
       if (op.type === "asset_list" && st.assets[a]) return { ok: false, err: "already-listed", gas };
       // FIX(Roast-65-a · HIGH-1): refPrice גולמי (asset_price) היה נכנס למצב-הקנוני כמו-שהוא
       // (float/NaN → CanonicalError-נצחי). שער-שלמים fail-closed על-שני-ה-ops (list/price).

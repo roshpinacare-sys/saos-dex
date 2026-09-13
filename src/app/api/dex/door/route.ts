@@ -53,7 +53,12 @@ export async function POST(req: Request) {
         if (chain !== "trx" && chain !== "sol") {
           return NextResponse.json({ ok: false, error: "bad-chain", note: "chain חייב להיות trx או sol" });
         }
-        const txid = String(body.txid ?? "").trim();
+        // FIX(R16-a·M3): txid מנורמל-לפי-השרשרת — TRX txid הוא hex (רישיות-חסרת-משמעות,
+        // הרינג-חד-פעמי משווה-מחרוזות-בדיוק → "abc…" ו-"ABC…" היו שתי-תביעות על-אותה-הפקדה)
+        // → lowercase. SOL txid הוא base58 (**רישיות-משמעותית** — lowercase היה משחית
+        // את-החתימה ומונע-אימות-לגיטימי) → נשמר-כפי-שנמסר. bridge.ts:473 כבר-נרמל.
+        const txidRaw = String(body.txid ?? "").trim();
+        const txid = chain === "trx" ? txidRaw.toLowerCase() : txidRaw;
         if (!TXID_RE.test(txid)) {
           return NextResponse.json({ ok: false, error: "bad-txid", note: "txid נראה שגוי (אורך/תווים)" });
         }

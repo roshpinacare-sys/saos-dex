@@ -3,6 +3,7 @@ import { getLiveState } from "@/lib/dex/chain";
 import { truthLedger, railTick } from "@/lib/dex/truth";
 import { blurtHead } from "@/lib/dex/price-proof";
 import { operatorAuth } from "@/lib/operator-auth";
+import { consoleGuard } from "@/lib/dex/guard"; // FIX(R16-a·m11): אחידות-היגיינה עם-שאר-הנתיבים-המגודרים
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +30,8 @@ export async function GET() {
 export async function POST(req: Request) {
   const oa = operatorAuth(req);
   if (oa) return oa;
+  const g = consoleGuard(req); // FIX(R16-a·m11)
+  if (g) return g;
   try {
     const body = (await req.json().catch(() => ({}))) as { action?: string };
     if (body.action !== "rail") {

@@ -52,10 +52,17 @@ function pegInfo() {
   return { st, p, pegRef, mid, bag };
 }
 
+/** FIX(R16-a·m6): NaN-מסנן — Number("abc")→NaN ו-Math.max(0,NaN)===NaN עבר-את-הסינון
+ * (mid<=NaN=false → חיפוש-בינארי מתוכנן-על-מלוא-התקרה). עתה: לא-סופי = ברירת-מחדל. */
+function safeInt(v: unknown, def: number): number {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) ? n : def;
+}
+
 /** GET — מצב-הפרמיה ותוכנית-החזר-לעיגון (ציבורי, קריאה-בלבד) */
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const bandBps = Math.max(0, Math.floor(Number(url.searchParams.get("band") ?? DEFAULT_BAND_BPS)));
+  const bandBps = Math.max(0, safeInt(url.searchParams.get("band") ?? DEFAULT_BAND_BPS, DEFAULT_BAND_BPS));
   const { p, pegRef, mid, bag } = pegInfo();
   const target = Math.floor((pegRef * (10_000 + bandBps)) / 10_000);
   // תכנון: חיפוש-בינארי על Δ-המכירה שמביא mid אל המסדרון
@@ -89,9 +96,10 @@ export async function POST(req: Request) {
   if (g) return g;
 
   const body = (await req.json().catch(() => ({}))) as { bandBps?: number; maxSellMu?: number; chunkMu?: number };
-  const bandBps = Math.max(0, Math.floor(Number(body.bandBps ?? DEFAULT_BAND_BPS)));
-  const maxSellMu = Math.min(MAX_SELL_CAP, Math.max(1, Math.floor(Number(body.maxSellMu ?? MAX_SELL_CAP))));
-  const chunkMu = Math.min(DEFAULT_CHUNK, Math.max(10_000, Math.floor(Number(body.chunkMu ?? DEFAULT_CHUNK))));
+  // FIX(R16-a·m6): safeInt-גם-כאן — NaN עבר-את-הסינון והזין-תוכנית-מלאה
+  const bandBps = Math.max(0, safeInt(body.bandBps ?? DEFAULT_BAND_BPS, DEFAULT_BAND_BPS));
+  const maxSellMu = Math.min(MAX_SELL_CAP, Math.max(1, safeInt(body.maxSellMu ?? MAX_SELL_CAP, MAX_SELL_CAP)));
+  const chunkMu = Math.min(DEFAULT_CHUNK, Math.max(10_000, safeInt(body.chunkMu ?? DEFAULT_CHUNK, DEFAULT_CHUNK)));
 
   const { st, p, pegRef, mid, bag } = pegInfo();
   const target = Math.floor((pegRef * (10_000 + bandBps)) / 10_000);
