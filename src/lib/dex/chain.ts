@@ -318,15 +318,17 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
         }
       }
       if (!pre.fees.ok) {
-        // הצהרה-על-ההיסטוריה: spent_נדרש = feeMeterPlusProfit − pools (השדה
-        // feeMeterPlusProfit כבר-כולל-את-feeMinted — ראה-הערת-המבקר ב-settle.ts).
-        // FIX(Roast-65 · sign+double-count): שתי-הטעויות-הקודמות-שלי — סימן-הפוך
-        // וספירת-minted-כפול (השדה-כבר-כולל-אותו) — הוכחו-בטעינה (846,040 → 185,384).
-        // הערך-החתום-יכול-להיות-שלילי: זו-הצהרה-כנה-על-"עמלות-פנטום-בבריכות"-מהעידן
-        // שלפני-התיקונים (הבריכות-מדדו-סוואפים-שמומנו-מ-USDS-פנטום).
-        const delta = pre.fees.feeMeterPlusProfit - pre.fees.poolsTreasury;
+        // הצהרה-על-ההיסטוריה — FIX(3-a · D1 · sign-lineage-coherence): הזהות-המתוקנת
+        // היא pools === meter+profit+minted+spent (עמלות-שהראוטר-צרך זרמו-לבריכות —
+        // נזקפות, לא-מנוכות; ראה-הערת-המבקר ב-settle.ts). דלי-ההצהרה חייב להיגזר
+        // מאותה-זהות: spent_הכולל-הדרוש = pools − feeMeterPlusProfit (השדה
+        // feeMeterPlusProfit כבר-כולל-את-feeMinted — ראה-הערת-המבקר ב-settle.ts), ולכן
+        // Δ = pools − (feeMeterPlusProfit + spent_הנמדד-הכולל). הערך-החתום-יכול-להיות-
+        // שלילי: זו-הצהרה-כנה על פער-היסטורי מהעידן-שלפני-התיקונים בשני-הכיוונים
+        // (עמלות-פנטום-בבריכות או עמלות-שנעלמו).
+        const delta = pre.fees.poolsTreasury - (pre.fees.feeMeterPlusProfit + pre.fees.feesSpentMu);
         adj.feesSpentMu = (adj.feesSpentMu ?? 0) + delta;
-        details.push(`feesSpent+=${delta > 0 ? "+" : ""}${delta} (phantom-pool-fees, declared)`);
+        details.push(`feesSpent+=${delta > 0 ? "+" : ""}${delta} (historical fees-lineage gap, declared)`);
       }
       const post = ledgerAudit(rt.st, genesisTotals());
       if (!post.ok) {
@@ -1015,7 +1017,10 @@ export function getPools() {
       k: p.ra * p.rb,
       feeBps: effectiveFeeBps(p), // FIX(Roast-65-c · F4): העמלה-הדינמית-האפקטיבית חשופה-ל-UI (היה-חייב-ניחוש-של-30bps-קבוע)
       lpFeesMu,                                                       // FIX(Roast-66): עמלי-ה-LP-המוטמעים (נגזרת-כנה)
-      lpYieldBps: p.lp > 0 ? Math.floor((lpFeesMu * 10_000) / p.lp) : 0, // תשואת-עמלות-ליחידת-LP (lifetime, bps)
+      // FIX(3-a · D5): הנגזרת-מתויגת-גלויה — lpFeesMu אינו-מדידה ישירה אלא feeT×7/3
+      // (אין-מונה-LP-נפרד במצב-הקנוני); צרכן-ה-API חייב לדעת שזו גזירה, לא ספירה.
+      derived: true,
+      lpYieldBps: p.lp > 0 ? Math.floor((lpFeesMu * 10_000) / p.lp) : 0, // תשואת-עמלות-ליחידת-LP (lifetime, bps — נגזרת-מנגזרת)
       polShareBps: p.lp > 0 ? Math.floor((tLp * 10_000) / p.lp) : 0,   // חלק-נזילות-בעלות-הפרוטוקול
     };
   });

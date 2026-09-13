@@ -152,14 +152,25 @@ export async function POST(req: Request) {
         if (!(usdsSide > 0) || (st.balances["treasury"]?.["USDS"] ?? 0) < usdsSide) {
           return NextResponse.json({ ok: false, error: "treasury-usds-short", note: `האוצר צריך ${usdsSide}µ USDS לזריעה` });
         }
-        // שלב-1: המפעיל מעביר את כל-העוגן שלו לאוצר (xfer_free). שלב-2: האוצר
-        // פותח-בריכה במחיר-אורקל. שני-ה-ops נדחפים יחד — מנגנון-הבלוק מבצע
-        // בסדר; כישלון-שלב-2 נראה-כנה ב-rejectedLast (fail-closed, אין-סטט).
-        submitOp({ type: "xfer_free", issuer: "operator", nonce: nextNonce("door-seed"), to: "treasury", asset: peg, amount: have });
-        submitOp({ type: "pool_open", issuer: "treasury", nonce: nextNonce("door-pool"), pair, amount: usdsSide, amountB: have });
+        // FIX(3-a · D3 · open-pool-atomicity): עטיפה-אטומית אחת — בדיוק-הדפוס של
+        // peg-in למעלה (batch, SETTLE-12: הכל-או-כלום). קודם: שני-ops-נפרדים
+        // (xfer_free operator→treasury ואז pool_open אוצר) — כישלון-פתיחה בזמן-בלוק
+        // (אורקל-השתנה/יתרת-אוצר-התפנתה) היה משאיר את העוגן-של-המפעיל תלוש-באוצר
+        // (סיכון-קרקוע-כסף-אמת). עתה: pool_open-אוצר רשאי-בתוך-ה-batch (חריג-ה-pinning
+        // היחיד בגרעין — מעשה-ריבוני, gas-0, אפס-קרדיטים) — כישלון-כל-שלב דוחה את
+        // כולה והעוגן נשאר אצל-המפעיל. התשובה כנה: ok=r.queued, הסיבה-חיה ב-error.
+        const r = submitOp({
+          type: "batch", issuer: "operator", nonce: nextNonce("door-pool"),
+          ops: [
+            { type: "xfer_free", issuer: "operator", nonce: nextNonce("door-seed"), to: "treasury", asset: peg, amount: have },
+            { type: "pool_open", issuer: "treasury", nonce: nextNonce("door-pool-open"), pair, amount: usdsSide, amountB: have },
+          ],
+        });
         return NextResponse.json({
-          ok: true,
-          note: `בריכת-${pair} נזרעת: ${have}µ ${peg} (מהמפעיל) + ${usdsSide}µ USDS (מהאוצר) במחיר-אורקל ${(o.mu / 1e6).toPrecision(6)}$ — תיפתח בבלוק-הבא`,
+          ok: r.queued, error: r.reason,
+          note: r.queued
+            ? `בריכת-${pair} נזרעת-אטומית: ${have}µ ${peg} (מהמפעיל) + ${usdsSide}µ USDS (מהאוצר) במחיר-אורקל ${(o.mu / 1e6).toPrecision(6)}$ — תיפתח בבלוק-הבא`
+            : undefined,
         });
       }
       case "refresh-oracle": {

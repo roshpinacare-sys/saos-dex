@@ -55,7 +55,7 @@ interface StateView {
   ladders: number; treasuryProfit: number; feeMeter: number;
   ladder: { refPrice: number; lifts: number; lastLiftHeight: number; spentMu: number; stepCostMu: number };
   liveOrders: number; buildMs: number; uptimeSec: number; lastBlockAgoMs: number | null;
-  dbOk: boolean; halted: boolean; tickMs: number; sealEvery: number; nextSealIn: number;
+  dbOk: boolean; halted: boolean; haltReason: string | null; tickMs: number; sealEvery: number; nextSealIn: number;
   backing: Record<string, number>; assets: Record<string, { refPrice: number }>;
 }
 interface ArenaParams { enabled: boolean; noise: boolean }
@@ -278,6 +278,12 @@ function useWorldStream(): { world: WorldResp | null; load: () => Promise<void>;
             setWorld(j);
           }
           if (!stopped) setOnline(true);
+          // FIX(3-a · D4): שרשרת-מושהית — השרת מחזיר-מיד (state/route.ts D2) ולכן הלולאה
+          // הייתה דולקת-חם על-שוק-קפוא. קצב-מופחת 30ש׳ כל-עוד halted (אותו-מבנה-לולאה;
+          // ה-abort בניתוק-הרכיב מעיר את ה-sleep דרך בדיקת-stopped באיטרציה הבאה).
+          if (!stopped && j.ok && j.state?.halted === true) {
+            await new Promise((res) => setTimeout(res, 30_000));
+          }
         } catch {
           if (stopped || ctrl.signal.aborted) return;
           setOnline(false);
@@ -2149,6 +2155,23 @@ export default function DexTerminal() {
           <TopTabs view={view} onNavigate={setView} />
         </div>
       </header>
+
+      {/* FIX(3-a · D4): באנר-עצירה מלא-רוחב — שרשרת-מושהית היא מצב-מוסדי שחייב להיות
+          בלתי-ניתן-להחמצה (ה-Pill בכותרת נשאר, אבל באנר-העצירה הוא-הראשון-בעמוד).
+          הסיבה-הפורנזית (haltReason) חיה-מהשרשרת — אפס-קישוט-מעל-האמת. */}
+      {st?.halted === true && (
+        <div className="border-b border-red-500/40 bg-red-500/10" role="alert" data-testid="halt-banner">
+          <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2">
+            <span className="rounded border border-red-500/50 bg-red-500/15 px-2 py-0.5 font-mono text-[10px] font-black tracking-widest text-red-300">CHAIN HALTED</span>
+            <span className="font-mono text-xs font-bold text-red-200">
+              השרשרת עצרה (fail-fast) — אין-בלוקים חדשים ואף-פעולה לא תתקבל עד-חקירה.
+            </span>
+            <span className="font-mono text-[10px] text-red-300/80" dir="ltr">
+              {st.haltReason ? `reason: ${st.haltReason}` : "reason: (unavailable)"}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* פאנל אימות-מפעיל — נפתח בלחיצה או אוטומטית בפגישת 401/503 */}
       {opPanel && (

@@ -119,7 +119,8 @@ function revenueCycle(st: DexState, h: number, nowMs: number): void {
   const auxTake = Math.min(take, aux);
   let rem = auxTake;
   // FIX(Roast-65-a · HIGH-3d): צריכת-treasuryProfit-על-ידי-הראוטר חייבת-להירשם-בדלי
-  // feesSpentMu — בלעדיו ביקורת-העמלות (pools===meter+profit+minted−spent) נשברת
+  // feesSpentMu — בלעדיו ביקורת-העמלות (pools===meter+profit+minted+spent, FIX 3-a·D1:
+  // הסימן-המתוקן — הצריכה-נזקפת כי היא זורמת-לבריכות) נשברת
   // נצחית מהמחזור-הראשון שבו-הראוטר שורף: המדידה-בבריכות אינה יורדת, הרווח כן.
   // רק-החלק-שנצרך-מרווח-עמלות-הסוואפ נספר (החלק-מ-revAux אינו עמלות-בריכות-כלל).
   let feesSpentThis = 0;
