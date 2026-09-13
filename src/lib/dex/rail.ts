@@ -111,18 +111,39 @@ export interface RailDoseRec {
   ok?: boolean | null;
 }
 
+/** FIX(Roast-67 · funding-truth): מימון-מסילה בהמתנה-לתוצאת-הבלוק. */
+interface RailFundPend {
+  nonce: string;
+  key: "usds" | "wsteem" | "energy" | "saos";
+  amt: number; // µ-יחידות-הנכס
+  inflowMu: number; // שווי-עוגן-אינדיקטיבי (נמדד-בעת-הדחיפה)
+  tick: number;
+}
+
 interface RailRT {
   baseEquityMu: number | null; // הון-עוגן באתחול-התהליך (נטו-מתאפס-פר-ריצה — כנות)
   inflowMu: number; // הזרמות-מימון-מאז-האתחול (בשווי-עוגן µ-USDS)
   doses: number; // FIX(Roast-66): מנות-ש**בוצעו** בפועל (r.ok) — לא-נספרות-עוד-בדחיפה
   dosesPushed: number; // FIX(Roast-66): מנות-שנדחפו-לממפול (כולל-דחויות) — כנות-מלאה
   doseLog: RailDoseRec[];
+  // FIX(Roast-67 · funding-truth): היה — lifetime+inflowMu נקומיטו-מיד-בדחיפה; op-שנדחה
+  // בגרעין היה מנפח-funded, בולע-תקרת-חיים, ומציג-מימון-שמעולם-לא-הגיע. עתה — pending
+  // עד-אישור-הבלוק: קומיט-רק-על-ok, דחייה/נפילה = אפס-צריכת-תקרה.
+  fundingPending: RailFundPend[];
+  fundingCommitted: number;
+  fundingRejected: number;
+  fundingDropped: number;
 }
 // FIX(SETTLE-16 split-brain, הלקה-מ-SETTLE-12): RT-ברמת-מודול שוכפל-בין-מופעי-
 // מודול-שונים-של-dev-server (instrumentation מול-route) — הטלמטריה-הראתה-0-מנות
 // בזמן-שהמסילה-סחרה. globalThis = מופע-אחד-לכל-הבאנדלים (אותו-דפוס של ensureChain).
 const g = globalThis as unknown as { __saosRailRT?: RailRT; __saosRailLife?: Record<string, number> };
-const railRt: RailRT = g.__saosRailRT ?? (g.__saosRailRT = { baseEquityMu: null, inflowMu: 0, doses: 0, dosesPushed: 0, doseLog: [] });
+const railRt: RailRT = g.__saosRailRT ?? (g.__saosRailRT = { baseEquityMu: null, inflowMu: 0, doses: 0, dosesPushed: 0, doseLog: [], fundingPending: [], fundingCommitted: 0, fundingRejected: 0, fundingDropped: 0 });
+// FIX(SETTLE-16 legacy): מופע-ישן-ששרד-חימום-חוזר עשוי-לחסר-את-השדות-החדשים
+if (!railRt.fundingPending) railRt.fundingPending = [];
+if (!railRt.fundingCommitted) railRt.fundingCommitted = 0;
+if (!railRt.fundingRejected) railRt.fundingRejected = 0;
+if (!railRt.fundingDropped) railRt.fundingDropped = 0;
 
 /** מחיר-עוגן לסימון-הון (µ-USDS ל-1-יחידה; credits ו-USDS = 1000). */
 function markMu(st: DexState, a: string): number {
@@ -156,6 +177,7 @@ export interface RailSummary {
   doseLog: RailDoseRec[];
   premiums: { id: string; pair: string; mid: number; anchor: number; premBps: number; active: boolean }[];
   budget: { credits: number; usdsMu: number; wsteemMu: number; energyMu: number; saosMu: number };
+  funding: { pending: number; committed: number; rejected: number; dropped: number }; // FIX(Roast-67)
   note: string;
 }
 
@@ -184,7 +206,13 @@ export function railSummary(): RailSummary {
       energyMu: b["ENERGY"] ?? 0,
       saosMu: b["SAOS"] ?? 0,
     },
-    note: "מסילת-המיקרו הריבונית: אפס-עמלת-רשת · מנות-מדודות-לעוגן minOut-fail-closed · P&L מסומן-לעוגן (MTM, אתחול-פר-ריצה) · אפס-הטבעה",
+    funding: {
+      pending: railRt.fundingPending.length,
+      committed: railRt.fundingCommitted,
+      rejected: railRt.fundingRejected,
+      dropped: railRt.fundingDropped,
+    },
+    note: "מסילת-המיקרו הריבונית: אפס-עמלת-רשת · מנות-מדודות-לעוגן minOut-fail-closed · P&L מסומן-לעוגן (MTM, אתחול-פר-ריצה) · אפס-הטבעה · מימון-אמת Roast-67: קומיט-רק-מאישור-בלוק",
   };
 }
 
@@ -272,11 +300,24 @@ function pushFunding(st: DexState, tick: number, pushOp: (op: Op) => void, asset
   } else {
     pushOp({ type: "xfer_free", issuer: src, nonce: `rail-fund-${asset}-${tick}`, to: RAIL, asset, amount: amt });
   }
-  railLifetime[lifetimeKey] += amt;
-  saveRailLifetime(); // FIX(Roast-64-c · F10): שמירה-אטומית — התקרה שורדת-ריסטארט
-  // רישום-ההזרמה ל-P&L: המנה מוערכת-בעוגן בעת-הדחיפה (בלוק-אחד-קדימה — סטייה-זניחה)
+  // FIX(Roast-67 · funding-truth): אין-קומיט-בדחיפה — המנה נרשמת-pending עד-תוצאת-הבלוק.
+  // railLifetime ו-inflowMu מתעדכנים רק ב-railReconcile כשה-op אושר בפועל (אפס-נפיחה).
+  const nonce = `rail-fund-${asset}-${tick}`;
   const px = markMu(st, asset);
-  if (px > 0) railRt.inflowMu += Math.floor((amt * px) / 1000);
+  sweepStaleFunding(tick);
+  railRt.fundingPending.push({ nonce, key: lifetimeKey, amt, inflowMu: px > 0 ? Math.floor((amt * px) / 1000) : 0, tick });
+}
+
+/** FIX(Roast-67): פינוי-pendings-מתים — מחזור-מימון (16-טיק) וחצי בלי-פיוס =
+ * ה-op מת-מעבר-לתהליך; פינוי = אפס-צריכת-תקרה (המנה חוזרת-לזמינה). */
+const FUNDING_STALE_TICKS = 40;
+function sweepStaleFunding(tick: number): void {
+  for (let i = railRt.fundingPending.length - 1; i >= 0; i--) {
+    if (tick - railRt.fundingPending[i].tick > FUNDING_STALE_TICKS) {
+      railRt.fundingPending.splice(i, 1);
+      railRt.fundingDropped++;
+    }
+  }
 }
 
 // ── הטיק ─────────────────────────────────────────────────────────────────────
@@ -332,5 +373,20 @@ export function railReconcile(rs: { nonce: string; ok: boolean }[]): void {
     if (ok === undefined) continue;
     rec.ok = ok;
     if (ok) railRt.doses++;
+  }
+  // FIX(Roast-67 · funding-truth): פיוס-המימון — קומיט-רק-על-אישור-בלוק-אמת.
+  for (let i = railRt.fundingPending.length - 1; i >= 0; i--) {
+    const p = railRt.fundingPending[i];
+    const ok = byNonce.get(p.nonce);
+    if (ok === undefined) continue;
+    railRt.fundingPending.splice(i, 1);
+    if (ok) {
+      railLifetime[p.key] += p.amt; // התקרה נצרכת-רק-על-כסף-שבאמת-זרם
+      saveRailLifetime(); // FIX(Roast-64-c): השמירה-האטומית עוברת-לרגע-הקומיט (לא-הדחיפה)
+      railRt.inflowMu += p.inflowMu;
+      railRt.fundingCommitted++;
+    } else {
+      railRt.fundingRejected++; // דחייה = אפס-צריכת-תקרה, אפס-inflow — כנות-מלאה
+    }
   }
 }
