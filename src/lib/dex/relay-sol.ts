@@ -170,16 +170,20 @@ export async function solSealBroadcast(
   const { address } = solIdentity(secretHex);
   const memoProgram32 = b58Decode(SOL_MEMO_PROGRAM);
 
+  // FIX(R15-c · unknown≠unfunded): כשל-קריאה היה נבלע-ל-0 → "unfunded: 0 lamports"
+  // בזמן-שהאמת "לא-נודע" (אותה-מחלקת-R14-FIX-12, הצד-הסולני). עתה: null = לא-נמדד
+  // → זריקה-כנה (fail-closed-נשמר: לא-שורף בלי-מדידה).
   const [balance, rentMin] = await Promise.all([
     rpc<number>(endpoint, "getBalance", [address, { commitment: "confirmed" }], 15000)
       .then((r) => (typeof r === "number" ? r : Number((r as { value?: number })?.value ?? 0)))
-      .catch(() => 0),
+      .catch(() => null as number | null),
     rpc<number>(endpoint, "getMinimumBalanceForRentExemption", [0, { commitment: "confirmed" }], 15000)
       .then((r) => (typeof r === "number" && r > 0 ? r : RENT_EXEMPT_FALLBACK))
       .catch(() => RENT_EXEMPT_FALLBACK),
   ]);
   // roast-78: סדר-ההגנות — רצפת-הגיבוי קודמת לרצפה-הקנונית (היא-גבוהה-ממנה בפועל:
   // תביעות-50µ = 50M-lamports » rent+fee ~897k).
+  if (balance === null) throw new Error("sol balance unmeasured (unknown ≠ unfunded) — anchor deferred honestly");
   const d = solBackingFloorDecision(balance, Math.max(0, Math.floor(claimsFloorLamports ?? 0)), rentMin);
   if (!d.allow) throw new Error(d.detail);
 
@@ -234,7 +238,17 @@ function memoJsonOf(logs: string[]): { height?: number; stateRoot?: string } | n
 export async function verifySolAnchor(
   txid: string,
   expected: { height: number; stateRoot: string },
+  expectedAddress?: string | null,
 ): Promise<{ ok: boolean; detail: string }> {
+  // FIX(R15-c · anchor-identity-binding): היה — אין-בדיקת-חותם-כלל. ה-memo פומבי
+  // וכל-אדם יכול לפרסם Memo-tx עם אותו-stateRoot ב-5,000-lamports — והיה נספר
+  // כעוגן-מאומת. עתה: כשהזהות-הריבונית-ידועה, ה-fee-payer (accountKeys[0] —
+  // החותם-החובה) חייב-להיות היא. צד-ג' → fail-closed "not-our-anchor".
+  const bindSigner = (t: { transaction?: { message?: { accountKeys?: string[] } } } | null): string | null => {
+    if (!expectedAddress) return null; // זהות-לא-ידועה → לא-ניתן-לאגד (רקורד-ישן) — המשך-כנה
+    const payer = t?.transaction?.message?.accountKeys?.[0] ?? null;
+    return payer && payer === expectedAddress ? null : "not-our-anchor";
+  };
   const endpoint = SOL_RPCS[0];
   const st = await rpc<{ value: ({ err: unknown; slot: number; confirmationStatus?: string } | null)[] }>(
     endpoint, "getSignatureStatuses", [[txid], { searchTransactionHistory: true }], 15000,
@@ -248,10 +262,12 @@ export async function verifySolAnchor(
   // true אומת-נגד-הלדג'ר-המלא-בחינם (עוגנים-ישנים לא-מקבלים "unknown" נצחית).
   const tx0 = v
     ? null
-    : await rpc<{ meta?: { logMessages?: string[] } | null }>(
+    : await rpc<{ meta?: { logMessages?: string[] } | null; transaction?: { message?: { accountKeys?: string[] } } }>(
         endpoint, "getTransaction", [txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }], 15000,
       ).catch(() => null);
   if (!v && tx0?.meta?.logMessages?.length) {
+    const bind0 = bindSigner(tx0);
+    if (bind0) return { ok: false, detail: `mismatch: ${bind0} — fee-payer is not the sovereign identity (getTransaction fallback, fail-closed)` };
     const logs0 = tx0.meta.logMessages;
     const memo0 = memoJsonOf(logs0);
     if (!memo0) return { ok: false, detail: "mismatch: no parseable anchor memo in logs (getTransaction fallback)" };
@@ -269,9 +285,11 @@ export async function verifySolAnchor(
   if (v.confirmationStatus && v.confirmationStatus !== "finalized") {
     return { ok: false, detail: `awaiting finalized block (now: ${v.confirmationStatus})` };
   }
-  const tx = await rpc<{ meta?: { logMessages?: string[] } | null }>(
+  const tx = await rpc<{ meta?: { logMessages?: string[] } | null; transaction?: { message?: { accountKeys?: string[] } } }>(
     endpoint, "getTransaction", [txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }], 15000,
   ).catch(() => null);
+  const bind = bindSigner(tx);
+  if (bind) return { ok: false, detail: `mismatch: ${bind} — fee-payer is not the sovereign identity (fail-closed)` };
   const logs = tx?.meta?.logMessages ?? [];
   if (logs.length === 0) return { ok: false, detail: "not indexed: awaiting finalized block" };
   // FIX(Roast-64-c · F8): פריקה-מתוחמת + השוואה-מספרית — לא עוד-substring

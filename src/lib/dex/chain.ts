@@ -92,6 +92,7 @@ interface ChainRT {
   cachedRoot: { h: number; root: string } | null; // FIX(SETTLE-9 perf): stateRoot-פר-גובה — getState פר-לקוח לא מחשב-מחדש O(state)
   rejectedLast: { h: number; count: number; sample: string[] } | null; // FIX(SETTLE-15 silent-drop): ראית-דחיות-חיה
   oracleTimer: ReturnType<typeof setInterval> | null; // Task 72 · לולאת-פיד-האורקל (חוץ-מצב — ה-op עצמו קנוני)
+  faucetAtRt: Map<string, number>; // FIX(R15-a): cooldown-ברז-הדמו חוץ-מצב — הכתיבה-הישירה-ב-st.faucetAt הייתה מוטציית-מצב-קנוני-מחוץ-לבלוק (שורש-מיושן + סיכון-ספיח במהלך-בנייה)
 }
 
 const g = globalThis as unknown as { __saosDexChain?: ChainRT };
@@ -486,7 +487,7 @@ function feedPriceOracle(rt: ChainRT, events: TradeEvent[] | undefined, h: numbe
   for (const ev of events) {
     if (ev.kind !== "fill" && ev.kind !== "swap") continue;
     if (!(ev.price > 0) || !(ev.amountMu > 0)) continue;
-    rt.priceSamples.push({ h, base: ev.base, quote: ev.quote, px: ev.price, muQ: Math.floor((ev.amountMu * ev.price) / 1000) });
+    rt.priceSamples.push({ h, base: ev.base, quote: ev.quote, px: ev.price, muQ: ev.quoteMu ?? Math.floor((ev.amountMu * ev.price) / 1000) }); // FIX(R15-a): quoteMu — משקל-ציטוט-אמת (קניות-בריכה היו ×price/1000-מנופפות)
   }
   if (rt.priceSamples.length > 600) rt.priceSamples.splice(0, rt.priceSamples.length - 600);
 }
@@ -798,6 +799,7 @@ export function ensureChain(): ChainRT {
     cachedRoot: null,
     rejectedLast: null,
     oracleTimer: null,
+    faucetAtRt: new Map(),
   };
   g.__saosDexChain = rt;
   // Task 72 · לולאת-פיד-האורקל (דלת-המטבעות): כל-60ש׳ בודקת את פידי-השוק-האמת
@@ -823,7 +825,15 @@ export function ensureChain(): ChainRT {
       // אין-תמונה כלל: ג'נזיס לגיטימי רק אם-אין-עדויות-קודמות ב-DB — אחרת זה
       // "ג'נזיס-מעל-היסטוריה" שמנותק את שרשרת-העדויות בשקט (השקר-הישן: deleteMany).
       let prior = 0;
-      try { prior = await db.blockHeader.count(); } catch { rt.dbOk = false; }
+      // FIX(R15-a · fail-closed-genesis): count-שגוי היה ממשיך-לג'נזיס עם "verified empty DB"
+      // — האימות מעולם-לא-קרה (fail-open בדיוק-הרגע-הקריטי). עתה: לא-ניתן-לאמת = עצירה-כנה.
+      try { prior = await db.blockHeader.count(); } catch (e) {
+        rt.dbOk = false;
+        rt.halted = true;
+        rt.haltReason = `genesis-refused: DB unreachable while verifying emptiness (${String(e).slice(0, 60)}) — continuity cannot be verified; retry on next boot`;
+        console.error(`[saos-dex][ALERT] BOOT REFUSED — blockHeader.count() failed; cannot prove DB empty. Chain HALTED fail-closed.`);
+        return;
+      }
       if (prior > 0) {
         rt.halted = true;
         rt.haltReason = `genesis-refused: ${prior} block headers exist in DB but no snapshot — continuity cannot be fabricated; explicit operator reset required`;
@@ -843,6 +853,11 @@ export function ensureChain(): ChainRT {
     try {
       const stale = await db.blockHeader.deleteMany({ where: { height: { gt: rt.st.height } } });
       if (stale.count > 0) console.info(`[saos-dex] purged ${stale.count} stale block headers beyond snapshot h${rt.st.height} (prior-run evidence)`);
+      // FIX(R15-a · stale-seals): רק-blockHeader נוקה — SealRecords מעל-התמונה נשארו:
+      // השרשרת-המשוחזרת מייצרת חותמות-חדשות בגבהים-שכבר-חתומים (root @unique) →
+      // create נכשל-בשקט → dbOk=false-רעש + חותמת-של-טיפ-נטוש-שהגרעין-החדש יסתור.
+      const staleSeals = await db.sealRecord.deleteMany({ where: { toHeight: { gt: rt.st.height } } });
+      if (staleSeals.count > 0) console.info(`[saos-dex] purged ${staleSeals.count} stale seal records beyond snapshot h${rt.st.height}`);
     } catch { rt.dbOk = false; }
     rt.timer = setInterval(() => void tick(rt), TICK_MS);
     console.info(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… (snapshot — verified vs DB stateRoot)`);
@@ -881,12 +896,14 @@ export function nextNonce(prefix: string): string {
 
 export function operatorFaucet(): { ok: boolean; reason?: string } {
   const rt = ensureChain();
-  // FIX(Roast-65-a · LOW-11): ה-cooldown עבר-למצב (st.faucetAt ב-DexState) — היה
-  // זיכרון-מודול: כל-ריסטארט איפס אותו → +1M SAOS+2.5M USDS-מהאוצר-פר-הפעלה-מחדש.
-  // במצב = שורד-ריסטארט, נכלל-בתמונה ובשורש.
-  const last = rt.st.faucetAt?.["operator"] ?? 0;
+  // FIX(Roast-65-a · LOW-11): cooldown-שורד-ריסטארט.
+  // FIX(R15-a · out-of-band): הכתיבה-הייתה ישר-ב-st.faucetAt (מצב-קנוני) מחוץ-ל-op/בלוק —
+  // שורש-מיושן-עד-החותם-הבא + מוטציה שיכולה-להימלט-ממקור-שחושב-בדיוק-עכשיו
+  // (seal-freeze-check-כוזב). עתה: cooldown-בראנטיים (Map) — שקול-פונקציונלית,
+  // אפס-נגיעה במצב; st.faucetAt נשאר-שדה-מורשת-ריק.
+  const last = rt.faucetAtRt.get("operator") ?? 0;
   if (Date.now() - last < 60_000) return { ok: false, reason: "cooldown-60s" };
-  rt.st.faucetAt = { ...(rt.st.faucetAt ?? {}), operator: Date.now() };
+  rt.faucetAtRt.set("operator", Date.now());
   rt.mempool.push({ type: "transfer", issuer: "treasury", nonce: sysNonce(rt.st, "faucet-s"), to: "operator", asset: "SAOS", amount: 1_000_000 });
   rt.mempool.push({ type: "transfer", issuer: "treasury", nonce: sysNonce(rt.st, "faucet-u"), to: "operator", asset: "USDS", amount: 2_500_000 });
   return { ok: true };
@@ -1193,6 +1210,10 @@ export function bench(ops = 20_000): { ops: number; ms: number; opsPerSec: numbe
 
 export async function resetChain(): Promise<void> {
   const rt = ensureChain();
+  // FIX(R15-a · reset-race): reset יכל להחליף rt.st בג'נזיס בזמן ש-buildBlock מושהה
+  // על-DB-await-של-המצב-הישן → בלוק-מהמצב-המנותק נכתב-ל-DB-הטרי. עתה: נדחה-כנה
+  // בזמן-בנייה (הפעלה-חוזרת אחרי-הטיק-עובדת).
+  if (rt.busy) throw new Error("reset deferred: block build in flight — retry in a moment (fail-closed, no torn state)");
   if (rt.timer) clearInterval(rt.timer);
   rt.st = genesisState(); // faucetAt/extClaims/feesSpentMu — כבר-בג'נזיס-הטרי (FIX(Roast-65-a · LOW-11))
   rt.mempool = []; rt.rt = new Map(); rt.tape = [];
@@ -1206,6 +1227,7 @@ export async function resetChain(): Promise<void> {
   // FIX(Roast-64 · evidence-leak-across-reset): טבעת-עדות-המחיר לא נוקתה — אחרי-reset
   // הסולם המשיך-לזוז לפי מסחר-השרשרת-הישנה (עדות-מעורבת של שני עידנים).
   rt.fuelSamples = []; rt.priceSamples = []; rt.buildMsRolling = 0; rt.opsPerSecRolling = 0;
+  rt.faucetAtRt = new Map(); // FIX(R15-a): reset = עולם-טרי — cooldown-הברז מתאפס עם-הג'נזיס (התנהגות-היסטורית)
   rt.cachedRoot = null; // FIX(SETTLE-9): cache-השורש מת לפי-גובה — reset מתחיל-גובה-חדש
   rt.halted = false; rt.haltReason = null;
   try {

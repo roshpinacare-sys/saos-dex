@@ -504,8 +504,11 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
       n: 5,
       what: "ETH/SOL-אבק-החיילים (sweep-אוצר)",
       status: "DUST",
-      valueUsd: (feeds.usd.eth ?? 0) * 0.0023 + (feeds.usd.sol ?? 0) * 0.0716,
-      detail: "11×0.0002-ETH + 0.0001 + SOL-אבק — הדלק-להעברה-יקר-מהשווי-פר-ארנק. כדאי-רק-איחוד-עתידי-כשהצבירה-תצדיק.",
+      // FIX(R15-c · stale-quantities): הכמויות היו קודמות-קשיח (0.0023-ETH/0.0716-SOL —
+      // ~6000×-מהנמדד-חי: 0.000000367-ETH · 0.0781-SOL). עתה: null — המדידה-החיה
+      // מוצגת-בדלת-המטבעות (custody-חי); לא-נודע > מספר-מזויף.
+      valueUsd: null,
+      detail: "אבק-על-זהויות-החוץ — הדלק-להעברה-יקר-מהשווי. כדאי-רק-איחוד-עתידי-כשהצבירה-תצדיק. שווי-חי: דלת-המטבעות.",
       zeroFee: false,
     },
     {
