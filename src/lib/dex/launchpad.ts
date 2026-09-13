@@ -16,7 +16,7 @@
  */
 import type { DexState } from "./kernel";
 import {
-  addBal, bal, launchVq, poolKey,
+  addBal, bal, launchVq, poolKey, sqrtLp,
   LPAD_FEE_BPS, LPAD_CREATOR_PCT, LPAD_GRAD_MIN_USDS, LPAD_MAX_RAISE,
   LPAD_LBP_BLOCKS, LPAD_MIN_SUPPLY, LPAD_MAX_SUPPLY, LPAD_VQ_DIV,
 } from "./kernel";
@@ -43,7 +43,7 @@ export function launchpadTick(st: DexState, nowMs: number): string[] {
     const ra = a === l.code ? R : B;
     const rb = a === l.code ? B : R;
     if (st.pools[key]) continue; // לעולם לא (קוד ייחודי) — הגנה fail-closed
-    st.pools[key] = { a: a as never, b: b as never, ra, rb, lp: Math.floor(Math.sqrt(ra * rb)), feeAccruedTreasury: 0, swaps: 0 };
+    st.pools[key] = { a: a as never, b: b as never, ra, rb, lp: sqrtLp(ra, rb), feeAccruedTreasury: 0, swaps: 0 };
     // LP-100%-לאוצר — POL-חדש שנולד-מהשקה-אמת (לא-הדפסה: הכסף הוא הגיוס-האמת)
     addBal(st, "treasury", `LP|${key}`, st.pools[key].lp);
     // רישום-הנכס — הראוטר והספר נפתחים-לו מיד (knownAsset)

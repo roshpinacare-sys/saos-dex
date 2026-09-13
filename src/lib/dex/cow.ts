@@ -78,15 +78,27 @@ export function cowSettle(st: DexState, exec: Exec, nowMs: number): TradeEvent[]
 
       if (matched > 0) {
         // חלוקה-יחסית-קנונית: floor + השארית לאחרון-בסדר-הקנוני
+        // FIX(R16-a·M2): האחרון קיבל matched−assigned **בלי-תקרה** — 5-קניות-של-1µ
+        // עם matched=3 היו ממלאות-את-האחרונה 3µ (3×-גודלה) → תשלום-מעבר-ל-escrow
+        // = invariant-HALT על-רצף-חוקי (DoS), ואצל-מוכרים חיוב-יתר מהיתרה-החופשית.
+        // עתה: כל-הקצאה מקורררת ב-qtyOf(o), והשארית מוצבת-מחדש לפקודות-עם-מקום
+        // (תמיד-אפשרי: Σroom = vol ≥ matched) — מה שלא-ניתן-לחלק זורם-ל-fallback
+        // באופן-טבעי דרך rem = qtyOf − got.
         const alloc = (orders: CowOrder[], vol: number): { o: CowOrder; mu: number }[] => {
-          const out: { o: CowOrder; mu: number }[] = [];
-          let assigned = 0;
-          for (let i = 0; i < orders.length; i++) {
-            const o = orders[i];
-            const mu = i === orders.length - 1 ? matched - assigned : Math.floor((matched * qtyOf(o)) / vol);
-            out.push({ o, mu });
-            assigned += mu;
+          const out: { o: CowOrder; mu: number }[] = orders.map((o) => ({ o, mu: Math.floor((matched * qtyOf(o)) / vol) }));
+          let residual = matched - out.reduce((s, x) => s + x.mu, 0);
+          let guard = orders.length + 1;
+          while (residual > 0 && guard-- > 0) {
+            let moved = 0;
+            for (const e of out) {
+              if (residual <= 0) break;
+              const room = qtyOf(e.o) - e.mu;
+              if (room > 0) { const add = Math.min(room, residual); e.mu += add; residual -= add; moved += add; }
+            }
+            if (moved === 0) break;
           }
+          // residual>0 כאן = בלתי-אפשרי מתמטית (Σroom≥matched) — מוזרם-ל-fallback בכנות
+          if (residual > 0) filledBy.set(-1, (filledBy.get(-1) ?? 0) + residual);
           return out;
         };
         const buyAllocs = alloc(qBuys, buyVol).filter((x) => x.mu > 0);

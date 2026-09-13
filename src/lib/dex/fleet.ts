@@ -108,14 +108,27 @@ function vaultDir(): string | null {
 function openVault(dir: string): VaultBundle {
   const raw = fs.readFileSync(path.join(dir, "fleet_keys.enc"), "utf8");
   if (!raw.startsWith(MAGIC)) throw new Error("fleet vault: unknown seal format");
-  const meta = JSON.parse(fs.readFileSync(path.join(dir, "fleet_keys.meta.json"), "utf8")) as { pass?: string };
-  if (!meta.pass) throw new Error("fleet vault: no pass in seal meta");
-  // פורמט: hex(salt16 | iv12 | tag16 | ct) — זהה-למפרט-פלטפורמה (vault-seal.ts)
+  const meta = JSON.parse(fs.readFileSync(path.join(dir, "fleet_keys.meta.json"), "utf8")) as { pass?: string; derived?: string };
+  // FIX(R16-c·M5): ה-pass ההיסטורי היה יושב **לצד** הצופן (meta-באותה-תיקייה) —
+  // חשיפת-תיקייה-אחת = כספת+סיסמה. עתה: נגזרת-כניסה (sha256 עם-תווית קנונית
+  // מעל DEX_OPERATOR_TOKEN — כבר-בסביבת-הדקס) נוסתה ראשונה, וה-legacy-meta-pass
+  // נשאר-נתיב-תאימות-לאחור לדור-החתום-הקיים (אף-כספת-חתומה-לא-נפגעת).
   const payload = Buffer.from(raw.slice(MAGIC.length).replace(/\s+/g, ""), "hex");
-  const key = scryptSync(meta.pass, payload.subarray(0, 16), 32);
-  const d = createDecipheriv("aes-256-gcm", key, payload.subarray(16, 28));
-  d.setAuthTag(payload.subarray(28, 44));
-  const plain = Buffer.concat([d.update(payload.subarray(44)), d.final()]).toString("utf8");
+  const tryPass = (pass: string): string | null => {
+    try {
+      const key = scryptSync(pass, payload.subarray(0, 16), 32);
+      const d = createDecipheriv("aes-256-gcm", key, payload.subarray(16, 28));
+      d.setAuthTag(payload.subarray(28, 44));
+      return Buffer.concat([d.update(payload.subarray(44)), d.final()]).toString("utf8");
+    } catch { return null; }
+  };
+  let plain: string | null = null;
+  try {
+    const base = process.env.DEX_OPERATOR_TOKEN ?? "";
+    if (base) plain = tryPass(createHash("sha256").update(`saos-fleet-vault-v2:${base}`).digest("hex"));
+  } catch { /* derived path unavailable — legacy next */ }
+  if (plain === null && meta.pass) plain = tryPass(meta.pass);
+  if (plain === null) throw new Error("fleet vault: decrypt failed (derived + legacy both exhausted)");
   const bundle = JSON.parse(plain) as { sealedAt?: string; files?: Record<string, string> } & Partial<VaultBundle>;
   const vaultJson = bundle.files?.["keys/vault.json"];
   if (!vaultJson) throw new Error("fleet vault: keys/vault.json member missing");

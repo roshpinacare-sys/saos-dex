@@ -93,6 +93,7 @@ interface ChainRT {
   rejectedLast: { h: number; count: number; sample: string[] } | null; // FIX(SETTLE-15 silent-drop): ראית-דחיות-חיה
   oracleTimer: ReturnType<typeof setInterval> | null; // Task 72 · לולאת-פיד-האורקל (חוץ-מצב — ה-op עצמו קנוני)
   faucetAtRt: Map<string, number>; // FIX(R15-a): cooldown-ברז-הדמו חוץ-מצב — הכתיבה-הישירה-ב-st.faucetAt הייתה מוטציית-מצב-קנוני-מחוץ-לבלוק (שורש-מיושן + סיכון-ספיח במהלך-בנייה)
+  pendingLoad: boolean; // FIX(R16-a·m5): אמת-באתחול — resetChain נדחה-כנה עד-סיום-הטעינה (ה-loader היה דורס-ג'נזיס-טרי בתמונה + מכפיל-טיימר)
 }
 
 const g = globalThis as unknown as { __saosDexChain?: ChainRT };
@@ -767,8 +768,13 @@ async function oracleTick(rt: ChainRT): Promise<void> {
     }
     if (Object.keys(prices).length === 0) return;
     const src = `median(${srcs.slice(0, 4).join(",")})`;
+    // FIX(R16-a·m10): הפעימה-הקבועה (60ש׳) ו-refresh-oracle (דלת-המפעיל) יכלו לרוץ
+    // במקביל לפני-צריכת-הנונס → אותו sysNonce פעמיים → השני נדחה replay-rejected
+    // (עדכון-מחיר-שונה נשרק בשקט). עתה: הסיומת כוללת גם את מספר-ה-oracle-הממתנים
+    // בממפול — קבוע-מהמצב (קביעות-ריפליי נשמרת — בלי-רנדומיות) ויחודי-לכל-דחיפה.
+    const pendingOracle = rt.mempool.filter((o) => String((o as { nonce?: string }).nonce ?? "").startsWith("oracle-")).length;
     rt.mempool.push({
-      type: "oracle_set", issuer: "treasury", nonce: sysNonce(rt.st, "oracle"), prices, claim: src,
+      type: "oracle_set", issuer: "treasury", nonce: `${sysNonce(rt.st, "oracle")}-p${pendingOracle}`, prices, claim: src,
     });
     console.info(`[saos-dex] oracle_set queued: ${Object.entries(prices).map(([a, m]) => `${a}=${(m / 1e6).toPrecision(6)}$`).join(" · ")} (${src})`);
   } catch {
@@ -800,6 +806,7 @@ export function ensureChain(): ChainRT {
     rejectedLast: null,
     oracleTimer: null,
     faucetAtRt: new Map(),
+    pendingLoad: true, // FIX(R16-a·m5)
   };
   g.__saosDexChain = rt;
   // Task 72 · לולאת-פיד-האורקל (דלת-המטבעות): כל-60ש׳ בודקת את פידי-השוק-האמת
@@ -819,6 +826,7 @@ export function ensureChain(): ChainRT {
       rt.halted = true;
       rt.haltReason = "snapshot-integrity-failed: load refused, evidence preserved (operator reset is the explicit recovery path)";
       console.error("[saos-dex][ALERT] BOOT REFUSED — snapshot failed integrity verification; chain HALTED without touching any evidence row. Recovery: explicit operator reset.");
+      rt.pendingLoad = false; // FIX(R16-a·m5)
       return;
     }
     if (loaded === "absent") {
@@ -832,19 +840,22 @@ export function ensureChain(): ChainRT {
         rt.halted = true;
         rt.haltReason = `genesis-refused: DB unreachable while verifying emptiness (${String(e).slice(0, 60)}) — continuity cannot be verified; retry on next boot`;
         console.error(`[saos-dex][ALERT] BOOT REFUSED — blockHeader.count() failed; cannot prove DB empty. Chain HALTED fail-closed.`);
+        rt.pendingLoad = false; // FIX(R16-a·m5)
         return;
       }
       if (prior > 0) {
         rt.halted = true;
         rt.haltReason = `genesis-refused: ${prior} block headers exist in DB but no snapshot — continuity cannot be fabricated; explicit operator reset required`;
         console.error(`[saos-dex][ALERT] BOOT REFUSED — no snapshot but ${prior} block headers in DB; genesis would orphan that evidence. Chain HALTED, evidence untouched.`);
+        rt.pendingLoad = false; // FIX(R16-a·m5)
         return;
       }
       // ג'נזיס-טרי אמת (בסיס-ריק בהכרח) — עוגן-ג'נזיס חתום מיד (בלוק-ראשון)
       await buildBlock(rt);
       pushReceipt(rt, "genesis", { root: stateRoot(rt.st), at: Date.now() });
       console.info(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… (genesis — verified empty DB)`);
-      rt.timer = setInterval(() => void tick(rt), TICK_MS);
+      if (!rt.timer) rt.timer = setInterval(() => void tick(rt), TICK_MS); // FIX(R16-a·m5): לא-לכפול-טיימר אם-reset הקדים
+      rt.pendingLoad = false; // FIX(R16-a·m5)
       return;
     }
     // ראיות-מעבר-לתמונת-המצב הן-שאריות-מריצה-קודמת (נחתמו-אחרי-הסנפלוט האחרון
@@ -859,7 +870,8 @@ export function ensureChain(): ChainRT {
       const staleSeals = await db.sealRecord.deleteMany({ where: { toHeight: { gt: rt.st.height } } });
       if (staleSeals.count > 0) console.info(`[saos-dex] purged ${staleSeals.count} stale seal records beyond snapshot h${rt.st.height}`);
     } catch { rt.dbOk = false; }
-    rt.timer = setInterval(() => void tick(rt), TICK_MS);
+    if (!rt.timer) rt.timer = setInterval(() => void tick(rt), TICK_MS); // FIX(R16-a·m5)
+    rt.pendingLoad = false; // FIX(R16-a·m5): סוף-הטעינה — reset מותר מעתה
     console.info(`[saos-dex] chain live · height ${rt.st.height} · root ${stateRoot(rt.st).slice(0, 12)}… (snapshot — verified vs DB stateRoot)`);
   })();
   return rt;
@@ -1214,6 +1226,9 @@ export async function resetChain(): Promise<void> {
   // על-DB-await-של-המצב-הישן → בלוק-מהמצב-המנותק נכתב-ל-DB-הטרי. עתה: נדחה-כנה
   // בזמן-בנייה (הפעלה-חוזרת אחרי-הטיק-עובדת).
   if (rt.busy) throw new Error("reset deferred: block build in flight — retry in a moment (fail-closed, no torn state)");
+  // FIX(R16-a·m5): reset מול-טעינת-אתחול-אסינכרונית — ה-loader היה דורס את הג'נזיס-הטרי
+  // בתמונת-המצב (טיפ-מנותק) ומכפיל-טיימר. עתה: נדחה-כנה עד-שהטעינה מסתיימת.
+  if (rt.pendingLoad) throw new Error("reset deferred: boot-time snapshot load in flight — retry in a moment (fail-closed)");
   if (rt.timer) clearInterval(rt.timer);
   rt.st = genesisState(); // faucetAt/extClaims/feesSpentMu — כבר-בג'נזיס-הטרי (FIX(Roast-65-a · LOW-11))
   rt.mempool = []; rt.rt = new Map(); rt.tape = [];
