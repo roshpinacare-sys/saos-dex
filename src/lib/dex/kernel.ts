@@ -933,6 +933,13 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // יחיד (מגן-minOut בקפיצה-2 של-המרה, למשל) מוחק את-כולה — אין-ביצוע-חלקי
       // שמשאיר נכס-תלוש-באמצע-שרשרת. תתי-ops חייבים issuer==מנפיק-ה-batch
       // (אין-הסעה-בין-חשבונות-בעטיפה-אחת) ואסורים-מקוננים (עומק-1).
+      // FIX(3-a · D3 · open-pool-atomicity): חריג-pinning-יחיד ומצומצם — pool_open
+      // עם issuer-מוצהר "treasury" רשאי לרוץ בתוך-batch של מנפיק-אחר. pool_open הוא
+      // מעשה-ריבוני-של-האוצר (gas-0 · אפס-קרדיטים · LP-כולו-לאוצר · fail-closed-פנימי
+      // · אינו-יכול להעשיר את חותם-ה-batch — בדיקת-ההתעשרות למטה נשארת מלאה), והדלת
+      // (door open-pool) צריכה אותו אטומי-מול העברת-העוגן של-המפעיל: בלי-החריג,
+      // שני-ה-ops היו נדחפים נפרדים וכישלון-פתיחה בזמן-בלוק היה מקרקע את העוגן
+      // באוצר. שאר-התתי-ops נשארים issuer-pinned במלואם — ההגנה-המקורית-שלמה.
       const sub = Array.isArray(op.ops) ? op.ops : null;
       if (!sub || sub.length === 0 || sub.length > BATCH_MAX_OPS) return { ok: false, err: "bad-batch", gas: 0 };
       if (sub.some((s) => !s || s.type === "batch" || Array.isArray(s.ops))) return { ok: false, err: "batch-nesting-forbidden", gas: 0 };
@@ -942,7 +949,8 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // (DCA/ראוטר) לא-נכנס-לטייפ ולעדות-המחיר (feedPriceOracle) — עדות-נעלמת.
       const evs: TradeEvent[] = [];
       for (let i = 0; i < sub.length; i++) {
-        const r = applyOp(trial, { ...sub[i], issuer }, nowMs); // issuer-pinned — הזהות של-החותם
+        const pinned = sub[i].type === "pool_open" && sub[i].issuer === "treasury" ? "treasury" : issuer; // FIX(3-a · D3) — ראה-הערה למעלה
+        const r = applyOp(trial, { ...sub[i], issuer: pinned }, nowMs); // issuer-pinned — הזהות של-החותם (חריג-יחיד: pool_open-אוצר)
         if (!r.ok) { failedAt = i; failErr = r.err; break; }
         if (r.events) evs.push(...r.events);
       }

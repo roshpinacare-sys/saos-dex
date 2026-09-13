@@ -151,6 +151,13 @@ export function poolRm(st: DexState, op: Op, _consume: () => OpResult | null): O
   const lp = op.lp ?? 0;
   if (!p) return { ok: false, err: "pool-not-found", gas: 0 };
   if (!(lp > 0)) return { ok: false, err: "bad-lp", gas: 0 };
+  // FIX(3-a · D6 · genesis-LP-lock): מדיניות-הג'נזיס "LP-נעול-לצמיתות" (kernel.ts
+  // st.locked["treasury"] — "LP נעול-לצמיתות (מורשת pool_lock)") לא הייתה נאכפת.
+  // ה-LP-הריבוני כולו (זריעת-ג'נזיס ו-pool_open כאחד) נולד-לאוצר — מימושו היה
+  // מוריד-נזילות-ריבונית מאחורי-הגב. הבחירה-המינימלית: דחיית-pool_rmw שמנפיקו
+  // האוצר (במקום-נעילה-ב-st.locked — הייתה משברת את זהות-הערבות של-המבקר,
+  // locked===Σפקודות-חיות). מימוש-המפקידים-הרגילים אינו-נפגע.
+  if (op.issuer === "treasury") return { ok: false, err: "treasury-lp-locked", gas: 0 };
   const lpAsset = LP_ASSET_PREFIX + key;
   if (avail(st, op.issuer, lpAsset as never) < lp) return { ok: false, err: "insufficient-lp", gas: 0 };
   const outA = Math.floor((lp * p.ra) / p.lp);

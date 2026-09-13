@@ -63,12 +63,24 @@ const LOG_CAP = 12;
  * כפול. המטבעות-לא-נוגעים — זו-רק-ראית-מתזמן (העדות-הציבורית-היא-על-Hive). */
 const MARKER_FILE = path.join(process.cwd(), "state", "milestone.json");
 interface Marker { lastAnchorAt: number; lastNetMu: number | null; anchored: number }
+/* FIX(3-a · D8): קריאת-המארקר ממוזגת-TTL-60ש׳ — milestoneSummary() רץ בכל-תשובת
+ * /api/dex/state (getState→milestone) ולא היה צריך fs-סינכרוני-חוזר. אותו-דפוס-TTL
+ * של-הצי (fleet.ts PROBE_TTL_MS). saveMarker מעדכן-מיד-את-המטמון — אפס-עיגון-כפול. */
+const MARKER_TTL_MS = 60_000;
+const gMarker = globalThis as unknown as { __saosMilestoneMarker?: { at: number; marker: Marker } };
 function loadMarker(): Marker {
+  const c = gMarker.__saosMilestoneMarker;
+  if (c && Date.now() - c.at < MARKER_TTL_MS) return c.marker;
   try {
     const raw = JSON.parse(fs.readFileSync(MARKER_FILE, "utf8")) as Marker;
-    if (typeof raw?.lastAnchorAt === "number") return raw;
+    if (typeof raw?.lastAnchorAt === "number") {
+      gMarker.__saosMilestoneMarker = { at: Date.now(), marker: raw };
+      return raw;
+    }
   } catch { /* אין-מארקר — חדש */ }
-  return { lastAnchorAt: 0, lastNetMu: null, anchored: 0 };
+  const fresh: Marker = { lastAnchorAt: 0, lastNetMu: null, anchored: 0 };
+  gMarker.__saosMilestoneMarker = { at: Date.now(), marker: fresh };
+  return fresh;
 }
 function saveMarker(m: MilestoneRT): void {
   try {
@@ -76,6 +88,7 @@ function saveMarker(m: MilestoneRT): void {
     const tmp = MARKER_FILE + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify({ lastAnchorAt: m.lastAnchorAt, lastNetMu: m.lastNetMu, anchored: m.anchored }));
     fs.renameSync(tmp, MARKER_FILE);
+    gMarker.__saosMilestoneMarker = { at: Date.now(), marker: { lastAnchorAt: m.lastAnchorAt, lastNetMu: m.lastNetMu, anchored: m.anchored } }; // FIX(3-a · D8): המטמון-מסונכרן-מיד-אחרי-כתיבה-מוצלחת
   } catch { /* כשל-כתיבה לא מפיל — העדות-החיה-על-Hive */ }
 }
 

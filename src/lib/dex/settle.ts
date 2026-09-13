@@ -9,7 +9,7 @@
  *     · קרדיטים: Σcredits + gasUsed === ג'נזיס (אפס-הטבעה/שריפה מחוץ-לג'נזיס)
  *     · נכסים: Σbalances + Σמאגרים + backing(עטוף) === ג'נזיס, לכל-נכס
  *     · ערבות: locked === Σפקודות-חיות (מדויק, לא-גלובלי) · avail ≥ 0 לכולם
- *     · עמלות: Σpools.feeAccruedTreasury === feeMeter + treasuryProfit (מדידה-כנה)
+ *     · עמלות: Σpools.feeAccruedTreasury === feeMeter + treasuryProfit + feeMinted + feesSpentMu (מדידה-כנה)
  *  2. AGENT EXAM (מבחן-סוכנים) — תוכנית-לימוד על שיבוט-מצב דטרמיניסטי:
  *     כל-סוכן עובר QUOTE (גריד) → CROSS (טייקר-חוצה-ספרד) → CANCEL (שחרור-נעילה
  *     מדויק) עם טענת-שימור אחרי-כל-שלב; התוכנית רצה פעמיים על שני-שיבוטים
@@ -202,16 +202,21 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
     }
   }
 
-  // (d) עמלות: מדידה-כנה — Σpools.feeAccruedTreasury === feeMeter + treasuryProfit + feeMinted − feesSpentMu
+  // (d) עמלות: מדידה-כנה — Σpools.feeAccruedTreasury === feeMeter + treasuryProfit + feeMinted + feesSpentMu
   const poolsTreasury = Object.values(st.pools).reduce((s, p) => s + p.feeAccruedTreasury, 0);
-  // (d) עמלות: כל-מה-שהבריכות-מדדו === מד-שלא-הוכר + רווח-שהוכר + דלק-שמוחזר − צריכת-הראוטר
+  // (d) עמלות: כל-מה-שהבריכות-מדדו === מד-שלא-נקצר + רווח-שלא-נצרך + דלק-שמוחזר + צריכת-הראוטר
   // (THE-FOUNTAIN: feeMinted הוא-עמלות-שהפכו-קרדיטים — נצרך-מהמדידה, לא-נעלם ·
   // FIX(Roast-65-a · HIGH-3d): feesSpentMu — עמלות-שהראוטר צרך-מ-treasuryProfit (economy.ts)
-  // לשריפה/קרן-ve. בלי-הדלי-הרביעי הזהות נשברת-נצחית מהמחזור-הראשון של-השריפה)
+  // FIX(3-a · D1 · sign-lineage): הסימן-הקודם (−spent) היה הפוך. קו-הייחוס-החי
+  // (h8412): pools 211,765 = meter 3,765 + profit 200,000 + spent 8,000 + minted 0 —
+  // מתאחה-במדויק רק עם **+spent**: עמלות-שהראוטר צרך מהרווח זרמו לבריכות (קניית-
+  // שריפה מוסיפה-USDS-לרזרבות) — כסף-שנצרך-מהמדידה-נמדד-בבריכות ולכן הוא-**נזקף**
+  // לטובת-Σpools, לא-מנוכה ממנה. הסימן-ההפוך ייצר סטייה-פנטום של 2×take בכל
+  // מחזור-ראוטר-רווחי ראשון → InvariantViolation → HALT כוזב (שרשרת-חיה עצרה ב-h8412).
   const feesSpentMu = (st.feesSpentMu ?? 0) + (st.auditAdjustments?.feesSpentMu ?? 0); // FIX(Roast-65 · drift-declaration): כולל-ההיסטוריה-המוצהרת
-  const feesRhs = st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0) - feesSpentMu;
+  const feesRhs = st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0) + feesSpentMu;
   const feesOk = poolsTreasury === feesRhs;
-  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted−spent ${feesRhs}`);
+  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted+spent ${feesRhs}`);
 
   return {
     ok: errors.length === 0 && negatives.length === 0,
@@ -220,7 +225,7 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
     escrow: { accounts, lockedSum, ordersSum, exact: errors.filter((e) => e.startsWith("escrow")).length === 0, availOk, ok: errors.filter((e) => e.startsWith("escrow") || e.startsWith("escrow-shadow")).length === 0 && negatives.length === 0 },
     // שדה-השם-מטעה-בכוונת-מקור: feeMeterPlusProfit = meter+profit+**minted** (השלישייה-כולה) —
     // FIX(Roast-65 · doc): מתועד-כאן-כדי-שהצהרת-הסחיפה-ב-chain.ts לא תספור-את-ה-minted פעמיים.
-    fees: { poolsTreasury, feeMeterPlusProfit: st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0), feesSpentMu, ok: feesOk },
+    fees: { poolsTreasury, feeMeterPlusProfit: st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0), feesSpentMu, ok: feesOk }, // FIX(3-a · D1): feeMeterPlusProfit נשאר-השלישייה (meter+profit+minted) — ההצהרה ב-chain.ts מחשבת-מולו את הדלי-הרביעי בכיוון-הנכון
     negatives,
     errors,
   };

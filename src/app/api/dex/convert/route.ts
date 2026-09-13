@@ -45,7 +45,7 @@ export async function GET(req: Request) {
     const q = quoteRoute(assetIn, assetOut, amount);
     if (q && q.amountOutMu > 0) {
       quote = {
-        path: q.legs.map((l) => (l.kind === "pool" ? l.to : l.to)), // רצף-הנכסים-כולל-נחיתות-עטיפה
+        path: q.legs.map((l) => l.to), // FIX(3-a · D7): טרנרי-מת — שני-הענפים היו l.to ממילא
         venues: q.legs.map((l) => l.venue),
         out: q.amountOutMu,
         effPriceMu: q.effPriceMu,

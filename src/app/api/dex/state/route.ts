@@ -15,7 +15,11 @@ const WAIT_STEP_MS = 250;
 export async function GET(req: Request) {
   const rt = ensureChain();
   const since = Number(new URL(req.url).searchParams.get("v") || 0);
-  if (Number.isFinite(since) && since > 0) {
+  // FIX(3-a · D2): שרשרת-מושהית (rt.halted — fail-fast, הגרסה-קפואה) לא נכנסת
+  // ל-long-poll: הלולאה הייתה ישנה 12ש׳ מלאים על מצב-שלא-יזוז לעולם. תשובה-מידית
+  // (200, state.halted=true+haltReason — שדות-קיימים ב-getState) — הלקוח מציג-
+  // באנר ומאט-קצב (page.tsx D4), בלי-סקר-חם על-שוק-קפוא.
+  if (!(rt.halted === true) && Number.isFinite(since) && since > 0) {
     const deadline = Date.now() + WAIT_MAX_MS;
     while (chainVersion() === since && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, WAIT_STEP_MS));
