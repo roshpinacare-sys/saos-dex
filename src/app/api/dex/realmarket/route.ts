@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { operatorAuth } from "@/lib/operator-auth";
 import {
-  realSnapshotSoft, realPlaceOrder, realCancelOrder, realReplacePowerdown, realPowerUp,
+  realSnapshotSoft, realPlaceOrder, realCancelOrder, realPowerUp,
 } from "@/lib/dex/realmarket";
 
 export const dynamic = "force-dynamic";
@@ -50,12 +50,10 @@ export async function POST(req: Request) {
         return NextResponse.json({ ok: true, action, ...r });
       }
       case "powerdown": {
-        const vestingShares = String(body.vestingShares ?? "");
-        if (!/^\d+(\.\d+)? VESTS$/.test(vestingShares)) {
-          return NextResponse.json({ ok: false, error: "powerdown: vestingShares format 'N.NNNNNN VESTS'" }, { status: 400 });
-        }
-        const r = await realReplacePowerdown(vestingShares);
-        return NextResponse.json({ ok: true, action, ...r });
+        // DIRECTIVE-R24 (owner 2026-09-13): לא עושים powerdown — כוח-הצי (SP/BP/HP)
+        // מזין-RC-להדפסות-החיילים. חלוקת-הכוח בין STEEM/HIVE/BLURT אינה-תחום-ה-DEX.
+        // ההוראה נאכפת כאן וגם ב-realReplacePowerdown (הגנה-כפולה fail-closed).
+        return NextResponse.json({ ok: false, error: "DIRECTIVE-R24: powerdown forbidden by owner — fleet RC protected (requires explicit new owner instruction)" }, { status: 403 });
       }
       case "powerup": {
         const steemAmount = String(body.steemAmount ?? "");

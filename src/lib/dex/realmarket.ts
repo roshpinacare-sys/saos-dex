@@ -316,10 +316,11 @@ export async function realCancelOrder(orderid: number): Promise<{ txid: string; 
   return signAndBroadcast([["limit_order_cancel", { owner: ACCOUNT, orderid }]]);
 }
 
-/** החלפת-תזמון-ה-powerdown (שמירה-על-דלק-RC). vests: "3064966.039374 VESTS" */
-export async function realReplacePowerdown(vestingShares: string): Promise<{ txid: string; block: number | null }> {
-  rt().data = null;
-  return signAndBroadcast([["withdraw_vesting", { account: ACCOUNT, vesting_shares: vestingShares }]]);
+/** DIRECTIVE-R24 (owner 2026-09-13): **לא עושים powerdown** — כוח-הצי (SP/BP/HP) קדוש:
+ * החיילים מדפיסים-פוסטים-מה-RC-שהוא-מזין. חלוקת-הכוח בין STEEM/HIVE/BLURT אינה-תחום-ה-DEX.
+ * הפונקציה-נעולה-fail-closed; נדרשת-הוראה-חדשה-מפורשת-מהבעלים-לפתיחה. */
+export async function realReplacePowerdown(_vestingShares: string): Promise<{ txid: string; block: number | null }> {
+  throw new Error("DIRECTIVE-R24: powerdown forbidden by owner — fleet RC protected; requires explicit new owner instruction to unlock");
 }
 
 /** power-up עתידי (דלק-RC מתאושש-מעצמו מתשלומי-השבוע) */

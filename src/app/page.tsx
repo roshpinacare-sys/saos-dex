@@ -1778,7 +1778,7 @@ function TruthPanel() {
           {/* המציאות-החוץ-במספרים */}
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4" data-testid="truth-totals">
             <Stat label="נזיל-חוץ-אמת" value={t.totals.estateRealUsd !== null ? `$${t.totals.estateRealUsd.toFixed(2)}` : "—"} sub="STEEM+SBD+HIVE+BLURT חי" />
-            <Stat label="נעול (SP/BP)" value={t.totals.estateLockedUsd !== null ? `$${t.totals.estateLockedUsd.toFixed(2)}` : "—"} sub="powerdown-13שב׳ — דורש-מפתח" />
+            <Stat label="נעול (SP/BP)" value={t.totals.estateLockedUsd !== null ? `$${t.totals.estateLockedUsd.toFixed(2)}` : "—"} sub="כוח-צי — מוגן-הוראה-R24 (איסור-powerdown)" />
             <Stat label="כיסוי-אמת-USDS" value={t.totals.usdsRealCoveragePct !== null ? `${t.totals.usdsRealCoveragePct.toFixed(4)}%` : "—"} sub="גיבוי-חוץ ÷ היצע" />
             <Stat label="מסילת-WBLURT" value={t.rail.wblurt.verified ? "VERIFIED" : "BROKEN"} sub={`${fmtInt(t.rail.wblurt.backingMu)}µ מגובה-חי`} />
           </div>
