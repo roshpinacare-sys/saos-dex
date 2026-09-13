@@ -242,6 +242,11 @@ type RelayKeys = {
   // wifToPublic של-הספרייה מחזיר פאב-שגוי לפורמט-המנורמל 5K (נמדד-חי 2026-09-09:
   // אותו-סקלר → פאב-שונה!). החתימה עצמה רצה על המנורמל (SETTLE-10/11) — שני העולמות.
   steemPub: string | null; hivePub: string | null;
+  // FIX(R13 · wif-forms): steem-js 0.7.11 מפענח K/L דחוס לסקלר שגוי בשקט
+  // (WARN בלי-זריקה — BigInteger.fromBuffer כולל דגל-הדחיסה 0x01 → k·256+1).
+  // עתה: הצורה-המנורמלת (5K) נשמרת לצד הגולמית; ה-preflight בודק את שתי-הצורות
+  // מול-השרשרת וה-self-heal בוחר את-הצורה-המנצחת לחתימה — שני דורות-רישום חיים.
+  steemWifNorm: string | null; hiveWifNorm: string | null; blurtWifNorm: string | null;
 };
 
 /* ── FIX(SETTLE-11) נרמול-WIF: דחוס (38 בייטים, סיומת 0x01) → לא-דחוס קנוני (37) ──
@@ -347,7 +352,11 @@ async function loadKeysUncached(): Promise<RelayKeys | null> {
   let hivePub: string | null = null;
   try { steemPub = steem.auth.wifToPublic(steemRaw) || null; } catch { steemPub = null; }
   try { hivePub = steem.auth.wifToPublic(hiveRaw) || null; } catch { hivePub = null; }
-  return { account, steemWif, steemAuth, hiveAccount, hiveWif, hiveAuth, blurtWif: blurtRaw, blurtPub, ethKey, solKey, ethExpected, solExpected, steemPub, hivePub };
+  // FIX(R13 · wif-forms): צורות-מנורמלות — fail-soft: פליטה-פסולה = null (ה-preflight ידווח כנה)
+  const steemWifNorm = await wifNormalized(steemRaw);
+  const hiveWifNorm = await wifNormalized(hiveRaw);
+  const blurtWifNorm = blurtRaw ? await wifNormalized(blurtRaw) : null;
+  return { account, steemWif, steemAuth, hiveAccount, hiveWif, hiveAuth, blurtWif: blurtRaw, blurtPub, ethKey, solKey, ethExpected, solExpected, steemPub, hivePub, steemWifNorm, hiveWifNorm, blurtWifNorm };
 }
 
 /* בדיקת-נוכחות-סינכרונית (ל-rtInit — בלי-פענוח) */
@@ -905,8 +914,21 @@ async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"
     if (blurtPfx) steem.config.set("address_prefix", "BLT");
     const postWif = chain === "steem" ? (process.env.STEEM_POSTING_WIF ?? "").trim() : chain === "hive" ? (process.env.HIVE_POSTING_WIF ?? "").trim() : "";
     const actWif = chain === "steem" ? (process.env.STEEM_ACTIVE_WIF ?? "").trim() : chain === "hive" ? (process.env.HIVE_ACTIVE_WIF ?? "").trim() : (process.env.BLURT_ACTIVE_WIF ?? "").trim();
-    if (postWif) { try { candidates.push({ wif: postWif, auth: "posting", pub: steem.auth.wifToPublic(postWif) }); } catch { /* skip */ } }
-    if (actWif) { try { candidates.push({ wif: actWif, auth: "active", pub: steem.auth.wifToPublic(actWif) }); } catch { /* skip */ } }
+    // FIX(R13 · wif-forms): כל-מקור-מפתח נבדק בשתי-הצורות — המנורמלת 5K קודם
+    // (המתמטיקה-הנכונה, מול-רישום-תקין) ואחר-כך הגולמית (הספרייה מזיזה K/L-דחוס
+    // לסקלר-שגוי-שקט: k·256+1 — תקין-מול-שרשרת-שנרשמה בדור-הפגום).
+    // המנצח קובע גם את-צורת-החתימה (self-heal למטה).
+    const normOf = chain === "steem" ? keys.steemWifNorm : chain === "hive" ? keys.hiveWifNorm : keys.blurtWifNorm;
+    const pairs: Array<[string, "posting" | "active"]> = [];
+    if (normOf) {
+      if (chain !== "blurt" && (!postWif || normOf !== postWif)) pairs.push([normOf, "posting"]);
+      if (!actWif || normOf !== actWif) pairs.push([normOf, "active"]);
+    }
+    if (postWif) pairs.push([postWif, "posting"]);
+    if (actWif) pairs.push([actWif, "active"]);
+    for (const [wif, auth] of pairs) {
+      try { candidates.push({ wif, auth, pub: steem.auth.wifToPublic(wif) }); } catch { /* skip */ }
+    }
     if (blurtPfx) { try { steem.config.set("address_prefix", prevPfx ?? "STM"); } catch { /* keep */ } }
     let chosen: { wif: string; auth: "posting" | "active"; pub: string | null } | null = null;
     for (const c of candidates) {
