@@ -224,13 +224,21 @@ export async function verifyEthAnchor(
   expectedAddress: string | null,
 ): Promise<{ ok: boolean; detail: string }> {
   const endpoint = ETH_RPCS[0];
-  const tx = await rpc<{ to: string | null; input: string | null; blockNumber: string | null }>(
+  const tx = await rpc<{ to: string | null; from: string | null; input: string | null; blockNumber: string | null }>(
     endpoint, "eth_getTransactionByHash", [txid], 15000,
   ).catch(() => null);
   if (!tx) return { ok: false, detail: "not indexed: tx unknown to public node yet" };
   // FIX(Roast-64-c · F7): הנמען מאוגד — expectedAddress היה מוזרק-למחרוזת-בלבד;
   // עתה: tx.to (lowercased) != הכתובת-הצפויה → ok:false "wrong-recipient" (fail-closed).
   if (expectedAddress) {
+    // FIX(R15-c · anchor-identity-binding): היה — רק tx.to מאוגד. ה-payload פומבי
+    // (anchors.json/UI) וכל-אדם יכול לשלוח tx עם אותו-calldata אל-הכתובת-שלנו —
+    // והיה נספר כעוגן-מאומת. עתה: גם tx.from === הכתובת-שלנו (עיגון-אמת הוא
+    // self-tx: from==to) — צד-ג' נדחה fail-closed "not-our-anchor".
+    const from = String(tx.from ?? "").toLowerCase();
+    if (!from || from !== expectedAddress.toLowerCase()) {
+      return { ok: false, detail: `mismatch: not-our-anchor — sender ${from ? from.slice(0, 12) + "…" : "unknown"} is not the sovereign identity (fail-closed)` };
+    }
     const to = String(tx.to ?? "").toLowerCase();
     if (!to) return { ok: false, detail: "mismatch: wrong-recipient — tx carries no recipient (contract-creation)" };
     if (to !== expectedAddress.toLowerCase()) {

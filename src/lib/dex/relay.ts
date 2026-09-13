@@ -594,14 +594,14 @@ export async function verifyOnChain(
     return verifyEthAnchor(txid, expected, rtInit().ethAddress);
   }
   if (chain === "sol") {
-    return verifySolAnchor(txid, expected);
+    return verifySolAnchor(txid, expected, rtInit().solAddress);
   }
   if (chain === "tron") {
     const info = await rpc<{ blockNumber?: number; receipt?: { status?: string } }>(
       `${TRON_RPC}/wallet/gettransactioninfobyid`, { value: txid, visible: true }, 15000,
     ).catch(() => null);
     if (!info?.blockNumber) return { ok: false, detail: "not indexed: tron tx awaiting block" };
-    const tx = await rpc<{ raw_data?: { extra_data?: string[] } }>(
+    const tx = await rpc<{ raw_data?: { extra_data?: string[]; contract?: { parameter?: { value?: { owner_address?: string } } }[] } }>(
       `${TRON_RPC}/wallet/gettransactionbyid`, { value: txid, visible: true }, 15000,
     ).catch(() => null);
     const extra = tx?.raw_data?.extra_data?.[0];
@@ -610,6 +610,17 @@ export async function verifyOnChain(
     // בלי-payload-גלוי = ok:false "payload-not-surfaced" — הרשומה נשארת-לא-מאומתת
     // (לעולם לא מזויף-מאומת), ונכנסת-לתור-הפיוס.
     if (!extra) return { ok: false, detail: `payload-not-surfaced: confirmed in block ${info.blockNumber} but node hides extra_data — record stays unverified (fail-closed)` };
+    // FIX(R15-c · anchor-identity-binding): היה — extra_data בלבד. ה-stateRoot פומבי
+    // וכל-אדם יכול createtransaction עם אותו-extra_data לכתובת-שלו (~1-sun) — והיה
+    // נספר כעוגן-מאומת. עתה: owner_address חייב-להיות זהות-ה-TRON-הריבונית.
+    // (visible=true → הצומת מחזיר כתובות-base58 — נמדד-חי — ההשוואה בצורה-זו.)
+    const tronId = rtInit().tronAddress;
+    if (tronId) {
+      const owner = tx?.raw_data?.contract?.[0]?.parameter?.value?.owner_address;
+      if (!owner || owner.toLowerCase() !== String(tronId).toLowerCase()) {
+        return { ok: false, detail: "mismatch: not-our-anchor — owner_address is not the sovereign identity (fail-closed)" };
+      }
+    }
     // FIX(Roast-64-c · F5): השוואה מתוחמת-ופורשת — פענוח-ה-payload והשוואת-שוויון
     // מדויק מול-ה-stateRoot (ביט-מול-ביט), לא-substring על-הגולם.
     const payload = Buffer.from(extra, "hex").toString("utf8").trim();

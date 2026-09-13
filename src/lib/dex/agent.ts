@@ -174,8 +174,7 @@ export function runSwap(assetIn: string, assetOut: string, amount: number, minOu
     journalPush(run);
     return { ok: false, run, error: r.reason ?? "queue-rejected" };
   }
-  step(true, "submit", `batch אטומי נכנס לגרעין (${ops.length} רגליים) — minOut fail-closed לכל-רגל`);
-  run.status = "done";
+  step(true, "submit", `batch אטומי נכנס לגרעין (${ops.length} רגליים) — minOut fail-closed לכל-רגל · פסק-הדין-הסופי מהבלוק`);
   journalPush(run);
   return { ok: true, run };
 }

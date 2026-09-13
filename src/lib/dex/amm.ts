@@ -137,6 +137,10 @@ export function poolSwap(
   const ev: TradeEvent = {
     kind: "swap", base: (inA ? p.a : p.b) as never, quote: (inA ? p.b : p.a) as never,
     price, amountMu: amountIn, taker: op.issuer, at: nowMs,
+    // FIX(R15-a · twap-buy-weight): amountMu הוא quote-µ בקנייה (assetIn=quote) —
+    // muQ=amountMu×price/1000 היה מכפיל את המשקל ×price/1000 בשוגג. עתה: quoteMu =
+    // הציטוט-שזרם-בפועל (קנייה: amountIn; מכירה: notional) — משקל-TWAP דימנסיונלי-נכון.
+    quoteMu: inA ? amountIn : Math.floor((amountIn * price) / 1000),
   };
   return { ok: true, gas: 0, events: [ev] };
 }

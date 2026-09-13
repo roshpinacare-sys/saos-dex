@@ -487,7 +487,7 @@ export const stateRoot = (st: DexState): string => stateRootOf(st);
 
 // ─── עימות-עסקאות: applyOp — מחזיר {ok, gas, err?} (חתימת kernel.cjs) ────────
 export type OpResult = { ok: true; gas: number; events?: TradeEvent[] } | { ok: false; err: string; gas: number };
-export interface TradeEvent { kind: "fill" | "swap"; base: Asset; quote: Asset; price: number; amountMu: number; taker: string; maker?: string; at: number }
+export interface TradeEvent { kind: "fill" | "swap"; base: Asset; quote: Asset; price: number; amountMu: number; taker: string; maker?: string; at: number; quoteMu?: number }
 
 export interface Op {
   type: OpKind;
@@ -529,6 +529,12 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
   if (!op || typeof op !== "object") return { ok: false, err: "bad-op", gas: 0 };
   const gas = GAS_TABLE[op.type];
   if (gas === undefined) return { ok: false, err: "unknown-op", gas: 0 };
+  // FIX(R15-a · CRITICAL-1 · integer-gates): op.amount גולמי (100.5) עבר כמה-שערים
+  // (refuel/mint_fuel/wrap) שכתבו אותו ישר-למצב-הקנוני → stateRoot זרק CanonicalError
+  // → HALT, וההתאוששות היחידה היא reset שמוחק-ראיות. עתה: שער-שלמים אחיד בדלת-ה-op —
+  // נדחה לפני-כל-נגיעה-במצב (אותו-עיקרון Roast-65-a HIGH-1 שהוחל-רק על order/cow/price).
+  if (op.amount !== undefined && !Number.isSafeInteger(op.amount))
+    return { ok: false, err: "non-integer-amount", gas: 0 };
   const issuer = String(op.issuer ?? "").toLowerCase();
   if (!issuer || !op.nonce) return { ok: false, err: "issuer+nonce-required", gas: 0 };
   // FIX(Roast-64 · prototype-pollution): זיהוי-מסוכן נדחה-בדלת (שים-לב: גם addBal/
@@ -704,6 +710,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const effPx = limitPx > 0 ? limitPx : triggerPx;
       const lockMu = side === "sell" ? amt : notional(effPx, amt);
       if (!(lockMu > 0)) return { ok: false, err: "bad-lock", gas: 0 };
+      if (!Number.isSafeInteger(lockMu)) return { ok: false, err: "lock-overflow", gas: 0 }; // FIX(R15-a): px*amt שלמים-אך מעל 2^53 — נפסל לפני consume
       if (Object.keys(st.trig ?? {}).filter((k) => st.trig?.[k]?.owner === issuer).length >= 24)
         return { ok: false, err: "trig-cap", gas: 0 };
       if (avail(st, issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
@@ -849,6 +856,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const lockAsset = (side === "sell" ? base : quote) as string;
       const lockMu = side === "sell" ? amt : notional(px, amt);
       if (!(lockMu > 0)) return { ok: false, err: "bad-lock", gas: 0 };
+      if (!Number.isSafeInteger(lockMu)) return { ok: false, err: "lock-overflow", gas: 0 }; // FIX(R15-a): ראה trig_order
       if ((st.cow ?? []).filter((o) => o.owner === issuer).length >= COW_MAX_PENDING_PER_ISSUER)
         return { ok: false, err: "cow-cap", gas: 0 };
       if (avail(st, issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
@@ -996,6 +1004,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const lockAsset = (op.side === "sell" ? op.base : op.quote) as string;
       const lockMu = op.side === "sell" ? amt : notional(px, amt);
       if (!(px > 0) || !(amt > 0) || !(lockMu > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
+      if (!Number.isSafeInteger(lockMu)) return { ok: false, err: "lock-overflow", gas: 0 }; // FIX(R15-a): ראה trig_order
       // FIX(Roast-65-a · HIGH-1): שער-שלמים בכניסה-ל-op — price/amount גולמיים (2500.5)
       // נכנסו-לספר/לנעילה (הוכח-חי P2), המצב-הקנוני הפך-רעיל ו-stateRoot זרק CanonicalError
       // בכל-חישוב. "אין-float במצב" היה-הצהרה, לא-שער. נדחה-לפני-כל-נגיעה-במצב.
@@ -1136,8 +1145,10 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         if ((st.extClaims ?? []).includes(op.claim)) return { ok: false, err: "claim-already-used", gas };
         if (st.extBack?.[a]?.claim === op.claim) return { ok: false, err: "claim-already-used", gas };
         const ce = consume(); if (ce) return ce;
-        st.backing[a] = (st.backing[a] ?? 0) + amt;
+        // FIX(R15-a): addBal קודם — אם-הוא-זורק, ה-backing לא-נגע (היה: backing+= קודם,
+        // addBal זרק → גיבוי-נרשם בלי-יתרה = מצב-סותר).
         addBal(st, issuer, a, amt);
+        st.backing[a] = (st.backing[a] ?? 0) + amt;
         st.extClaims = [...(st.extClaims ?? []), op.claim].slice(-256); // FIX(Roast-65-a · LOW-10): טבעת-חסומה — גידול-מצב חסום, אין-זליגת-זיכרון
         st.extBack = { ...(st.extBack ?? {}), [a]: { claim: op.claim, mu: (st.extBack?.[a]?.mu ?? 0) + amt, atH: st.height } };
         // FIX(Roast-64 · journal-mislabel): הרשומה הייתה עם t:0 (זמן-מזויף) ו-
@@ -1187,6 +1198,10 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas };
       const a = op.asset;
       if (!a) return { ok: false, err: "asset-required", gas };
+      // FIX(R15-a · proto-gate): asset_list/asset_price היו המקום-האחרון בלי-FORBIDDEN_KEYS
+      // — treasury-op יכול היה לכתוב st.assets["__proto__"] ולהרעיל-אב-טיפוס (אותה-מחלקה
+      // Roast-64 סגרה ל-accounts). הגנת-עומק בדלת-ה-op.
+      if (FORBIDDEN_KEYS.has(a)) return { ok: false, err: "forbidden-asset", gas };
       if (op.type === "asset_list" && st.assets[a]) return { ok: false, err: "already-listed", gas };
       // FIX(Roast-65-a · HIGH-1): refPrice גולמי (asset_price) היה נכנס למצב-הקנוני כמו-שהוא
       // (float/NaN → CanonicalError-נצחי). שער-שלמים fail-closed על-שני-ה-ops (list/price).
