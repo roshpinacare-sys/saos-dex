@@ -197,7 +197,13 @@ async function fetchCustody(ids: DoorIdentities): Promise<Custody> {
       if (!ids.tron) return null;
       try {
         const r = await fencedFetch(`${TRON_RPC}/v1/accounts/${ids.tron}`, "peg-door.tron-bal", { signal: AbortSignal.timeout(12_000), cache: "no-store" });
-        const j = (await r.json()) as { data?: { balance?: number }[] };
+        // FIX(R14-a · false-zero): fencedFetch לא-זורק-על-HTTP-שגיאה והקוד לא בדק r.ok —
+        // גוף-שגיאה/429 (בלי data) נפל ל-`?? 0` והוצג כ"יתרת-משמורת 0" כשהכסף על-השרשרת
+        // (נמדד-חי: 2,000,001-TRX על הדלת הוצגו 0). עתה: HTTP-שגיאה או success:false =
+        // null (לא-נודע — fail-כנה) ולא-אפס-פיזי-מזויף.
+        if (!r.ok) return null;
+        const j = (await r.json()) as { data?: { balance?: number }[]; success?: boolean };
+        if (j?.success === false) return null;
         return j?.data?.[0]?.balance ?? 0;
       } catch { return null; }
     })(),
