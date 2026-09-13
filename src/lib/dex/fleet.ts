@@ -23,7 +23,7 @@
  */
 import fs from "fs";
 import path from "path";
-import { scryptSync, createDecipheriv } from "crypto";
+import { scryptSync, createDecipheriv, createHash } from "crypto";
 import steemLibRaw from "steem";
 import { fencedFetch } from "./fence"; // FIX(Roast-65-b · H2): גדר + redirect:error מרוכזים
 import { ANCHOR_ID, HIVE_CHAIN_ID, HIVE_NODES, grapheneSealBroadcast, rcMana } from "./relay";
@@ -32,6 +32,43 @@ interface SteemAuth {
   auth: { wifToPublic(wif: string): string };
 }
 const steemLib = steemLibRaw as unknown as SteemAuth;
+
+// FIX(R14-a · dual-form): תאום-של normalizeWif מ-relay.ts (היבוא יצור סחרור-מעגלי
+// relay↔fleet — לכן מקומי). K/L-דחוס (52 תווים) → מעטפת-5K-קנונית (51): base58check
+// decode, הסרת דגל-הדחיסה 0x01, encode מחדש. צורות-אחרות עוברות ללא-שינוי.
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function fleetWifNormalized(wif: string): string | null {
+  const w = wif.trim();
+  if (!/^[KL]/.test(w)) return w;
+  let num = BigInt(0);
+  for (const ch of w) {
+    const idx = B58.indexOf(ch);
+    if (idx < 0) return null;
+    num = num * BigInt(58) + BigInt(idx);
+  }
+  let hex = num.toString(16);
+  if (hex.length % 2) hex = "0" + hex;
+  let bytes = Buffer.from(hex, "hex");
+  let pad = 0;
+  while (w[pad] === "1") pad++;
+  if (pad > 0) bytes = Buffer.concat([Buffer.alloc(pad), bytes]);
+  if (bytes.length < 5) return null;
+  const payload = bytes.subarray(0, bytes.length - 4);
+  const check = bytes.subarray(bytes.length - 4);
+  const h = createHash("sha256").update(createHash("sha256").update(payload).digest()).digest();
+  if (!h.subarray(0, 4).equals(check)) return null;
+  if (payload.length !== 34 || payload[0] !== 0x80 || payload[33] !== 0x01) return w;
+  const body = payload.subarray(0, 33);
+  const h2 = createHash("sha256").update(createHash("sha256").update(body).digest()).digest();
+  const buf = Buffer.concat([body, h2.subarray(0, 4)]);
+  let n = BigInt(0);
+  for (const b of buf) n = n * BigInt(256) + BigInt(b);
+  let out = "";
+  while (n > BigInt(0)) { out = B58[Number(n % BigInt(58))] + out; n /= BigInt(58); }
+  let pad2 = 0;
+  while (buf[pad2] === 0) { out = "1" + out; pad2++; }
+  return out;
+}
 
 /* עלות-אמפירית-מדודה-חי (2026-09-09): עיגון-הצי-הראשון (haran, tx fa946dfb…) בלע
  * ~199M-RC מהמדד-החי — תואם-מדידת-jummper (157.7M-ל-op-קטן-יותר). הסף-להלן
@@ -180,13 +217,22 @@ function tryOpen(rt: FleetRT): void {
     rt.sealedAt = bundle.at;
     for (const a of bundle.accounts) {
       // self-verify: ה-WIF-חייב-לגזור-בדיוק-את-ה-pub-שבכספת — אחרת-נפסל (fail-closed)
+      // FIX(R14-a · dual-form): steem-js 0.7.11 מזיז K/L-דחוס לסקלר-שגוי-שקט (k·256+1).
+      // היה-בדיקה-בצורה-הגולמית-בלבד → מפתח-צי-דחוס-חוקי היה נפסל-בשקט (false-negative).
+      // עתה: בדיקה בשתי-הצורות (גולמי + מנורמל 5K), והזוכה בצורתו נשמר לחתימה.
       let pubOk = false;
+      let winningWif = "";
       try {
-        pubOk = steemLib.auth.wifToPublic(a.keys.posting!.wif) === a.keys.posting!.pub;
+        const raw = a.keys.posting!.wif;
+        if (steemLib.auth.wifToPublic(raw) === a.keys.posting!.pub) { pubOk = true; winningWif = raw; }
+        else {
+          const norm = fleetWifNormalized(raw);
+          if (norm && norm !== raw && steemLib.auth.wifToPublic(norm) === a.keys.posting!.pub) { pubOk = true; winningWif = norm; }
+        }
       } catch { pubOk = false; }
       if (!rt.accounts.has(a.username)) {
         rt.accounts.set(a.username, {
-          postingWif: pubOk ? a.keys.posting!.wif : "",   // לא-מאומת → לא-נשמר
+          postingWif: pubOk ? winningWif : "",   // לא-מאומת → לא-נשמר
           postingPub: a.keys.posting!.pub,
           authorityOk: null, rcEffective: null,
           failCount: 0, lastFailAt: null,

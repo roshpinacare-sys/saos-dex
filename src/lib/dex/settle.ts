@@ -408,7 +408,7 @@ const num = (s: string): number => parseFloat(String(s).replace(/[^\d.]/g, "")) 
 async function auditRail(rail: ChainName, identity: string): Promise<RailBalance> {
   const at = new Date().toISOString();
   try {
-    if (rail === "steem" || rail === "hive" || rail === "blurt") {
+    if (rail === "steem" || rail === "hive" || rail === "blurt" || rail === "fleet") {
       // FIX(70-b ·1): BLURT היה-נופל לענף-ה-SOL — שאילתת-getBalance-סולנית על-שם-גרפן
       // החזירה "0.000000000 SOL" ירוק (חיובי-שקר). עתה: ענף-גרפן אמיתי (אותו-מבנה-condenser),
       // צמתים-חיים מ-blurtwallet (blurt.world מת). BLURT אין-דבט — רק-נזיל+VESTS.
@@ -417,6 +417,10 @@ async function auditRail(rail: ChainName, identity: string): Promise<RailBalance
         hive: "https://api.hive.blog",
         // rpc.blurt.blog — הצומת-החי-שנמדד (Roast-74) · מקובע-כבר-ב-PINNED_HOSTS
         blurt: "https://rpc.blurt.blog",
+        // FIX(R14-a·1): fleet = חיילי-הצי על Hive — ענף-גרפן משלו. היה-נופל לענף-ה-SOL
+        // (getBalance-סולני על שם-גרפן): על צומת-סלחן היה מחזיר false-positive
+        // "0.000000000 SOL" חי, ועל הצומת-הקפדן — "read failed: Invalid param" מטעה.
+        fleet: "https://api.hive.blog",
       };
       const node = NODES[rail];
       const r = await jfetch<{ result?: { balance: string; sbd_balance?: string; hbd_balance?: string; vesting_shares: string }[]; error?: { message: string } }>(
@@ -424,7 +428,7 @@ async function auditRail(rail: ChainName, identity: string): Promise<RailBalance
       if (r.error) throw new Error(r.error.message);
       const acc = r.result?.[0];
       if (!acc) throw new Error("account not found");
-      const sym = rail === "steem" ? "STEEM" : rail === "hive" ? "HIVE" : "BLURT";
+      const sym = rail === "steem" ? "STEEM" : rail === "hive" ? "HIVE" : rail === "fleet" ? "HIVE" : "BLURT";
       const debtSym = rail === "steem" ? "SBD" : rail === "hive" ? "HBD" : null;
       const debt = debtSym ? num(rail === "steem" ? acc.sbd_balance ?? "0" : acc.hbd_balance ?? "0") : null;
       return {
@@ -437,7 +441,10 @@ async function auditRail(rail: ChainName, identity: string): Promise<RailBalance
       };
     }
     if (rail === "tron") {
-      const r = await jfetch<{ data: { balance?: number }[] }>(`https://api.trongrid.io/v1/accounts/${identity}?visible=true`);
+      // FIX(R14-a·2): trongrid יכול להחזיר HTTP-200 עם גוף-שגיאה (success:false) — היה
+      // נקרא כ"0.000000 TRX ok:true". עתה: גוף-שגיאה = זריקה כנה (fail-closed).
+      const r = await jfetch<{ data: { balance?: number }[]; success?: boolean; error?: unknown }>(`https://api.trongrid.io/v1/accounts/${identity}?visible=true`);
+      if (r.success === false) throw new Error("trongrid returned success:false error body");
       const sun = r.data?.[0]?.balance ?? 0;
       return {
         rail, identity, ok: true,
@@ -446,18 +453,29 @@ async function auditRail(rail: ChainName, identity: string): Promise<RailBalance
       };
     }
     if (rail === "eth") {
-      const rpc = process.env.ETH_RPC_URL || "https://eth.llamarpc.com";
-      const r = await jfetch<{ result: string; error?: { message: string } }>(rpc, {
-        jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [identity, "latest"],
-      });
-      if (r.error) throw new Error(r.error.message);
-      const wei = BigInt(r.result);
-      const n = await jfetch<{ result: string }>(rpc, { jsonrpc: "2.0", id: 2, method: "eth_getTransactionCount", params: [identity, "latest"] });
-      return {
-        rail, identity, ok: true,
-        native: `${(Number(wei) / 1e18).toFixed(9)} ETH`, extra: `nonce ${parseInt(n.result, 16)} (broadcasts live)`,
-        detail: new URL(rpc).host, at,
-      };
+      // FIX(R14-a · eth-audit-fallback): קשר-קשה-ל-RPC-יחיד — llamarpc החזיר 403 (חסימת-IP
+      // נמדדה-חי 2026-09-13) והמסילה דווחה מתה-שקרית. עתה: רשימת-RPC-ציבוריים (אותו-מאגר
+      // של-relay-eth) — הראשון-שעונה מנצח; כולם-נכשלו = ok:false כנה.
+      const { ETH_RPCS } = await import("./relay-eth");
+      let lastErr: string | null = null;
+      for (const rpc of ETH_RPCS) {
+        try {
+          const r = await jfetch<{ result: string; error?: { message: string } }>(rpc, {
+            jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [identity, "latest"],
+          });
+          if (r.error) throw new Error(r.error.message);
+          const wei = BigInt(r.result);
+          const n = await jfetch<{ result: string }>(rpc, { jsonrpc: "2.0", id: 2, method: "eth_getTransactionCount", params: [identity, "latest"] });
+          return {
+            rail, identity, ok: true,
+            native: `${(Number(wei) / 1e18).toFixed(9)} ETH`, extra: `nonce ${parseInt(n.result, 16)} (broadcasts live)`,
+            detail: new URL(rpc).host, at,
+          };
+        } catch (e) {
+          lastErr = e instanceof Error ? e.message : "error";
+        }
+      }
+      throw new Error(`all eth RPCs failed (last: ${lastErr?.slice(0, 60) ?? "unknown"})`);
     }
     // sol
     const rpc = process.env.SOL_RPC_URL || "https://api.mainnet-beta.solana.com";
@@ -483,7 +501,11 @@ async function auditRail(rail: ChainName, identity: string): Promise<RailBalance
  * ההוכחה-הטריה-החזקה); נופלים לרשומה-חיה-בת-יותר-מ-45ש׳ (חלון-אינדוקס). */
 async function anchorSpotCheck(rsAccount: string | null): Promise<AnchorSpot[]> {
   const rs = relayStatus() as { records: { chain: ChainName; height: number; status: string; txid: string | null; stateRoot?: string; verified?: boolean | null; at: string; account?: string | null }[] };
-  const chains: ChainName[] = ["steem", "hive", "tron", "eth", "sol"];
+  // FIX(R14-a·3): blurt נוסף לסקר-העיגון (נתיב-verifyOnChain שלו הוכח-חי Roast-74 —
+  // אותו-condenser get_transaction). fleet נשאר-מחוץ-לסקר בכנות: עיגוני-הצי נחתמים
+  // על-חשבונות-חיילים ואימות-ה-authority-binding שלהם טרם-הוכח — הוספה-סמאית הייתה
+  // מסכנת פסק-דין-אדום-שקרי (mismatches) על כל-המערכת.
+  const chains: ChainName[] = ["steem", "hive", "blurt", "tron", "eth", "sol"];
   const pick = (c: ChainName) =>
     rs.records.find((r) => r.chain === c && r.status === "anchored" && r.txid && r.stateRoot && r.verified === true)
     ?? rs.records.find((r) => r.chain === c && r.status === "anchored" && r.txid && r.stateRoot && Date.now() - new Date(r.at).getTime() > 45_000)
