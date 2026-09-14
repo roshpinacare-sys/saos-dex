@@ -1,26 +1,18 @@
-# SAOS PULSE — h25 · המחזור התשיעי · 2026-09-12
+# אוחד לבית הקנוני — G6
 
-**נולד מהוראת הבעלים "תמשיך ודחוף" (trace 1a0935becee43045) — פעימה מלאה בכנות, אפס סודות.**
+קובץ זה היה עותק-שידור משוכפל (קבוצת שכפול 19/90 במדידת האקוסיסטם של 2026-09-14:
+1527 קבצי-סטטוס נמדדו, 910 עותקים יתרים, dup=0.5959 — יעד <0.2).
+התוכן אוחד לבית הקנוני. אין לשחזר את התוכן לכאן — עדכנו את הקנוני וקשרו אליו.
 
-## החותם
-- SealRecord **height=25** · root `8f51386543f814181d001de5d0f913f79b9483df9d978d2cfb90aeb3897059e7` · 02:08:34 UTC
-- קבלה משורשרת `28b2a5d2…` · מעל v75 תצוגה-מדברת-אמת + v76 פנקס-העניינים (rebased שתי המכונות, אף קומיט לא אבד)
+| שדה | ערך |
+|---|---|
+| העותק הקנוני | roshpinacare-sys/anchor-baseline · docs/reports/SAOS-PULSE-2026-09-12-H25-NINTH-CYCLE.md |
+| sha256 העותק שהיה כאן | undefined |
+| גודל העותק שהיה כאן | undefined bytes |
+| מיקום העותק שהיה כאן | roshpinacare-sys/saos-dex · docs/reports/SAOS-PULSE-2026-09-12-H25-NINTH-CYCLE.md |
+| אוחד | 2026-09-14 · THE WEAVE · weave-ecosystem G6 |
 
-## עוגנים חיים — אומתו מחדש בצד-השרת (anchor-ingest discipline, CAS)
-| רשת | txid | עדות |
-|---|---|---|
-| ETHEREUM | `0x02648a905dda03720109fd4bdfe347fb7b8a5eafa0b1a172fd165590774f01bf` | blk 25,958,268 · calldata = root‖height בדיוק-בייט · 22,320 גז @ 0.052 gwei (אבק) |
-| SOLANA | `5BbqFe466JsDNDx2TgTCLTirBYSgZ58mRsdekMbY7zdyPHTPTjUeRgV5qyRXYFUpubTyciwf1PnJqNGPE1wRiAxZ` | slot 446,313,117 · memo נושא h=25 + root מלא · 5,000 lamports · dual-RPC |
+התוכן המלא נשמר בשני מקומות: (א) העותק הקנוני שלעיל; (ב) היסטוריית הגיט של הריפו הזה —
+`git log --oneline -- docs/reports/SAOS-PULSE-2026-09-12-H25-NINTH-CYCLE.md` ואז `git show <commit>:docs/reports/SAOS-PULSE-2026-09-12-H25-NINTH-CYCLE.md`.
 
-שתי העוגנות נורו מכלי-ה-h24 (שנבנו מראיות אחרי איפוס-הסנדבוקס), נחתמו מכספת-המפתחות-המשוחזרת (cashmachine), ונבדקו שנית ב-RPC בלתי-תלוי לפני כניסה לספר — הכלל מ-h15/h16 עומד: עוגן שמגיע מבחוץ נבדק שנית.
-
-## שערים כנים — לא ירו, וזו עדות לא כישלון
-- **STEEM/BLURT** — כספת הפלטפורמה אינה נאטמת (אין מפתח active במעטפת; ממצא v73: כספת משוחזרת מהדור הישן) — הפעימה ממתינה למפתח-דור-חי מהמפעיל · fail-closed הוכח חי שוב
-- **HIVE** — RC 0.03% < רצפת 8% (ממשיך להצטבר)
-- **TRON** — energy-0 על כל 6 כתובות הכספת
-
-## מצב המטריצה אחרי h25
-STEEM h22-anchored · BLURT h22-anchored · ETHEREUM **h25** · SOLANA **h25** · HIVE gated · TRON transit · 4/6 מעוגנות-חי, 2 שערים כנים.
-
-## אפס סודות
-מסלולי-קבצים בלבד בכל היומנים; התוכן לעולם לא נכנס ללוג, לתשובה או לקבלה.
+Consolidated by THE WEAVE ecosystem dedup (G6). This pointer is intentional — do not copy content back.
