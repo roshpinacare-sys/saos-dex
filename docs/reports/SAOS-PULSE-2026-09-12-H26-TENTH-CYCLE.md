@@ -1,44 +1,18 @@
-# SAOS PULSE — h26 · המחזור העשירי · 2026-09-12
+# אוחד לבית הקנוני — G6
 
-**נולד מהוראת הבעלים "תעבור על כל מה שעשיתי וכתבתי — תראה מה יש לעשות, הרבה — תמשיך ודחוף" (trace 1a09387c31d37d5d) — פעימה מלאה בכנות, אפס סודות.**
+קובץ זה היה עותק-שידור משוכפל (קבוצת שכפול 18/90 במדידת האקוסיסטם של 2026-09-14:
+1527 קבצי-סטטוס נמדדו, 910 עותקים יתרים, dup=0.5959 — יעד <0.2).
+התוכן אוחד לבית הקנוני. אין לשחזר את התוכן לכאן — עדכנו את הקנוני וקשרו אליו.
 
-## החותם
-- SealRecord **height=26** · root `fe1679aa4e6dd660b6d94c5900256f751c4cdc322541ce5c04ed94963e365a14` · stateRoot `f882d4f0…` · 9 עלים · 02:55:37 UTC
-- קבלה משורשרת `2b42f56c…` · מעל v76 פנקס-העניינים + v77 כרטיס-הזהות של המטבע (rebase-מצבים נשמרים, אף קומיט לא אבד)
+| שדה | ערך |
+|---|---|
+| העותק הקנוני | roshpinacare-sys/anchor-baseline · docs/reports/SAOS-PULSE-2026-09-12-H26-TENTH-CYCLE.md |
+| sha256 העותק שהיה כאן | undefined |
+| גודל העותק שהיה כאן | undefined bytes |
+| מיקום העותק שהיה כאן | roshpinacare-sys/saos-dex · docs/reports/SAOS-PULSE-2026-09-12-H26-TENTH-CYCLE.md |
+| אוחד | 2026-09-14 · THE WEAVE · weave-ecosystem G6 |
 
-## עוגנים חיים — אומתו מחדש בצד-השרת (anchor-ingest discipline, CAS)
-| רשת | txid | עדות |
-|---|---|---|
-| ETHEREUM | `0x87c490aed4d07d373c554029e437275ed152b1f46514dd9eae492a944134722b` | blk 25,958,483 · calldata = root‖height בדיוק-בייט · 22,320 גז @ 0.0509 gwei (אבק) |
-| SOLANA | `2uPrCtWANzReqcqrZ81PPz66KsmzHgRrrDfd8UK1eEgjWkzozjERXS9XTKkee9LUrwCssQDq9mNzV2ZRpPo7KL7B` | slot 446,321,252 · memo נושא h=26 + root מלא · 5,000 lamports |
+התוכן המלא נשמר בשני מקומות: (א) העותק הקנוני שלעיל; (ב) היסטוריית הגיט של הריפו הזה —
+`git log --oneline -- docs/reports/SAOS-PULSE-2026-09-12-H26-TENTH-CYCLE.md` ואז `git show <commit>:docs/reports/SAOS-PULSE-2026-09-12-H26-TENTH-CYCLE.md`.
 
-שתי העוגנות נורו מכלי-ה-h24 (חתימת cashmachine מכספת-המפתחות-המשוחזרת), ונבדקו שנית ב-RPC בלתי-תלוי (publicnode) לפני כניסה לספר — הכלל מ-h15/h16 עומד: **עוגן שמגיע מבחוץ נבדק שנית**.
-
-## מוסד שנולד המחזור הזה: `scripts/anchor-ingest.mjs`
-ה-h25 נעשה בתור-חד-פעמי מ-/tmp; ה-h26 הפך את המשמעת לקובץ-מוסד בתוך הריפו:
-- אימות-מחדש ETH: status=1 + calldata בדיוק-בייט מול root‖height של החותם
-- אימות-מחדש SOL: memo מכיל h+root (לקח-חי שנתפס: RPC "json" מקודד data ב-base58 — הסקריפט מפענח כפול base58+base64)
-- מילוי-CAS: שורה קיימת לעולם לא נדרסת; נכתב פעם אחת בלבד (ETHEREUM "existing" ✓ · SOLANA "created" ✓)
-- אפס מפתחות: הסקריפט קורא נתוני-שרשרת ציבוריים בלבד
-- logOp `anchor.ingest` רשום בפנק-התפעול
-
-## שערים כנים — לא ירו, וזו עדות לא כישלון
-- **STEEM/BLURT** — כספת הפלטפורמה אינה נאטמת (אין מפתח active במעטפת; ממצא v73) — ממתין למפתח-דור-חי מהמפעיל · fail-closed הוכח חי שוב
-- **HIVE** — RC נמוך מרצפת 8% (ממשיך להצטבר)
-- **TRON** — energy-0 על כל כתובות הכספת
-
-## תקלה-תפעולית שנתפסה ותוקנה במהלך הסבב
-- הווב (:3000) קיבל SIGTERM ("Polite quit request") ונפל — זוהה בסקירה, אותר process-עץ חי, חזר ל-200 OK תוך שניות. שאר השירותים (keeper :3005 · herald :3006 · swarm :3007 · anvil :8545 בלוק 1,591) עמדו כולם חיים לאורך הסבב.
-
-## מצב המטריצה אחרי h26
-STEEM h22-anchored · BLURT h22-anchored · ETHEREUM **h26** · SOLANA **h26** · HIVE gated · TRON transit · **4/6 מעוגנות-חי**, 2 שערים כנים. המטבע SAOS-M קשור לחותם-החי: `/api/saos/coin` מציג lastSeal height=26.
-
-## תוכניות — הסבב הבא
-- **h27** — מחזור העגינה האחד-עשר: ETH+SOL מהמלאי (כלים מוכחים), עם `scripts/anchor-ingest.mjs` כקו-הייצור
-- **TRON** — עוגן ישיר כשתהיה אנרגיה זמינה על כתובות-הכספת (ממתין למלאי/מפעיל)
-- **HIVE** — המתנה לצבירת RC מעל רצפת 8%
-- **STEEM/BLURT** — שער-מפעיל: איטום כספת חדש מהבעלים פותח את שתי הרשתות מיד
-- **כיסוי-אנדפוינט** — הוספת endpointHost ל-AnchorRecord (הפער-היחיד שנותר מ-RELAY-PATCH-2)
-
-## אפס סודות
-מסלולי-קבצים בלבד בכל היומנים; התוכן לעולם לא נכנס ללוג, לתשובה או לקבלה.
+Consolidated by THE WEAVE ecosystem dedup (G6). This pointer is intentional — do not copy content back.
