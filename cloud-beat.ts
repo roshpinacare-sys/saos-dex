@@ -246,7 +246,9 @@ async function main(): Promise<void> {
   const ledger = loadLedger();
   const envelopes: Record<string, unknown>[] = [];
   for (const acc of RELAY_ACCOUNTS) {
-    const hist = await steemRpc<Array<[number, { op?: [string, Record<string, unknown>] } ]>>("condenser_api.get_account_history", [acc, -1, 500]);
+    // מגבלת-condenser: 100 לקריאה. הלב קורא את-100-האחרונות לכל-חשבון-ממסר
+    // (תביעות הן-טריות-מטבען; סריקה-עמוקה יותר מתבצעת באימות-העצמאי שבאתר).
+    const hist = await steemRpc<Array<[number, { op?: [string, Record<string, unknown>] } ]>>("condenser_api.get_account_history", [acc, -1, 100]);
     if (!Array.isArray(hist)) continue;
     for (const [, entry] of hist) {
       const op = entry?.op;
