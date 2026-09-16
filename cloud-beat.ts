@@ -123,6 +123,8 @@ interface CreditsLedger {
   credits: CreditRec[];
   processedTxids: Record<string, 1>;
   processedIds: Record<string, 1>;
+  /** הבלוק האחרון שנסרק בסריקת-הרשת (self-serve) — 0 = עדיין לא. */
+  lastScanBlock?: number;
 }
 function loadLedger(): CreditsLedger {
   try {
@@ -139,6 +141,69 @@ function saveLedger(l: CreditsLedger): void {
 }
 
 /* ── Steem: קריאת-הספר הציבורי (חסר-מפתח, קריאה-בלבד) ── */
+/* ── סריקת-רשת: תביעות ששודרו מכל חשבון Steem (self-serve) ──
+ * get_account_history רואה רק את חשבונות-הממסר. משתמש שמשדר את התביעה
+ * מהחשבון שלו נתפס כאן: סורקים את חלון-הבלוקים מאז-הסריקה האחרונה
+ * (JSON-RPC באצוות-10, מדידה: ~1.1s לאצווה) ומלקטים custom_json עם
+ * מזהה-הפעולה שלנו מכל כותב שהוא. החתימה הפנימית (saos1) היא הסמכות
+ * — התעבורה רק מסיעה. תקרת-חלון: 2400 בלוקים (~2ש'); פער גדול יותר
+ * נרשם בכנות וממשיך מההווה. */
+const SCAN_BATCH = 10;
+const SCAN_MAX_BLOCKS = 2400;
+const SCAN_CONCURRENCY = 3;
+async function scanNetworkClaims(ledger: CreditsLedger): Promise<Record<string, unknown>[]> {
+  let head = 0;
+  for (let i = 0; i < 3 && !head; i++) {
+    const props = await steemRpc<{ head_block_number?: number }>("condenser_api.get_dynamic_global_properties", []);
+    head = Number(props?.head_block_number ?? 0);
+    if (!head) await new Promise((r) => setTimeout(r, 2_000));
+  }
+  if (!head) { console.warn("[cloud-beat] scanNetwork: head unknown — skipped this beat"); return []; }
+  const last = Number(ledger.lastScanBlock ?? 0);
+  let from = last > 0 ? last - 12 : head - 20; // חפיפת-ביטחון 12 בלוקים
+  if (head - from > SCAN_MAX_BLOCKS) {
+    console.warn(`[cloud-beat] scan gap ${head - from} blocks > cap — resuming from head-${SCAN_MAX_BLOCKS} (older claims: use the gate relay)`);
+    from = head - SCAN_MAX_BLOCKS;
+  }
+  const out: Record<string, unknown>[] = [];
+  const blockNos: number[] = [];
+  for (let b = from + 1; b <= head; b++) blockNos.push(b);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < blockNos.length) {
+      const mine = blockNos.slice(cursor, cursor + SCAN_BATCH);
+      cursor += SCAN_BATCH;
+      const reqs = mine.map((b, i) => ({ jsonrpc: "2.0", id: i + 1, method: "condenser_api.get_ops_in_block", params: [b, false] }));
+      try {
+        const ac = new AbortController();
+        const tm = setTimeout(() => ac.abort(), 25_000);
+        const r = await fetch(STEEM_NODE, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify(reqs), signal: ac.signal,
+        });
+        clearTimeout(tm);
+        if (!r.ok) throw new Error(String(r.status));
+        const arr = (await r.json()) as Array<{ result?: Array<{ op?: [string, Record<string, unknown>] }> }>;
+        for (const res of arr) {
+          for (const entry of res?.result ?? []) {
+            const op = entry?.op;
+            if (!op || op[0] !== "custom_json") continue;
+            const body = op[1] as { id?: string; json?: string };
+            if (body?.id !== OP_ID || typeof body.json !== "string") continue;
+            try { out.push(JSON.parse(body.json) as Record<string, unknown>); } catch { /* הקיפול ידחה בכנות */ }
+          }
+        }
+      } catch {
+        await new Promise((r2) => setTimeout(r2, 1_500)); // אצווה אחת נפלה — ממשיכים, הבאה בפעימה הבאה
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: SCAN_CONCURRENCY }, worker));
+  ledger.lastScanBlock = head;
+  console.log(`[cloud-beat] network scan: blocks ${from + 1}..${head} → ${out.length} envelopes (any-account self-serve)`);
+  return out;
+}
+
 async function steemRpc<T>(method: string, params: unknown[]): Promise<T | null> {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -245,9 +310,15 @@ async function main(): Promise<void> {
   const heightAfter = rt.st.height;
   console.log(`[cloud-beat] advanced ${heightBefore} → ${heightAfter} (${ticked} ticks, ${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
-  /* ── תביעות-הפקדה מהספר הציבורי ── */
+  /* ── תביעות-הפקדה מהספר הציבורי: חשבונות-ממסר + סריקת-רשת (self-serve) ── */
   const ledger = loadLedger();
   const envelopes: Record<string, unknown>[] = [];
+  const seenIds = new Set<string>();
+  const pushEnv = (e: Record<string, unknown>) => {
+    const id = typeof e?.id === "string" ? e.id : "";
+    if (id) { if (seenIds.has(id)) return; seenIds.add(id); }
+    envelopes.push(e);
+  };
   for (const acc of RELAY_ACCOUNTS) {
     // מגבלת-condenser: 100 לקריאה. הלב קורא את-100-האחרונות לכל-חשבון-ממסר
     // (תביעות הן-טריות-מטבען; סריקה-עמוקה יותר מתבצעת באימות-העצמאי שבאתר).
@@ -258,10 +329,11 @@ async function main(): Promise<void> {
       if (!op || op[0] !== "custom_json") continue;
       const body = op[1] as { id?: string; json?: string };
       if (body?.id !== OP_ID || typeof body.json !== "string") continue;
-      try { envelopes.push(JSON.parse(body.json) as Record<string, unknown>); } catch { /* גם-הקיפול-דוחה בכנות */ }
+      try { pushEnv(JSON.parse(body.json) as Record<string, unknown>); } catch { /* גם-הקיפול-דוחה בכנות */ }
     }
   }
-  console.log(`[cloud-beat] public book: ${envelopes.length} envelopes from ${RELAY_ACCOUNTS.length} relay accounts`);
+  for (const e of await scanNetworkClaims(ledger)) pushEnv(e);
+  console.log(`[cloud-beat] public book: ${envelopes.length} envelopes (12 relay accounts + network scan)`);
 
   const deposits = await readPublicDeposits();
   const byTxid = new Map(deposits.map((d) => [String(d.txid).toLowerCase(), d]));
@@ -333,7 +405,7 @@ async function main(): Promise<void> {
     credited++;
     console.log(`[cloud-beat] credited ${usds} USDS → ${to} (txid ${dep.txid.slice(0, 14)}…, ${cur})`);
   }
-  if (credited > 0 || ledger.credits.length > 0) saveLedger(ledger);
+  saveLedger(ledger); // תמיד: lastScanBlock חייב להתקדם גם בלי זיכויים (חלון-הסריקה)
   console.log(`[cloud-beat] claims: ${credited} credited, ${skipped} skipped/waiting`);
 
   forceFlush();
@@ -391,6 +463,7 @@ async function main(): Promise<void> {
     state: st,
     markets: getMarkets(),
     pools: getPools(),
+    wallets: (chain as { getWallets: () => { name: string; balances: Record<string, number>; locked: Record<string, number> }[] }).getWallets(),
     tape: getTape(40),
     seal: (getProofs().seals ?? [])[0] ?? null,
     credits: ledger.credits.slice(-50),
