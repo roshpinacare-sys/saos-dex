@@ -342,11 +342,13 @@ async function main(): Promise<void> {
   let feeds: Record<string, number> = {};
   try {
     const pp = await import("./src/lib/dex/price-proof");
-    const f = await (pp as { extFeeds: (force?: boolean) => Promise<Record<string, number>> }).extFeeds(true);
+    /* המרה-דו-שלבית (Task 35): טיפוס-המודול האמיתי אינו-חופף-מספיק לחתימה — בלי-unknown
+     * המהדר מסרב (TS2352) וחוסם את הבנייה כולה. ההמרה כאן רק מצהירה-על-החלק-שבו-משתמשים. */
+    const f = await (pp as unknown as { extFeeds: (force?: boolean) => Promise<Record<string, number>> }).extFeeds(true);
     feeds = f ?? {};
   } catch (e) { console.warn(`[cloud-beat] extFeeds unavailable: ${String(e).slice(0, 60)}`); }
 
-  const { submitOp, nextNonce } = chain as {
+  const { submitOp, nextNonce } = chain as unknown as {
     submitOp: (op: Record<string, unknown>) => { queued: boolean; reason?: string };
     nextNonce: (p: string) => string;
   };

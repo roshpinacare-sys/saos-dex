@@ -17,6 +17,8 @@ export function buildWorldSnapshot(): Record<string, unknown> {
   const proofs = chain.getProofs();
   return {
     ok: true,
+    /* publishedAt — שדה-עזר לרצועת-המראה באתר (גיל-נתונים כן); הטרמינל עצמו מתעלם ממנו */
+    publishedAt: new Date().toISOString(),
     version: chain.chainVersion(),
     state: chain.getState(),
     markets: chain.getMarkets(),
