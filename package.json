@@ -9,7 +9,9 @@
     "start": "next start -p 3010 -H 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "db:push": "prisma db push --accept-data-loss",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "build:static": "bun run scripts/build-static.mjs",
+    "world:snapshot": "bun run scripts/world-snapshot.ts"
   },
   "dependencies": {
     "@beblurt/dblurt": "^0.17.0",

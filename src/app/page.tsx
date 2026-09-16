@@ -29,9 +29,25 @@ import { PriceChart } from "@/components/dex/chart";
 import { MobileNav, TopTabs, type ViewId } from "@/components/dex/nav";
 import { AgentView } from "@/components/dex/agent-view";
 
-/** קידומת-הגשר — כל-קריאת-רשת עוברת דרכה אל דמון-3010 */
+/** קידומת-הגשר — כל-קריאת-רשת עוברת דרכה אל דמון-3010.
+ *  STATIC-MIRROR (Task 35): כשהטרמינל נבנה לייצוא-סטטי ל-Pages, קריאות-הקריאה מנותבות
+ *  לקבצי-JSON ציבוריים שמפרסם הלב בענן (dex/world.json) — המוצר נשאר זהה-לגמרי,
+ *  רק הצינור מתאים אליו. פעולות-כתיבה (POST) נשארות בצד הריבוני — כישלון-כן במראה. */
+const IS_STATIC = process.env.NEXT_PUBLIC_STATIC_MIRROR === "1";
 const BASE = "/saos-dex";
-const api = (p: string): string => `${BASE}${p}`;
+const api = (p: string): string => {
+  if (!IS_STATIC) return `${BASE}${p}`;
+  const path = p.split("?")[0];
+  const staticMap: Record<string, string> = {
+    "/api/dex/state": "/Console/dex/world.json",
+    "/api/dex/relay": "/Console/dex/relay.json",
+    "/api/dex/showcase": "/Console/dex/showcase.json",
+    "/api/dex/settle": "/Console/dex/settle.json",
+  };
+  const mapped = staticMap[path];
+  // t= — שבירת-מטמון: Pages שומר תשובות ~10ד' לפי-כתובת; כל-סקר לוקח עותק-חי
+  return mapped ? `${mapped}?t=${Date.now()}` : `${BASE}${p}`;
+};
 
 /** P0(25-a) — מפתח-אחסון-מקומי לטוקן-המפעיל: לעולם לא יוצא מהדפדפן (localStorage בלבד) */
 const OPERATOR_KEY = "saos-dex.operator-token";
@@ -283,6 +299,11 @@ function useWorldStream(): { world: WorldResp | null; load: () => Promise<void>;
           // ה-abort בניתוק-הרכיב מעיר את ה-sleep דרך בדיקת-stopped באיטרציה הבאה).
           if (!stopped && j.ok && j.state?.halted === true) {
             await new Promise((res) => setTimeout(res, 30_000));
+          }
+          // STATIC-MIRROR: קובץ-סטטי משיב-מיד (אין החזקת-בקשה בצד-השרת) — בלי-המתנה
+          // הלולאה הייתה דולקת-חם על אותה-תמונה. קצב-מראה: 20ש' בין-סקרים.
+          if (!stopped && IS_STATIC && j.ok && j.version === versionRef.current) {
+            await new Promise((res) => setTimeout(res, 20_000));
           }
         } catch {
           if (stopped || ctrl.signal.aborted) return;
@@ -2064,7 +2085,11 @@ export default function DexTerminal() {
       else flash("err", j.error ?? j.reason ?? "נדחה");
       void load();
     } catch (e) {
-      flash("err", `כשל-רשת: ${e instanceof Error ? e.message : "unknown"}`);
+      if (IS_STATIC) {
+        flash("err", "מראה-ציבורית לקריאה-בלבד — פעולות מסחר מתבצעות בצד הריבוני");
+      } else {
+        flash("err", `כשל-רשת: ${e instanceof Error ? e.message : "unknown"}`);
+      }
     } finally {
       setBusy(false);
     }
@@ -2139,6 +2164,9 @@ export default function DexTerminal() {
             )}
             {/* FIX(Roast-65-e4 · F11): ×5-קבוע → מספר-המסילות-החי בפועל מעמדת-הסליקה (liveRails), נפילה-כנה ל-… */}
             <Pill tone="amber" testid="header-sim-pill">SIM book · REAL-money audited ×{settle.data?.realMoney ? settle.data.realMoney.liveRails : "…"}</Pill>
+            {IS_STATIC && (
+              <Pill tone="violet" testid="header-mirror-pill">PUBLIC MIRROR · read-only</Pill>
+            )}
             <button
               type="button"
               onClick={() => setOpPanel((v) => !v)}

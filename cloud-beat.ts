@@ -507,9 +507,15 @@ async function main(): Promise<void> {
     credits: ledger.credits.slice(-200),
   }, null, 1));
 
+  /* Task 35 — המראה הציבורית של הטרמינל ב-Pages: world.json בצורת ה-API של המוצר
+   * (אותם getters, אותה צורה — בונה משותף עם הדמון, אפס סטייה) + relay.json. */
+  const { buildWorldSnapshot, buildRelaySnapshot } = await import("./src/lib/dex/world-snapshot");
+  fs.writeFileSync(path.join(PUB, "dex", "world.json"), JSON.stringify(buildWorldSnapshot()));
+  fs.writeFileSync(path.join(PUB, "dex", "relay.json"), JSON.stringify(buildRelaySnapshot()));
+
   execSync('git config user.name "dex-beat[bot]"', { encoding: "utf8", cwd: PUB });
   execSync('git config user.email "dex-beat[bot]@users.noreply.github.com"', { encoding: "utf8", cwd: PUB });
-  execSync("git add dex/state.json dex/credits.json", { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
+  execSync("git add dex/state.json dex/credits.json dex/world.json dex/relay.json", { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
   const stagedPub = execSync("git diff --cached --name-only", { encoding: "utf8", cwd: PUB }).trim();
   if (stagedPub) {
     execSync(`git commit -m "dex-beat: h${heightAfter} · ${credited} credits · ${new Date().toISOString().slice(0, 16)}Z"`, { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
