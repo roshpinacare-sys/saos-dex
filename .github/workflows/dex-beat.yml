@@ -1,0 +1,57 @@
+# DEX-BEAT — לב-הענן של הבורסה (Task 33)
+#
+# השרשרת הקנונית של SAOS-DEX ממשיכה לפעום מהענן של GitHub, בלי-סנדבוקס
+# ובלי-שרת-אמה: כל-ריצה טוענת את תמונת-המצב מהריפו, מריצה טיקים
+# דטרמיניסטיים (אותם-שערים — busy/halted/integrity), מזכה הפקדות
+# שאומתו מול-הספר-הציבורי, מבצע-commit לריפו ומפרסמת את המצב ל-Console
+# (Pages) לציבור. הריפו הוא הבית — הענן הוא הבונה.
+#
+# תדירות: כל-שעתיים (מכבת-Actions של-ריפו-פרטי נשמרת בכנות; ההרצות
+# הקיימות של-הלבבות נמדדו קצרות). אפשר להפעיל ידנית בכל-רגע.
+
+name: dex-beat
+
+on:
+  schedule:
+    - cron: '23 */2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dex-beat
+  cancel-in-progress: false
+
+jobs:
+  beat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Checkout the chain
+        uses: actions/checkout@v4
+
+      - name: Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-dex-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-dex-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Prisma client
+        run: bunx prisma generate
+
+      - name: Beat (advance chain, verify claims, credit, publish)
+        env:
+          DATABASE_URL: file:${{ github.workspace }}/db/dex.db
+          CLOUD_TICKS: '480'
+          CONSOLE_TOKEN: ${{ secrets.CONSOLE_PUSH_TOKEN }}
+        run: bun run cloud-beat.ts
