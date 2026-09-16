@@ -41,12 +41,21 @@ const api = (p: string): string => {
   const staticMap: Record<string, string> = {
     "/api/dex/state": "/Console/dex/world.json",
     "/api/dex/relay": "/Console/dex/relay.json",
+    "/api/dex/agent": "/Console/dex/agent.json",
+    "/api/dex/fleet": "/Console/dex/fleet.json",
+    "/api/dex/portfolio": "/Console/dex/portfolio.json",
+    "/api/dex/bridge": "/Console/dex/bridge.json",
+    "/api/dex/onramp": "/Console/dex/onramp.json",
     "/api/dex/showcase": "/Console/dex/showcase.json",
-    "/api/dex/settle": "/Console/dex/settle.json",
+    "/api/dex/settle": "/Console/dex/mirror-stub.json",
   };
   const mapped = staticMap[path];
   // t= — שבירת-מטמון: Pages שומר תשובות ~10ד' לפי-כתובת; כל-סקר לוקח עותק-חי
-  return mapped ? `${mapped}?t=${Date.now()}` : `${BASE}${p}`;
+  if (mapped) return `${mapped}?t=${Date.now()}`;
+  // שאר נקודות-ה-API (settle כבד, route/microdose פרמטריות, POST-ים): ה-stub ההגון —
+  // ok:false כנות במקום 404, הלקוח נשאר במצב-המתנה המעוצב שלו.
+  if (path.startsWith("/api/dex/")) return `/Console/dex/mirror-stub.json?t=${Date.now()}`;
+  return `${BASE}${p}`;
 };
 
 /** P0(25-a) — מפתח-אחסון-מקומי לטוקן-המפעיל: לעולם לא יוצא מהדפדפן (localStorage בלבד) */
