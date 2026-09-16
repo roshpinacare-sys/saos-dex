@@ -1309,4 +1309,39 @@ export async function resetChain(): Promise<void> {
   }
 }
 
+// ─── Task 33 · CLOUD-BEAT: ריצת-הענן חסרת-השרת ───────────────────────────────
+// השרשרת עולה ב-GitHub Actions (הריפו הפרטי, אפס-סנדבוקס): טעינת-תמונה מהריפו,
+// טיקים סנכרוניים בלי-שעון-קיר (אותם-שערי-busy/halted/pendingLoad של הטיק
+// הרגיל — שום עקיפה), שטיפת-תמונה סופית ויציאה נקייה. הריצה ממשיכה את אותה
+// שרשרת מאותה-תמונה — הריפו הוא הבית הקנוני של המצב, הענן הוא הבונה.
+
+/** צעד-בודד סנכרוני: ממתין לסוף-הטעינה (עד 60ש') ואז מריץ טיק-אחד מיד. */
+export async function stepOnce(): Promise<void> {
+  const rt = ensureChain();
+  if (rt.pendingLoad) {
+    const t0 = Date.now();
+    while (rt.pendingLoad && Date.now() - t0 < 60_000) await new Promise((r) => setTimeout(r, 250));
+  }
+  await tick(rt);
+}
+
+/** פעימת-אורקל ידנית (ריצת-ענן: בלי-לחכות לטיימר-ה-60ש׳). */
+export async function oracleTickOnce(): Promise<void> {
+  const rt = ensureChain();
+  await oracleTick(rt);
+}
+
+/** עצירת לולאות-הקיר (טיימר-3ש׳ + אורקל-60ש׳) — לריצה-עננית נקייה. */
+export function stopLoops(): void {
+  const rt = ensureChain();
+  if (rt.timer) { clearInterval(rt.timer); rt.timer = null; }
+  if (rt.oracleTimer) { clearInterval(rt.oracleTimer); rt.oracleTimer = null; }
+}
+
+/** שטיפת-תמונה כפויה בסוף-ריצה (בלי לחכות למכפלה-ה-16). */
+export function forceFlush(): void {
+  const rt = ensureChain();
+  flushSnapshot(rt);
+}
+
 export { notional, sortBook, LP_ASSET_PREFIX };
