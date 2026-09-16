@@ -34,10 +34,17 @@ if (rt.halted) {
 }
 console.log(`[world-snapshot] chain loaded · height ${rt.st.height}`);
 fs.mkdirSync(path.join(outDir, "dex"), { recursive: true });
-fs.writeFileSync(path.join(outDir, "dex", "world.json"), JSON.stringify(buildWorldSnapshot()));
-fs.writeFileSync(path.join(outDir, "dex", "relay.json"), JSON.stringify(buildRelaySnapshot()));
+const { buildMirrorSnapshots } = await import("../src/lib/dex/world-snapshot");
+for (const [name, body] of Object.entries(await buildMirrorSnapshots())) {
+  fs.writeFileSync(path.join(outDir, "dex", `${name}.json`), JSON.stringify(body));
+}
+fs.writeFileSync(path.join(outDir, "dex", "mirror-stub.json"), JSON.stringify({
+  ok: false,
+  mirror: true,
+  note: "Not available in the public mirror — this runs on the sovereign side",
+}));
 chain.stopLoops();
 
-console.log(`[world-snapshot] wrote ${outDir}/dex/world.json + relay.json`);
+console.log(`[world-snapshot] wrote all mirror files`);
 console.log(`[world-snapshot] done → ${outDir}/dex/`);
 process.exit(0);

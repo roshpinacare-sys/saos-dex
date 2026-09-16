@@ -509,15 +509,22 @@ async function main(): Promise<void> {
     credits: ledger.credits.slice(-200),
   }, null, 1));
 
-  /* Task 35 — המראה הציבורית של הטרמינל ב-Pages: world.json בצורת ה-API של המוצר
-   * (אותם getters, אותה צורה — בונה משותף עם הדמון, אפס סטייה) + relay.json. */
-  const { buildWorldSnapshot, buildRelaySnapshot } = await import("./src/lib/dex/world-snapshot");
-  fs.writeFileSync(path.join(PUB, "dex", "world.json"), JSON.stringify(buildWorldSnapshot()));
-  fs.writeFileSync(path.join(PUB, "dex", "relay.json"), JSON.stringify(buildRelaySnapshot()));
+  /* Task 35 — המראה הציבורית של הטרמינל ב-Pages: כל קבצי-המראה (world/relay/agent/fleet/
+   * portfolio/bridge/onramp/showcase) בצורות ה-API המדויקות של המוצר — בונה-משותף
+   * עם הדמון (src/lib/dex/world-snapshot.ts), אפס סטייה — + stub הגון לשאר. */
+  const { buildMirrorSnapshots } = await import("./src/lib/dex/world-snapshot");
+  for (const [name, body] of Object.entries(await buildMirrorSnapshots())) {
+    fs.writeFileSync(path.join(PUB, "dex", `${name}.json`), JSON.stringify(body));
+  }
+  fs.writeFileSync(path.join(PUB, "dex", "mirror-stub.json"), JSON.stringify({
+    ok: false,
+    mirror: true,
+    note: "Not available in the public mirror — this runs on the sovereign side",
+  }));
 
   execSync('git config user.name "dex-beat[bot]"', { encoding: "utf8", cwd: PUB });
   execSync('git config user.email "dex-beat[bot]@users.noreply.github.com"', { encoding: "utf8", cwd: PUB });
-  execSync("git add dex/state.json dex/credits.json dex/world.json dex/relay.json", { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
+  execSync("git add dex/state.json dex/credits.json dex/world.json dex/relay.json dex/agent.json dex/fleet.json dex/portfolio.json dex/bridge.json dex/onramp.json dex/showcase.json dex/mirror-stub.json", { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
   const stagedPub = execSync("git diff --cached --name-only", { encoding: "utf8", cwd: PUB }).trim();
   if (stagedPub) {
     execSync(`git commit -m "dex-beat: h${heightAfter} · ${credited} credits · ${new Date().toISOString().slice(0, 16)}Z"`, { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
