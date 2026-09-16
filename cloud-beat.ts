@@ -408,6 +408,35 @@ async function main(): Promise<void> {
   saveLedger(ledger); // תמיד: lastScanBlock חייב להתקדם גם בלי זיכויים (חלון-הסריקה)
   console.log(`[cloud-beat] claims: ${credited} credited, ${skipped} skipped/waiting`);
 
+  /* ── פקודות-מסחר חתומות מהציבור (dex.order / dex.cancel) ──
+   * אותו-מודל-האמון כמו-הזיכויים: המעטפה חתומה-saos1 (החתימה מכסה את
+   * כל-השדות), הלב מתרגם אותה ל-op מקומי בשם הבעלים u:<addr>. השרשרת
+   * עצמה אוכפת יתרה/נאמנות/תקרת-פקודות — דחייה היא תשובה כנה, לא-שקט. */
+  let ordered = 0, cancelled = 0;
+  for (const env of envelopes) {
+    if (env?.k !== "dex.order" && env?.k !== "dex.cancel") continue;
+    if (typeof env.id !== "string" || ledger.processedIds[env.id]) continue;
+    if (!verifyEnvelope(env)) { ledger.processedIds[String(env.id)] = 1; continue; }
+    const issuer = `u:${String(env.by)}`;
+    if (env.k === "dex.order") {
+      const base = String(env.base ?? "").toUpperCase();
+      const quote = String(env.quote ?? "").toUpperCase();
+      const side = env.side === "buy" ? "buy" : env.side === "sell" ? "sell" : "";
+      const price = Math.round(Number(env.price ?? 0) * 1000);   // מחיר-אדם → µ-ציטוט ליחידת-בסיס
+      const amount = Math.round(Number(env.amount ?? 0) * 1000); // כמות-אדם → µ-בסיס
+      const r = submitOp({ type: "order", issuer, nonce: String(env.id), base, quote, side, price, amount });
+      if (r.queued) { ordered++; await stepOnce(); console.log(`[cloud-beat] order ${side} ${amount}µ ${base} @${price}µ ${quote} ← ${issuer.slice(0, 18)}…`); }
+      else console.warn(`[cloud-beat] order ${String(env.id).slice(0, 10)} rejected: ${r.reason}`);
+    } else {
+      const orderId = Number(env.orderId ?? 0);
+      const r = submitOp({ type: "cancel", issuer, nonce: String(env.id), orderId });
+      if (r.queued) { cancelled++; await stepOnce(); console.log(`[cloud-beat] cancel #${orderId} ← ${issuer.slice(0, 18)}…`); }
+      else console.warn(`[cloud-beat] cancel ${String(env.id).slice(0, 10)} rejected: ${r.reason}`);
+    }
+    ledger.processedIds[String(env.id)] = 1;
+  }
+  if (ordered || cancelled) saveLedger(ledger);
+
   forceFlush();
 
   /* ── שלב-האמת: קודם-commit-השרשרת לריפו, ורק-אז-פרסום-הציבורי ── */
@@ -464,6 +493,7 @@ async function main(): Promise<void> {
     markets: getMarkets(),
     pools: getPools(),
     wallets: (chain as { getWallets: () => { name: string; balances: Record<string, number>; locked: Record<string, number> }[] }).getWallets(),
+    orders: (chain as { ensureChain: () => { st: { orders: unknown[] } } }).ensureChain().st.orders.filter((o) => (o as { live?: boolean }).live === true).slice(-300),
     tape: getTape(40),
     seal: (getProofs().seals ?? [])[0] ?? null,
     credits: ledger.credits.slice(-50),
