@@ -24,8 +24,11 @@ import { createHash } from "crypto";
 import { secp256k1 } from "@noble/curves/secp256k1";
 import bs58 from "bs58";
 
-/* ── סביבה לפני-כל-ייבוא-של-המנוע (db.ts מאמת בטעינת-מודול) ── */
-process.env.DATABASE_URL ??= `file:${path.join(process.cwd(), "db", "dex.db")}`;
+/* ── סביבה לפני-כל-ייבוא-של-המנוע (db.ts מאמת בטעינת-מודול) ──
+ * בכוח-ולא-ב-??=: סביבת-אם (סנדבוקס) מזריקה לפעמים DATABASE_URL של-עצמה
+ * (custom.db) — הלב הוא-הבעלים-היחיד של-ה-db-שלו וקובע-אותו תמיד. שומר-ה-db
+ * של-המנוע תופס-בדיוק-את-זה אילו-דלף — הכיוון הזה חד-חד-ערכי. */
+process.env.DATABASE_URL = `file:${path.join(process.cwd(), "db", "dex.db")}`;
 
 const ROOT = process.cwd();
 const DB_DIR = path.join(ROOT, "db");
@@ -311,7 +314,8 @@ async function main(): Promise<void> {
     }
 
     const to = `u:${String(env.by)}`;
-    const mu = Math.floor(usds * 1_000_000);
+    // יחידות-השרשרת: 1000µ = 1 יחידה (אותו-קנון של המנוע — fmtAmtMu מחלק-ב-1000)
+    const mu = Math.floor(usds * 1_000);
     const r = submitOp({
       type: "transfer", issuer: "treasury", nonce: nextNonce("cloudcredit"),
       to, asset: "USDS", amount: mu,
