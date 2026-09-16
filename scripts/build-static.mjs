@@ -53,6 +53,9 @@ fs.renameSync(API, API_BAK);
 fs.copyFileSync(CFG, CFG_BAK);
 try {
   fs.writeFileSync(CFG, STATIC_CFG);
+  /* ניקוי-שרידי-dev: .next/dev/types/validator.ts מעידת-הדמון מזכיר את מסלולי-ה-api
+   * שהורחקו — בלי-מחיקה ה-typecheck של הבנייה נכשל על מודולים-רפאים. */
+  fs.rmSync(path.join(ROOT, ".next"), { recursive: true, force: true });
   run("bunx next build", { NEXT_PUBLIC_STATIC_MIRROR: "1" });
 } finally {
   fs.renameSync(API_BAK, API);
