@@ -1231,6 +1231,39 @@ export function getState() {
     // בדיוק-כמו-שקר; השדות נכנסים-לרשימה-הלבנה של getState עכשיו.
     vaults: st.vaults ?? {},
     vaultTot: st.vaultTot ?? { opened: 0, repaid: 0, liquidations: 0, interestMu: 0, backstopLossMu: 0, issuedMu: 0, burnedMu: 0 },
+    // R28 · ENGINE-TRUTH: מוני-האוטומציה-והכלכלה גלויים-לציבור. אותו-לקח-כנות
+    // של-הכספת (A44): CoW, ProtoRev, DCA, טריגרים, ראוטר-ההכנסות ו-ve חיים
+    // בשרשרת ורצים בכל-טיק — אבל נעדרו מהמראה-הציבורית. אמת-שקיימת-ונסתרת
+    // היא כיסוי-עיניים בדיוק-כמו-שקר. הכל נקרא-מהמצב-האמת, ברירות-מחדל
+    // אפסים-כנים לשדות-שלא-נולדו-עדיין (היסטוריה-קודמת-לשדה = undefined → 0).
+    engine: {
+      cow: st.cowStats ?? { matched: 0, batches: 0, surplusMu: 0, fallbackPool: 0, fallbackBook: 0 },
+      cowPending: (st.cow ?? []).length,
+      protorev: {
+        pendingMu: st.revAux?.protorevMu ?? 0,
+        launchpadMu: st.revAux?.launchpadMu ?? 0,
+        runs: st.revAux?.runs ?? 0,
+        cycles: st.revAux?.cycles ?? 0,
+        rejections: st.revAux?.rejections ?? 0,
+      },
+      router: st.rev ?? { lastH: 0, cycles: 0, burnedMu: 0, vePaidMu: 0 },
+      burnedSaosMu: st.burnedSaos ?? 0,
+      feesSpentMu: st.feesSpentMu ?? 0,
+      ve: { positions: Object.keys(st.ve ?? {}).length, epoch: st.veEpoch ?? 0 },
+      auto: {
+        dcaActive: Object.values(st.dca ?? {}).filter((p) => p.remainingMu > 0).length,
+        dcaTotal: Math.max(0, (st.dcaSeq ?? 1) - 1),
+        trigActive: Object.keys(st.trig ?? {}).length,
+        trigTotal: Math.max(0, (st.trigSeq ?? 1) - 1),
+      },
+      // עדות-חיה לאחרוני-האירועים של המשפחה (יומן-500-נכנסים, מסונן בזהירות):
+      // הציבור רואה אצוות-נסגרות, פרוסות-DCA, טריגרים-שנורו, ארב-ושריפות.
+      feed: st.journal
+        .filter((j) => ["cow", "dca", "trig", "protorev", "router"].includes(String(j.soldier)))
+        .slice(-10)
+        .reverse()
+        .map((j) => ({ h: j.h, s: String(j.soldier), a: j.action, p: j.profitMu ?? 0, n: j.note })),
+    },
   };
 }
 

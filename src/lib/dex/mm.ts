@@ -335,7 +335,7 @@ export function arenaTick(
       const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
       if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-${tick}`, to: "treasury", amount: mint });
     }
-    for (const ag of [...soldiers, "arena", "bot-a", "bot-b", "bot-c", "rail"]) {
+    for (const ag of [...soldiers, "arena", "bot-a", "bot-b", "bot-c", "bot-e", "rail"]) {
       const c = st.credits[ag] ?? 0;
       // FIX(SETTLE-15 fuel-oscillation, נתפס-בלוג-הדחיות): סף-10k = מילוי-מוקדם-בחלון-אחד,
       // אפס-דחיות; זו-העברה-טהורה (אפס-הטבעה) — השריפה-הכוללת-לא-משתנה, רק-התזמון-מוקדם.
@@ -423,7 +423,10 @@ export function arenaTick(
   // והקצבה-ממנו-רוקנה-אותו-עד-ריק (ממצא-חי 2026-09). מדידה-על-**avail** (כולל
   // נעילות-ספר) ולא-יתרה-גולמית — פקודות-מנוחות של-בוט לא-ימנעו-מימון-חדש.
   if (params.noise && tick % 24 === 0) {
-    for (const bot of ["bot-a", "bot-b", "bot-c"]) {
+    // R28 · bot-e = סוכן-ההתעמלות (ראה exerciseTick) — מקבל את אותה קצבת-בוטים
+    // מהארנה ואותן תקרות-חיים (2.4M USDS / 1.2M SAOS): סוחר-רעש לכל דבר, רק
+    // שהזרימה שלו עוברת דרך הפרימיטיבים הציבוריים במקום ישר לספר.
+    for (const bot of ["bot-a", "bot-b", "bot-c", "bot-e"]) {
       const caps = botSeedCounts(st, bot);
       if (avail(st, bot, "USDS") < 100_000 && caps.usds < BOT_SEED_CAP_USDS) {
         caps.usds += 400_000;
@@ -567,6 +570,91 @@ export function arenaTick(
           const assetIn = tick % 2 === 0 ? p.a : p.b;
           submit(rt, st, bot, { type: "pool_swap", pair: poolKey(p.a, p.b), assetIn, amount: 15_000 + (tick % 5) * 5_000 }, pushOp);
         }
+      }
+    }
+  }
+
+  // R28 · THE-EXERCISE: הדלקת הפרימיטיבים הציבוריים הרדומים (CoW/DCA/טריגר) —
+  // אחרי ה-MARKETS, לפני סוף הטיק. הסוכן פועל רק כשזרימת-הרעש חיה (params.noise):
+  // הוא חלק מאותה כלכלה סימולטיבית, לא מנגנון-בחן נפרד.
+  if (params.noise) exerciseTick(rt, st, tick, pushOp);
+}
+
+/* ── R28 · THE-EXERCISE: הדלקת הפרימיטיבים הציבוריים הרדומים ──────────────
+ * ממצא-כנות R28 (נמדד בקוד, לא בהצהרה): שלושת הפרימיטיבים הציבוריים — CoW,
+ * DCA וטריגרים — נבנו, עברו תיקוני-רוסט עמוקים (R16/R17/Roast-63/64/65)…
+ * ומעולם לא קיבלו תנועה: אף סוכן לא מציב cow_order (grep: אפס מקורות מלבד
+ * ה-API הציבורי), אף תוכנית-DCA לא נפתחה, אף טריגר לא ננעל. הטיקים רצים
+ * בכל בלוק (chain.ts · dcaTick+trigTick+protoRevTick+cowSettle) על תורים
+ * ריקים: "קיים" בלי "חי" — בדיוק סוג ההצהרה-למחצה שהוצאנו מהמערכת.
+ * הטיפול מדידתי, לא סטטיסטי: סוכן-ההתעמלות bot-e מפעיל את שלושתם בקצב
+ * קבוע-ודטרמיניסטי, בכסף-אמת-שלו (קצבת-הבוטים ועירוי-הדלק הקיימים),
+ * עם חילוף-תפקידים מול הארנה (הכיסים העמוקים) כדי שהמלאי ממוחזר ולא מתרוקן:
+ *   · CoW כל 40 טיקים: זוג פקודות הפוכות משני בעלים שונים (בעלים אחד —
+ *     ניטרול-החפיפה-העצמית R17-b·H1 היה מבטל את ההתאמה), גבולות ±0.3%
+ *     סביב הפייר, הצד-השני הארנה — הסליקה במחיר-האחיד ≈ הפייר (אפס זיהום-אורקל), והעודף
+ *     ≈ 0.6% מהנומינל נשאר אצל שני הצדדים ונמדד ב-cowStats.surplusMu.
+ *   · DCA כל 480 טיקים: תוכנית 3-פרוסות USDS→SAOS (12kµ/פרוסה, כל-40-בלוקים)
+ *     — ורק אם אין לסוכן תוכנית פעילה (התור נשאר צנוע והפרוסות אמת).
+ *   · טריגר כל 480 טיקים: מכירה/קנייה לסירוגין, 30bps נגד הכיוון — נורה
+ *     בדיפ/בראלי, או פג-תוקף בכנות מתועדת; שני הכיוונים הם מדידה-חיה.
+ * הכל מ-`tick` והמצב בלבד: אפס-רנדומיות · אפס-שעון — ריפליי-אמת.
+ * ההצבה מוגנת-יתרה (avail ×1) לפני-כל-שליחה: אין דחיות-רעש כתוצר-לוואי. */
+const EXERCISE_PAIR_TICK = 40;
+const EXERCISE_PLAN_TICK = 480;
+const EXERCISE_COW_AMT = 20_000;
+const EXERCISE_DCA_PER_SLICE = 12_000;
+const EXERCISE_DCA_SLICES = 3;
+const EXERCISE_TRIG_AMT = 15_000;
+
+export function exerciseTick(rt: Map<string, SoldierRT>, st: DexState, tick: number, pushOp: PushOp): void {
+  const m = MARKETS[0]; // הזוג הריבוני SAOS/USDS
+  const fair = fairPrice(st, m.base, m.quote);
+  if (!(fair > 0)) return;
+
+  // ── CoW: זוג הפוך משני בעלים, גבולות ±0.3% סביב הפייר ──
+  // מדידת-מלאי R28 (בדיקת-ההוכחה המקומית): בוטי-הרעש רוקנו עידנים-עידנים
+  // (SAOS=1µ — תקרות-הזריעה מוצו), החיילים חסרי-SAOS — הצד-השני היחיד עם
+  // כיסים-עמוקים משני-הצדדים ועם התפקיד-הארכיטקטוני המתאים הוא הארנה —
+  // "המפעיל-הנדיב" שמממן את הסימולציה מלכתחילה (קצבות, rearm, רצפות-עומק).
+  // חילוף-הכיוונים שומר עליה בת-קיימא: מחזור-זוגי היא קונה SAOS, אי-זוגי
+  // מוכרת — נטו-שטוח, המלאי ממוחזר בינה לבין סוכן-ההתעמלות ולא מתרוקן.
+  if (tick % EXERCISE_PAIR_TICK === 12) {
+    const cycle = Math.floor(tick / EXERCISE_PAIR_TICK);
+    const botSells = cycle % 2 === 0;
+    const seller = botSells ? "bot-e" : "arena";
+    const buyer = botSells ? "arena" : "bot-e";
+    const sellPx = Math.floor((fair * 9_970) / 10_000); // −0.3% מתחת לפייר
+    const buyPx = Math.floor((fair * 10_030) / 10_000);  // +0.3% מעליו — חוצה
+    const sellOk = avail(st, seller, m.base) >= EXERCISE_COW_AMT;
+    const buyOk = avail(st, buyer, m.quote) >= notional(buyPx, EXERCISE_COW_AMT);
+    if (sellPx > 0 && buyPx >= sellPx && sellOk && buyOk) {
+      submit(rt, st, seller, { type: "cow_order", base: m.base, quote: m.quote, side: "sell", price: sellPx, amount: EXERCISE_COW_AMT }, pushOp);
+      submit(rt, st, buyer, { type: "cow_order", base: m.base, quote: m.quote, side: "buy", price: buyPx, amount: EXERCISE_COW_AMT }, pushOp);
+    }
+  }
+
+  // ── DCA: תוכנית קטנה, רק אם אין אחת פעילה לסוכן ──
+  if (tick % EXERCISE_PLAN_TICK === 60) {
+    const mineActive = Object.values(st.dca ?? {}).some((p) => p.owner === "bot-e" && p.remainingMu > 0);
+    const cost = EXERCISE_DCA_PER_SLICE * EXERCISE_DCA_SLICES;
+    if (!mineActive && avail(st, "bot-e", "USDS") >= cost) {
+      submit(rt, st, "bot-e", { type: "dca_create", asset: "USDS", to: "SAOS", perSlice: EXERCISE_DCA_PER_SLICE, slicesMax: EXERCISE_DCA_SLICES, everyK: 40, minOutBps: 100 }, pushOp);
+    }
+  }
+
+  // ── טריגר: כיוון מתחלף, 30bps נגד הפייר, תוקף 500 בלוקים ──
+  if (tick % EXERCISE_PLAN_TICK === 300) {
+    const planIdx = Math.floor(tick / EXERCISE_PLAN_TICK);
+    const side: "sell" | "buy" = planIdx % 2 === 0 ? "sell" : "buy";
+    const triggerPx = side === "sell"
+      ? Math.floor((fair * 9_970) / 10_000)   // נורה אם המחיר יורד 0.3%
+      : Math.floor((fair * 10_030) / 10_000);  // נורה אם המחיר עולה 0.3%
+    if (triggerPx > 0) {
+      if (side === "sell" && avail(st, "bot-e", m.base) >= EXERCISE_TRIG_AMT) {
+        submit(rt, st, "bot-e", { type: "trig_order", base: m.base, quote: m.quote, side, triggerPx, limitPx: 0, amount: EXERCISE_TRIG_AMT, expiresH: st.height + 500 }, pushOp);
+      } else if (side === "buy" && avail(st, "bot-e", m.quote) >= notional(triggerPx, EXERCISE_TRIG_AMT)) {
+        submit(rt, st, "bot-e", { type: "trig_order", base: m.base, quote: m.quote, side, triggerPx, limitPx: 0, amount: EXERCISE_TRIG_AMT, expiresH: st.height + 500 }, pushOp);
       }
     }
   }
