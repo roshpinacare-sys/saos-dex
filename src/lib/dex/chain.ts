@@ -764,10 +764,10 @@ const ORACLE_MAP: Array<{ asset: string; feed: "steem" | "hive" | "sbd" | "blurt
   { asset: "BTC", feed: "btc" },
 ];
 
-async function oracleTick(rt: ChainRT): Promise<void> {
+async function oracleTick(rt: ChainRT, force = false): Promise<void> {
   if (rt.halted) return;
   try {
-    const feeds = await extFeeds();
+    const feeds = await extFeeds(force);
     if (!feeds.ok || feeds.stale) return; // אין-פיד-חי = אין-דחיפה (כנות: last-good נשאר במצב)
     const prices: Record<string, number> = {};
     const srcs: string[] = [];
@@ -1327,10 +1327,12 @@ export async function stepOnce(): Promise<void> {
   await tick(rt);
 }
 
-/** פעימת-אורקל ידנית (ריצת-ענן: בלי-לחכות לטיימר-ה-60ש׳). */
-export async function oracleTickOnce(): Promise<void> {
+/** פעימת-אורקל ידנית (ריצת-ענן: בלי-לחכות לטיימר-ה-60ש׳). force מיישר-את-TTL-הקאש —
+ * R23: הריצה-העננית מסתיימת-בשניות, אז בלי-force כל-הקריאות באותה-ריצה מקבלות את-
+ * אותו-cache וההחלקה מתבצעת-פעמיים-בלבד-לכל-פעימה. עם-force: פיד-טרי בכל-120-טיקים. */
+export async function oracleTickOnce(force = false): Promise<void> {
   const rt = ensureChain();
-  await oracleTick(rt);
+  await oracleTick(rt, force);
 }
 
 /** עצירת לולאות-הקיר (טיימר-3ש׳ + אורקל-60ש׳) — לריצה-עננית נקייה. */

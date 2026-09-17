@@ -275,7 +275,7 @@ async function main(): Promise<void> {
   const { ensureChain, stepOnce, oracleTickOnce, stopLoops, forceFlush } = chain as {
     ensureChain: () => { pendingLoad: boolean; halted: boolean; haltReason: string | null; st: { height: number } };
     stepOnce: () => Promise<void>;
-    oracleTickOnce: () => Promise<void>;
+    oracleTickOnce: (force?: boolean) => Promise<void>;
     stopLoops: () => void;
     forceFlush: () => void;
   };
@@ -304,7 +304,7 @@ async function main(): Promise<void> {
       console.error(`[cloud-beat] HALTED mid-run after ${ticked} ticks: ${rt.haltReason ?? "?"}`);
       break;
     }
-    if (i > 0 && i % 120 === 0) await oracleTickOnce().catch(() => {});
+    if (i > 0 && i % 120 === 0) await oracleTickOnce(true).catch(() => {}); // R23: force — פיד-טרי, החלקה-נוספת
   }
   forceFlush();
   const heightAfter = rt.st.height;
