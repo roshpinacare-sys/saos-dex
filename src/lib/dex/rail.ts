@@ -289,6 +289,25 @@ function fundingSource(st: DexState, asset: "USDS" | "WSTEEM" | "ENERGY" | "SAOS
 function pushFunding(st: DexState, tick: number, pushOp: (op: Op) => void, asset: "USDS" | "WSTEEM" | "ENERGY" | "SAOS", floorMu: number, trancheMu: number, lifetimeKey: "usds" | "wsteem" | "energy" | "saos", lifetimeCap: number): void {
   if (avail(st, RAIL, asset) >= floorMu) return;
   if (railLifetime[lifetimeKey] + trancheMu > lifetimeCap) return;
+
+  /** ── SETTLE-18 (rail-WSTEEM wrap bridge · starved-rail cure) ──
+   * ממצא-חי (R29): המסילה מעולם-לא-ביצעה-מנה-אחת על-קו-WSTEEM (doses=0) בעוד
+   * premium של +82,777bps בער-מעליה. שורש: מקורות-המימון התרוקנו-מבנית —
+   * שקיות-הבוטים ריקות, לאופרטור אין, ושארית-האוצר (18.3Kµ) נפלה-מתחת-לשער-
+   * הרעש (floor/5=20Kµ) — ההזרמה נדחית-לנצח בזמן-ש-316Kµ STEEM-טבעי-כנה
+   * יושבים-באוצר חסרי-תפקיד. הטיפול: לפני-ניסיון-ההעברה — האוצר עוטף-STEEM
+   * טבעי ל-WSTEEM (1:1 כנה, הגיבוי-נרשם ב-backing, אותו-פעולת-wrap_mint
+   * של-קו-ה-rearm SETTLE-14). ריקוד-שני-חלונות-כמו-שם: העטיפה נוחתת-בחלון-
+   * הזה, ההעברה-למסילה נפרקת-בחלון-הבא מתוך-מלאי-קיים-בלבד — אפס-ספירה-
+   * כפולה, אפס-הטבעה, הגרעין-אוכף-בעצמו. */
+  if (asset === "WSTEEM") {
+    const tw = avail(st, "treasury", "WSTEEM");
+    const need = Math.min(trancheMu, lifetimeCap - railLifetime[lifetimeKey]);
+    if (tw < need && avail(st, "treasury", "STEEM") >= need - tw) {
+      pushOp({ type: "wrap_mint", issuer: "treasury", nonce: `rail-wrap-${tick}`, wrapAsset: "WSTEEM", amount: need - tw });
+    }
+  }
+
   const src = fundingSource(st, asset);
   if (!src) return;
   const amt = Math.min(trancheMu, lifetimeCap - railLifetime[lifetimeKey], avail(st, src, asset));

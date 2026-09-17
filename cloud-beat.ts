@@ -29,6 +29,10 @@ import bs58 from "bs58";
  * (custom.db) — הלב הוא-הבעלים-היחיד של-ה-db-שלו וקובע-אותו תמיד. שומר-ה-db
  * של-המנוע תופס-בדיוק-את-זה אילו-דלף — הכיוון הזה חד-חד-ערכי. */
 process.env.DATABASE_URL = `file:${path.join(process.cwd(), "db", "dex.db")}`;
+/* SETTLE-18: מוני-החיים-של-המסילה רוכבים-מעתה על-השרשת (db/) — במקום state/
+ * שהיה מתאפס-בכל-ריצת-Actions (פנטום-תקרה מהסוג-ש-Roast-64-c התחייב-למנוע).
+ * הקובץ נטען-ב-max-מהדיסק (אף-פעם-לא-מתאפס) ומחויב עם-השרשרת בכל-פעימה. */
+process.env.SAOS_DEX_STATE_DIR = path.join(process.cwd(), "db");
 
 const ROOT = process.cwd();
 const DB_DIR = path.join(ROOT, "db");
@@ -444,7 +448,7 @@ async function main(): Promise<void> {
   /* ── שלב-האמת: קודם-commit-השרשרת לריפו, ורק-אז-פרסום-הציבורי ── */
   git("config user.name \"dex-beat[bot]\"", { allowFail: true });
   git("config user.email \"dex-beat[bot]@users.noreply.github.com\"", { allowFail: true });
-  const chainFiles = ["db/state-snapshot.json", "db/tape.jsonl", "db/dex.db", "db/dex-credits.json"];
+  const chainFiles = ["db/state-snapshot.json", "db/tape.jsonl", "db/dex.db", "db/dex-credits.json", "db/rail-lifetime.json"];
   for (const f of chainFiles) git(`add -- ${f}`, { allowFail: true });
   let chainPushed = false;
   const staged = git("diff --cached --name-only", { allowFail: true });
