@@ -753,11 +753,12 @@ async function tick(rt: ChainRT): Promise<void> {
 // extFeeds מחזיר median חוצה-מקורות ($ ליחידה) → ממפה ל-µ-USDS-ל-יחידה (×1e6,
 // עיגול-שלמים) על נכסי-הרשת הרלוונטיים. דחיפה רק-כשערך-שונה מהאורקל-הקנוני —
 // אין-רעש-מצב. ה-op עצמו אוצר-חתום + nonce-מערכת → ריפליי דטרמיניסטי.
-const ORACLE_MAP: Array<{ asset: string; feed: "steem" | "hive" | "blurt" | "eth" | "sol" | "trx" | "btc" }> = [
+const ORACLE_MAP: Array<{ asset: string; feed: "steem" | "hive" | "sbd" | "blurt" | "eth" | "sol" | "trx" | "btc" }> = [
   { asset: "WTRX", feed: "trx" },
   { asset: "WSOL", feed: "sol" },
   { asset: "WSTEEM", feed: "steem" },
-  { asset: "HIVE", feed: "hive" },
+  { asset: "PHIVE", feed: "hive" },   // R23: הנכס-הרשום הוא PHIVE (לא HIVE) — עד-עתה העוגן שלו לא זז כלל
+  { asset: "WSBD", feed: "sbd" },     // R23: WSBD עוקב אחרי SBD אמת (steem-dollars, ~$0.44) — לא HBD של Hive
   { asset: "WBLURT", feed: "blurt" },
   { asset: "ETH", feed: "eth" },
   { asset: "BTC", feed: "btc" },
@@ -1208,6 +1209,7 @@ export function getState() {
     nextSealIn: SEAL_EVERY - (st.height % SEAL_EVERY),
     backing: st.backing,
     assets: st.assets,
+    oracle: st.oracle, // R23 · LIVE-ANCHOR: מפת-פיד-השוק-האמיתי גלוי-לציבור מול-העוגנים (µ$-ליחידה; refPrice ב-mµ)
     // SETTLE-15: מקור-הנזיל-שמכניס-מהכל — פנקס-ההכנסה-החי (כנות: הכל-נמדד)
     income: {
       poolFeesMu: Object.values(st.pools).reduce((s, p) => s + p.feeAccruedTreasury, 0),

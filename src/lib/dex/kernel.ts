@@ -473,7 +473,7 @@ export function genesisState(): DexState {
   st.assets = {
     SAOS: { refPrice: 2500, listed: 0 },     // 2.50 USDS
     USDS: { refPrice: 1000, listed: 0 },
-    WSTEEM: { refPrice: 320, listed: 0 },    // 0.32 USDS (feedPrice מורשת)
+    WSTEEM: { refPrice: 320, listed: 0 },    // 0.32 USDS — מורשת; R23: העוגן מחליק אל מחיר-החוץ מיישום-oracle_set הראשון
     ENERGY: { refPrice: 125, listed: 0 },    // 0.125 SAOS
     WSBD: { refPrice: 1000, listed: 0 },
     PHIVE: { refPrice: 40, listed: 0 },
@@ -1222,7 +1222,32 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       }
       const c = consume(); if (c) return c;
       st.oracle = { ...(st.oracle ?? {}), ...clean };
-      st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "oracle_set", note: `${Object.keys(clean).sort().join(",")} ← ${String(op.claim ?? "ext").slice(0, 40)}` });
+      // R23 · LIVE-ANCHOR: העוגן עוקב אחרי השוק האמיתי. המדידה שהוכיחה את הכשל:
+      // refPrice(WSTEEM)=320mµ ($0.32) מול STEEM אמיתי $0.0552 — פער 5.8x שהחזיק מעודף
+      // כי-שום-דבר לא חיבר את האורקל הקנוני לעוגן. עתה כל יישום oracle_set מקרב
+      // את refPrice של נכס רשום אל מחיר החוץ: מדומם חצי-פער, תקרה 0.5% בפער-שגרה,
+      // עד-25% כשהפער הגולמי >10% (עוגן מיושן מדביק מציאות). אותו הגהון של הסולם
+      // (keel), בכיוון האורקל. USDS — יחידת החשבון — לעולם לא זז. דטרמיניסטי מלא:
+      // פונקציה טהורה של ה-op והמצב — ריפליי משחזר ביט-לביט.
+      const glides: string[] = [];
+      for (const [a, rec] of Object.entries(clean)) {
+        if (a === "USDS") continue; // יחידת-החשבון לא נעוגנת-מחדש
+        const cur = st.assets[a];
+        if (!cur || !(cur.refPrice > 0)) continue; // נכס לא-רשום: אין עוגן להזיז
+        const target = Math.round(rec.mu / 1000); // אורקל ב-µ$-ליחידה; refPrice ב-mµ-ליחידה
+        if (!(target > 0) || target === cur.refPrice) continue;
+        const ref = cur.refPrice;
+        const gapBps = Math.floor((Math.abs(target - ref) * 10_000) / ref);
+        const capPct = gapBps > 1_000 ? 0.25 : 0.005; // פער-גולמי = עוגן-מיושן
+        const halfGap = Math.floor(Math.abs(target - ref) / 2);
+        const step = Math.max(1, Math.min(Math.floor(ref * capPct), halfGap));
+        const next = target > ref ? Math.min(target, ref + step) : Math.max(target, ref - step);
+        if (next > 0 && next !== ref) {
+          st.assets[a] = { refPrice: next, listed: cur.listed };
+          glides.push(`${a} ${ref}>${next} of ${target}`);
+        }
+      }
+      st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "oracle_set", note: `${Object.keys(clean).sort().join(",")} <- ${String(op.claim ?? "ext").slice(0, 40)}${glides.length ? ` · anchor ${glides.join(" ")}` : ""}` });
       return { ok: true, gas };
     }
     case "asset_list":
