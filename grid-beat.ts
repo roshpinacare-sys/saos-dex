@@ -147,12 +147,12 @@ async function main(): Promise<void> {
   /* ── הפעולות (רק כשחמוש וכשהספר והמדדים חיים) ── */
   let placed = 0, cancelled = 0;
   const blocker: string[] = [];
-  if (!armed) blocker.push("STEEM_ACTIVE_WIF secret missing — one operator action to arm the external grid");
-  if (!parity) blocker.push("external USD marks unavailable (steem/sbd feeds down) — no marking, no trading");
+  if (!armed) blocker.push("STEEM_ACTIVE_WIF secret missing: one operator action to arm the external grid");
+  if (!parity) blocker.push("external USD marks unavailable (steem/sbd feeds down): no marking, no trading");
   if (!snap.book.bestBid || !snap.book.bestAsk) blocker.push("public book one-sided or unreachable");
   if (parity && snap.book.mid) {
     const devBps = Math.floor(((snap.book.mid - parity) / parity) * 10_000);
-    if (Math.abs(devBps) > PARITY_BAND_BPS) blocker.push(`book mid deviates ${devBps}bps from external parity — refusing to trade a broken market`);
+    if (Math.abs(devBps) > PARITY_BAND_BPS) blocker.push(`book mid deviates ${devBps}bps from external parity: refusing to trade a broken market`);
   }
 
   if (armed && parity && snap.book.bestBid && snap.book.bestAsk && blocker.length === 0) {
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
     externalFlowUsd: ledger.externalFlowUsd,
     fills: ledger.fills.slice(-12),
     orders: ledger.orders.slice(-24),
-    honesty: "מדוד מול ספר-STEEM הציבורי ופידי-USD חיים. מילויים מסומנים בזמן-הגילוי (marked-at-detection) — המעקה מתעד את הציון שנמדד. ה-SBD הפנימי נסחר בפרימיום מול הציון החיצוני; קו-הזהות מוצג בגלוי כדי שכל אחד יוכל לאמת שאנחנו לא מוכרים מתחת לערך.",
+    honesty: "מדוד מול ספר-STEEM הציבורי ופידי-USD חיים. מילויים מסומנים בזמן-הגילוי (marked-at-detection); המעקה מתעד את הציון שנמדד. ה-SBD הפנימי נסחר בפרימיום מול הציון החיצוני; קו-הזהות מוצג בגלוי כדי שכל אחד יוכל לאמת שאנחנו לא מוכרים מתחת לערך.",
   };
 
   const CONSOLE_TOKEN = process.env.CONSOLE_TOKEN ?? "";
