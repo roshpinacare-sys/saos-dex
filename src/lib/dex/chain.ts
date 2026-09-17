@@ -758,6 +758,7 @@ const ORACLE_MAP: Array<{ asset: string; feed: "steem" | "hive" | "sbd" | "blurt
   { asset: "WSOL", feed: "sol" },
   { asset: "WSTEEM", feed: "steem" },
   { asset: "PHIVE", feed: "hive" },   // R23: הנכס-הרשום הוא PHIVE (לא HIVE) — עד-עתה העוגן שלו לא זז כלל
+  { asset: "HIVE", feed: "hive" },    // R28: מפתח-מורשת שנתקע ב-h9913 אחרי מעבר R23 — מוחזר למפה כדי שכל מפתח באורקל הציבורי יישאר חי (אותו פיד, אפס השפעה מסחרית)
   { asset: "WSBD", feed: "sbd" },     // R23: WSBD עוקב אחרי SBD אמת (steem-dollars, ~$0.44) — לא HBD של Hive
   { asset: "WBLURT", feed: "blurt" },
   { asset: "ETH", feed: "eth" },
