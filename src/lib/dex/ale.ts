@@ -33,6 +33,7 @@ import {
   ROUTER_USDS_FLOOR,
 } from "./kernel";
 import { LP_ASSET_PREFIX } from "./amm";
+import { RAIL_OWNED_POOLS } from "./rail";
 
 /* ══ 1. POL-SEED — ההזרעה-האוטונומית ═════════════════════════════════════════ */
 
@@ -117,7 +118,15 @@ function acquireOther(st: DexState, p: Pool, usdsWantedMu: number, nowMs: number
 export function aleTick(st: DexState, nowMs: number): void {
   const h = st.height;
   if (h <= 0 || h % ALE_EVERY !== 0) return;
-  const targets = seedTargets(st).filter((t) => t.pool.a === "USDS" || t.pool.b === "USDS");
+  // R26 · בריכות-המסדרון מחוץ-לתחום-ה-ALE: עבור-נכס-עיגון-1:1 (WSTEEM ≡ STEEM)
+  // "רכישת-הצד-השני מהבריכה" היא-כפיית-ביקוש-סימולטיבי-מעל-האמת-החיצונית —
+  // ה-ALE קנה WSTEEM ב-USDS-אוצר כל-100-בלוקים (פגיעה ≤10% למחזור) ודחף-את
+  // מחיר-המסדרון במתמדת מעל-העוגן (נמדד-חי: 54→136µ תוך-480-טיקים; ובהיסטוריה —
+  // זה-שהביא-את-הבריכה-ל-917µ מעל-עוגן-360µ). עומק-המסדרון בא-מהעולם-האמת:
+  // הפקדות-STEEM דרך-הדלת — לא-מקניות-פרוטוקול-עצמי. ה-ALE ממשיך-להזריע-לזוגות
+  // הריבוניים (SAOS/USDS וכל-בריכה-חופשית-מחיר).
+  const targets = seedTargets(st).filter((t) =>
+    (t.pool.a === "USDS" || t.pool.b === "USDS") && !RAIL_OWNED_POOLS.has(t.key));
   if (targets.length === 0) return;
   // מקור-המימון: USDS-חופשי-מעל-רצפת-האוצר (הרצפה = אותה-רצפת-הראוטר — מגן-אחד)
   const freeUsds = Math.max(0, bal(st, "treasury", "USDS") - ROUTER_USDS_FLOOR);

@@ -357,6 +357,43 @@ async function main(): Promise<void> {
     nextNonce: (p: string) => string;
   };
 
+  /* ── R26 · מדיניות-עוגן-ברירה (standing anchor policy) ──────────────────────
+   * אחרי-הטיקים: אם בריכת-המסדרון (USDS/WSTEEM) סוטה-מהעוגן-האורקלי בלמעלה-מ-10%
+   * (מעל/מתחת) — סימון-מחדש ריבוני אל-העוגן (pool_repeg · treasury · אפס-הטבעה,
+   * Σ נשמר, מגולל-ביומן). ההיגיון: המסילה משפשפת-סטיות עד-25% במנות-מדודות
+   * (TWAP-scrubbing); מעבר-לזה זה-שבר-משטר (קריסת-נכס-חוץ) והסימון-מחדש הוא-
+   * התשובה-הכנה-היחידה (אין-שקיות-מספיקות-לסגירת-פער-8.8x ב-swap). אפס-תלות-
+   * במפעיל: הרשת מרפאת-את-עצמה בכל-פעימה — הבעיה-שנמצאה-חיה ב-h18553 (mid=473µ
+   * מול-עוגן 54µ) לא-תחזור-לרדוף-אותנו בשקט. */
+  try {
+    const { poolKey } = await import("./src/lib/dex/kernel");
+    const stx = rt.st as unknown as {
+      pools: Record<string, { ra: number; rb: number; a: string; b: string }>;
+      assets: Record<string, { refPrice?: number }>;
+    };
+    const pk = poolKey("WSTEEM", "USDS");
+    const p = stx.pools[pk];
+    const ref = stx.assets["WSTEEM"]?.refPrice ?? 0;
+    if (p && ref > 0 && p.rb > 0) {
+      const mid = Math.floor((p.ra * 1000) / p.rb);
+      const premBps = Math.floor(((mid - ref) * 10_000) / ref);
+      if (Math.abs(premBps) >= 1_000) {
+        const r = submitOp({ type: "pool_repeg", issuer: "treasury", nonce: nextNonce("rpeg"), pair: pk });
+        if (r.queued) {
+          await stepOnce(); // ה-op נכנס-לממפול — בלוק-אחד מבצע
+          const p2 = stx.pools[pk];
+          console.log(`[cloud-beat] R26 pool_repeg ${pk}: mid ${mid}→${Math.floor((p2.ra * 1000) / p2.rb)}µ (anchor ${ref}µ, premium was ${premBps}bps)`);
+        } else {
+          console.warn(`[cloud-beat] R26 pool_repeg rejected: ${r.reason ?? "?"} (mid ${mid}µ vs anchor ${ref}µ)`);
+        }
+      } else {
+        console.log(`[cloud-beat] R26 anchor check: ${pk} mid ${mid}µ vs anchor ${ref}µ (${premBps >= 0 ? "+" : ""}${premBps}bps) — within band`);
+      }
+    }
+  } catch (e) {
+    console.warn(`[cloud-beat] R26 anchor policy skipped: ${String(e).slice(0, 80)}`);
+  }
+
   let credited = 0, skipped = 0;
   for (const env of envelopes) {
     if (env?.k !== "deposit.claim") continue;

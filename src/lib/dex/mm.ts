@@ -51,6 +51,12 @@ export interface SoldierRT { nonceSeq: number; fills: number; takes: number; }
 /** מחיר-הוגן: עדות-משוקללת של הספר, הבריכה וסולם-הערך */
 export function fairPrice(st: DexState, base: string, quote: string): number {
   const ref = st.assets[base]?.refPrice ?? 0;
+  // R26 · עוגן-יחיד לזוגות-המסילה: הפייר של זוג-בבעלות-המסילה הוא refPrice — לא
+  // תערובת-ספר+בריכה. המצאו-החי (h18553): 80% מהפייר היה self-referential
+  // (ספר 50% + בריכה 30%) — נקודת-שבת-עצמית שהחזיקה-את-הספר ב-305µ בעוד-העוגן
+  // 54µ (STEEM-אמת). "מנוע-אחד-לעוגן" (SETTLE-16) — המסילה היא בעלת-המשמעות,
+  // והעוגן שלה הוא-האורקל, תמיד. הספר מצטט-סביב-העוגן ± spread — נקודה.
+  if (ref > 0 && RAIL_OWNED_POOLS.has(poolKey(base, quote))) return ref;
   const bids = sortBook(st, base, quote, "buy");
   const asks = sortBook(st, base, quote, "sell");
   const bestBid = bids[0]?.price ?? 0;
@@ -192,13 +198,15 @@ export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void 
 
   // (1) מנעול-בריכה — לכל-הזוגות (FIX SETTLE-14: היה רק-הזוג-הריבוני ובריכת
   // WSTEEM צפה חופשי — נסחרה עד 6x מעל הספר בלי-שום-גרביטציה)
-  // SETTLE-16 THE-MICRORAIL: הזוגות-בבעלות-המסילה (USDS/WSTEEM) נשלפים-מהנעילה-
-  // הצפה — המסילה היא בעלת-המשמעת שלהם מול-עוגן-אמת (refPrice ≡ STEEM 1:1),
-  // ולא מול-פייר-צף שהבוק-מדלל (ממצא-חי: הפייר-הצף גרר-את-הבריכה-בחזרה-מעלה
-  // אחרי-ה-REPEG — מלחמת-סוכנים). מנוע-אחד-לעוגן.
+  // R26 · הסרת-הפטור-של-זוגות-המסילה: הפטור נולד (SETTLE-16) כי-הפייר-הצף גרר-
+  // את-הבריכה-בחזרה-מעלה אחרי-ה-REPEG ("מלחמת-סוכנים"). מאז-R26 הפייר-של-זוג-
+  // מסילה ≡ העוגן (fairPrice מחזיר refPrice) — אין-עוד-שני-מנועים-עם-שני-יעדים:
+  // מנוע-אחד, יעד-אחד (העוגן). המנעול חוזר-לשמור-גם-על-בריכת-המסדרון — בלי-
+  // הכוח-הזה בריכה-רדודה (אחרי-סימון-מחדש) נסחפת-חופשית-ברעש-הבוטים (נמדד:
+  // 54→66µ ב-60-טיקים) והמסילה חסרת-מלאי-לשפשף (doses=0). המנוע-השני נשאר
+  // למנות-העדינות (TWAP-scrubbing) — שניהם-פונים-לאותו-עוגן.
   for (const mk of MARKETS) {
     const mkPair = poolKey(mk.base, mk.quote);
-    if (RAIL_OWNED_POOLS.has(mkPair)) continue;
     const p = getPool(st, mkPair);
     if (!p) continue;
     const pm = poolMidFor(p, mk.base, mk.quote);
@@ -209,12 +217,21 @@ export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void 
     // SETTLE-14: פער-גדול (≥200bps) מטופל כל-טיק; קטן — כל-טיק-שני (חיסכון-גז)
     if (Math.abs(gapBps) >= 30 && (Math.abs(gapBps) >= 200 || tick % 2 === 0)) {
       const assetIn = gapBps > 0 ? mk.base : mk.quote; // יקר-בבריכה → מזרימים-בסיס-פנימה (מוריד-mid)
-      const rIn = assetIn === p.a ? p.ra : p.rb;
-      // גודל-לסגירת-חצי-פער (ליניאריזציה), מדורג: 10k..600k µ (היה 150k —
-      // לא-היה-מסוגל לסגור פער של 25% והבריכה צפה מעל השוק) — ולא-יותר-מהזמין
-      const halfGap = Math.floor(Math.abs(Math.floor((rIn * gapBps) / 10_000)) / 2);
-      const size = Math.min(Math.max(halfGap, 10_000), 600_000, avail(st, "arena", assetIn));
-      if (size >= 5_000) {
+      // R26 · מנה-מדויקת-שורש (סגירת-פער-לאפס): הליניאריזציה-מחצית-הפער היתה
+      // כפולה במכפיל — mid ∝ ra/rb (שינוי-יחס), אבל המנה חושבה-ליניארית-על-המונה
+      // בלבד. על-בריכה-רדודה מנת-10kµ הרימה-את-ה-mid ב-+3.7% (דיוק-היעד: +1.9%)
+      // → הצד-השני לא-החזיר-אותה → ראצ'ט מתמשך שדילדל-את-הבריכה מ-WSTEEM
+      // (נמדד-חי: 54→82µ תוך-240-טיקים). המנה-המדויקת להביא-את-מחיר-הבריכה
+      // בדיוק-לפייר: sqrt — שכן mid' = 1000·rQ·rB/(rB+x)² למכירה,
+      // ו-mid' = 1000(rQ+x)²/(rB·rQ) לקנייה. לפערים-קטנים היא מתכנסת-לליניארית
+      // (sqrt(1+g)≈1+g/2) — שיפור-טהור, בלי-overshoot, בלי-ראצ'ט.
+      const rBase = mk.base === p.a ? p.ra : p.rb;
+      const rQuote = mk.quote === p.a ? p.ra : p.rb;
+      const raw = gapBps > 0
+        ? Math.floor(Math.sqrt(Math.floor((1000 * rQuote * rBase) / mkFair)) - rBase)   // מכירת-בסיס פנימה
+        : Math.floor(Math.sqrt(Math.floor((mkFair * rBase * rQuote) / 1000)) - rQuote); // קניית-בסיס מהבריכה
+      const size = Math.min(Math.max(raw, 1), 600_000, avail(st, "arena", assetIn));
+      if (size >= 500) {
         pushOp({ type: "pool_swap", issuer: "arena", nonce: `pk-pool-${tick}-${mk.base}`, pair: poolKey(mk.base, mk.quote), assetIn, amount: size });
       }
     }
@@ -538,7 +555,12 @@ export function arenaTick(
         submit(rt, st, bot, { type: "order", base: m.base, quote: m.quote, side, price: px, amount: amt }, pushOp);
       } else {
         const p = getPool(st, poolKey(m.base, m.quote));
-        if (p) {
+        // R26 · בוטי-רעש לא-נוגעים-בבריכת-המסדרון: הזרימה-שלהם חד-צדדית-מבנית
+        // (לבוטים אין WSTEEM — המכירות נדחות insufficient, הקניות נשארות → סחיפת-
+        // הבריכה מעל-העוגן; נמדד-חי: 54→79µ ב-240-טיקים). בנכס-עיגון-1:1 גילוי-
+        // המחיר הוא-מבחוץ (STEEM-אמת באורקל) — רעש-סימולטיבי על-המסדרון הוא-לא
+        // גילוי-מחיר אלא-סתם-עיוות. האמת באה-מהדלת, מהמסילה-ומהסימון-המחדש.
+        if (p && !RAIL_OWNED_POOLS.has(poolKey(m.base, m.quote))) {
           // FIX(SETTLE-14): הכיוון היה tick%3 — מוטה-מבנית 2:1 (על-הזוג-הריבוני:
           // 2/3 קניות-בסיס). זרימה-חד-צדדית קטנה-אך-מתמדת היא-הרמת-מחיר,
           // לא-גילוי-מחיר. זוגיות-טיק = איזון-מושלם שתי-הכיוונים.
