@@ -131,10 +131,14 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
     // נכס-טבעי: Σbal + Σpools + backing(W+x) === ג'נזיס − שריפות-שנרשמו (FIX: HIGH-3b —
     // הראוטר שורף SAOS אמת (burnedSaos): ההיצע-החי יורד-לצמיתות — בלי-הדלי הביקורת
     // הייתה נכשלת-נצחית מהמחזור-הראשון של ה-buy-and-burn) + הפרש-היסטורי-מוצהר
+    // Task 80 · THE-VAULT: היצע-הכספת (issuedMu−burnedMu) הוא-הנפקה-המוצהרת-החיה
+    // של USDS — שאיבה מטביעה (issuedMu+=), פירעון שורף (burnedMu+=). רק-הקרן נספרת:
+    // ריבית לא-הוטבעה-מעולם, רק-הועברה-מהמשלם-לאוצר — ההיצע נשאר-מדויק-לנצח.
     const nativeBacking = backing[`W${a}`] ?? 0;
     const live = (liveAssets[a] ?? 0) + nativeBacking;
     const adjNative = st.auditAdjustments?.native?.[a] ?? 0;
-    const expected = (totals.assets[a] ?? 0) - (a === "SAOS" ? (st.burnedSaos ?? 0) : 0) + adjNative;
+    const vaultSupply = a === "USDS" ? ((st.vaultTot?.issuedMu ?? 0) - (st.vaultTot?.burnedMu ?? 0)) : 0;
+    const expected = (totals.assets[a] ?? 0) - (a === "SAOS" ? (st.burnedSaos ?? 0) : 0) + adjNative + vaultSupply;
     const ok = live === expected;
     assetRows.push({ asset: a, live, expected, ok, kind: "native" });
     if (!ok) errors.push(`native ${a}: live ${live} ≠ genesis+declared ${expected}`);

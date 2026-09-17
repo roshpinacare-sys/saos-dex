@@ -28,6 +28,7 @@ import { sortBook } from "./book";
 import { dcaTick, trigTick } from "./triggers";
 import { protoRevTick } from "./protorev";
 import { cowSettle } from "./cow";
+import { vaultTick } from "./vault"; // Task 80 · THE-VAULT — סוכן-כספת-ההדגמה
 // Task 72 · דלת-המטבעות: פיד-האורקל — extFeeds (median חוצה-מקורות, TTL-משותף עם price-proof)
 import { extFeeds } from "./price-proof";
 
@@ -663,6 +664,8 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     const exec = (op: Op) => applyOp(st, op, t0);
     // FIX(Roast-65-a · LOW-13): nowMs מוזרק-גם-ל-DCA/טריגרים — רישומי-הג'ורנל שלהם
     // היו t:0 (זמן-מזויף) בניגוד-לתיקון-63/64 על-שאר-הנתיבים.
+    // Task 80 · THE-VAULT: סוכן-הכספת אינו-סוחר — אין-לו-אירועי-טייפ (ריבית ≠ עמלת-סוואפ).
+    vaultTick(st, rt.tickCount, exec, t0);
     const tickEvents = [...dcaTick(st, exec, t0), ...trigTick(st, exec, t0), ...protoRevTick(st, exec, t0), ...cowSettle(st, exec, t0)];
     for (const ev of tickEvents) rt.tape.unshift({ ...ev, h: st.height });
     feedPriceOracle(rt, tickEvents.length > 0 ? tickEvents : undefined, st.height);
