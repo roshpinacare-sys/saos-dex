@@ -38,6 +38,10 @@ export const GAS_TABLE = {
   // gas-על-op-אוצר-בלבד אינו-מוסיף-הגנה-ורק-מרעיב-את-ספר-הריבון (תשישות-מבנית —
 // אותו-דפוס-שתוקן-ב-ZFB-66-וב-קצבת-החיות-SETTLE-15).
   pool_open: 0,
+  // R26 · POOL-REPEG — סימון-מחדש-ריבוני של בריכה-בבעלות-מלאה אל-עוגן-האורקל.
+  // אפס-גז — אותה-משפחת-ערוצים-ריבוניים (מבנה-המגן: אוצר-בלבד + pair-קנוני +
+  // אורקל-קיים; לא-מחיר). זה-לא-swap — ההחלפה-היא-בסימון-בלבד (Σ נשמר).
+  pool_repeg: 0,
   pool_swap: 100,
   pool_rmw: 120,
   pool_xAdd: 180,
@@ -1193,6 +1197,47 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       addBal(st, "treasury", parts[1], -amtB);
       addBal(st, "treasury", LP_ASSET_PREFIX + canon, lpMint);
       st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "pool_open", note: `${canon} ${amtA}+${amtB}µ · LP ${lpMint}µ` });
+      return { ok: true, gas };
+    }
+    case "pool_repeg": {
+      // R26 · POOL-REPEG (ריענון-עוגן-רשת): סימון-מחדש של בריכה בבעלות-מלאה לעוגן-האמת.
+      // הבעיה-החיה (2026-09-17, h18553): בריכת USDS/WSTEEM נסחרה mid=473µ בעוד
+      // העוגן-האורקל החי (STEEM בפועל) = 54µ — פער 8.8x. ה-fairPrice המעורבב
+      // (ספר 50% + בריכה 30% + עוגן 20%) יצר-נקודת-שבת-עצמית: הספר-העצמי נתן
+      // לעצמו לגיטימציה. מי-שהיה-מפקיד STEEM אמת דרך-הדלת (wrap 1:1) היה-מוכר
+      // WSTEEM ב-473µ — מדפיס-כסף-חינם על-חשבון-האוצר. זהו-כשל-כלכלי-P0.
+      // הפיתרון: כיוון-שהבריכה 100% בבעלות-האוצר (polShare=10000; אין-LP-חוץ;
+      // pool_rmw-של-אוצר נעול-לנצח מ-הג'נזיס) — סימון-מחדש ריבוני הוא-הכלי-הכנה:
+      // ra נקבע-כך-שמחיר-הבריכה יהיה-העוגן; העודף חוזר-לאוצר (או האוצר משלים).
+      // אפס-הטבעה · אפס-שריפה · Σ(balances+pool-reserves) נשמר-בדיוק (המבקר-הברזל
+      // ירוק) · LP לא-נגע · הכל-מגולל-ביומן. הכיוון-הכפול: גם-בריכה-זולה-מהעוגן
+      // מושלמת-ממלאי-האוצר (במלאי-קיים-בלבד — fail-closed).
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      const rKey = String(op.pair ?? "");
+      if (!rKey) return { ok: false, err: "pair-required", gas: 0 };
+      const parts = rKey.split("/");
+      if (parts.length !== 2 || !parts[0] || !parts[1]) return { ok: false, err: "bad-pair", gas: 0 };
+      const canon = poolKey(parts[0], parts[1]);
+      if (rKey !== canon) return { ok: false, err: "non-canonical-pair", gas: 0 };
+      const p = st.pools[canon];
+      if (!p) return { ok: false, err: "pool-not-found", gas: 0 };
+      // עוגן-דו-צדדי: refPrice של-שני-הצדדים (µ-USDS ל-1-יחידה). היעד: מחיר-1-B
+      // במונחי-A === refB/refA. עבור USDS/WSTEEM: 54/1000 → ra_new = 54×rb/1000.
+      const refA = st.assets[p.a]?.refPrice ?? 0;
+      const refB = st.assets[p.b]?.refPrice ?? 0;
+      if (!(refA > 0) || !(refB > 0)) return { ok: false, err: "no-anchor", gas: 0 };
+      if (!(p.rb > 0)) return { ok: false, err: "empty-pool", gas: 0 };
+      const raNew = Math.floor((refB * p.rb) / refA);
+      if (!(raNew > 0)) return { ok: false, err: "bad-anchor", gas: 0 };
+      const delta = raNew - p.ra;
+      if (delta === 0) return { ok: false, err: "on-anchor", gas: 0 };
+      if (delta > 0 && avail(st, "treasury", p.a) < delta) return { ok: false, err: "insufficient-treasury", gas: 0 };
+      const c = consume(); if (c) return c;
+      const midOld = Math.floor((p.ra * 1000) / p.rb);
+      if (delta > 0) { addBal(st, "treasury", p.a, -delta); p.ra += delta; }
+      else { p.ra += delta; addBal(st, "treasury", p.a, -delta); }
+      const midNew = Math.floor((p.ra * 1000) / p.rb);
+      st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "pool_repeg", note: `${canon} mid ${midOld}→${midNew}µ (anchor refB/refA=${Math.floor((refB * 1000) / refA) / 1000}) · ${delta > 0 ? "+" : ""}${delta}µ ${p.a} ${delta > 0 ? "treasury→pool" : "pool→treasury"} · Σ נשמר` });
       return { ok: true, gas };
     }
     case "pool_add":
