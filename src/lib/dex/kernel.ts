@@ -82,6 +82,11 @@ export const GAS_TABLE = {
   // הערכים חיים בתוך ה-op עצמו → ריפליי דטרמיניסטי. אפס-גז (משפחת-הערוצים
   // הריבוניים: relay/wrap/batch) — השקיפות היא המוצר, והמגן-המבני הוא אוצר-בלבד.
   oracle_set: 0,
+  // ── Task 80 · THE-VAULT (כספת-ההלוואות — שלב 2 בשעון נתיב הכסף) ──
+  vault_open: 80,     // שאיבת USDS נגד בטחונות WSTEEM (CDP מינימלי, יחס 250%)
+  vault_repay: 60,    // פירעון + שחרור בטחונות (הריבית → אוצר)
+  vault_liquidate: 60, // ניקוי-כספת שנפלה מתחת-ל-150% — פתוח-לכל-אזרח, בונוס 5%
+  vault_backstop: 40, // כיסוי-כספת-שקועה מתחת-ל-100% — אוצר-בלבד, הפסד-נרשם-בגלוי
 } as const;
 
 export type OpKind = keyof typeof GAS_TABLE;
@@ -110,6 +115,19 @@ export const BOND_VE_WEEKS = 12;        // SAOS-של-בונד נעול 12שב' (
 export const BOND_MIN_USDS = 50_000;    // תקרה-תחתונה-פר-בונד (µ)
 export const BOND_MAX_USDS = 2_000_000; // תקרת-בונד-פר-פקודה (2000 USDS)
 export const BOND_COOLDOWN = 10;        // בלוקים-בין-בונדים-פר-חשבון
+// ── Task 80 · THE-VAULT — כספת-ההלוואות המינימלית (שלב 2 בשעון נתיב הכסף · money.html) ──
+// דוקטרינה: USDS נגד בטחונות WSTEEM בלבד · יחס שמרני · תקרות עד-שהמכשיר-יוכח ·
+// ריבית מתומחרת-במצב-השרשרת · אפס-float-במצב · ריפליי-מדויק (הונפה-עצלה-טהורה).
+export const VAULT_POT = "vault-pot";                // חשבון-עד שמחזיק את כל-הבטחונות
+export const VAULT_COLLATERAL = "WSTEEM";            // הבטחון היחיד (money.html שלב 2: WSTEEM בלבד)
+export const VAULT_MIN_CR_PCT = 250;                 // יחס-בטחונות מינימלי 250% — שאיבה ≤ 40% מערך
+export const VAULT_LIQ_CR_PCT = 150;                 // מתחת-ל-150% — נזילות פתוחה-לכל-אזרח
+export const VAULT_LIQ_BONUS_BPS = 500;              // בונוס-מפרק 5% — תמריץ-ניקוי-חוב אמת
+export const VAULT_DEBT_CAP_MU = 100_000;            // תקרת-חוב-פר-כספת ($100) — השקה-שמרנית, אפס-ביקורת-חוץ
+export const VAULT_GLOBAL_CAP_MU = 500_000;          // תקרת-חוב-גלובלית ($500) — עד-שהמכשיר-יוכח-בחיים
+export const VAULT_BASE_RATE_BPS = 500;              // ריבית-בסיס 5%/שנה
+export const VAULT_UTIL_SURGE_BPS = 1_000;           // תוספת-ניצולת עד +10%/שנה — מתומחר-בשרשרת
+export const BLOCKS_PER_YEAR = BLOCKS_PER_WEEK * 52; // 10,483,200 — ריבית-שלמים-בלבד
 export const EPOCH_BLOCKS = 1_200;      // אפוק-פליפ כל-שעה (טיק 3s) — נראה-חי
 export const ROUTER_EVERY = 600;        // מחזור-קנייה-ושריפה כל-30 דק'
 export const REV_FLOOR = 200_000;       // רצפת-רווח-אוצר שהראוטר לא נוגע בה (µ)
@@ -252,6 +270,9 @@ export interface DexState {
   rearmCounts?: { saos: number; usds: number; wsteem: number }; // FIX(Roast-64): תקרות-ה-rearm-במצב (היו-מודול — ריסטארט-מאפס)
   botSeedCounts?: Record<string, { usds: number; saos: number }>; // FIX(Roast-64): תקרות-זריעת-בוטים-במצב (אותו-עיקרון)
   soldierSeedCounts?: Record<string, { wsteem: number }>; // SETTLE-17: קו-אספקת-חיילים במצב (אותו-עיקרון — ריסטארט לא מאפס)
+  // ── Task 80 · THE-VAULT (רשויות: תמונות-ישנות-בלעדיהן = undefined) ──
+  vaults?: Record<string, { colMu: number; debtMu: number; intMu: number; atH: number }>; // עמדת-כספת-פר-חשבון (בטחונות/קרן/ריבית-מונפת/גובה-הונפה)
+  vaultTot?: { opened: number; repaid: number; liquidations: number; interestMu: number; backstopLossMu: number; issuedMu: number; burnedMu: number }; // מוני-חיים + חשבונאות-היצע-כנה (issued−burned = ההיצע שהכספת יצרה)
   stats: { fills: number; swaps: number; opsTotal: number; ladders: number };
   // ── Task 54 · כלכלה (רשויות-כולן: תמונות-מצב-ישנות-בלעדיהן = undefined) ──
   ve?: Record<string, { amt: number; unlockH: number; weeks: number; atH: number }>; // עמדת-veSAOS-פר-חשבון
@@ -444,6 +465,8 @@ export function genesisState(): DexState {
     burnedSaos: 0,
     bond: { soldSaosMu: 0, usdsInMu: 0, count: 0 },
     bondUserH: {},
+    vaults: {},
+    vaultTot: { opened: 0, repaid: 0, liquidations: 0, interestMu: 0, backstopLossMu: 0, issuedMu: 0, burnedMu: 0 },
     dca: {}, trig: {}, dcaSeq: 1, trigSeq: 1,
     launch: {}, launchSeq: 1,
     revAux: { protorevMu: 0, launchpadMu: 0 },
@@ -528,6 +551,11 @@ export interface Op {
   ticker?: string; lmode?: "curve" | "lbp"; supply?: number;
   // Task 72 · oracle_set — מפת-מחירים (נכס → µ-USDS ל-1-יחידה, שלמים בלבד)
   prices?: Record<string, number>;
+  // Task 80 · THE-VAULT — כספת-ההלוואות
+  drawMu?: number;       // vault_open: סכום-השאיבה ב-USDSµ
+  repayMu?: number;      // vault_repay: סכום-הפירעון ב-USDSµ (0 = פירעון-מלא-עד-החוב)
+  withdrawMu?: number;   // vault_repay: בטחונות-לשחרור ב-WSTEEMµ
+  owner?: string;        // vault_liquidate / vault_backstop: בעל-הכספת המטופלת
   // דבר-גורר-דבר (SETTLE-12): תתי-ops של batch — כל-תת-op חייב-issuer זהה למנפיק-ה-batch
   ops?: Op[];
 }
@@ -536,6 +564,35 @@ export interface Op {
 export function knownAsset(st: DexState, a: string | undefined): boolean {
   if (!a) return false;
   return (ASSETS as string[]).includes(a) || !!st.assets[a];
+}
+
+/* ── Task 80 · THE-VAULT — מתמטיקה-טהורה (שלמים-בלבד, זהה-בריפליי) ─────────────── */
+/** ערך בטחונות ב-µUSDS: refPrice ב-mµ-ליחידה (USDS=1000 → $1; WSTEEM=54 → $0.054). */
+export function vaultColValueMu(st: DexState, colMu: number): number {
+  const ref = st.assets[VAULT_COLLATERAL]?.refPrice ?? 0;
+  return ref > 0 ? Math.floor((colMu * ref) / 1000) : 0;
+}
+/** ריבית מתומחרת-במצב-השרשרת: בסיס 5%/שנה + תוספת-ניצולת (חוב-גלובלי/תקרה). */
+export function vaultRateBps(st: DexState): number {
+  let debt = 0;
+  for (const v of Object.values(st.vaults ?? {})) debt += v.debtMu + v.intMu; // קרן + ריבית-מונפת — התביעה-הכוללת
+  const util = debt >= VAULT_GLOBAL_CAP_MU ? 1 : debt / VAULT_GLOBAL_CAP_MU;
+  return VAULT_BASE_RATE_BPS + Math.floor(util * VAULT_UTIL_SURGE_BPS);
+}
+/** חוב-אפקטיבי = קרן + ריבית שנצברה — הונפה-עצלה: פונקציה-טהורה-של-המצב, אפס-כתיבה-פר-בלוק. */
+export function vaultEffDebtMu(debtMu: number, rateBps: number, fromH: number, toH: number): number {
+  const blocks = Math.max(0, toH - fromH);
+  if (blocks <= 0 || debtMu <= 0) return debtMu;
+  return debtMu + Math.floor((debtMu * rateBps * blocks) / (10_000 * BLOCKS_PER_YEAR));
+}
+/** מוני-חיים וחשבונאות-היצע של הכספת — תמיד-אובייקט (תמונות-ישנות-בלעדיו = אפסים-כנים). */
+export function vaultTotals(st: DexState): { opened: number; repaid: number; liquidations: number; interestMu: number; backstopLossMu: number; issuedMu: number; burnedMu: number } {
+  return st.vaultTot ?? { opened: 0, repaid: 0, liquidations: 0, interestMu: 0, backstopLossMu: 0, issuedMu: 0, burnedMu: 0 };
+}
+/** היצע-הכספת-החי (µ USDS): מה-שהוטבע-בשאיבה וטרם-נשרף בפירעון — הצהרת-הביקורת המדויקת. */
+export function vaultNetSupplyMu(st: DexState): number {
+  const t = vaultTotals(st);
+  return t.issuedMu - t.burnedMu;
 }
 
 export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
@@ -1309,6 +1366,154 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
     }
     case "heartbeat": {
       const c = consume(); if (c) return c;
+      return { ok: true, gas };
+    }
+    /* ── Task 80 · THE-VAULT — כספת-ההלוואות המינימלית ─────────────────────────── */
+    case "vault_open": {
+      // שאיבת USDS נגד בטחונות WSTEEM (CDP): ההטבעה-כנגד-הבטחונות היא-ההנפקה,
+      // הפירעון הוא-השריפה. כל-הבדיקות לפני-כל-נגיעה-במצב (עסקה-לא-חוקית לא-נוגעת).
+      // issuedMu = הצהרת-ההיצע לביקורת-הספרים (ledgerAudit): ההטבעה נספרת-בגלוי,
+      // השריפה בפירעון — אחרת ביקורת-הברזל עוצרת-את-השרשרת (כפי-שהוכח-בהוכחה-המקומית).
+      const amt = op.amount ?? 0, draw = op.drawMu ?? 0;
+      if (op.asset !== VAULT_COLLATERAL) return { ok: false, err: "vault-wsteem-only", gas: 0 };
+      if (!Number.isSafeInteger(amt) || amt <= 0) return { ok: false, err: "bad-amount", gas: 0 };
+      if (!Number.isSafeInteger(draw) || draw <= 0) return { ok: false, err: "bad-draw", gas: 0 };
+      if (avail(st, issuer, VAULT_COLLATERAL) < amt) return { ok: false, err: "insufficient-collateral", gas };
+      const prev = st.vaults?.[issuer];
+      const colMu = (prev?.colMu ?? 0) + amt;
+      const colVal = vaultColValueMu(st, colMu);
+      if (colVal <= 0) return { ok: false, err: "no-collateral-price", gas: 0 };
+      const rate = vaultRateBps(st);
+      const prevBase = prev ? prev.debtMu + prev.intMu : 0;
+      const oldEff = prev ? vaultEffDebtMu(prevBase, rate, prev.atH, st.height) : 0;
+      // חלוקה-מדויקת של החוב החדש: הקרן (ישנה + השאיבה הטרייה) + הריבית שנצברה-עד-עתה.
+      // תיקון-הוכחה-מקומית: ה-draw חייב-להיכנס-לקרן — אם-הוא נשמט, השאיבה כסף-חינם
+      // (32 מחזורים × 2160µ הודפסו בלי חוב — הביקורת יראה זאת כהיצע-כשר כי issuedMu נספר,
+      // אבל הכלכלה שקרית. ההוכחה המקומית תפסה את זה לפני שזה נגע בשרשרת-האמת).
+      const debtMu = (prev?.debtMu ?? 0) + draw;
+      const intMu = oldEff - (prev?.debtMu ?? 0); // ריבית מונפת-קודמת + צבירה-טרייה
+      const totalDebt = debtMu + intMu; // === oldEff + draw (התביעה-הכוללת)
+      const maxDebt = Math.min(Math.floor((colVal * 100) / VAULT_MIN_CR_PCT), VAULT_DEBT_CAP_MU);
+      if (totalDebt > maxDebt) return { ok: false, err: "collateral-ratio", gas: 0 };
+      let others = 0;
+      for (const [k, v] of Object.entries(st.vaults ?? {})) if (k !== issuer) others += v.debtMu + v.intMu;
+      if (others + totalDebt > VAULT_GLOBAL_CAP_MU) return { ok: false, err: "global-debt-cap", gas: 0 };
+      const c = consume(); if (c) return c;
+      addBal(st, issuer, VAULT_COLLATERAL, -amt);
+      addBal(st, VAULT_POT, VAULT_COLLATERAL, amt);
+      addBal(st, issuer, "USDS", draw); // שאיבה = הטבעה-כנגד-בטחונות (ספק-CDP אמת)
+      st.vaults = { ...(st.vaults ?? {}), [issuer]: { colMu, debtMu, intMu, atH: st.height } };
+      st.vaultTot = { ...vaultTotals(st), opened: vaultTotals(st).opened + 1, issuedMu: vaultTotals(st).issuedMu + draw };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "vault_open", note: `+${amt}µ ${VAULT_COLLATERAL} → draw ${draw}µ USDS · CR ${Math.floor((colVal * 100) / totalDebt)}% · issued ${vaultNetSupplyMu(st)}µ` });
+      return { ok: true, gas };
+    }
+    case "vault_repay": {
+      // פירעון + שחרור: הריבית שנצברה → הכנסת אוצר; הקרן נשרפת (היא הוטבעה-בשאיבה).
+      // חשבונאות-מפוצלת מדויקת: כל-תשלום נחתך-קודם-כריבית (עד-גובה-הריבית-הכוללת),
+      // השארית-קרן — השריפה נספרת-ב-burnedMu וההיצע נשאר-מדויק-מול-הביקורת-לעולם.
+      const v = st.vaults?.[issuer];
+      if (!v) return { ok: false, err: "no-vault", gas: 0 };
+      const repay = Math.floor(op.repayMu ?? 0), wd = Math.floor(op.withdrawMu ?? 0);
+      if (repay < 0 || wd < 0) return { ok: false, err: "bad-args", gas: 0 };
+      if (repay === 0 && wd === 0) return { ok: false, err: "nothing-to-do", gas: 0 };
+      const rate = vaultRateBps(st);
+      const base = v.debtMu + v.intMu;
+      const eff = vaultEffDebtMu(base, rate, v.atH, st.height);
+      const accrued = eff - base;
+      const pay = Math.min(repay, eff);
+      if (avail(st, issuer, "USDS") < pay) return { ok: false, err: "insufficient-usds", gas };
+      const totalInterest = v.intMu + accrued;
+      const interestPart = Math.min(pay, totalInterest);
+      const principalPart = pay - interestPart;
+      const newDebtMu = v.debtMu - principalPart;
+      const newIntMu = totalInterest - interestPart;
+      const newEff = newDebtMu + newIntMu;
+      const newCol = v.colMu - wd;
+      if (newCol < 0) return { ok: false, err: "over-withdraw", gas: 0 };
+      if (newEff > 0) {
+        const colVal = vaultColValueMu(st, newCol);
+        if (Math.floor((colVal * 100) / newEff) < VAULT_MIN_CR_PCT) return { ok: false, err: "collateral-ratio", gas: 0 };
+      }
+      const c = consume(); if (c) return c;
+      addBal(st, issuer, "USDS", -pay);
+      if (interestPart > 0) addBal(st, "treasury", "USDS", interestPart); // ריבית = הכנסת-אוצר (לא-הוטבעה-מעולם)
+      const vt = vaultTotals(st);
+      const nextTot = principalPart > 0 ? { ...vt, interestMu: vt.interestMu + interestPart, burnedMu: vt.burnedMu + principalPart }
+                                        : (interestPart > 0 ? { ...vt, interestMu: vt.interestMu + interestPart } : vt);
+      if (wd > 0) { addBal(st, VAULT_POT, VAULT_COLLATERAL, -wd); addBal(st, issuer, VAULT_COLLATERAL, wd); }
+      const maps = { ...(st.vaults ?? {}) };
+      if (newEff <= 0 && newCol <= 0) {
+        delete maps[issuer];
+        st.vaultTot = { ...nextTot, repaid: nextTot.repaid + 1 };
+      } else {
+        maps[issuer] = { colMu: newCol, debtMu: newDebtMu, intMu: newIntMu, atH: st.height };
+        st.vaultTot = nextTot;
+      }
+      st.vaults = maps;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "vault_repay", note: `pay ${pay}µ USDS (ריבית ${interestPart}µ→אוצר · קרן ${principalPart}µ→שריפה) · free ${wd}µ ${VAULT_COLLATERAL} · debt ${newEff}µ` });
+      return { ok: true, gas };
+    }
+    case "vault_liquidate": {
+      // נזילות-אזרח: כספת שנפלה מתחת-ל-150% — כל-אחד יכול-לסגור-חוב-ולקחת-בטחונות+5%.
+      // כנות-כפולה: מתחת-ל-100% אין-רווח-למפרק — רק-האוצר (backstop), לא-תיאטרון.
+      // חשבונאות: המפרק משלם את-החוב-הכולל; הריבית → אוצר, הקרן נשרפת (burnedMu).
+      const owner = String(op.owner ?? "").toLowerCase();
+      if (!owner || FORBIDDEN_KEYS.has(owner)) return { ok: false, err: "bad-owner", gas: 0 };
+      const v = st.vaults?.[owner];
+      if (!v) return { ok: false, err: "no-vault", gas: 0 };
+      const rate = vaultRateBps(st);
+      const base = v.debtMu + v.intMu;
+      const eff = vaultEffDebtMu(base, rate, v.atH, st.height);
+      if (eff <= 0) return { ok: false, err: "no-debt", gas: 0 };
+      const colVal = vaultColValueMu(st, v.colMu);
+      const cr = Math.floor((colVal * 100) / eff);
+      if (cr >= VAULT_LIQ_CR_PCT) return { ok: false, err: "not-liquidatable", gas: 0 };
+      if (cr < 100) return { ok: false, err: "underwater-backstop-only", gas: 0 };
+      const ref = st.assets[VAULT_COLLATERAL]?.refPrice ?? 0;
+      if (ref <= 0) return { ok: false, err: "no-collateral-price", gas: 0 };
+      const seizeVal = Math.floor((eff * (10_000 + VAULT_LIQ_BONUS_BPS)) / 10_000);
+      const seizeMu = Math.min(v.colMu, Math.floor((seizeVal * 1000) / ref));
+      if (avail(st, issuer, "USDS") < eff) return { ok: false, err: "insufficient-usds", gas };
+      const c = consume(); if (c) return c;
+      addBal(st, issuer, "USDS", -eff);
+      const interestPart = eff - v.debtMu; // כל-הריבית-שנצברה (הונפה + חדשה)
+      if (interestPart > 0) addBal(st, "treasury", "USDS", interestPart);
+      const vt = vaultTotals(st);
+      st.vaultTot = { ...vt, interestMu: vt.interestMu + interestPart, burnedMu: vt.burnedMu + v.debtMu, liquidations: vt.liquidations + 1 };
+      addBal(st, VAULT_POT, VAULT_COLLATERAL, -seizeMu);
+      addBal(st, issuer, VAULT_COLLATERAL, seizeMu);
+      const restCol = v.colMu - seizeMu;
+      const maps = { ...(st.vaults ?? {}) };
+      if (restCol <= 0) delete maps[owner]; else maps[owner] = { colMu: restCol, debtMu: 0, intMu: 0, atH: st.height };
+      st.vaults = maps;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "vault_liquidate", note: `vault ${owner}: paid ${eff}µ USDS · seized ${seizeMu}µ ${VAULT_COLLATERAL} (CR was ${cr}%)` });
+      return { ok: true, gas };
+    }
+    case "vault_backstop": {
+      // כספת-שקועה (מפול-אורקל, CR<100%): האוצר סוגר-החוב משלו ולוקח-הכל —
+      // ההפסד נרשם-במונה-הגלוי לכל-החיים (backstopLossMu), לא-מוסתר-ברווח.
+      // חשבונאות-מדויקת: רק-הקרן (v.debtMu) הוטבעה-על-ידי-הכספת — היא-שנשרפת;
+      // הריבית לא-הוטבעה-מעולם — האוצר משלם-אותה-לעצמו (קיזוז-טהור, אפס-היצע-נע).
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      const owner = String(op.owner ?? "").toLowerCase();
+      if (!owner || FORBIDDEN_KEYS.has(owner)) return { ok: false, err: "bad-owner", gas: 0 };
+      const v = st.vaults?.[owner];
+      if (!v) return { ok: false, err: "no-vault", gas: 0 };
+      const rate = vaultRateBps(st);
+      const base = v.debtMu + v.intMu;
+      const eff = vaultEffDebtMu(base, rate, v.atH, st.height);
+      const colVal = vaultColValueMu(st, v.colMu);
+      if (eff <= 0) return { ok: false, err: "no-debt", gas: 0 };
+      if (Math.floor((colVal * 100) / eff) >= 100) return { ok: false, err: "not-underwater", gas: 0 };
+      if (avail(st, "treasury", "USDS") < v.debtMu) return { ok: false, err: "treasury-short", gas };
+      const c = consume(); if (c) return c;
+      addBal(st, "treasury", "USDS", -v.debtMu); // הקרן-המוטבעת נשרפת-מיתרת-האוצר
+      addBal(st, VAULT_POT, VAULT_COLLATERAL, -v.colMu);
+      addBal(st, "treasury", VAULT_COLLATERAL, v.colMu);
+      const maps = { ...(st.vaults ?? {}) }; delete maps[owner]; st.vaults = maps;
+      const vt = vaultTotals(st);
+      st.vaultTot = { ...vt, burnedMu: vt.burnedMu + v.debtMu, backstopLossMu: vt.backstopLossMu + (eff - colVal) };
+      st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "vault_backstop", note: `vault ${owner}: debt ${eff}µ absorbed (principal ${v.debtMu}µ burned, interest self-offset) · loss ${eff - colVal}µ recorded forever` });
       return { ok: true, gas };
     }
     default:
