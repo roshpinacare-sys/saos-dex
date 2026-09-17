@@ -141,7 +141,16 @@ export function proofOk(chain: string, s: string): boolean {
   }
 }
 
-const idOk = (s: string): boolean => /^[a-z0-9][a-z0-9-]{0,30}$/.test(s);
+/* R33 · deposit-door: תושב בסימולציה על עותק-חי של השרשרת — ה-regex ההיסטורי
+ * דחה את חשבונות-המפקידים (u:saos1…) משתי סיבות: הנקודותיים אינן באלפבית
+ * והאורך (41 > 32). התוצאה: כסף נכנס (זיכוי cloud) אבל דלת-היציאה
+ * (lockOutbound) ומסילת-הכניסה (registerInbound) נעולות בפני בדיוק מי
+ * שהמערכת מיועדת לו. עתה: שמות-הפנים ההיסטוריים נשארים כמו שהיו, ונוסף
+ * טופס-החשבון שהגרעין באמת מייצר — "u:" + כתובת-saos1 המנורמלת-לקטנות
+ * (kernel.ts:612,622 מנרמל issuer/to לקטנות; base58 רגיש-רישיות, ולכן
+ * השם-הקנוני הוא הכתובת-הקטנה — אותו חוק ש-cloud-beat מזריע עכשיו). */
+const idOk = (s: string): boolean =>
+  /^[a-z0-9][a-z0-9-]{0,30}$/.test(s) || /^u:saos1[a-z0-9]{33,35}$/.test(s);
 
 /* ── FIX(Roast-64-c · F1) עזרי-TRON: base58→hex + פריקת-העברות ─────────────── */
 const TRON_TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"; // keccak("Transfer(address,address,address)")

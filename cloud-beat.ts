@@ -428,7 +428,12 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const to = `u:${String(env.by)}`;
+    // R33 · canonical-account: הגרעין מנרמל issuer/to לקטנות (kernel.ts:612,622) —
+    // כתובת-saos1 היא base58 רגישת-רישיות, ולכן השם-הקנוני של חשבון-מפקיד הוא
+    // "u:" + הכתובת-הקטנה. בלי-זה הזיכוי נחת תחת שם-שונה מזה שכל-הבדיקות-הציבוריות
+    // (accountExists של הגשר, מראה-הארנק) מחפשות — הכסף נעלם לעיני בעליו.
+    // הוכח-חי בסימולציה: saos1BxqgarCWK… נזקף תחת u:saos1bxqgarcwk… בלי שאיש יראה.
+    const to = `u:${String(env.by).toLowerCase()}`;
     // יחידות-השרשרת: 1000µ = 1 יחידה (אותו-קנון של המנוע — fmtAmtMu מחלק-ב-1000)
     const mu = Math.floor(usds * 1_000);
     const r = submitOp({
@@ -436,8 +441,22 @@ async function main(): Promise<void> {
       to, asset: "USDS", amount: mu,
     });
     if (!r.queued) { console.warn(`[cloud-beat] credit op rejected: ${r.reason}`); skipped++; continue; }
-    // הזיכוי נכנס-לממפול — בלוק-אחד-נוסף מבצע אותו בפועל
+    // הזיכוי נכנס-לממפול — בלוק-אחד-נוסף מבצע אותו בפועל.
+    // R33 · credit-landed-proof: היה — הסימון processedTxids נקבע מיד אחרי-התור,
+    // גם אם הבלוק עצמו דחה את ה-transfer (insufficient בזמן-הבלוק, escrow-צמוד).
+    // תוצאה: הפקדה מסומנת-כמעובדת לנצח בלי שאף זיכוי נחת — הכסף נתקע בשקט.
+    // עתה: מודדים את היתרה לפני ואחרי, ורק נחיתה-אמיתית נרשמת-כמעובדת;
+    // דחייה כנה משאירה את התביעה לפעימה הבאה (ה-op-מוקיי מזוהה-לפי-nonce ייחודי).
+    const stBal = (who: string): Record<string, number> =>
+      ((rt.st as unknown as { balances: Record<string, Record<string, number>> }).balances[who] ?? {});
+    const balBefore = (stBal(to)["USDS"] ?? 0);
     await stepOnce();
+    const balAfter = (stBal(to)["USDS"] ?? 0);
+    if (!(balAfter - balBefore >= mu)) {
+      console.warn(`[cloud-beat] credit ${String(env.id).slice(0, 10)} did NOT land (bal ${balBefore}→${balAfter}, want +${mu}) — NOT marking processed, next beat retries`);
+      skipped++;
+      continue;
+    }
     ledger.processedTxids[dep.txid] = 1;
     ledger.processedIds[String(env.id)] = 1;
     ledger.credits.push({
@@ -446,6 +465,24 @@ async function main(): Promise<void> {
       how: `auto · verified vs ${String(dep.chain ?? "?")} watcher + saos1 sig`,
     });
     credited++;
+    // R33 · gas-tank-on-credit — תושב-חי בסימולציה: חשבון-מפקיד טרי נולד עם USDS
+    // אבל בלי-אף-קרדיט-גז → כל-order שלו נדחה בבלוק ב"insufficient-credits"
+    // (התור מקבל, הבלוק דוחה — הפקודה מסומנת-כמעובדת בלי-שהוצבה). הזיכוי
+    // מזריע עכשיו גם מכל-דלק: refuel 100,000µ קרדיטים מהאוצר (העברה-טהורה,
+    // Σcredits נשמר, REFUEL_CAP בדיוק) — שנה-מסחר במחיר-הגז שלנו (~60µ/פקודה).
+    const creditsBefore = ((rt.st as unknown as { credits: Record<string, number> }).credits[to] ?? 0);
+    const rr = submitOp({ type: "refuel", issuer: "treasury", nonce: nextNonce("simfuel"), to, amount: 100_000 });
+    if (rr.queued) {
+      await stepOnce();
+      const creditsAfter = ((rt.st as unknown as { credits: Record<string, number> }).credits[to] ?? 0);
+      if (creditsAfter - creditsBefore >= 100_000) {
+        console.log(`[cloud-beat] gas tank refueled: +100,000µ credits → ${to} (depositor can trade)`);
+      } else {
+        console.warn(`[cloud-beat] refuel ${String(env.id).slice(0, 10)} did NOT land (${creditsBefore}→${creditsAfter}) — order path may stall; next beat retries on next credit`);
+      }
+    } else {
+      console.warn(`[cloud-beat] refuel rejected: ${rr.reason} — depositor has no gas yet`);
+    }
     console.log(`[cloud-beat] credited ${usds} USDS → ${to} (txid ${dep.txid.slice(0, 14)}…, ${cur})`);
   }
   saveLedger(ledger); // תמיד: lastScanBlock חייב להתקדם גם בלי זיכויים (חלון-הסריקה)
@@ -460,7 +497,7 @@ async function main(): Promise<void> {
     if (env?.k !== "dex.order" && env?.k !== "dex.cancel") continue;
     if (typeof env.id !== "string" || ledger.processedIds[env.id]) continue;
     if (!verifyEnvelope(env)) { ledger.processedIds[String(env.id)] = 1; continue; }
-    const issuer = `u:${String(env.by)}`;
+    const issuer = `u:${String(env.by).toLowerCase()}`; // R33 · canonical-account — אותו חוק-קטנות של הזיכוי
     if (env.k === "dex.order") {
       const base = String(env.base ?? "").toUpperCase();
       const quote = String(env.quote ?? "").toUpperCase();
@@ -468,8 +505,17 @@ async function main(): Promise<void> {
       const price = Math.round(Number(env.price ?? 0) * 1000);   // מחיר-אדם → µ-ציטוט ליחידת-בסיס
       const amount = Math.round(Number(env.amount ?? 0) * 1000); // כמות-אדם → µ-בסיס
       const r = submitOp({ type: "order", issuer, nonce: String(env.id), base, quote, side, price, amount });
-      if (r.queued) { ordered++; await stepOnce(); console.log(`[cloud-beat] order ${side} ${amount}µ ${base} @${price}µ ${quote} ← ${issuer.slice(0, 18)}…`); }
-      else console.warn(`[cloud-beat] order ${String(env.id).slice(0, 10)} rejected: ${r.reason}`);
+      if (r.queued) {
+        await stepOnce();
+        // R33 · order-landed-proof: התור מקבל, הבלוק יכול-לדחות (insufficient-credits
+        // / bad-params / cap-24-orders). דחייה שנרשמת-כמעובדת = פקודת-משתמש
+        // נבלעת-בשקט. עתה: ה-nonce נדחף-לחלון רק-כשה-op בוצע — בדיקת-חברות
+        // ב-st.nonces היא ההוכחה שהפקודה-באמת-הוצבה; אחרת התביעה נשארת-פתוחה
+        // לפעימה-הבאה (המפקיד מקבל refuel-דלק מהזיכוי, אז-הניסיון-החוזר יעבור).
+        const landed = ((rt.st as unknown as { nonces: string[] }).nonces ?? []).includes(`${issuer}:${String(env.id)}`);
+        if (landed) { ordered++; console.log(`[cloud-beat] order ${side} ${amount}µ ${base} @${price}µ ${quote} ← ${issuer.slice(0, 18)}…`); }
+        else { console.warn(`[cloud-beat] order ${String(env.id).slice(0, 10)} REJECTED IN BLOCK (likely insufficient-credits/bad-params) — left open for retry`); skipped++; continue; }
+      } else { console.warn(`[cloud-beat] order ${String(env.id).slice(0, 10)} rejected: ${r.reason}`); }
     } else {
       const orderId = Number(env.orderId ?? 0);
       const r = submitOp({ type: "cancel", issuer, nonce: String(env.id), orderId });
