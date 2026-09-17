@@ -481,7 +481,7 @@ async function main(): Promise<void> {
     ok: true,
     publishedAt: new Date().toISOString(),
     beat: {
-      engine: "saos-dex/1.18 cloud-beat",
+      engine: "saos-dex/1.19 cloud-beat · R23 live-anchor",
       runAt: new Date().toISOString(),
       ticks: ticked,
       fromHeight: heightBefore,

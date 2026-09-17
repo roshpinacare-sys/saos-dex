@@ -296,7 +296,10 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
     if (!o) verdict = "NO-ORACLE";
     else if (!pool || !(midMu && midMu > 0)) verdict = "NO-POOL";
     else {
-      spreadBps = Math.round(((midMu - o.mu) / o.mu) * 10_000);
+      // R23 · unit-truth: האורקל ב-µ$-ליחידה אבל midMu ב-mµ-ציטוט-ליחידה — היה פער-סקאלות
+      // 1000x שפסק "DIVERGENT" כמעט-תמידית ל-WTRX/WSOL. עכשיו: השוואה באותה-סקאלה.
+      const oMilli = Math.round(o.mu / 1000);
+      spreadBps = Math.round(((midMu - oMilli) / oMilli) * 10_000);
       verdict = Math.abs(spreadBps) < 300 ? "CONVERGED" : Math.abs(spreadBps) < 1_500 ? "DRIFT" : "DIVERGENT";
     }
     // roast-78 · שקיפות-הגיבוי: חשוב-רק ל-WSOL (המשמורת-ה-SOL היא-גם-דלק-העיגון)

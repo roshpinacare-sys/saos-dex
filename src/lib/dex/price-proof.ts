@@ -28,13 +28,13 @@ import { fencedFetch } from "./fence"; // FIX(Roast-65-b · H2): גדר + redire
 import { onrampSnapshot } from "@/lib/onramp";
 
 // ─── פידים-חוץ-אמת — שרשרת-מקורות-ממוינת (Task 58: עמידות-ל-429/השבתות) ───────
-const CG_URL = "https://api.coingecko.com/api/v3/simple/price?ids=steem,hive,hive_dollar,blurt,ethereum,solana,binancecoin,tron,bitcoin&vs_currencies=usd";
+const CG_URL = "https://api.coingecko.com/api/v3/simple/price?ids=steem,hive,hive_dollar,steem-dollars,blurt,ethereum,solana,binancecoin,tron,bitcoin&vs_currencies=usd";
 const BLURT_NODE = "https://blurt-rpc.saboin.com";
 const HEAD_ACCOUNT = "headcorner";
 const FEED_TTL_MS = 5 * 60_000;
 const FEED_STALE_OK_MS = 60 * 60_000; // last-good-חוקי עד-שעה — מעבר-לזה: NO-FEED כנה
 
-type FeedKey = "steem" | "hive" | "hbd" | "blurt" | "eth" | "sol" | "bnb" | "trx" | "btc";
+type FeedKey = "steem" | "hive" | "hbd" | "sbd" | "blurt" | "eth" | "sol" | "bnb" | "trx" | "btc";
 
 interface FeedSource { name: string; url: string; where: string; parse: (j: unknown) => Partial<Record<FeedKey, number | null>> }
 
@@ -46,7 +46,7 @@ const FEED_SOURCES: FeedSource[] = [
     parse: (j) => {
       const o = j as Record<string, { usd?: number }>;
       const p = (id: string): number | null => (typeof o[id]?.usd === "number" && o[id].usd > 0 ? o[id].usd : null);
-      return { steem: p("steem"), hive: p("hive"), hbd: p("hive_dollar"), blurt: p("blurt"), eth: p("ethereum"), sol: p("solana"), bnb: p("binancecoin"), trx: p("tron"), btc: p("bitcoin") };
+      return { steem: p("steem"), hive: p("hive"), hbd: p("hive_dollar"), sbd: p("steem-dollars"), blurt: p("blurt"), eth: p("ethereum"), sol: p("solana"), bnb: p("binancecoin"), trx: p("tron"), btc: p("bitcoin") };
     },
   },
   {
@@ -60,12 +60,12 @@ const FEED_SOURCES: FeedSource[] = [
         const v = row?.quotes?.USD?.price;
         return typeof v === "number" && v > 0 ? v : null;
       };
-      return { steem: p("steem-steem"), hive: p("hive-hive"), blurt: p("blurt-blurt"), eth: p("eth-ethereum"), sol: p("sol-solana"), bnb: p("bnb-binance-coin"), trx: p("trx-tron"), btc: p("btc-bitcoin") };
+      return { steem: p("steem-steem"), hive: p("hive-hive"), sbd: p("sbd-steem-dollars"), blurt: p("blurt-blurt"), eth: p("eth-ethereum"), sol: p("sol-solana"), bnb: p("bnb-binance-coin"), trx: p("trx-tron"), btc: p("btc-bitcoin") };
     },
   },
   {
     name: "cryptocompare",
-    url: "https://min-api.cryptocompare.com/data/pricemulti?fsyms=STEEM,HIVE,HBD,BLURT,ETH,SOL,BNB,TRX,BTC&tsyms=USD",
+    url: "https://min-api.cryptocompare.com/data/pricemulti?fsyms=STEEM,HIVE,HBD,SBD,BLURT,ETH,SOL,BNB,TRX,BTC&tsyms=USD",
     where: "price-proof/cryptocompare",
     parse: (j) => {
       const o = j as Record<string, Record<string, number>>;
@@ -73,7 +73,7 @@ const FEED_SOURCES: FeedSource[] = [
         const v = o[sym]?.USD;
         return typeof v === "number" && v > 0 ? v : null;
       };
-      return { steem: p("STEEM"), hive: p("HIVE"), hbd: p("HBD"), blurt: p("BLURT"), eth: p("ETH"), sol: p("SOL"), bnb: p("BNB"), trx: p("TRX"), btc: p("BTC") };
+      return { steem: p("STEEM"), hive: p("HIVE"), hbd: p("HBD"), sbd: p("SBD"), blurt: p("BLURT"), eth: p("ETH"), sol: p("SOL"), bnb: p("BNB"), trx: p("TRX"), btc: p("BTC") };
     },
   },
   {
@@ -97,10 +97,10 @@ export interface ExtFeeds {
   at: number;
   stale: boolean;
   usd: {
-    steem: number | null; hive: number | null; hbd: number | null; blurt: number | null;
+    steem: number | null; hive: number | null; hbd: number | null; sbd: number | null; blurt: number | null;
     eth: number | null; sol: number | null; bnb: number | null; trx: number | null; btc: number | null;
   };
-  src: { steem?: string | null; hive?: string | null; hbd?: string | null; blurt?: string | null; eth?: string | null; sol?: string | null; bnb?: string | null; trx?: string | null; btc?: string | null };
+  src: { steem?: string | null; hive?: string | null; hbd?: string | null; sbd?: string | null; blurt?: string | null; eth?: string | null; sol?: string | null; bnb?: string | null; trx?: string | null; btc?: string | null };
   // FIX(Roast-64-c · F13): הצלבה-חוצה-מקורות — חציון+MAD-פר-נכס (עד-אתמול: first-wins
   // סריאלי בלי-שום-הצלבה-חרף-הטענה). median = המחיר-המדווח · outliers = מקורות-חורגים.
   cross?: Partial<Record<FeedKey, { median: number; mad: number; sources: number; outliers: { v: number; src: string }[] }>>;
@@ -114,7 +114,7 @@ function feedRt(): FeedRT {
   return g.__saosPriceFeeds;
 }
 
-const EMPTY_USD: Record<FeedKey, number | null> = { steem: null, hive: null, hbd: null, blurt: null, eth: null, sol: null, bnb: null, trx: null, btc: null };
+const EMPTY_USD: Record<FeedKey, number | null> = { steem: null, hive: null, hbd: null, sbd: null, blurt: null, eth: null, sol: null, bnb: null, trx: null, btc: null };
 
 async function fetchOne(s: FeedSource): Promise<Partial<Record<FeedKey, number | null>>> {
   // FIX(Roast-65-b · H2): דרך-fencedFetch — גדר + redirect:error (פיד-עוין-שמנתה לא-משחזר-בקשות)
@@ -142,7 +142,7 @@ async function fetchFeeds(): Promise<ExtFeeds> {
   // outliers חושפים-מקור-סוטה. צורת-ה-merge (usd/src) נשמרת לצרכנים — usd = החציון.
   const settled = await Promise.allSettled(FEED_SOURCES.map((s) => fetchOne(s)));
   const perKey = Object.fromEntries(([
-    "steem", "hive", "hbd", "blurt", "eth", "sol", "bnb", "trx", "btc",
+    "steem", "hive", "hbd", "sbd", "blurt", "eth", "sol", "bnb", "trx", "btc",
   ] as FeedKey[]).map((k) => [k, [] as { v: number; src: string }[]])) as Record<FeedKey, { v: number; src: string }[]>;
   const errs: string[] = [];
   settled.forEach((r, i) => {
@@ -175,7 +175,7 @@ async function fetchFeeds(): Promise<ExtFeeds> {
     return {
       ok: true, at: Date.now(), stale: false,
       usd: {
-        steem: usd.steem, hive: usd.hive, hbd: usd.hbd, blurt: usd.blurt,
+        steem: usd.steem, hive: usd.hive, hbd: usd.hbd, sbd: usd.sbd, blurt: usd.blurt,
         eth: usd.eth, sol: usd.sol, bnb: usd.bnb, trx: usd.trx, btc: usd.btc,
       },
       src,
@@ -208,7 +208,7 @@ export async function extFeeds(force = false): Promise<ExtFeeds> {
     if (m.data?.ok && Date.now() - m.at < FEED_STALE_OK_MS) {
       return { ...m.data, stale: true, error: "feed-crash" } as ExtFeeds;
     }
-    return { ok: false, at: Date.now(), stale: false, usd: { steem: null, hive: null, hbd: null, blurt: null }, src: {}, error: "feed-crash" } as ExtFeeds;
+    return { ok: false, at: Date.now(), stale: false, usd: { ...EMPTY_USD }, src: {}, error: "feed-crash" } as ExtFeeds;
   });
   return m.inflight;
 }
