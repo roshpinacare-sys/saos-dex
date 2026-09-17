@@ -175,6 +175,10 @@ export interface RailSummary {
   netMu: number;
   doses: number;
   doseLog: RailDoseRec[];
+  /* Task 80-a · A44 הגונה: מוני-החיים נפרסמים-בציבור — doses הוא מונה-פר-ריצה
+   * (מתאפס-בכל-Action, נמדד-בחלון), אבל הראצ'ט האמתי הוא מה-ששולם-אי-פעם:
+   * max-load מ-db/rail-lifetime.json. תביעה-על-מונה-חולף היא תביעה-על-אפס. */
+  lifetime: { usds: number; wsteem: number; energy: number; saos: number };
   premiums: { id: string; pair: string; mid: number; anchor: number; premBps: number; active: boolean }[];
   budget: { credits: number; usdsMu: number; wsteemMu: number; energyMu: number; saosMu: number };
   funding: { pending: number; committed: number; rejected: number; dropped: number }; // FIX(Roast-67)
@@ -197,6 +201,12 @@ export function railSummary(): RailSummary {
     fundedMu: funded,
     netMu: eq - funded,
     doses: railRt.doses,
+    lifetime: {
+      usds: railLifetime.usds ?? 0,
+      wsteem: railLifetime.wsteem ?? 0,
+      energy: railLifetime.energy ?? 0,
+      saos: railLifetime.saos ?? 0,
+    },
     doseLog: railRt.doseLog.slice(-8).reverse(),
     premiums,
     budget: {
