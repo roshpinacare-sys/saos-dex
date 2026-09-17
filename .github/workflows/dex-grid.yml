@@ -1,0 +1,56 @@
+# DEX-GRID — הזרימה החוץ של הבורסה (R24 · צעד-1 בנתיב הכסף)
+#
+# הרץ היומי של THE-REAL-GRID: גריד-אמת על ספר-STEEM הפנימי הציבורי.
+# מדוד מול פידי-USD חיים, מפרסם את המצב ל-Console (dex/grid.json), ומנהל
+# מעקה-חי של כל מילוי-חוץ שנספר בכנות. החימום כנה: בלי STEEM_ACTIVE_WIF
+# (סוד-ריפו) אין חתימה — המצב מתפרסם בגלוי עם הסיבה, שום דבר לא מדומה.
+#
+# תדירות: יומי ב-03:17 UTC — תופס את דלק-ה-powerdown של יום-ה' (02:01)
+# ומרכז מחדש את הגריד סביב הספר החי. אפשר להפעיל ידנית בכל-רגע.
+
+name: dex-grid
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dex-grid
+  cancel-in-progress: false
+
+jobs:
+  grid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-dex-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-dex-
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Prisma client
+        run: bunx prisma generate
+
+      - name: Grid (read public book, mark to live feeds, place if armed, publish)
+        env:
+          SAOS_RELAY_AGENT_ACCOUNT: headcorner
+          STEEM_ACTIVE_WIF: ${{ secrets.STEEM_ACTIVE_WIF }}
+          CONSOLE_TOKEN: ${{ secrets.CONSOLE_PUSH_TOKEN }}
+        run: bun run grid-beat.ts

@@ -127,6 +127,9 @@ export interface RealFill {
   paid: string;
   received: string;
   price: string;
+  /** R24 · grid-beat: מזהי-ההזמנות מהאירוע — השוואה מדויקת למעקה */
+  openOrderid?: number;
+  currentOrderid?: number;
 }
 
 export interface RealSnapshot {
@@ -197,25 +200,45 @@ async function fetchSnapshot(): Promise<RealSnapshot> {
   const mid = bestBid && bestAsk ? (bestBid + bestAsk) / 2 : null;
   const spreadBps = bestBid && bestAsk ? Math.floor(((bestAsk - bestBid) / bestBid) * 10_000) : null;
   // מילויים-אמת (אחרונים)
+  // FIX(R24 · silent-fills-loss): condenser מגביל get_account_history ל-100-פעולות
+  // לקריאה (נמדד-חי: api.steemit.com ו-justyy דוחים 200 בשגיאה, ה-fail-soft
+  // בלע אותה והמילויים נעלמו בשקט). עתה: דפדוף-מדוד — עד-3-דפים של-100,
+  // עוצר ברגע שנמצאו 6 מילויים או שההיסטוריה אזלה. כשל-דף = המשך-כנה.
   const fills: RealFill[] = [];
   try {
-    const hist = await rpcAny<[number, { op: [string, Record<string, unknown>]; timestamp: string }][]>(
-      "condenser_api.get_account_history", [ACCOUNT, -1, 200],
-    );
-    for (const [, e] of hist) {
-      if (e.op[0] !== "fill_order" || fills.length >= 6) continue;
-      const o = e.op[1] as Record<string, { amount: string } | string>;
-      const openOwner = String(o.open_owner ?? "");
-      const isMaker = openOwner === ACCOUNT;
-      if (!isMaker && String(o.current_owner ?? "") !== ACCOUNT) continue;
-      const paid = String((o.current_pays as { amount?: string })?.amount ?? "");
-      const recv = String((o.open_pays as { amount?: string })?.amount ?? "");
-      const pf = n(paid) / Math.max(1e-12, n(recv));
-      fills.push({
-        at: e.timestamp, side: isMaker ? "maker" : "taker",
-        paid, received: recv,
-        price: `${pf.toFixed(6)} ${paid.includes("SBD") ? "SBD/STEEM" : "STEEM/SBD"}`,
-      });
+    let start = -1;
+    for (let page = 0; page < 3 && fills.length < 6; page++) {
+      const hist = await rpcAny<[number, { op: [string, Record<string, unknown>]; timestamp: string }][]>(
+        "condenser_api.get_account_history", [ACCOUNT, start, 100],
+      );
+      if (!Array.isArray(hist) || hist.length === 0) break;
+      for (const [idx, e] of hist) {
+        if (e.op[0] !== "fill_order" || fills.length >= 6) continue;
+        const o = e.op[1] as Record<string, { amount: string } | string>;
+        const openOwner = String(o.open_owner ?? "");
+        const isMaker = openOwner === ACCOUNT;
+        if (!isMaker && String(o.current_owner ?? "") !== ACCOUNT) continue;
+        // FIX(R24 · pays-form): condenser מחזיר current_pays/open_pays כמחרוזת
+        // ("0.049 SBD"); הקאסט-הישן חיפש .amount על-מחרוזת וקיבל ריק — המילויים
+        // נספרו בלי-סכומים. עתה: שתי-הצורות (מחרוזת-גולמית או אובייקט-amount).
+        const paysOf = (x: unknown): string =>
+          typeof x === "string" ? x : String((x as { amount?: string })?.amount ?? "");
+        const paid = paysOf(o.current_pays);
+        const recv = paysOf(o.open_pays);
+        const pf = n(paid) / Math.max(1e-12, n(recv));
+        const openOid = Number(o.open_orderid ?? 0) || undefined;
+        const curOid = Number(o.current_orderid ?? 0) || undefined;
+        fills.push({
+          at: e.timestamp, side: isMaker ? "maker" : "taker",
+          paid, received: recv,
+          price: `${pf.toFixed(6)} ${paid.includes("SBD") ? "SBD/STEEM" : "STEEM/SBD"}`,
+          openOrderid: openOid, currentOrderid: curOid,
+        });
+      }
+      const firstIdx = hist[0]![0];
+      if (firstIdx <= 0) break; // אין עבר נוסף
+      start = firstIdx - 100; // דף-הבא: 100 אחורה מהראשון שראינו
+      if (start < 0) start = 0;
     }
   } catch { /* fail-soft */ }
   const openOrders = (openRaw ?? []).map((o) => ({
