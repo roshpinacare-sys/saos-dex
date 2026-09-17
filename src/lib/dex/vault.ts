@@ -26,8 +26,9 @@ import {
 
 const DEMO_AGENT = "soldier-4";        // עושה-השוק עם עודף-הבטחונות הגדול (דוזות-מסילה)
 const DEMO_EVERY = 40;                 // בדיקה כל-40-טיקים (קדנצת-סוכנים)
-const DEMO_COLLATERAL_MU = 100_000;     // 100 STEEM ≈ $5.4 בעוגן-החי — עמדת-הדגמה-אמת
-const DEMO_KEEP_MU = 200_000;          // שמור-לעבודת-שוק: אל-תסגור-על-כל-היתרה
+const DEMO_COLLATERAL_MU = 100_000;     // תקרת-עמדה: 100 STEEM ≈ $5.4 בעוגן-החי
+const DEMO_MIN_COLLATERAL_MU = 50_000; // מתחת-לזה אין-טעם-הדגמה — הסוכן שותק-בכנות
+const DEMO_FREE_FRACTION = 0.4;        // לכל-היותר 40% מהיתרה-הפנויה: השוק-מנוע מוכר-WSTEEM חי — שמורה-קשיחה תחסום-לנצח
 const DEMO_CYCLE_BLOCKS = 28_800;       // יום-מדומה אחד (בפועל ~5 ימים בקצב-הפעימות): העמדה פתוחה, נראית וצוברת ריבית-אמת
 const DEMO_SELF_HEAL_CR = 175;          // מתחת-לזה — פירעון-מוקדם (החלקת-אורקל נגדנו)
 
@@ -36,10 +37,11 @@ export function vaultTick(st: DexState, tick: number, exec: (op: Op) => OpResult
   const v = st.vaults?.[DEMO_AGENT];
 
   if (!v) {
-    // אין-עמדה: פתח-אחת מהיתרה-הפנויה-האמתית (אין-זריעה-מזויפת)
+    // אין-עמדה: פתח-אחת מהיתרה-הפנויה-האמתית (אין-זריעה-מזויפת) — עד-40%-ממנה,
+    // כי-השוק-מנוע חי-ומוכר: הבטחונות בני-הנזילות הם אלה-שאין-בהם-צורך-עבודה-מיידי.
     const free = (st.balances[DEMO_AGENT]?.[VAULT_COLLATERAL] ?? 0) - (st.locked?.[DEMO_AGENT]?.[VAULT_COLLATERAL] ?? 0);
-    const amt = Math.min(DEMO_COLLATERAL_MU, free - DEMO_KEEP_MU);
-    if (amt < DEMO_COLLATERAL_MU) return; // אין-עודף-אמת — הסוכן שותק-בכנות
+    const amt = Math.min(DEMO_COLLATERAL_MU, Math.floor(free * DEMO_FREE_FRACTION));
+    if (amt < DEMO_MIN_COLLATERAL_MU) return; // אין-עודף-אמת — הסוכן שותק-בכנות
     const colVal = vaultColValueMu(st, amt);
     const draw = Math.floor((colVal * 100) / VAULT_MIN_CR_PCT);
     if (draw <= 0) return; // מחיר-הבטחון אפסי — אין-שאיבה-הגיונית
