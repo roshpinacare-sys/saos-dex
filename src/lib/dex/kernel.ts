@@ -251,6 +251,7 @@ export interface DexState {
   relayOpen?: number; // FIX(Roast-64): מונה-דלתות-relay-פתוחות — relay_ack חייב-קישור (רשויות: תמונות-ישנות-בלעדיו)
   rearmCounts?: { saos: number; usds: number; wsteem: number }; // FIX(Roast-64): תקרות-ה-rearm-במצב (היו-מודול — ריסטארט-מאפס)
   botSeedCounts?: Record<string, { usds: number; saos: number }>; // FIX(Roast-64): תקרות-זריעת-בוטים-במצב (אותו-עיקרון)
+  soldierSeedCounts?: Record<string, { wsteem: number }>; // SETTLE-17: קו-אספקת-חיילים במצב (אותו-עיקרון — ריסטארט לא מאפס)
   stats: { fills: number; swaps: number; opsTotal: number; ladders: number };
   // ── Task 54 · כלכלה (רשויות-כולן: תמונות-מצב-ישנות-בלעדיהן = undefined) ──
   ve?: Record<string, { amt: number; unlockH: number; weeks: number; atH: number }>; // עמדת-veSAOS-פר-חשבון
