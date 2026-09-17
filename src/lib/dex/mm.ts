@@ -124,6 +124,24 @@ const botSeedCounts = (st: DexState, bot: string): { usds: number; saos: number 
   return (st.botSeedCounts[bot] ??= { usds: 0, saos: 0 });
 };
 
+/** ── SETTLE-17 (soldier-WSTEEM supply line · one-sided-market cure) ──
+ * ממצא-חי (R29): שוק USDS/WSTEEM חד-צדדי — אפס-asks חיים בעוד-ה-bids חיים.
+ * שורש-מוכח: הג'נזיס מימן-חיילים-ב-SAOS+USDS בלבד (kernel genesis); קו-ה-rearm
+ * (SETTLE-14) מזרים WSTEEM מהאוצר לארנה — אבל שום-קו-לא-מזרים-מהארנה-לחיילים.
+ * החיילים החזיקו 15-64Kµ WSTEEM — פחות-מרמת-ask-אחת (sizeMu=80Kµ) — אז-
+ * כל-ציטוט-המכירה נדחה-בשקט באמת-מלאי, והשוק נשאר-חד-צדדי לנצח.
+ * הטיפול: קו-אספקה ארנה→חייל — ניתוב-מלאי-טהר של ה-WSTEEM-העטוף-הכנה
+ * (1:1 מSTEEM-טבעי, אפס-הטבעה, Σנשמר), בכפוף-ל: תקרה-מצטברת-פר-חייל-במצב
+ * (דפוס-Roast-64 — ריסטארט לא מאפס), כבוד-לרצפת-הארנה (REARM_FLOOR_WSTEEM —
+ * בסיס-המנעול-לבריכה), ורק-מהעודף-האמיתי-שמעל-הרצפה. כשהארנה-ריקה-מעודף —
+ * הקו-מפסיק-לזרום-בכנות (אין-מקור-נסתר). */
+const SOLDIER_SEED_TARGET_WSTEEM = 160_000; // יעד-השלמה: 2 רמות-ask (sizeMu 80Kµ)
+const SOLDIER_SEED_CAP_WSTEEM = 320_000;    // תקרה-מצטברת-פר-חייל לכל-חיי-התהליך
+const soldierSeedCounts = (st: DexState, soldier: string): { wsteem: number } => {
+  st.soldierSeedCounts ??= {};
+  return (st.soldierSeedCounts[soldier] ??= { wsteem: 0 });
+};
+
 type PushOp = (op: Op) => void;
 
 /** FIX(Task 56 replay-storm): אחרי-טעינת-תמונת-מצב, st.nonces מכיל אלפי-נונסים
@@ -361,6 +379,23 @@ export function arenaTick(
       if (avail(st, "treasury", "WSTEEM") >= amt) {
         rc.wsteem += amt;
         pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-w${tick}`, to: "arena", asset: "WSTEEM", amount: amt });
+      }
+    }
+
+    // ── SETTLE-17: קו-אספקת-חיילים — ארנה→חייל (רק-מעל-רצפת-הארנה, מצטבר-במצב) ──
+    // באותו-חלון-16-טיק של-ה-rearm: קודם-הארנה-מתמלאת, אחר-כך-החיילים-מקבלים.
+    // העברה-טהורה של-מלאי-קיים — לא-הטבעה, לא-מקור-חדש; הגרעין-אוכף-בעצמו.
+    for (const soldier of soldiers) {
+      const free = avail(st, soldier, "WSTEEM");
+      const sc = soldierSeedCounts(st, soldier);
+      if (free >= SOLDIER_SEED_TARGET_WSTEEM || sc.wsteem >= SOLDIER_SEED_CAP_WSTEEM) continue;
+      const want = SOLDIER_SEED_TARGET_WSTEEM - free;            // השלמה-ליעד-בלבד
+      const byCap = SOLDIER_SEED_CAP_WSTEEM - sc.wsteem;          // כבוד-לתקרה-המצטברת
+      const arenaSpare = avail(st, "arena", "WSTEEM") - REARM_FLOOR_WSTEEM; // עודף-אמיתי-מעל-רצפת-המנעול
+      const amt = Math.min(want, byCap, arenaSpare);
+      if (amt > 0) {
+        sc.wsteem += amt;
+        pushOp({ type: "transfer", issuer: "arena", nonce: `swseed-${tick}-${soldier}`, to: soldier, asset: "WSTEEM", amount: amt });
       }
     }
   }
