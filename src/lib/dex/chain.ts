@@ -1226,6 +1226,11 @@ export function getState() {
     // SETTLE-16 THE-MICRORAIL: המסילה-הריבונית-למיקרו — תקציב, מנות, פרמיות, P&L
     rail: railSummary(),
     milestone: milestoneSummary(),
+    // Task 80 · THE-VAULT: הכספת-גלויה-לציבור — עמדות-חיות + מוני-חיים + חשבונאות-ההיצע.
+    // לקח-הפוך-מזיוף: אמת-שקיימת-בשרשרת-אך-נעדרת-מהמראה-הציבורית היא כיסוי-עיניים
+    // בדיוק-כמו-שקר; השדות נכנסים-לרשימה-הלבנה של getState עכשיו.
+    vaults: st.vaults ?? {},
+    vaultTot: st.vaultTot ?? { opened: 0, repaid: 0, liquidations: 0, interestMu: 0, backstopLossMu: 0, issuedMu: 0, burnedMu: 0 },
   };
 }
 
