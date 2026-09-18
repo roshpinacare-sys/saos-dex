@@ -21,13 +21,13 @@ import type { DexState, Op, OpResult } from "./kernel";
 import { avail } from "./kernel";
 
 // ── ve_lock + ve_vote: עמדת-העומדת של הסוחר ──────────────────────────
-const VE_AGENT = "soldier-1";       // סוחר-השוק עם ה-SAOS-האמיתי שהרוויח במסחר
-const VE_LOCK_MU = 200_000;         // 200 SAOS מכיסו-שלו — מחויבות-אמיתית (74% מה-SAOS שלו)
+const VE_AGENT = "operator";         // המפעיל — SAOS-פנוי-אמיתי (מדידה-חיה: ל-soldier-1 75% מה-SAOS תפוס-בפקודות — הסוכן שתק-בכנות; המפעיל מדגים את-הנעילה-הישירה, כפי-שהוא-מדגים את-החיסכון)
+const VE_LOCK_MU = 200_000;         // 200 SAOS מכיסו-שלו — 10% מה-SAOS שלו (כמו-החיסכון: ~11% מה-USDS)
 const VE_WEEKS = 12;                // נעילה-בינונית — מיושרת-עם-נעילת-האג"ח
 const VOTE_PAIR = "SAOS/USDS";      // הבריכה-העמוקה — שם-העמלות-הנמדדות זורמות
 
 // ── bond_buy: אג"ח-ריבונית אחת-חד-פעמית — ההוכחה, לא-המשאבה ──────────
-const BOND_AGENT = "soldier-1";     // אותו-סוחר: מסלול-המפקיד המלא — אג"ח ← נעילה ← הצבעה
+const BOND_AGENT = "soldier-1";     // הסוחר: הדלת-השנייה-ל-ve — אג"ח ← נעילה ← הצבעה (שתי-הדלתות מוכחות)
 const BOND_MU = 100_000;            // 100 USDS מכיסו (מעל-המינימום 50, מתחת-לכל-תקרת-טעם)
 const BOND_FLOOR_MU = 2_000_000;    // רצפת-נזילות: אין-אג"ח על-חשבון-הסחר-החי
 
@@ -39,7 +39,7 @@ export function veDemoTick(st: DexState, tickCount: number, exec: (op: Op) => Op
     if (avail(st, VE_AGENT, "SAOS") < VE_LOCK_MU) return; // אין-SAOS-פנוי — הסוכן שותק-בכנות
     const r = exec({ type: "ve_lock", issuer: VE_AGENT, nonce: `ve-${st.height}-l`, asset: "SAOS", amount: VE_LOCK_MU, weeks: VE_WEEKS });
     if (r.ok) {
-      st.journal.push({ h: st.height, t: nowMs, soldier: VE_AGENT, action: "ve_lock", note: `soldier locks ${VE_LOCK_MU}µ SAOS × ${VE_WEEKS}w → ve — standing position, same rules as every locker` });
+      st.journal.push({ h: st.height, t: nowMs, soldier: VE_AGENT, action: "ve_lock", note: `operator locks ${VE_LOCK_MU}µ SAOS × ${VE_WEEKS}w → ve — standing position, same rules as every locker` });
     }
   }
 
