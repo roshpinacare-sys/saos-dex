@@ -271,8 +271,13 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
   // FIX(Roast-64-c · F16): spOwn=null (גורם-vests-לא-זמין) → 0 = תביעת-חסר-כנה
   // (מתחת-לאמת, לעולם לא מעליה) — לא-עוד-הגורם-השגוי-הידוע 1e6.
   const spOwn = steemHead?.spOwn ?? 0;                    // SP-עצמי-אמת (גורם-חי)
-  const steemLiquid = steemHead?.steem ?? 0;              // נזיל (אין-מפתח-STEEM-בכספת)
+  const steemLiquid = steemHead?.steem ?? 0;              // נזיל
   const steemRealTotalMu = Math.floor((steemLiquid + spOwn) * 1000); // כל-מה-שלנו-על-STEEM (נזיל+SP)
+  // R42 · המצא-המפתח-נגזר-חי, לא-קבוע-בקוד: מאז-R38 ה-active נאטם-בכספת-המנוע
+  // (saos-dex/STEEM_ACTIVE_WIF) והגריד-החוץ-חמוש-וחותם-סדרות-אמת. הפקוד
+  // "אין-מפתח-בכספת" היה-שקר-פומבי מיום-החימום.
+  const keyInVault = Boolean(process.env.STEEM_ACTIVE_WIF);
+  const powerdownActive = steemHead?.powerdownActive ?? false;
 
   // ── שורות-האמת פר-נכס ──
   const rows: AssetTruth[] = [];
@@ -342,7 +347,10 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
       ? Math.floor(((wstInternal - wstExtMu) / wstExtMu) * 10_000) : null,
     verdict: "REAL-LOCKED",
     exitPath: "burn→STEEM-אמת-ב-headcorner→Binance STEEMUSDT→$-אמת. אפס-עמלת-העברה על-STEEM (RC).",
-    blocker: "אין-מפתח-active-STEEM-של-headcorner בכספת — ה-SP (2,139) נעול עד-powerdown (13שב׳) שדורש-מפתח-מהמפעיל",
+    // R42 · החוסם נגזר-מהמצב-החי: המפתח-בכספת (מאז-R38) וה-powerdown-פעיל (4-תשלומים-שבועיים).
+    blocker: keyInVault
+      ? `מפתח-active-נאטם-בכספת-המנוע (R38); פדיון-מלא מחייב-שידור-מכוון מהמפעיל${powerdownActive ? ` — ה-powerdown-פעיל (SP-עצמי ${(spOwn).toFixed(0)} מתנקז-שבועית)` : ""}`
+      : `אין-מפתח-active-STEEM בסביבת-המנוע הזו${powerdownActive ? ` — powerdown-פעיל (SP-עצמי ${spOwn.toFixed(0)})` : ` — SP-עצמי ${spOwn.toFixed(0)} נעול`}`,
   });
 
   // STEEM — יחידת-ספר-ג'נזיס (לא-קשורה-לגיבוי-אמת)
@@ -363,22 +371,26 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
     blocker: "המרה-לאמת רק-דרך-WSTEEM (wrap_mint מספר-STEEM-פנימי — זה-הפייק-המקורי)",
   });
 
-  // WSBD / PHIVE — עטיפות-בלי-מסילה (router.ts: SBD/HIVE לא-רשומים)
+  // WSBD / PHIVE — R42: WSBD קיבלה מסדרון (SBD נרשם בגרעין + הפעימה עוטפת-חי)
+  const sbdLiveMu = Math.floor((steemHead?.sbd ?? 0) * 1000); // SBD-אמת-נזיל-ב-headcorner (RPC-ציבורי)
+  const wsbdSupply = supplyMu(st, "WSBD");
   push({
     asset: "WSBD",
-    supplyMu: supplyMu(st, "WSBD"),
-    backingClaimMu: 0,
-    realBackingMu: 0,
+    supplyMu: wsbdSupply,
+    backingClaimMu: st.backing["WSBD"] ?? 0,
+    realBackingMu: sbdLiveMu,
     realBackingLockedMu: null,
-    coveragePct: null,
+    coveragePct: wsbdSupply > 0 ? (sbdLiveMu * 100) / wsbdSupply : null,
     coverageLockedPct: null,
     internalPriceMu: st.assets["WSBD"]?.refPrice ?? null,
-    externalPriceUsd: null,
-    externalPriceMu: null,
+    externalPriceUsd: feeds.usd.sbd,
+    externalPriceMu: feeds.usd.sbd !== null ? Math.floor(feeds.usd.sbd * 1000) : null,
     divBps: null,
-    verdict: "UNBACKED-WRAP",
-    exitPath: "אין-unwrap — SBD לא-רשום-בגרעין. התביעה-על-העטיפה לא-ניתנת-למימוש-בפנים.",
-    blocker: "אין-מסילת-SBD-אמת (היתרה-האמת: 0.26-SBD — ללא-מפתח-STEEM)",
+    verdict: sbdLiveMu >= wsbdSupply && wsbdSupply > 0 ? "REAL-ACTIONABLE" : "UNBACKED-WRAP",
+    exitPath: "burn→SBD-אמת-ב-headcorner→שוק-חוץ. הפעימה עוטפת-את-כל-עודף-ה-SBD (R42 · THE-SBD-RAIL) — מילויי-הגריד הופכים-לגיבוי-חי.",
+    blocker: wsbdSupply > 0 && sbdLiveMu < wsbdSupply
+      ? `גיבוי-חי מכסה ${sbdLiveMu}µ מתוך ${wsbdSupply}µ — חסר ${wsbdSupply - sbdLiveMu}µ; הכיסוי ייסגר כשהגריד יצבור-SBD (מכירות מעל-קו-הזהות)`
+      : null,
   });
   push({
     asset: "PHIVE",
