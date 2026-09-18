@@ -555,7 +555,18 @@ export function arenaTick(
         const px = Math.floor((fair * (10_000 + (roll === 3 ? 40 : -40))) / 10_000);
         const side: "buy" | "sell" = roll === 4 ? "sell" : "buy";
         const amt = 20_000 + (tick % 7) * 8_000;
-        submit(rt, st, bot, { type: "order", base: m.base, quote: m.quote, side, price: px, amount: amt }, pushOp);
+        // FIX(R44 · noise-escrow-guard): פקודת-הלימיט של בוט-הרעש נבדקת-לכיסוי לפני-
+        // השליחה — כמו-טייק-השוק. נמדד-חי: order(bot-c):insufficient-escrow ב-
+        // world.json (h28759) — הבוט המשיך-להציע-פקודות אחרי-שאזל-מלאיו, כל-טיק
+        // מחדש, מזהם-את-מונה-הדחיות ומבזבז-סליקה. כעת: בלי-כיסוי → אין-פקודה (הבוט
+        // שותק-בכנות, בדיוק-כמו-סוחר-אמת-שאין-לו-מה-להציע).
+        {
+          const needMu = side === "buy" ? px * amt : amt; // קנייה: הצעת-ציטוט; מכירה: הבסיס-עצמו
+          const haveMu = side === "buy" ? avail(st, bot, m.quote) : avail(st, bot, m.base);
+          if (needMu > 0 && haveMu >= needMu) {
+            submit(rt, st, bot, { type: "order", base: m.base, quote: m.quote, side, price: px, amount: amt }, pushOp);
+          }
+        }
       } else {
         const p = getPool(st, poolKey(m.base, m.quote));
         // R26 · בוטי-רעש לא-נוגעים-בבריכת-המסדרון: הזרימה-שלהם חד-צדדית-מבנית

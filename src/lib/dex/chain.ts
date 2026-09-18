@@ -14,6 +14,9 @@ import { db } from "@/lib/db";
 import {
   applyOp, genesisState, stateRoot, type DexState, type Op, type TradeEvent,
   GAS_TABLE, notional, poolKey, VE_POT,
+  // R44 · THE-MARKET — פרסום-שוק-הכספים במראה הציבורית (רשימה-לבנה של getState)
+  lendState, lendUtilBps, lendBorrowAprBps, lendSupplyAprBps, lendDebtNow,
+  lendHealthFactor, lendLiqThresholdBps, LEND_MARKETS, LEND_POT,
 } from "./kernel";
 import { economyTick } from "./economy";
 import { merkleRoot, sha256, canon, CanonicalError } from "./canonical";
@@ -31,6 +34,7 @@ import { cowSettle } from "./cow";
 import { vaultTick } from "./vault"; // Task 80 · THE-VAULT — סוכן-כספת-ההדגמה
 import { savingsTick, saveDemoTick } from "./save"; // R40 · THE-SAVE — צבירת-הכנסה-מדודה + עמדת-המפעיל
 import { veDemoTick, bondDemoTick } from "./ve"; // R41 · THE-VE — נעילה+הצבעה+אג"ח: סוגרים-את-המעגל-הרדום
+import { lendTick } from "./lend"; // R44 · THE-MARKET — שוק-הכספים: סוכני-האוצר-והלווים
 // Task 72 · דלת-המטבעות: פיד-האורקל — extFeeds (median חוצה-מקורות, TTL-משותף עם price-proof)
 import { extFeeds } from "./price-proof";
 
@@ -678,6 +682,10 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     // ← וגם: מסחר ← עמלות ← קרן ← נועלים. אותם-חוקים לכל-אחד.
     veDemoTick(st, rt.tickCount, exec, t0);
     bondDemoTick(st, rt.tickCount, exec, t0);
+    // R44 · THE-MARKET: דבר-גורר-דבר — האוצר מזרים-נזילות-עודפת לבריכת-האשראי
+    // (אספקה-אדפטיבית לפי-ביקוש), וחיילי-הצי לווים-ופורעים-במחזורים — הריבית
+    // זורמת-לאוצר-ולמלווים ב-µ-אמת, והניצולת-החיה מזיזה-את-העקומה.
+    lendTick(st, rt.tickCount, exec, t0);
     const tickEvents = [...dcaTick(st, exec, t0), ...trigTick(st, exec, t0), ...protoRevTick(st, exec, t0), ...cowSettle(st, exec, t0)];
     for (const ev of tickEvents) rt.tape.unshift({ ...ev, h: st.height });
     feedPriceOracle(rt, tickEvents.length > 0 ? tickEvents : undefined, st.height);
@@ -1252,6 +1260,48 @@ export function getState() {
       const base = s.potMu > 0 ? s.potMu : 1;
       const apyBps = Math.floor((s.dayPaidPrevMu * 365 * 10_000) / base); // יום-מלא/קרן → bps-שנתי (שניהם ב-µ — יחס-טהור)
       return { potMu: s.potMu, savers: Object.keys(s.positions).length, paidMu: s.paidMu, dayPaidMu: s.dayPaidMu, dayPaidPrevMu: s.dayPaidPrevMu, apyBps, opens: s.opens, closes: s.closes, incomeSourceMu: income };
+    })(),
+    // R44 · THE-MARKET: שוק-הכספים גלוי-לציבור — שווקים-חיים (ניצולת/עקומה/מזומן),
+    // עמדות, מוני-ריבית-ששולמה-באמת, ועמדת-האוצר. הכל-מדידה-חיה-מהשרשרת.
+    lend: (() => {
+      const ls = lendState(st);
+      const markets = Object.entries(LEND_MARKETS).map(([asset, ltvBps]) => {
+        const m = ls.markets[asset];
+        return {
+          asset,
+          ltvBps,
+          liqThresholdBps: lendLiqThresholdBps(asset),
+          sMu: m?.sMu ?? 0,
+          bMu: m?.bMu ?? 0,
+          cashMu: (st.balances[LEND_POT]?.[asset] ?? 0),
+          utilBps: lendUtilBps(m),
+          borrowAprBps: lendBorrowAprBps(m),
+          supplyAprBps: lendSupplyAprBps(m),
+          sEarnedMu: m?.sEarnedMu ?? 0,
+          resMu: m?.resMu ?? 0,
+        };
+      });
+      const positions = Object.entries(ls.positions).map(([who, p]) => ({
+        who,
+        supplies: Object.entries(p.s).map(([a, sp]) => ({ asset: a, mu: sp.mu, earned: sp.earned })),
+        borrows: Object.entries(p.b).map(([a, bp]) => ({ asset: a, mu: bp.mu, int: bp.int, atH: bp.atH, debtMu: lendDebtNow(bp, lendBorrowAprBps(ls.markets[a]), st.height) })),
+        hf: lendHealthFactor(st, who),
+      }));
+      return {
+        markets,
+        positions,
+        totals: ls.totals,
+        treasury: (() => {
+          const t = ls.positions["treasury"];
+          const m = ls.markets["USDS"];
+          return { suppliedMu: t?.s?.USDS?.mu ?? 0, earnedMu: t?.s?.USDS?.earned ?? 0, supplyAprBps: lendSupplyAprBps(m) };
+        })(),
+        invariant: Object.fromEntries(Object.keys(LEND_MARKETS).map((asset) => {
+          const sSum = Object.values(ls.positions).reduce((s2, p) => s2 + (p.s[asset]?.mu ?? 0) + (p.s[asset]?.earned ?? 0), 0);
+          const bSum = Object.values(ls.positions).reduce((s2, p) => s2 + (p.b[asset]?.mu ?? 0), 0);
+          return [asset, { pot: st.balances[LEND_POT]?.[asset] ?? 0, expect: sSum - bSum, ok: (st.balances[LEND_POT]?.[asset] ?? 0) === sSum - bSum }];
+        })),
+      };
     })(),
     // R41 · THE-VE: הריבונות-הנעולה גלויה-לציבור — קרן-ve שהוזנה-מההכנסה-המדודה,
     // נועלים-חיים, הצבעות, אפוקים — והאג"ח שהומרו. הקרן מתרוקנת-בפועל בכל-אפוק-פליפ

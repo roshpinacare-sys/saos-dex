@@ -94,6 +94,12 @@ export const GAS_TABLE = {
   // ── R40 · THE-SAVE (חיסכון-USDS בהכנסה-מדודה — התשובה ל"למה-להפקיד") ──
   save_open: 80,   // הפקדת-USDS לחיסכון — קבלת-חלק-פרו-ראטה בהכנסה המדודה
   save_close: 60,  // משיכה + ריבית-שנצברה מהכנסה-שהגיעה-בפועל
+  // ── R44 · THE-MARKET (שוק-כספים ריבוני — peer-to-pool Aave-style) ──
+  lend_supply: 80,    // הפקדת-נכס לבריכת-האשראי (מלווה/בטחונות)
+  lend_withdraw: 80,  // משיכת-קרן + ריבית-מדודה (כפוף-למזומן-הבריכה)
+  lend_borrow: 100,   // שאילה-מהבריכה נגד-בטחונות (HF ≥ 1.1, רצפת-נזילות-10%)
+  lend_repay: 60,    // פירעון: ריבית → 90% מלווים + 10% אוצר (מדידה-חיה)
+  lend_liquidate: 60, // ניזולת-HF<1 — פתוח-לכל-אזרח, בונוס-5%
 } as const;
 
 export type OpKind = keyof typeof GAS_TABLE;
@@ -140,6 +146,24 @@ export const SAVE_POT = "save-pot";             // חשבון-עד שמחזיק 
 export const SAVE_CAP_MU = 10_000_000;          // תקרת-חיסכון-גלובלית ($10,000) — השקה-שמרנית
 export const SAVE_POS_CAP_MU = 2_500_000;       // תקרת-עמדה-פר-חשבון ($2,500)
 export const SAVE_DAY_BLOCKS = 28_800;          // חלון-היום הקנוני — לשיעור-המפורסם
+// ── R44 · THE-MARKET — שוק-כספים ריבוני (Aave-v3-style peer-to-pool) ──
+export const LEND_POT = "lend-pot";                  // חשבון-עד שמחזיק את כל-נזילות-השוק
+export const LEND_BASE_APR_BPS = 100;                // 1% בסיס
+export const LEND_SLOPE1_BPS = 400;                  // +4% עד-ה-kink
+export const LEND_SLOPE2_BPS = 6_000;                // +60% מעל-ה-kink (עונש-ניצולת)
+export const LEND_KINK_BPS = 8_000;                  // 80% ניצולת
+export const LEND_RESERVE_FACTOR_BPS = 1_000;       // 10% מהריבית → אוצר
+export const LEND_MAX_UTIL_BPS = 9_000;              // שאילה נחסמת מעל 90% (רצפת-משיכה 10%)
+export const LEND_LIQ_BONUS_BPS = 500;               // בונוס-ניזולת 5% למפרק
+export const LEND_HF_BUFFER = 110;                   // HF ≥ 1.10 בשאילה (חוצץ-בטיחות)
+export const LEND_GLOBAL_CAP_MU = 20_000_000;        // תקרת-שוק-גלובלית ($20,000)
+export const LEND_POS_CAP_MU = 5_000_000;           // תקרת-עמדה-פר-חשבון ($5,000)
+/** השווקים הקנוניים: נכס → LTV ב-bps (USDS אספקה = בטחונות-מלא-כמעט; האחרים שמרניים). */
+export const LEND_MARKETS: Record<string, number> = { USDS: 7500, WSTEEM: 5000, WTRX: 5000, SAOS: 5000 };
+/** סף-ניזולת = LTV + 15pp — חלון-הגנה בין-אזהרה-לסגירה (Aave: LTV < LT). */
+export function lendLiqThresholdBps(asset: string): number {
+  return Math.min(9_900, (LEND_MARKETS[asset] ?? 0) + 1_500);
+}
 export const EPOCH_BLOCKS = 1_200;      // אפוק-פליפ כל-שעה (טיק 3s) — נראה-חי
 export const ROUTER_EVERY = 600;        // מחזור-קנייה-ושריפה כל-30 דק'
 export const REV_FLOOR = 200_000;       // רצפת-רווח-אוצר שהראוטר לא נוגע בה (µ)
@@ -296,6 +320,12 @@ export interface DexState {
     lastIncomeMu: number;   // תמונת-מונה-ריבית-הכספת שנראתה לאחרונה — דלתא=הכנסה-חדשה
     dayPaidMu: number; dayPaidPrevMu: number; dayMarkH: number; // חלון-יום מתגלגל — שיעור-מפורסם-אמת
     opens: number; closes: number;
+  };
+  // ── R44 · THE-MARKET (רשויות: תמונות-ישנות-בלעדיהן = השוק טרם-נולד) ──
+  lend?: {
+    markets: Record<string, { sMu: number; bMu: number; sEarnedMu: number; resMu: number; lastH: number }>;
+    positions: Record<string, { s: Record<string, { mu: number; earned: number }>; b: Record<string, { mu: number; int: number; atH: number }> }>;
+    totals: { suppliesMu: number; borrowsMu: number; interestPaidMu: number; resToTreasuryMu: number; liquidations: number; opens: number; closes: number };
   };
   stats: { fills: number; swaps: number; opsTotal: number; ladders: number };
   // ── Task 54 · כלכלה (רשויות-כולן: תמונות-מצב-ישנות-בלעדיהן = undefined) ──
@@ -618,6 +648,59 @@ export function vaultTotals(st: DexState): { opened: number; repaid: number; liq
 export function vaultNetSupplyMu(st: DexState): number {
   const t = vaultTotals(st);
   return t.issuedMu - t.burnedMu;
+}
+
+/* ── R44 · THE-MARKET — מתמטיקה-טהורה של שוק-הכספים (שלמים-בלבד, דטרמיניסטי) ── */
+/** מצב-שוק — תמיד-אובייקט (תמונות-ישנות = שוק-ריק-כנה, לא-התרסקות). */
+export function lendState(st: DexState): NonNullable<DexState["lend"]> {
+  return st.lend ?? { markets: {}, positions: {}, totals: { suppliesMu: 0, borrowsMu: 0, interestPaidMu: 0, resToTreasuryMu: 0, liquidations: 0, opens: 0, closes: 0 } };
+}
+/** ניצולת-השוק ב-bps: חוב-קרן / אספקה-קרן. אספקה-אפסית → 0 (אין-שוק). */
+export function lendUtilBps(m: { sMu: number; bMu: number } | undefined): number {
+  if (!m || m.sMu <= 0) return 0;
+  return Math.min(10_000, Math.floor((m.bMu * 10_000) / m.sMu));
+}
+/** ריבית-שאילה-שנתית ב-bps — עקומת-kink מלאה (Aave-v3 standard). */
+export function lendBorrowAprBps(m: { sMu: number; bMu: number } | undefined): number {
+  const u = lendUtilBps(m);
+  if (u <= 0) return LEND_BASE_APR_BPS;
+  if (u <= LEND_KINK_BPS) return LEND_BASE_APR_BPS + Math.floor((LEND_SLOPE1_BPS * u) / LEND_KINK_BPS);
+  return LEND_BASE_APR_BPS + LEND_SLOPE1_BPS + Math.floor((LEND_SLOPE2_BPS * (u - LEND_KINK_BPS)) / (10_000 - LEND_KINK_BPS));
+}
+/** ריבית-אספקה-שנתית ב-bps — שאילה × ניצולת × (1 − פקטור-רזרבה). */
+export function lendSupplyAprBps(m: { sMu: number; bMu: number } | undefined): number {
+  const u = lendUtilBps(m);
+  if (u <= 0) return 0;
+  return Math.floor((lendBorrowAprBps(m) * u * (10_000 - LEND_RESERVE_FACTOR_BPS)) / 100_000_000);
+}
+/** חוב-אפקטיבי = קרן + ריבית-מונפת + צבירה-טרייה — פונקציה-טהורה-של-הגובה. */
+export function lendDebtNow(b: { mu: number; int: number; atH: number }, aprBps: number, h: number): number {
+  const base = b.mu + b.int;
+  const blocks = Math.max(0, h - b.atH);
+  if (base <= 0 || blocks <= 0) return base;
+  return base + Math.floor((base * aprBps * blocks) / (10_000 * BLOCKS_PER_YEAR));
+}
+/** ערך-נכס ב-µUSDS לפי-האורקל-הקנוני (אותו-סולם-מדויק של הכספת: refPrice=mµ/יחידה). */
+export function lendAssetValueMu(st: DexState, asset: string, mu: number): number {
+  const ref = st.assets[asset]?.refPrice ?? 0;
+  return ref > 0 ? Math.floor((mu * ref) / 1000) : 0;
+}
+/** HF×100 = בטחונות(בסף-הניזולת) / חוב. אין-חוב → 1e9 (אינסוף-מיוצג). */
+export function lendHealthFactor(st: DexState, who: string): number {
+  const ls = lendState(st);
+  const pos = ls.positions[who];
+  if (!pos) return 1e9;
+  let col = 0, debt = 0;
+  for (const [a, sp] of Object.entries(pos.s)) {
+    col += Math.floor((lendAssetValueMu(st, a, sp.mu + sp.earned) * lendLiqThresholdBps(a)) / 10_000);
+  }
+  for (const [a, bp] of Object.entries(pos.b)) {
+    if (bp.mu + bp.int <= 0) continue;
+    const debtMu = lendDebtNow(bp, lendBorrowAprBps(ls.markets[a]), st.height);
+    debt += lendAssetValueMu(st, a, debtMu);
+  }
+  if (debt <= 0) return 1e9;
+  return Math.floor((col * 100) / debt);
 }
 
 export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
@@ -1619,6 +1702,261 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (restMu <= 0) delete maps[issuer]; else maps[issuer] = { mu: restMu, owedMu: 0, atH: st.height };
       st.savings = { ...s!, positions: maps, potMu: s!.potMu - takeMu, paidMu: s!.paidMu + owed, closes: s!.closes + 1 };
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "save_close", note: `withdraw ${takeMu}µ + interest ${owed}µ (measured income, never minted) · pot ${s!.potMu - takeMu}µ` });
+      return { ok: true, gas };
+    }
+    /* ── R44 · THE-MARKET — שוק-הכספים הריבוני (peer-to-pool) ────────────────── */
+    case "lend_supply": {
+      // הפקדת-נכס לבריכת-האשראי: מלווה שם-כסף, לווה שם-בטחונות. העברה-טהורה
+      // (משתמש → lend-pot) — אפס-הטבעה; הריבית תגיע-רק-מלווים-אמת-שישלמו.
+      const amt = op.amount ?? 0;
+      const asset = String(op.asset ?? "");
+      if (!(asset in LEND_MARKETS)) return { ok: false, err: "market-not-listed", gas: 0 };
+      if (!Number.isSafeInteger(amt) || amt <= 0) return { ok: false, err: "bad-amount", gas: 0 };
+      const ls0 = lendState(st);
+      const m0 = ls0.markets[asset];
+      if ((m0?.sMu ?? 0) + amt > LEND_GLOBAL_CAP_MU) return { ok: false, err: "market-cap", gas: 0 };
+      const pos0 = ls0.positions[issuer] ?? { s: {}, b: {} };
+      if ((pos0.s[asset]?.mu ?? 0) + amt > LEND_POS_CAP_MU) return { ok: false, err: "position-cap", gas: 0 };
+      if (avail(st, issuer, asset) < amt) return { ok: false, err: "insufficient-balance", gas };
+      const c = consume(); if (c) return c;
+      addBal(st, issuer, asset, -amt);
+      addBal(st, LEND_POT, asset, amt);
+      const prev = pos0.s[asset] ?? { mu: 0, earned: 0 };
+      const ls: NonNullable<DexState["lend"]> = {
+        ...ls0,
+        markets: { ...ls0.markets, [asset]: { ...(m0 ?? { sMu: 0, bMu: 0, sEarnedMu: 0, resMu: 0, lastH: 0 }), sMu: (m0?.sMu ?? 0) + amt, lastH: st.height } },
+        positions: { ...ls0.positions, [issuer]: { ...pos0, s: { ...pos0.s, [asset]: { mu: prev.mu + amt, earned: prev.earned } } } },
+        totals: { ...ls0.totals, suppliesMu: ls0.totals.suppliesMu + amt, opens: ls0.totals.opens + 1 },
+      };
+      st.lend = ls;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "lend_supply", note: `+${amt}µ ${asset} → lend-pot (pool ${(m0?.sMu ?? 0) + amt}µ · util ${lendUtilBps(ls.markets[asset]) / 100}% · borrowAPR ${lendBorrowAprBps(ls.markets[asset]) / 100}%)` });
+      return { ok: true, gas };
+    }
+    case "lend_withdraw": {
+      // משיכת-קרן + כל-הריבית-המדודה-שנצברה. כנות-נזילות: אם-הבריכה-מרוקנת
+      // (הלווים מחזיקים) — pot-short כנה, כמו-החיסכון. רצפת-ה-10% בשאילה
+      // מבטיחה-שתמיד-תהיה-משיכה-אפשרית-בחלק-מהקרן.
+      const asset = String(op.asset ?? "");
+      if (!(asset in LEND_MARKETS)) return { ok: false, err: "market-not-listed", gas: 0 };
+      const ls = lendState(st);
+      const pos = ls.positions[issuer];
+      const sp = pos?.s[asset];
+      if (!pos || !sp || sp.mu + sp.earned <= 0) return { ok: false, err: "no-position", gas: 0 };
+      const amt = Math.floor(op.amount ?? -1); // השמטה/-1 = הכל
+      if (amt === 0) return { ok: false, err: "bad-amount", gas: 0 };
+      const takeMu = amt < 0 ? sp.mu : Math.min(amt, sp.mu);
+      const earned = sp.earned; // ריבית-מדודה משולמת-תמיד-במלואה (מדפוס-החיסכון)
+      if (avail(st, LEND_POT, asset) < takeMu + earned) return { ok: false, err: "pot-short", gas };
+      const c = consume(); if (c) return c;
+      addBal(st, LEND_POT, asset, -(takeMu + earned));
+      addBal(st, issuer, asset, takeMu + earned);
+      const m = ls.markets[asset]!;
+      const restMu = sp.mu - takeMu;
+      const sMaps = { ...pos.s };
+      if (restMu <= 0 && earned <= 0) delete sMaps[asset]; else sMaps[asset] = { mu: restMu, earned: 0 };
+      const pMaps = { ...ls.positions };
+      if (Object.keys(sMaps).length === 0 && Object.keys(pos.b).length === 0) delete pMaps[issuer]; else pMaps[issuer] = { ...pos, s: sMaps };
+      st.lend = {
+        ...ls,
+        markets: { ...ls.markets, [asset]: { ...m, sMu: m.sMu - takeMu, sEarnedMu: Math.max(0, m.sEarnedMu - earned), lastH: st.height } },
+        positions: pMaps,
+        totals: { ...ls.totals, suppliesMu: ls.totals.suppliesMu - takeMu, closes: ls.totals.closes + 1 },
+      };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "lend_withdraw", note: `withdraw ${takeMu}µ ${asset} + earned ${earned}µ (measured) · pool ${m.sMu - takeMu}µ` });
+      return { ok: true, gas };
+    }
+    case "lend_borrow": {
+      // שאילה-מהבריכה נגד-בטחונות: HF ≥ 1.10 (חוצץ), רצפת-נזילות-10% (המלווים
+      // תמיד-יוכלו-למשוך), תקרות-שוק-ועמדה. החוב נפתח-בקרן-נקייה + ריבית-מונפת
+      // בגובה (אותה-מתמטיקה-דטרמיניסטית-של-הכספת — צבירה-עצלה-בקריאה).
+      const asset = String(op.asset ?? "");
+      if (!(asset in LEND_MARKETS)) return { ok: false, err: "market-not-listed", gas: 0 };
+      const amt = Math.floor(op.amount ?? 0);
+      if (!Number.isSafeInteger(amt) || amt <= 0) return { ok: false, err: "bad-amount", gas: 0 };
+      const ls = lendState(st);
+      const m = ls.markets[asset];
+      if ((m?.bMu ?? 0) + amt > LEND_GLOBAL_CAP_MU) return { ok: false, err: "market-cap", gas: 0 };
+      const pos = ls.positions[issuer] ?? { s: {}, b: {} };
+      // תקציב-נזילות: השאילה לא-תרוקן-את-הבריכה מתחת-לרצפת-10% מהאספקה
+      const cash = avail(st, LEND_POT, asset);
+      const floorMu = Math.floor(((m?.sMu ?? 0) * (10_000 - LEND_MAX_UTIL_BPS)) / 10_000);
+      if (cash - amt < floorMu) return { ok: false, err: "cash-floor", gas: 0 };
+      if (cash < amt) return { ok: false, err: "pot-short", gas: 0 };
+      // בדיקת-בריאות-מלאה: אחרי-השאילה HF (ב-LTV) ≥ 1.10
+      const simB = { ...pos.b };
+      const prevB = simB[asset];
+      if (prevB) {
+        const debtNow = lendDebtNow(prevB, lendBorrowAprBps(m), st.height);
+        simB[asset] = { mu: prevB.mu + amt, int: debtNow - prevB.mu, atH: st.height };
+      } else {
+        simB[asset] = { mu: amt, int: 0, atH: st.height };
+      }
+      let colV = 0, debtV = 0;
+      for (const [a, s2] of Object.entries(pos.s)) {
+        const ltv = LEND_MARKETS[a] ?? 0;
+        colV += Math.floor((lendAssetValueMu(st, a, s2.mu + s2.earned) * ltv) / 10_000);
+      }
+      for (const [a, b2] of Object.entries(simB)) {
+        if (b2.mu + b2.int <= 0) continue;
+        const d = lendDebtNow(b2, lendBorrowAprBps(ls.markets[a]), st.height);
+        debtV += lendAssetValueMu(st, a, d);
+      }
+      if (debtV > colV || colV <= 0) return { ok: false, err: "no-collateral", gas: 0 };
+      if (Math.floor((colV * 100) / debtV) < LEND_HF_BUFFER) return { ok: false, err: "health-factor", gas: 0 };
+      const c = consume(); if (c) return c;
+      addBal(st, LEND_POT, asset, -amt);
+      addBal(st, issuer, asset, amt);
+      const bMaps = { ...pos.b };
+      if (prevB) {
+        const debtNow = lendDebtNow(prevB, lendBorrowAprBps(m), st.height);
+        bMaps[asset] = { mu: prevB.mu + amt, int: debtNow - prevB.mu, atH: st.height };
+      } else {
+        bMaps[asset] = { mu: amt, int: 0, atH: st.height };
+      }
+      st.lend = {
+        ...ls,
+        markets: { ...ls.markets, [asset]: { ...(m ?? { sMu: 0, bMu: 0, sEarnedMu: 0, resMu: 0, lastH: 0 }), bMu: (m?.bMu ?? 0) + amt, lastH: st.height } },
+        positions: { ...ls.positions, [issuer]: { ...pos, b: bMaps } },
+        totals: { ...ls.totals, borrowsMu: ls.totals.borrowsMu + amt },
+      };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "lend_borrow", note: `borrow ${amt}µ ${asset} (util ${lendUtilBps(st.lend.markets[asset]) / 100}% · APR ${lendBorrowAprBps(st.lend.markets[asset]) / 100}% · HF after ${Math.floor((colV * 100) / debtV) / 100})` });
+      return { ok: true, gas };
+    }
+    case "lend_repay": {
+      // פירעון — הנה מגיע-הכסף-האמת: הריבית שהלווה-משלם (µ-אמת-מיתרתו) נחתכת:
+      // 90% → מלווים פרו-ראטה-לפי-קרן (מדידה-חיה, אחרון-בולע-אבק), 10% → אוצר.
+      // אפס-הטבעה: הכל-העברות-טהורות. אינווריאנטת-הספרים נשמרת-מעצמה.
+      const asset = String(op.asset ?? "");
+      if (!(asset in LEND_MARKETS)) return { ok: false, err: "market-not-listed", gas: 0 };
+      const ls = lendState(st);
+      const pos = ls.positions[issuer];
+      const bp = pos?.b[asset];
+      if (!pos || !bp || bp.mu + bp.int <= 0) return { ok: false, err: "no-debt", gas: 0 };
+      const amt = Math.floor(op.amount ?? -1); // השמטה/-1 = הכל
+      if (amt === 0) return { ok: false, err: "bad-amount", gas: 0 };
+      const m = ls.markets[asset]!;
+      const debt = lendDebtNow(bp, lendBorrowAprBps(m), st.height);
+      const pay = amt < 0 ? debt : Math.min(amt, debt);
+      if (pay <= 0) return { ok: false, err: "nothing-to-do", gas: 0 };
+      if (avail(st, issuer, asset) < pay) return { ok: false, err: "insufficient-balance", gas };
+      const accrued = debt - bp.mu;                     // כל-הריבית-שנצברה (מונפת + טרייה)
+      const interestPart = Math.min(pay, accrued);      // ריבית-נגבית-קודם
+      const principalPart = pay - interestPart;
+      const c = consume(); if (c) return c;
+      addBal(st, issuer, asset, -pay);
+      addBal(st, LEND_POT, asset, pay);
+      // חלוקת-הריבית: 90% מלווים / 10% אוצר — מהכסף-שהגיע-בפועל
+      const toSuppliers = Math.floor((interestPart * (10_000 - LEND_RESERVE_FACTOR_BPS)) / 10_000);
+      const toReserve = interestPart - toSuppliers;
+      if (toReserve > 0) addBal(st, LEND_POT, asset, -toReserve), addBal(st, "treasury", asset, toReserve);
+      // פרו-ראטה-לפי-קרן-חיה (האחרון-בסדר-הקנוני בולע-את-האבק — שימור-מדויק-עד-ה-µ)
+      const positions = { ...ls.positions };
+      let left = toSuppliers;
+      const suppliers = Object.keys(positions).filter((k) => (positions[k]!.s[asset]?.mu ?? 0) > 0);
+      for (let i = 0; i < suppliers.length; i++) {
+        const p = positions[suppliers[i]]!;
+        const sp = p.s[asset]!;
+        if (i === suppliers.length - 1) {
+          if (left > 0) { positions[suppliers[i]] = { ...p, s: { ...p.s, [asset]: { ...sp, earned: sp.earned + left } } }; left = 0; }
+        } else {
+          const share = Math.floor((toSuppliers * sp.mu) / (m.sMu));
+          if (share > 0) { positions[suppliers[i]] = { ...p, s: { ...p.s, [asset]: { ...sp, earned: sp.earned + share } } }; left -= share; }
+        }
+      }
+      // סגירת-החוב: ריבית-קודם, קרן-אחר-כך (אותו-סדר-חשבונאי-כמו-הכספת)
+      const bMaps = { ...positions[issuer]!.b };
+      const newInt = accrued - interestPart;
+      const newMu = bp.mu - principalPart;
+      if (newMu + newInt <= 0) delete bMaps[asset]; else bMaps[asset] = { mu: newMu, int: newInt, atH: st.height };
+      const pAfter = positions[issuer]!;
+      if (Object.keys(bMaps).length === 0 && Object.keys(pAfter.s).length === 0) delete positions[issuer]; else positions[issuer] = { ...pAfter, b: bMaps };
+      st.lend = {
+        ...ls,
+        markets: { ...ls.markets, [asset]: { ...m, bMu: Math.max(0, m.bMu - principalPart), sEarnedMu: m.sEarnedMu + toSuppliers, resMu: m.resMu + toReserve, lastH: st.height } },
+        positions,
+        totals: { ...ls.totals, borrowsMu: Math.max(0, ls.totals.borrowsMu - principalPart), interestPaidMu: ls.totals.interestPaidMu + interestPart, resToTreasuryMu: ls.totals.resToTreasuryMu + toReserve },
+      };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "lend_repay", note: `repay ${pay}µ ${asset} (interest ${interestPart}µ: ${toSuppliers}µ→${suppliers.length} suppliers · ${toReserve}µ→treasury · principal ${principalPart}µ) · debt now ${newMu + newInt}µ` });
+      return { ok: true, gas };
+    }
+    case "lend_liquidate": {
+      // ניזולת-אזרח: HF < 1 — כל-אחד-יכול-לסגור-חוב-ולקחת-בטחונות+5%.
+      // הבטחון-הנתפס: הנכס-המסופק-בעל-הערך-הגדול-של-הלווה (דטרמיניסטי).
+      const owner = String(op.owner ?? "").toLowerCase();
+      if (!owner || FORBIDDEN_KEYS.has(owner)) return { ok: false, err: "bad-owner", gas: 0 };
+      const asset = String(op.asset ?? "");
+      if (!(asset in LEND_MARKETS)) return { ok: false, err: "market-not-listed", gas: 0 };
+      const ls = lendState(st);
+      const pos = ls.positions[owner];
+      const bp = pos?.b[asset];
+      if (!pos || !bp || bp.mu + bp.int <= 0) return { ok: false, err: "no-debt", gas: 0 };
+      if (lendHealthFactor(st, owner) >= 100) return { ok: false, err: "not-liquidatable", gas: 0 };
+      const m = ls.markets[asset]!;
+      const debt = lendDebtNow(bp, lendBorrowAprBps(m), st.height);
+      const pay = Math.min(Math.floor(op.amount ?? -1) < 0 ? debt : Math.floor(op.amount ?? -1), debt);
+      if (pay <= 0) return { ok: false, err: "bad-amount", gas: 0 };
+      if (avail(st, issuer, asset) < pay) return { ok: false, err: "insufficient-balance", gas };
+      // בטחון-היעד: הספקה-הגדולה-בערך (שוויון → סדר-אלפביתי — דטרמיניסטי)
+      let colAsset = "", colVal = 0;
+      for (const [a, sp] of Object.entries(pos.s)) {
+        const v = lendAssetValueMu(st, a, sp.mu + sp.earned);
+        if (v > colVal) { colVal = v; colAsset = a; }
+      }
+      if (!colAsset || colVal <= 0) return { ok: false, err: "no-collateral", gas: 0 };
+      const ref = st.assets[colAsset]?.refPrice ?? 0;
+      if (ref <= 0) return { ok: false, err: "no-collateral-price", gas: 0 };
+      const seizeValMu = Math.min(Math.floor((pay * (10_000 + LEND_LIQ_BONUS_BPS)) / 10_000), colVal);
+      const colSp = pos.s[colAsset]!;
+      const seizeMu = Math.min(colSp.mu + colSp.earned, Math.floor((seizeValMu * 1000) / ref));
+      if (seizeMu <= 0) return { ok: false, err: "seize-too-small", gas: 0 };
+      if (avail(st, LEND_POT, colAsset) < seizeMu) return { ok: false, err: "pot-short", gas: 0 };
+      const c = consume(); if (c) return c;
+      addBal(st, issuer, asset, -pay);
+      addBal(st, LEND_POT, asset, pay);
+      const accrued = debt - bp.mu;
+      const interestPart = Math.min(pay, accrued);
+      const principalPart = pay - interestPart;
+      const toSuppliers = Math.floor((interestPart * (10_000 - LEND_RESERVE_FACTOR_BPS)) / 10_000);
+      const toReserve = interestPart - toSuppliers;
+      if (toReserve > 0) addBal(st, LEND_POT, asset, -toReserve), addBal(st, "treasury", asset, toReserve);
+      const positions = { ...ls.positions };
+      let left = toSuppliers;
+      const suppliers = Object.keys(positions).filter((k) => (positions[k]!.s[asset]?.mu ?? 0) > 0);
+      for (let i = 0; i < suppliers.length; i++) {
+        const p = positions[suppliers[i]]!;
+        const sp = p.s[asset]!;
+        if (i === suppliers.length - 1) {
+          if (left > 0) { positions[suppliers[i]] = { ...p, s: { ...p.s, [asset]: { ...sp, earned: sp.earned + left } } }; left = 0; }
+        } else {
+          const share = Math.floor((toSuppliers * sp.mu) / m.sMu);
+          if (share > 0) { positions[suppliers[i]] = { ...p, s: { ...p.s, [asset]: { ...sp, earned: sp.earned + share } } }; left -= share; }
+        }
+      }
+      // תפיסת-הבטחון: מה-pot אל-המפרק (הבטחון-הופקד-שם-פיזית)
+      addBal(st, LEND_POT, colAsset, -seizeMu);
+      addBal(st, issuer, colAsset, seizeMu);
+      // חלוקת-התפיסה בין-קרן-לריבית (שתי-המראות חייבות-להתאים-לעמדות):
+      // takeFromEarned נגבע-קודם — הריבית-שנצברה שייכת-לבעלים באותה-מידה
+      const oPos = positions[owner]!;
+      const oS = { ...oPos.s };
+      const seizedSp = oS[colAsset]!;
+      const takeFromEarned = Math.min(seizeMu, seizedSp.earned);
+      const takeFromMu = seizeMu - takeFromEarned;
+      const restMu = seizedSp.mu - takeFromMu;
+      const restEarned = seizedSp.earned - takeFromEarned;
+      if (restMu + restEarned <= 0) delete oS[colAsset]; else oS[colAsset] = { mu: restMu, earned: restEarned };
+      const oB = { ...oPos.b };
+      const newInt = accrued - interestPart;
+      const newMu = bp.mu - principalPart;
+      if (newMu + newInt <= 0) delete oB[asset]; else oB[asset] = { mu: newMu, int: newInt, atH: st.height };
+      if (Object.keys(oS).length === 0 && Object.keys(oB).length === 0) delete positions[owner]; else positions[owner] = { s: oS, b: oB };
+      st.lend = {
+        ...ls,
+        markets: { ...ls.markets, [asset]: { ...m, bMu: Math.max(0, m.bMu - principalPart), sEarnedMu: m.sEarnedMu + toSuppliers, resMu: m.resMu + toReserve, lastH: st.height }, [colAsset]: { ...ls.markets[colAsset]!, sMu: Math.max(0, ls.markets[colAsset]!.sMu - takeFromMu), sEarnedMu: Math.max(0, ls.markets[colAsset]!.sEarnedMu - takeFromEarned), lastH: st.height } },
+        positions,
+        totals: { ...ls.totals, borrowsMu: Math.max(0, ls.totals.borrowsMu - principalPart), interestPaidMu: ls.totals.interestPaidMu + interestPart, resToTreasuryMu: ls.totals.resToTreasuryMu + toReserve, liquidations: ls.totals.liquidations + 1 },
+      };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "lend_liquidate", note: `liquidated ${owner}: paid ${pay}µ ${asset} · seized ${seizeMu}µ ${colAsset} (+5% bonus) · HF was ${lendHealthFactor(st, owner) / 100}` });
       return { ok: true, gas };
     }
     default:
