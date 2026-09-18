@@ -394,6 +394,42 @@ async function main(): Promise<void> {
     console.warn(`[cloud-beat] R26 anchor policy skipped: ${String(e).slice(0, 80)}`);
   }
 
+  /* ── R42 · THE-SBD-RAIL — הגלגל-החיצוני-של-דבר-גורר-דבר ────────────────────
+   * השלמת-המעגל שנמדדה-חיה: הגריד-החוץ מוכר-STEEM מעל-קו-הזהות ← SBD-אמת
+   * מצטבר-ב-headcorner ← אבל-שם-הוא-מת. מכאן: כל-פעימה עוטפת-את-כל-העודף
+   * (deficit-mint, טענה-חד-פעמית `sbd:headcorner:h:deficit`) — ה-SBD הופך
+   * לגיבוי-WSBD-חי-באוצר. אותו-דפוס-מוכח של TRUTH-RAIL (WBLURT), רק-אוטומטי:
+   * אין-סנדבוקס, אין-POST-מפעיל, אין-המתנה. השרשרת-הפנימית נשארת-טהורה —
+   * הקריאה-החיצונית כאן (RPC-ציבורי), ה-op עם-ה-claim הוא-שנכנס-לקונצנזוס.
+   * אם הגריד יקנה-STEEM-ב-SBD (צד-הקנייה) — היתרה-החיה-יורדת-מתחת-לגיבוי
+   * ← אין-הטבעה (rail-deficit), והאמת-מוצגת-בגלוי ב-truth (כיסוי-חי). */
+  try {
+    const ENGINE_ACCOUNT = process.env.SAOS_RELAY_AGENT_ACCOUNT || "headcorner";
+    const accts = await steemRpc<Array<{ sbd_balance?: string }>>("condenser_api.get_accounts", [[ENGINE_ACCOUNT]]);
+    const sbdBal = Number(accts?.[0]?.sbd_balance ?? 0) || 0;
+    const liveSbdMu = Math.floor(sbdBal * 1000);
+    const stx2 = rt.st as unknown as { backing?: Record<string, number>; height: number };
+    const curBack = stx2?.backing?.["WSBD"] ?? 0;
+    const deficit = liveSbdMu - curBack;
+    if (deficit > 0) {
+      const r = submitOp({
+        type: "wrap_mint", issuer: "treasury", nonce: nextNonce("sdbrail"),
+        wrapAsset: "WSBD", amount: deficit, external: true,
+        claim: `sbd:headcorner:${stx2.height}:${deficit}`, // ייחודי-להטבעה — הגרעין דוחה-שימוש-חוזר
+      });
+      if (r.queued) {
+        await stepOnce(); // ה-op נכנס-לממפול — בלוק-אחד מבצע
+        console.log(`[cloud-beat] R42 SBD-RAIL: wrapped ${deficit}µ WSBD (live ${(sbdBal).toFixed(3)} SBD → backing ${curBack + deficit}µ, h${stx2.height})`);
+      } else {
+        console.warn(`[cloud-beat] R42 SBD-RAIL rejected: ${r.reason ?? "?"} (deficit ${deficit}µ)`);
+      }
+    } else {
+      console.log(`[cloud-beat] R42 SBD-RAIL: no deficit (live ${liveSbdMu}µ vs backing ${curBack}µ${deficit < 0 ? ` — rail-deficit:${-deficit}µ` : ""})`);
+    }
+  } catch (e) {
+    console.warn(`[cloud-beat] R42 SBD-RAIL skipped: ${String(e).slice(0, 80)}`);
+  }
+
   let credited = 0, skipped = 0;
   for (const env of envelopes) {
     if (env?.k !== "deposit.claim") continue;

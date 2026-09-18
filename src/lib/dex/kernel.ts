@@ -202,13 +202,16 @@ export function funderFor(st: DexState, amt: number, exclude?: string): FuelFund
   return "operator";
 }
 
-export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM" | "BLURT" | "WBLURT" | "WTRX" | "WSOL";
+export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM" | "SBD" | "BLURT" | "WBLURT" | "WTRX" | "WSOL";
 /** רשימת-ריצה של הנכסים — אימות-קלט fail-closed ב-routes ובגרעין (SETTLE-9).
  * Task 61 · BLURT/WBLURT — מסילת-האמת: WBLURT מוטבע מול-גיבוי-חוץ-אמת
  * (BLURT-אמת על headcorner, מאומת-חי מול-RPC-ציבורי בכל-קריאת-truth).
  * Task 72 · דלת-המטבעות: WTRX/WSOL — עוגנים-מגובי-פקדה (wrap_mint external
- * + claim), הפקדות-אמת מאומתות מול-RPC ציבורי (trongrid/solana). */
-export const ASSETS: Asset[] = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE", "STEEM", "BLURT", "WBLURT", "WTRX", "WSOL"];
+ * + claim), הפקדות-אמת מאומתות מול-RPC ציבורי (trongrid/solana).
+ * R42 · THE-SBD-RAIL: SBD-נרשם-כנכס — ל-WSBD נולד מסדרון-גיבוי (WSBD⇄SBD),
+ * והגריד-החוץ (מכירות מעל-קו-הזהות) מזרים-SBD-אמת-ל-headcorner —
+ * הפעימה עוטפת-את-העודף (deficit-mint) לגיבוי-חי-מדוד. דבר-גורר-דבר. */
+export const ASSETS: Asset[] = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE", "STEEM", "SBD", "BLURT", "WBLURT", "WTRX", "WSOL"];
 
 export interface Pool {
   a: Asset; b: Asset; // ממוינים אלפבתית — מפתח-קנוני
