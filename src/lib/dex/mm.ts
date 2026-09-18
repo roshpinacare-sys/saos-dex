@@ -171,7 +171,12 @@ function submit(rt: Map<string, SoldierRT>, st: DexState | null, soldier: string
   const r = rt.get(soldier) ?? { nonceSeq: st ? seedNonceSeq(st, soldier) : 0, fills: 0, takes: 0 };
   r.nonceSeq++;
   rt.set(soldier, r);
-  pushOp({ ...op, issuer: soldier, nonce: `a${r.nonceSeq}` } as Op);
+  // FIX(R45 · nonce-owner): ה-nonce היה `a${seq}` חסר-בעלים — ה-seeding למעלה סרק
+  // קידומת `${soldier}:a` שלעולם-לא-נכתבה (קוד-מת) ← כל-אתחול-תהליך מתחיל-seq-מ-1
+  // מחדש, ההזמנות של כל-החיילים-והבוטים מתנגשות-ביניהן ובחלון-הנונסים-ההיסטורי
+  // (replay-rejected המוני-עד-שה-seq-עובר-את-החלון — בדיוק-מה-שההערה-למעלה-התכוונה-
+  // למנוע). עכשיו: הקידומת-בפועל-שווה-לזו-שה-seeding-סורק — הזריעה-חיה-וההתנגשות-נעלמת.
+  pushOp({ ...op, issuer: soldier, nonce: `${soldier}:a${r.nonceSeq}` } as Op);
 }
 
 /**
@@ -232,7 +237,7 @@ export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void 
         : Math.floor(Math.sqrt(Math.floor((mkFair * rBase * rQuote) / 1000)) - rQuote); // קניית-בסיס מהבריכה
       const size = Math.min(Math.max(raw, 1), 600_000, avail(st, "arena", assetIn));
       if (size >= 500) {
-        pushOp({ type: "pool_swap", issuer: "arena", nonce: `pk-pool-${tick}-${mk.base}`, pair: poolKey(mk.base, mk.quote), assetIn, amount: size });
+        pushOp({ type: "pool_swap", issuer: "arena", nonce: `pk-pool-h${st.height}-${mk.base}`, pair: poolKey(mk.base, mk.quote), assetIn, amount: size });
       }
     }
   }
@@ -252,14 +257,14 @@ export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void 
         // יקר-מדי-מול-הסולם → הארנה מוכרת-לתוך-הבידים (מורידה-את-המגע)
         const qty = Math.min(bandQty, avail(st, "arena", m.base));
         if (qty >= 5_000) {
-          pushOp({ type: "fill", issuer: "arena", nonce: `pk-band-${tick}`, base: m.base, quote: m.quote, side: "sell", amount: qty, market: true });
+          pushOp({ type: "fill", issuer: "arena", nonce: `pk-band-h${st.height}-${m.base}-s`, base: m.base, quote: m.quote, side: "sell", amount: qty, market: true });
         }
       } else if (devBps < -400) {
         // זול-מדי → הארנה קונה-מהאסקים (מרימה-את-המגע)
         const px = ba > 0 ? ba : ref;
         const qty = Math.min(bandQty, Math.floor((avail(st, "arena", m.quote) * 900) / (px * 10)));
         if (qty >= 5_000) {
-          pushOp({ type: "fill", issuer: "arena", nonce: `pk-band-${tick}`, base: m.base, quote: m.quote, side: "buy", amount: qty, market: true });
+          pushOp({ type: "fill", issuer: "arena", nonce: `pk-band-h${st.height}-${m.base}-b`, base: m.base, quote: m.quote, side: "buy", amount: qty, market: true });
         }
       }
     }
@@ -283,7 +288,7 @@ export function pegkeeperTick(st: DexState, tick: number, pushOp: PushOp): void 
       const addB = Math.floor((p.rb * addA) / p.ra);
       if (addA < 20_000 || addB < 20_000) continue;
       if (avail(st, "arena", p.a) < addA || avail(st, "arena", p.b) < addB) continue;
-      pushOp({ type: "pool_add", issuer: "arena", nonce: `pk-floor-${tick}-${p.a}`, pair: poolKey(p.a, p.b), amount: addA });
+      pushOp({ type: "pool_add", issuer: "arena", nonce: `pk-floor-h${st.height}-${p.a}`, pair: poolKey(p.a, p.b), amount: addA });
     }
   }
 }
@@ -333,7 +338,7 @@ export function arenaTick(
     const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
     if (trCr < 10_000 && fuelAvail > 1_000) {
       const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
-      if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-${tick}`, to: "treasury", amount: mint });
+      if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-h${st.height}`, to: "treasury", amount: mint });
     }
     for (const ag of [...soldiers, "arena", "bot-a", "bot-b", "bot-c", "bot-e", "rail"]) {
       const c = st.credits[ag] ?? 0;
@@ -362,7 +367,7 @@ export function arenaTick(
         }
         if (!funder || amt <= 0) continue;
         fuelBudget.set(funder, (fuelBudget.get(funder) ?? 0) + amt);
-        pushOp({ type: "refuel", issuer: funder, nonce: `refuel-${tick}-${ag}`, to: ag, amount: amt });
+        pushOp({ type: "refuel", issuer: funder, nonce: `refuel-h${st.height}-${ag}`, to: ag, amount: amt });
       }
     }
   }
@@ -374,14 +379,14 @@ export function arenaTick(
       const amt = Math.min(REARM_TRANCHE_SAOS, REARM_LIFETIME_SAOS - rc.saos);
       if (avail(st, "treasury", "SAOS") >= amt) {
         rc.saos += amt;
-        pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-s${tick}`, to: "arena", asset: "SAOS", amount: amt });
+        pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-sh${st.height}`, to: "arena", asset: "SAOS", amount: amt });
       }
     }
     if (avail(st, "arena", "USDS") < REARM_FLOOR_USDS && rc.usds + REARM_TRANCHE_USDS <= REARM_LIFETIME_USDS) {
       const amt = Math.min(REARM_TRANCHE_USDS, REARM_LIFETIME_USDS - rc.usds);
       if (avail(st, "treasury", "USDS") >= amt) {
         rc.usds += amt;
-        pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-u${tick}`, to: "arena", asset: "USDS", amount: amt });
+        pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-uh${st.height}`, to: "arena", asset: "USDS", amount: amt });
       }
     }
     // קו-WSTEEM (SETTLE-14): אוצר-עוטף-את-ה-STEEM-הטבעי-שלו-עצמו (גיבוי 1:1 כנה —
@@ -391,11 +396,11 @@ export function arenaTick(
       const amt = Math.min(REARM_TRANCHE_WSTEEM, REARM_LIFETIME_WSTEEM - rc.wsteem);
       const tw = avail(st, "treasury", "WSTEEM");
       if (tw < amt && avail(st, "treasury", "STEEM") >= amt - tw) {
-        pushOp({ type: "wrap_mint", issuer: "treasury", nonce: `rearm-wrap-${tick}`, wrapAsset: "WSTEEM", amount: amt - tw });
+        pushOp({ type: "wrap_mint", issuer: "treasury", nonce: `rearm-wraph${st.height}`, wrapAsset: "WSTEEM", amount: amt - tw });
       }
       if (avail(st, "treasury", "WSTEEM") >= amt) {
         rc.wsteem += amt;
-        pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-w${tick}`, to: "arena", asset: "WSTEEM", amount: amt });
+        pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-wh${st.height}`, to: "arena", asset: "WSTEEM", amount: amt });
       }
     }
 
@@ -412,7 +417,7 @@ export function arenaTick(
       const amt = Math.min(want, byCap, arenaSpare);
       if (amt > 0) {
         sc.wsteem += amt;
-        pushOp({ type: "transfer", issuer: "arena", nonce: `swseed-${tick}-${soldier}`, to: soldier, asset: "WSTEEM", amount: amt });
+        pushOp({ type: "transfer", issuer: "arena", nonce: `swseed-h${st.height}-${soldier}`, to: soldier, asset: "WSTEEM", amount: amt });
       }
     }
   }
@@ -430,12 +435,12 @@ export function arenaTick(
       const caps = botSeedCounts(st, bot);
       if (avail(st, bot, "USDS") < 100_000 && caps.usds < BOT_SEED_CAP_USDS) {
         caps.usds += 400_000;
-        pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-u${tick}-${bot}`, to: bot, asset: "USDS", amount: 400_000 });
+        pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-uh${st.height}-${bot}`, to: bot, asset: "USDS", amount: 400_000 });
       }
       const caps2 = botSeedCounts(st, bot);
       if (avail(st, bot, "SAOS") < 100_000 && caps2.saos < BOT_SEED_CAP_SAOS) {
         caps2.saos += 200_000;
-        pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-s${tick}-${bot}`, to: bot, asset: "SAOS", amount: 200_000 });
+        pushOp({ type: "transfer", issuer: "arena", nonce: `botseed-sh${st.height}-${bot}`, to: bot, asset: "SAOS", amount: 200_000 });
       }
     }
   }
@@ -443,6 +448,18 @@ export function arenaTick(
   for (const m of MARKETS) {
     const fair = fairPrice(st, m.base, m.quote);
     if (fair <= 0) continue;
+
+    /* FIX(R45 · inflight-escrow): חשבון-נעילות-בטיסה-פר-טיק — נמדד-חי בהוכחת-R45:
+     * order(soldier-1):insufficient-escrow חוזר-ונשנה. שורש: כל-הפקודות-של-אותו-
+     * סוכן באותו-טיק נבדקות-מול-אותו-avail לא-מעודכן (הנעילה נרשמת-רק-בביצוע-
+     * הבלוק) ← הפקודה-השלישית-והלאה נדחות. עכשיו: כל-דחיפה מנכה-מראש-מספר-ספר
+     * מקומי — אותו-עיקרון-כמו-fuelBudget של-העירוי, על-המאזן-החי. */
+    const inflight = new Map<string, number>();
+    const inflightAvail = (who: string, asset: string): number =>
+      avail(st, who, asset) - (inflight.get(`${who}:${asset}`) ?? 0);
+    const inflightAdd = (who: string, asset: string, mu: number): void => {
+      inflight.set(`${who}:${asset}`, (inflight.get(`${who}:${asset}`) ?? 0) + mu);
+    }
 
     if (params.enabled) {
       for (const soldier of soldiers) {
@@ -482,7 +499,10 @@ export function arenaTick(
           lvl++;
           const lockAsset = d.side === "sell" ? m.base : m.quote;
           const lockMu = d.side === "sell" ? size : notional(d.px, size);
-          if (lockMu <= 0 || avail(st, soldier, lockAsset) < lockMu) continue;
+          // FIX(R45 · inflight-escrow): הבדיקה מנכה-את-הנעילות-שכבר-נדחפה-בטיק-הזה —
+          // סדרת-פקודות-של-אותו-חייל לא-מתחרה-עוד-על-אותה-יתרה-מתה.
+          if (lockMu <= 0 || inflightAvail(soldier, lockAsset) < lockMu) continue;
+          inflightAdd(soldier, lockAsset, lockMu);
           submit(rt, st, soldier, {
             type: "order", base: m.base, quote: m.quote, side: d.side,
             price: d.px, amount: size,
@@ -505,15 +525,27 @@ export function arenaTick(
         // להציג-עמלה-שאינה-קיימת כ"רווחיות-וודאית".
         const edgeBps = Math.floor(((fair - bestAsk.price) / bestAsk.price) * 10_000);
         if (edgeBps >= params.minEdgeBps) {
-          const qty = Math.min(bestAsk.amount - bestAsk.filled, 150_000);
-          submit(rt, st, taker, { type: "fill", base: m.base, quote: m.quote, side: "buy", amount: qty, market: true }, pushOp);
+          // FIX(R45 · inflight-escrow): הטייק-קונה-משלם-ציטוט — נחתך-לכיסוי-הבטיסה
+          // (יתרה-חיה פחות-הנעילות-שנדחפה-בטיק-הזה, ×0.9 שוליים-בטיחות).
+          const canQuote = Math.floor((inflightAvail(taker, m.quote) * 9) / 10);
+          const maxQty = bestAsk.price > 0 ? Math.floor(canQuote / bestAsk.price) : 0;
+          const qty = Math.min(bestAsk.amount - bestAsk.filled, 150_000, maxQty);
+          if (qty > 0) {
+            inflightAdd(taker, m.quote, bestAsk.price * qty);
+            submit(rt, st, taker, { type: "fill", base: m.base, quote: m.quote, side: "buy", amount: qty, market: true }, pushOp);
+          }
         }
       }
       if (bestBid) {
         const edgeBps = Math.floor(((bestBid.price - fair) / fair) * 10_000);
         if (edgeBps >= params.minEdgeBps) {
-          const qty = Math.min(bestBid.amount - bestBid.filled, 150_000);
-          submit(rt, st, taker, { type: "fill", base: m.base, quote: m.quote, side: "sell", amount: qty, market: true }, pushOp);
+          // FIX(R45 · inflight-escrow): הטייק-מוכר-מוסר-בסיס — נחתך-לכיסוי-הבטיסה.
+          const maxQty = Math.floor((inflightAvail(taker, m.base) * 9) / 10);
+          const qty = Math.min(bestBid.amount - bestBid.filled, 150_000, maxQty);
+          if (qty > 0) {
+            inflightAdd(taker, m.base, qty);
+            submit(rt, st, taker, { type: "fill", base: m.base, quote: m.quote, side: "sell", amount: qty, market: true }, pushOp);
+          }
         }
       }
     }
@@ -537,11 +569,13 @@ export function arenaTick(
  // זרימת-המכירות-הייתה-אפסית וה"איזון-מושלם" היה-שקר). למכירה: הבסיס-עצמו.
         const affordable = px > 0
           ? (side === "buy"
-              ? Math.floor((avail(st, bot, m.quote) * 9) / (px * 10))
-              : Math.floor((avail(st, bot, m.base) * 9) / 10))
+              ? Math.floor((inflightAvail(bot, m.quote) * 9) / (px * 10))
+              : Math.floor((inflightAvail(bot, m.base) * 9) / 10))
           : 0;
         const qty = Math.min(25_000 + (tick % 5) * 10_000, affordable);
         if (qty > 0) {
+          if (side === "buy") inflightAdd(bot, m.quote, Math.ceil((px * qty) / 10) * 10);
+          else inflightAdd(bot, m.base, qty);
           submit(rt, st, bot, { type: "fill", base: m.base, quote: m.quote, side, amount: qty, market: true }, pushOp);
         }
       } else if (roll < 6) {
@@ -562,8 +596,9 @@ export function arenaTick(
         // שותק-בכנות, בדיוק-כמו-סוחר-אמת-שאין-לו-מה-להציע).
         {
           const needMu = side === "buy" ? px * amt : amt; // קנייה: הצעת-ציטוט; מכירה: הבסיס-עצמו
-          const haveMu = side === "buy" ? avail(st, bot, m.quote) : avail(st, bot, m.base);
+          const haveMu = inflightAvail(bot, side === "buy" ? m.quote : m.base);
           if (needMu > 0 && haveMu >= needMu) {
+            inflightAdd(bot, side === "buy" ? m.quote : m.base, needMu);
             submit(rt, st, bot, { type: "order", base: m.base, quote: m.quote, side, price: px, amount: amt }, pushOp);
           }
         }
@@ -579,7 +614,19 @@ export function arenaTick(
           // 2/3 קניות-בסיס). זרימה-חד-צדדית קטנה-אך-מתמדת היא-הרמת-מחיר,
           // לא-גילוי-מחיר. זוגיות-טיק = איזון-מושלם שתי-הכיוונים.
           const assetIn = tick % 2 === 0 ? p.a : p.b;
-          submit(rt, st, bot, { type: "pool_swap", pair: poolKey(p.a, p.b), assetIn, amount: 15_000 + (tick % 5) * 5_000 }, pushOp);
+          // FIX(R45 · noise-pool-guard): סוואפ-הבריכה של בוט-הרעש נבדק-לכיסוי לפני-
+          // השליחה — החור שהשאיר R44 (תיקן-לימיט-פקודות-בלבד). נמדד-חי:
+          // pool_swap(bot-b):insufficient ב-world.json (h29305) — bot-b עם
+          // {USDS:958, SAOS:1} המשיך-לדחוף-סוואפים-של-15k-35kµ כל-טיק מחדש.
+          // כעת: הגודל נחתך-לכיסוי-האמת (×0.9), אפס-כיסוי → אין-סוואפ — הבוט
+          // שותק-בכנות, כמו-סוחר-אמת-שאין-בכיסו-כלום.
+          const haveMu = inflightAvail(bot, assetIn as Asset);
+          const wantMu = 15_000 + (tick % 5) * 5_000;
+          const amt = Math.min(wantMu, Math.floor((haveMu * 9) / 10));
+          if (amt > 0) {
+            inflightAdd(bot, assetIn as Asset, amt);
+            submit(rt, st, bot, { type: "pool_swap", pair: poolKey(p.a, p.b), assetIn, amount: amt }, pushOp);
+          }
         }
       }
     }

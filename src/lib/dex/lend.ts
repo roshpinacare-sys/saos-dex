@@ -45,10 +45,46 @@ const BORROWER_CYCLE_BLOCKS = 28_800; // ~יום-שרשרת-אחד בהחזקה
 const BORROWER_SELF_HEAL_HF = 150;    // מתחת-ל-1.5 — פירעון-מוקדם (הגנה-עצמית)
 const BORROWER_COL_CAP_MU = 120_000;  // תקרת-בטחונות-פר-מחזור
 
+/* ── R45 · THE-PEERS: ספקי-הצי — שוק-העמיתים מקבל-עמיתים-אמת ────────────────
+ * ממצא-הבחינה (חי, h29308): כל-אספקת-ה-USDS בשוק-הכספים הייתה-של-האוצר-לבד
+ * (20kµ) — "peer-to-pool" בלי-עמיתים: חלוקת-ה-90% למלווים זרמה-כולה-חזרה-לאוצר,
+ * וה-pro-rata היה-תיאורטי. soldier-2/4 מחזיקים-3Mµ USDS רדומים-כל-אחד (הון-צי
+ * אמת, לא-הטבעה) — ומעתה-כל-אחד-מהם מנהל-אספקה-אדפטיבית-עצמאית-משלו, באותו-
+ * חוק-מדידה-כמו-האוצר (יעד = 3× החוב-החי, בין-רצפה-לתקרה), בלי-תיאום-ביניהם.
+ * התוצאה המדודה: חלוקת-הריבית-העתידית זורמת-פרו-ראטה-אמיתית-בין-שלושה-כיסים-
+ * עצמאיים, ונזילות-השוק מעמיקה-כשהביקוש-גדל — דבר-גורר-דבר. */
+const SUPPLIER_AGENTS = ["soldier-2", "soldier-4"] as const;
+const SUPPLIER_DEMAND_MULT = 3;       // אותו-חוק-אדפטיבי-כמו-האוצר — נחשב-עצמאית
+const SUPPLIER_MIN_MU = 10_000;      // רצפה-פר-ספק — השוק-חי-גם-בלי-לווים
+const SUPPLIER_MAX_MU = 150_000;     // תקרה-פר-ספק (5% מהון-הצי — נזילות-השוק שמורה)
+const SUPPLIER_KEEP_LIQUID_MU = 2_500_000; // שמורת-נזילות-לעבודת-השוק-האחרת-שלהם
+
 export function lendTick(st: DexState, tickCount: number, exec: (op: Op) => OpResult, nowMs: number): void {
   if (tickCount % TREASURY_EVERY !== 0) return;
   treasuryLendTick(st, exec, nowMs);
+  // R45 · THE-PEERS: ספקי-הצי פועלים-באותה-קדנצה — כל-אחד-עם-היעד-האדפטיבי-שלו
+  for (const s of SUPPLIER_AGENTS) supplierTick(st, s, exec, nowMs);
   for (const b of BORROWER_AGENTS) borrowerTick(st, b, exec, nowMs);
+}
+
+/** R45 · THE-PEERS — ספק-עצמאי: אותו-חוק-אדפטיבי-כמו-האוצר, נחשב-מהמצב-החי-שלו. */
+function supplierTick(st: DexState, who: string, exec: (op: Op) => OpResult, nowMs: number): void {
+  const ls = lendState(st);
+  let borrowsUsd = 0;
+  for (const [a, m] of Object.entries(ls.markets)) borrowsUsd += lendAssetValueMu(st, a, m.bMu);
+  const target = Math.min(SUPPLIER_MAX_MU, Math.max(SUPPLIER_MIN_MU, borrowsUsd * SUPPLIER_DEMAND_MULT));
+  const cur = ls.positions[who]?.s?.USDS?.mu ?? 0;
+  if (target > cur + 1_000) {
+    const room = avail(st, who, "USDS") - SUPPLIER_KEEP_LIQUID_MU;
+    const amt = Math.min(target - cur, Math.max(0, room));
+    if (amt >= 1_000) {
+      const r = exec({ type: "lend_supply", issuer: who, nonce: `lnd-${who}-${st.height}-s`, asset: "USDS", amount: amt });
+      if (r.ok) st.journal.push({ h: st.height, t: nowMs, soldier: who, action: "lend_supply", note: `${who} supplies ${amt}µ USDS (adaptive target ${target}µ = 3× live borrows ${borrowsUsd}µ, own wallet) — peer liquidity earns pro-rata` });
+    }
+  } else if (target + 1_000 < cur) {
+    const r = exec({ type: "lend_withdraw", issuer: who, nonce: `lnd-${who}-${st.height}-sw`, asset: "USDS", amount: cur - target });
+    if (r.ok) st.journal.push({ h: st.height, t: nowMs, soldier: who, action: "lend_withdraw", note: `${who} right-sizes ${cur - target}µ (demand fell) — sovereign peer management` });
+  }
 }
 
 function treasuryLendTick(st: DexState, exec: (op: Op) => OpResult, nowMs: number): void {
