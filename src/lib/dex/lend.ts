@@ -37,13 +37,20 @@ const TREASURY_DEMAND_MULT = 3;    // יעד = 3× החוב-החי (ניצולת
 
 /** לווי-הצי — מחזור-אשראי-אמיתי: בטחונות ← שאילה ← החזקה ← פירעון-בריבית ← שחרור. */
 const BORROWER_AGENTS = ["soldier-1", "soldier-3"] as const;
-const BORROWER_FREE_FRACTION = 40;  // עד-40% מהיתרה-הפנויה → בטחונות (שמורה-קשיחה לעבודת-השוק)
+const BORROWER_FREE_FRACTION = 40;  // עד-40% מהיתרת-ה-WSTEEM-הפנויה → בטחונות (שמורה-קשיחה לעבודת-השוק)
+/* FIX(R47 · scale-truth): בטחונות-ה-WSTEEM בלבד שאבו ~1,400µ — ריבית-יום-שלמה
+ * עליהן floor(1400×131×5760/(10⁴×2.1M))=0 — חלוקת-ה-90/10 הייתה-מתה-מבנית.
+ * רגל-בטחונות שנייה: SAOS — מלאי-עבודת-השוק של-החיילים (פי-5 בערך-מה-WSTEEM
+ * שלהם). שברית-שמורה-קשיחה-יותר (25%) כי-זה-מלאי-מחזור-חי. השאילה נגד-שתי-
+ * הרגליים-יחד ← הפער-נמדד-חי: שאילות ~20kµ ← ריבית-מחזור floor≥1µ מתממשת
+ * למלווים (90%) ולעתודת-האוצר (10%) — הגלגל מסתובב-בפועל. */
+const BORROWER_SAOS_FRACTION = 25;  // עד-25% מהיתרת-ה-SAOS-הפנויה → בטחונות (מלאי-מחזור — שמורה-קשיחה-משל-ה-WSTEEM)
 const BORROWER_LTV_BPS = 3000;      // 30% — שמרני-במכוון (HF בפתיחה ≈ 3.3)
 const BORROWER_MIN_COL_MU = 20_000;
 const BORROWER_MIN_DRAW_MU = 500;
-const BORROWER_CYCLE_BLOCKS = 28_800; // ~יום-שרשרת-אחד בהחזקה
+const BORROWER_CYCLE_BLOCKS = 5_760; // FIX(R47 · time-truth): יום-אמת-אחד (היה 28,800 = 5 ימים) // ~יום-שרשרת-אחד בהחזקה
 const BORROWER_SELF_HEAL_HF = 150;    // מתחת-ל-1.5 — פירעון-מוקדם (הגנה-עצמית)
-const BORROWER_COL_CAP_MU = 120_000;  // תקרת-בטחונות-פר-מחזור
+const BORROWER_COL_CAP_MU = 120_000;  // תקרת-בטחונות-פר-מחזור (לכל-רגל)
 
 /* ── R45 · THE-PEERS: ספקי-הצי — שוק-העמיתים מקבל-עמיתים-אמת ────────────────
  * ממצא-הבחינה (חי, h29308): כל-אספקת-ה-USDS בשוק-הכספים הייתה-של-האוצר-לבד
@@ -115,16 +122,26 @@ function borrowerTick(st: DexState, who: string, exec: (op: Op) => OpResult, now
 
   if (!borrow || borrow.mu + borrow.int <= 0) {
     // אין-חוב — פתיחת-מחזור: בטחונות מהיתרה-הפנויה-האמיתית (אפס-זריעה)
-    const free = (st.balances[who]?.WSTEEM ?? 0) - (st.locked?.[who]?.WSTEEM ?? 0);
-    const col = Math.min(Math.floor((free * BORROWER_FREE_FRACTION) / 100), BORROWER_COL_CAP_MU);
-    if (col < BORROWER_MIN_COL_MU) return; // אין-עודף-אמת — הסוכן שותק-בכנות
-    const colVal = lendAssetValueMu(st, "WSTEEM", col);
+    // FIX(R47 · scale-truth): שתי-רגלי-בטחונות — WSTEEM (40%) + SAOS (25%) — שאילה-כנגד-שתיהן.
+    const freeW = Math.max(0, (st.balances[who]?.WSTEEM ?? 0) - (st.locked?.[who]?.WSTEEM ?? 0));
+    const colW = Math.min(Math.floor((freeW * BORROWER_FREE_FRACTION) / 100), BORROWER_COL_CAP_MU);
+    const freeS = Math.max(0, (st.balances[who]?.SAOS ?? 0) - (st.locked?.[who]?.SAOS ?? 0));
+    const colS = Math.min(Math.floor((freeS * BORROWER_SAOS_FRACTION) / 100), BORROWER_COL_CAP_MU);
+    if (colW < BORROWER_MIN_COL_MU && colS < BORROWER_MIN_COL_MU) return; // אין-עודף-אמת — הסוכן שותק-בכנות
+    const colVal = lendAssetValueMu(st, "WSTEEM", colW) + lendAssetValueMu(st, "SAOS", colS);
     const draw = Math.floor((colVal * BORROWER_LTV_BPS) / 10_000);
     if (draw < BORROWER_MIN_DRAW_MU) return;
-    let r = exec({ type: "lend_supply", issuer: who, nonce: `lnd-${who}-${st.height}-c`, asset: "WSTEEM", amount: col });
-    if (!r.ok) return;
+    let r: OpResult;
+    if (colW >= BORROWER_MIN_COL_MU) {
+      r = exec({ type: "lend_supply", issuer: who, nonce: `lnd-${who}-${st.height}-c`, asset: "WSTEEM", amount: colW });
+      if (!r.ok) return;
+    }
+    if (colS >= BORROWER_MIN_COL_MU) {
+      r = exec({ type: "lend_supply", issuer: who, nonce: `lnd-${who}-${st.height}-s`, asset: "SAOS", amount: colS });
+      if (!r.ok) return;
+    }
     r = exec({ type: "lend_borrow", issuer: who, nonce: `lnd-${who}-${st.height}-b`, asset: "USDS", amount: draw });
-    if (r.ok) st.journal.push({ h: st.height, t: nowMs, soldier: who, action: "lend_borrow", note: `${who} borrows ${draw}µ USDS against ${col}µ WSTEEM (LTV 30% · HF ${lendHealthFactor(st, who)}) — credit cycle open` });
+    if (r.ok) st.journal.push({ h: st.height, t: nowMs, soldier: who, action: "lend_borrow", note: `${who} borrows ${draw}µ USDS against ${colW}µ WSTEEM + ${colS}µ SAOS (LTV 30% · HF ${lendHealthFactor(st, who)}) — credit cycle open` });
     return;
   }
 

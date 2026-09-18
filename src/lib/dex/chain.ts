@@ -17,6 +17,8 @@ import {
   // R44 · THE-MARKET — פרסום-שוק-הכספים במראה הציבורית (רשימה-לבנה של getState)
   lendState, lendUtilBps, lendBorrowAprBps, lendSupplyAprBps, lendDebtNow,
   lendHealthFactor, lendLiqThresholdBps, LEND_MARKETS, LEND_POT,
+  // FIX(R47 · income-base): קבועי-החיסכון האמיתיים לפרסום הציבורי
+  SAVE_DAY_BLOCKS, SAVE_FEE_SHARE_PCT,
 } from "./kernel";
 import { economyTick } from "./economy";
 import { merkleRoot, sha256, canon, CanonicalError } from "./canonical";
@@ -1266,11 +1268,18 @@ export function getState() {
     // ושיעור-היום-האמיתי (מדוד-מחלון-הפירעונות — לא-הבטחה, לא-הטבעה).
     savings: (() => {
       const s = st.savings;
-      const income = st.vaultTot?.interestMu ?? 0;
-      if (!s) return { potMu: 0, savers: 0, paidMu: 0, dayPaidMu: 0, dayPaidPrevMu: 0, apyBps: 0, opens: 0, closes: 0, incomeSourceMu: income };
+      // FIX(R47 · income-base): פירוק-זרמי-ההכנסה גלוי — ריבית-כספת + עתודת-שוק-כספים + נתח-30% מחית-עמלות-הבריכות
+      const feeCut = Object.values(st.pools).reduce((s2, p) => s2 + p.feeAccruedTreasury, 0);
+      const incomeStreams = {
+        vaultInterestMu: st.vaultTot?.interestMu ?? 0,
+        lendReserveMu: st.lend?.totals?.resToTreasuryMu ?? 0,
+        feeShareMu: Math.floor((feeCut * SAVE_FEE_SHARE_PCT) / 100), // 30% מחית-העמלות (מראה-ה-TREASURY_CUT_PCT)
+      };
+      const income = incomeStreams.vaultInterestMu + incomeStreams.lendReserveMu + incomeStreams.feeShareMu;
+      if (!s) return { potMu: 0, savers: 0, paidMu: 0, dayPaidMu: 0, dayPaidPrevMu: 0, apyBps: 0, opens: 0, closes: 0, incomeSourceMu: income, incomeStreams, dayWindowBlocks: SAVE_DAY_BLOCKS, feeSharePct: SAVE_FEE_SHARE_PCT };
       const base = s.potMu > 0 ? s.potMu : 1;
       const apyBps = Math.floor((s.dayPaidPrevMu * 365 * 10_000) / base); // יום-מלא/קרן → bps-שנתי (שניהם ב-µ — יחס-טהור)
-      return { potMu: s.potMu, savers: Object.keys(s.positions).length, paidMu: s.paidMu, dayPaidMu: s.dayPaidMu, dayPaidPrevMu: s.dayPaidPrevMu, apyBps, opens: s.opens, closes: s.closes, incomeSourceMu: income };
+      return { potMu: s.potMu, savers: Object.keys(s.positions).length, paidMu: s.paidMu, dayPaidMu: s.dayPaidMu, dayPaidPrevMu: s.dayPaidPrevMu, apyBps, opens: s.opens, closes: s.closes, incomeSourceMu: income, incomeStreams, dayWindowBlocks: SAVE_DAY_BLOCKS, feeSharePct: SAVE_FEE_SHARE_PCT };
     })(),
     // R44 · THE-MARKET: שוק-הכספים גלוי-לציבור — שווקים-חיים (ניצולת/עקומה/מזומן),
     // עמדות, מוני-ריבית-ששולמה-באמת, ועמדת-האוצר. הכל-מדידה-חיה-מהשרשרת.
