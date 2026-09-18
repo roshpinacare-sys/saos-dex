@@ -21,8 +21,12 @@ import { addBal, avail, vaultTotals } from "./kernel";
 /** צבירת-הכנסה — נקראת בכל-בלוק מבונה-הבלוקים (אחרי-סוכן-הכספת):
  *  דלתא-ריבית-כספת שהגיעה בפועל ← מחולקת-לחוסכים פרו-ראטה, מגובה-יתרת-אוצר-אמת. */
 export function savingsTick(st: DexState, nowMs: number): void {
+  if (!st.savings) {
+    // התחלה-קנונית-דטרמיניסטית לתמונות-מצב-ישנות (שנולדו-טרם-המכשיר):
+    // lastIncomeMu נפתח במונה-הריבית-הנוכחי — אין-חלוקה-רטרואקטיבית לעולם.
+    st.savings = { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: vaultTotals(st).interestMu, dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, opens: 0, closes: 0 };
+  }
   const s = st.savings;
-  if (!s) return; // תמונות-ישנות: המכשיר טרם-נולד — אין-צבירה
   const income = vaultTotals(st).interestMu;
   const delta = income - s.lastIncomeMu;
   s.lastIncomeMu = income; // מצב-ההכנסה מתעדכן-תמיד — גם-בלי-חוסכים (אין-רטרואקטיביות)
