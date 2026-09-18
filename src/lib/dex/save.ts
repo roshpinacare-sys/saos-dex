@@ -16,18 +16,21 @@
  *   · שקיפות-מלאה: potMu, paidMu, שיעור-חלון-היום — הכל במראה-הציבורית (world.json).
  */
 import type { DexState, Op, OpResult } from "./kernel";
-import { addBal, avail, vaultTotals } from "./kernel";
+import { addBal, avail, savingsIncomeMu, SAVE_DAY_BLOCKS } from "./kernel";
 
 /** צבירת-הכנסה — נקראת בכל-בלוק מבונה-הבלוקים (אחרי-סוכן-הכספת):
- *  דלתא-ריבית-כספת שהגיעה בפועל ← מחולקת-לחוסכים פרו-ראטה, מגובה-יתרת-אוצר-אמת. */
+ *  דלתא-הכנסה-המדודה שהגיעה בפועל ← מחולקת-לחוסכים פרו-ראטה, מגובה-יתרת-אוצר-אמת.
+ *  FIX(R47 · income-base): בסיס-ההכנסה הורחב מריבית-כספת-בלבד לכל-הכנסות-הרשת
+ *  המדודות (ריבית-כספת + עתודת-אוצר-שוק-כספים + 30% מחית-עמלות-הבריכות) —
+ *  ההבטחה-המקורית של-המכשיר, שהוכחה-כמתה (12 פעימות אפס-תשואה). */
 export function savingsTick(st: DexState, nowMs: number): void {
   if (!st.savings) {
     // התחלה-קנונית-דטרמיניסטית לתמונות-מצב-ישנות (שנולדו-טרם-המכשיר):
-    // lastIncomeMu נפתח במונה-הריבית-הנוכחי — אין-חלוקה-רטרואקטיבית לעולם.
-    st.savings = { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: vaultTotals(st).interestMu, dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, opens: 0, closes: 0 };
+    // lastIncomeMu נפתח במונה-ההכנסה-הנוכחי — אין-חלוקה-רטרואקטיבית לעולם.
+    st.savings = { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: savingsIncomeMu(st), dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, opens: 0, closes: 0 };
   }
   const s = st.savings;
-  const income = vaultTotals(st).interestMu;
+  const income = savingsIncomeMu(st);
   const delta = income - s.lastIncomeMu;
   s.lastIncomeMu = income; // מצב-ההכנסה מתעדכן-תמיד — גם-בלי-חוסכים (אין-רטרואקטיביות)
   if (delta > 0 && s.potMu > 0) {
@@ -52,9 +55,9 @@ export function savingsTick(st: DexState, nowMs: number): void {
       s.dayPaidMu += pay;
     }
   }
-  // חלון-היום הקנוני (28,800 בלוקים) — לפרסום-שיעור-אמת-מתגלגל
-  while (st.height - s.dayMarkH >= 28_800) {
-    s.dayMarkH += 28_800;
+  // חלון-היום הקנוני (FIX R47: 5,760 בלוקים = יום-אמת-אחד בקצב-הנמדד) — לפרסום-שיעור-אמת-מתגלגל
+  while (st.height - s.dayMarkH >= SAVE_DAY_BLOCKS) {
+    s.dayMarkH += SAVE_DAY_BLOCKS;
     s.dayPaidPrevMu = s.dayPaidMu;
     s.dayPaidMu = 0;
   }

@@ -140,12 +140,13 @@ export const VAULT_DEBT_CAP_MU = 100_000;            // תקרת-חוב-פר-כ�
 export const VAULT_GLOBAL_CAP_MU = 500_000;          // תקרת-חוב-גלובלית ($500) — עד-שהמכשיר-יוכח-בחיים
 export const VAULT_BASE_RATE_BPS = 500;              // ריבית-בסיס 5%/שנה
 export const VAULT_UTIL_SURGE_BPS = 1_000;           // תוספת-ניצולת עד +10%/שנה — מתומחר-בשרשרת
-export const BLOCKS_PER_YEAR = BLOCKS_PER_WEEK * 52; // 10,483,200 — ריבית-שלמים-בלבד
+export const BLOCKS_PER_YEAR = 2_102_400; // FIX(R47 · time-truth): הקצב-הנמדד — 480 גבהים/פעימה × 12 פעימות/יום × 365. הקבוע-הישן (10,483,200 = BLOCKS_PER_WEEK×52) הניח שרשרת-רציפה-בת-3s/בלוק; בפועל-הענן מקדם 480 גבהים כל-120-דק' (15s/גובה) — הריבית זרמה-ב-1/5 מהמציאות ועיגול-השלמים איפס-אותה-לנצח (נמדד-חי: floor(1368µ×131bps×28800/(10⁴×10.5M))=0). פונקציות-טהורות (lendDebtNow/vaultEffDebtMu) — אין-מיגרציה; עמדות-קיימות צוברות-מעתה בקצב-האמת. אם-הקדנצה תשתנה — הקבון מתוקן-מחדש (מדידה-מתמדת).
 // ── R40 · THE-SAVE — חיסכון-USDS בהכנסה-מדודה (מדפוס-הכספת: תקרות-עד-שהמכשיר-יוכח) ──
 export const SAVE_POT = "save-pot";             // חשבון-עד שמחזיק את קרן-החוסכים
 export const SAVE_CAP_MU = 10_000_000;          // תקרת-חיסכון-גלובלית ($10,000) — השקה-שמרנית
 export const SAVE_POS_CAP_MU = 2_500_000;       // תקרת-עמדה-פר-חשבון ($2,500)
-export const SAVE_DAY_BLOCKS = 28_800;          // חלון-היום הקנוני — לשיעור-המפורסם
+export const SAVE_DAY_BLOCKS = 5_760;           // FIX(R47 · time-truth): חלון-היום הקנוני = יום-אמת (5,760 גבהים/יום בקצב-הנמדד; היה 28,800 = 5 ימים-קיר)
+export const SAVE_FEE_SHARE_PCT = 30;           // FIX(R47 · income-base): נתח-החוסכים מחית-עמלות-הבריכות (30% — מראה-ה-TREASURY_CUT_PCT) · 70% נשארים לראוטר/דלק
 // ── R44 · THE-MARKET — שוק-כספים ריבוני (Aave-v3-style peer-to-pool) ──
 export const LEND_POT = "lend-pot";                  // חשבון-עד שמחזיק את כל-נזילות-השוק
 export const LEND_BASE_APR_BPS = 100;                // 1% בסיס
@@ -655,6 +656,26 @@ export function vaultTotals(st: DexState): { opened: number; repaid: number; liq
 export function vaultNetSupplyMu(st: DexState): number {
   const t = vaultTotals(st);
   return t.issuedMu - t.burnedMu;
+}
+
+/* ── FIX(R47 · income-base): בסיס-הכנסה המדוד של THE-SAVE ──────────────────
+ * מציאות-שנמדדה-חי (12 פעימות, היסטוריית-גיט של world.json): saveAPY=0 לכל-
+ * אורך-ההיסטוריה — בסיס-ההכנסה (ריבית-כספת-בלבד) מעולם-לא-זרם: כספת-אחת
+ * ($2.16) שלא-נפרעה, וגם-כשתיפרע — 0.3µ/יום על קרן-500,000µ = אפס-מובנה.
+ * התיקון משלים את-הבטחת-העיצוב המקורית (save.ts: "מקבל את **כל** הכנסת
+ * הרשת המדודה שמגיעה בפועל לאוצר"): שלושה-מונים מונוטוניים-של-הכנסה-אמת:
+ *   · ריבית-כספת (vaultTot.interestMu) — מעבירות-פירעון, USDS-אמת-לאוצר
+ *   · עתודת-אוצר-שוק-הכספים (lend.totals.resToTreasuryMu) — 10% מריבית-השאילה
+ *   · 30% מחית-עמלות-הבריכות (Σpools.feeAccruedTreasury) — הזרם-הדומיננטי
+ *     (נמדד: 32-543µ/פעימה) · 70% נשארים באוצר לראוטר (שריפה/ve) ולדלק.
+ * החלוקה עצמה נשארת-כנה: מגובה-יתרת-USDS-נזיל-אמת-של-האוצר בלבד (coverage-cap),
+ * פרו-ראטה-לקרן-חיה, אפס-הטבעה — העברה-טהורה. אין-רטרואקטיביות: lastIncomeMu
+ * נזרע-מאותה-נוסחה-בדיוק בכל-נקודות-האתחול. */
+export function savingsIncomeMu(st: DexState): number {
+  const fees = Object.values(st.pools).reduce((s, p) => s + p.feeAccruedTreasury, 0);
+  return (st.vaultTot?.interestMu ?? 0)
+    + (st.lend?.totals?.resToTreasuryMu ?? 0)
+    + Math.floor((fees * SAVE_FEE_SHARE_PCT) / 100);
 }
 
 /* ── R44 · THE-MARKET — מתמטיקה-טהורה של שוק-הכספים (שלמים-בלבד, דטרמיניסטי) ── */
@@ -1682,7 +1703,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if ((st.savings?.potMu ?? 0) + amt > SAVE_CAP_MU) return { ok: false, err: "savings-cap", gas: 0 };
       if (avail(st, issuer, "USDS") < amt) return { ok: false, err: "insufficient-usds", gas };
       const c = consume(); if (c) return c;
-      const s = st.savings ?? { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: vaultTotals(st).interestMu, dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, opens: 0, closes: 0 };
+      const s = st.savings ?? { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: savingsIncomeMu(st), dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, opens: 0, closes: 0 };
       const prev = s.positions[issuer] ?? { mu: 0, owedMu: 0, atH: st.height };
       addBal(st, issuer, "USDS", -amt);
       addBal(st, SAVE_POT, "USDS", amt);
