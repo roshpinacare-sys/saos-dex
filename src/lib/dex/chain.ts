@@ -1276,10 +1276,19 @@ export function getState() {
         feeShareMu: Math.floor((feeCut * SAVE_FEE_SHARE_PCT) / 100), // 30% מחית-העמלות (מראה-ה-TREASURY_CUT_PCT)
       };
       const income = incomeStreams.vaultInterestMu + incomeStreams.lendReserveMu + incomeStreams.feeShareMu;
-      if (!s) return { potMu: 0, savers: 0, paidMu: 0, dayPaidMu: 0, dayPaidPrevMu: 0, apyBps: 0, opens: 0, closes: 0, incomeSourceMu: income, incomeStreams, dayWindowBlocks: SAVE_DAY_BLOCKS, feeSharePct: SAVE_FEE_SHARE_PCT };
+      if (!s) return { potMu: 0, savers: 0, paidMu: 0, dayPaidMu: 0, dayPaidPrevMu: 0, windows: 0, apyBps: null, opens: 0, closes: 0, incomeSourceMu: income, incomeStreams, dayWindowBlocks: SAVE_DAY_BLOCKS, feeSharePct: SAVE_FEE_SHARE_PCT, dayMarkH: null, demoMu: 0 };
       const base = s.potMu > 0 ? s.potMu : 1;
-      const apyBps = Math.floor((s.dayPaidPrevMu * 365 * 10_000) / base); // יום-מלא/קרן → bps-שנתי (שניהם ב-µ — יחס-טהור)
-      return { potMu: s.potMu, savers: Object.keys(s.positions).length, paidMu: s.paidMu, dayPaidMu: s.dayPaidMu, dayPaidPrevMu: s.dayPaidPrevMu, apyBps, opens: s.opens, closes: s.closes, incomeSourceMu: income, incomeStreams, dayWindowBlocks: SAVE_DAY_BLOCKS, feeSharePct: SAVE_FEE_SHARE_PCT };
+      // FIX(R48 · calibration-truth): APY נמדד-רק-מחלון-יום-שני-והלאה (windows>=2) —
+      // חלון-הפתיחה שלאחר-לידת/הרחבת-בסיס-ההכנסה קולט-הצטבר-היסטורי ואינו-מייצג-קצב-אמת
+      // (נמדד-חי: 77,184µ בחלון-המיגרציה של R47). גם-אם-הריפליי סופר-את-חלון-המיגרציה
+      // כחלון-ראשון-היסטורי — הוא-לעולם-לא-יהיה-בסיס-לפרסום-שנתי. בזמן-הכיול מתפרסם null —
+      // הצרכן מציג-קצב-חי-מהחלון-הנוכחי במקום-הבטחה-שנתית.
+      const windows = s.windows ?? 0;
+      const apyBps = windows >= 2 ? Math.floor((s.dayPaidPrevMu * 365 * 10_000) / base) : null; // יום-מלא/קרן → bps-שנתי (שניהם ב-µ — יחס-טהור)
+      // FIX(R48 · demo-disclosure): גילוי-מלא — עמדת-ההדגמה-הקבועה של המפעיל מפורסמת-בשמה —
+      // הציבור רשאי-לדעת-שהחוסך-היחיד הוא-המפעיל-עצמו (אין-להציג-"1 חוסכים" בלי-לגלות-זאת).
+      const demoMu = s.positions["operator"]?.mu ?? 0;
+      return { potMu: s.potMu, savers: Object.keys(s.positions).length, paidMu: s.paidMu, dayPaidMu: s.dayPaidMu, dayPaidPrevMu: s.dayPaidPrevMu, windows, apyBps, opens: s.opens, closes: s.closes, incomeSourceMu: income, incomeStreams, dayWindowBlocks: SAVE_DAY_BLOCKS, feeSharePct: SAVE_FEE_SHARE_PCT, dayMarkH: s.dayMarkH ?? null, demoMu };
     })(),
     // R44 · THE-MARKET: שוק-הכספים גלוי-לציבור — שווקים-חיים (ניצולת/עקומה/מזומן),
     // עמדות, מוני-ריבית-ששולמה-באמת, ועמדת-האוצר. הכל-מדידה-חיה-מהשרשרת.
