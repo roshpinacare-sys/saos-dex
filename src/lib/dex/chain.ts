@@ -219,6 +219,16 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
     return "corrupt";
   }
   rt.st = raw.state;
+  // ── FIX(R46 · ratchet-truth): זרע-המונה-המונוטוני בטעינת-תמונה-חיה ──
+  // השיא-ההיסטורי הגיט-מוכח של treasuryProfit הוא 213752µ (Console@4ac9369, 2026-09-17,
+  // dex/world.json@h~17000) — היתרה מאז נוקזה לדלק-סולם/גז (זהו תפקידה: יתרה-עובדת).
+  // מונה-הצבירה-לנצח לא יכול להתחיל מהיתרה-הנוכחית (200000µ) כי אז היה שוכח את מה
+  // שכבר נצבר; הוא גם לא יכול להתחיל מאפס כי אז A38 היה נכשל עד שהמצטבר-מחדש
+  // יעבור את ההיסטוריה. הזרע = חסם-תחתון אמיתי: המאזן הגבוה שהושג אי-פעם (גיט-מוכח).
+  if (typeof rt.st.treasuryProfitEver !== "number" || !Number.isSafeInteger(rt.st.treasuryProfitEver)) {
+    rt.st.treasuryProfitEver = Math.max(rt.st.treasuryProfit ?? 0, 213752); // git-proven high-water
+    console.warn(`[saos-dex][R46] ratchet seed: treasuryProfitEver=${rt.st.treasuryProfitEver}µ (git-proven high-water 213752, working balance ${rt.st.treasuryProfit}µ)`);
+  }
   // ── FIX(escrow-dust) — פיוס-ערבות בעת-טעינה (עם-כנות-חדשה) ──
   // (1) נרמול: פקודות-ישנות בלי מד-נעילה מקבלות מד-נגזר (rem/notional(rem))
   for (const o of rt.st.orders) {
@@ -1239,6 +1249,7 @@ export function getState() {
       poolFeesMu: Object.values(st.pools).reduce((s, p) => s + p.feeAccruedTreasury, 0),
       feeMeterMu: st.feeMeter,
       treasuryProfitMu: st.treasuryProfit,
+      treasuryProfitEverMu: st.treasuryProfitEver ?? 0, // FIX(R46): המונה-המונוטוני-האמיתי — עולה-רק (Σ-harvest מהזרע-הגיט-מוכח), לעולם לא נשחק-לדלק
       ladderSpentMu: st.ladder?.spentMu ?? 0,
       backingWsteemMu: st.backing["WSTEEM"] ?? 0,
       hub: "USDS", // כל-ראוטר-דרך-האב משלם 30bps → 30% לאוצר
