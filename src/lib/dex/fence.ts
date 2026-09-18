@@ -63,6 +63,9 @@ const PINNED_HOSTS = new Set<string>([
   "steem-rpc.publicnode.com",
   /* FIX(Roast-63): bridge.ts — אימות-הוכחות-חוץ (eth_getTransactionReceipt על-BSC) */
   "bsc-rpc.publicnode.com",
+  /* R42 · truth.gridArmedLive — המו״פ הציבורי-שלנו (Console/Pages): קריאת-מצב-הגריד
+   * החמוש = ההוכחה-החיה-של-כספת-המפתח (הגריד מתחמש-רק-לאחר-אימות-ואטימה, R38) */
+  "roshpinacare-sys.github.io",
   /* מקומי (דמון/בדיקות) — פין-עירום: מכסה כל-פורט על המארח (FIX(Roast-65-b · H1)) */
   "127.0.0.1", "localhost", "::1",
 ]);

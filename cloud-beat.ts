@@ -406,7 +406,9 @@ async function main(): Promise<void> {
   try {
     const ENGINE_ACCOUNT = process.env.SAOS_RELAY_AGENT_ACCOUNT || "headcorner";
     const accts = await steemRpc<Array<{ sbd_balance?: string }>>("condenser_api.get_accounts", [[ENGINE_ACCOUNT]]);
-    const sbdBal = Number(accts?.[0]?.sbd_balance ?? 0) || 0;
+    // FIX(R42-a): היתרה מגיעה-כמחרוזת "0.049 SBD" — Number() נותן-NaN→0 (נתפס-חי
+    // בריצה-העננית הראשונה: "no deficit (live 0µ)" מול-0.049-אמת). parseFloat מקלף-את-הסיומת.
+    const sbdBal = parseFloat(String(accts?.[0]?.sbd_balance ?? "0")) || 0;
     const liveSbdMu = Math.floor(sbdBal * 1000);
     const stx2 = rt.st as unknown as { backing?: Record<string, number>; height: number };
     const curBack = stx2?.backing?.["WSBD"] ?? 0;
