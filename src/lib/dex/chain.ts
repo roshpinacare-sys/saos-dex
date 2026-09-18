@@ -29,6 +29,7 @@ import { dcaTick, trigTick } from "./triggers";
 import { protoRevTick } from "./protorev";
 import { cowSettle } from "./cow";
 import { vaultTick } from "./vault"; // Task 80 · THE-VAULT — סוכן-כספת-ההדגמה
+import { savingsTick, saveDemoTick } from "./save"; // R40 · THE-SAVE — צבירת-הכנסה-מדודה + עמדת-המפעיל
 // Task 72 · דלת-המטבעות: פיד-האורקל — extFeeds (median חוצה-מקורות, TTL-משותף עם price-proof)
 import { extFeeds } from "./price-proof";
 
@@ -666,6 +667,10 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     // היו t:0 (זמן-מזויף) בניגוד-לתיקון-63/64 על-שאר-הנתיבים.
     // Task 80 · THE-VAULT: סוכן-הכספת אינו-סוחר — אין-לו-אירועי-טייפ (ריבית ≠ עמלת-סוואפ).
     vaultTick(st, rt.tickCount, exec, t0);
+    // R40 · THE-SAVE: דבר-גורר-דבר — פירעון-כספת באותו-בלוק מזרים ריבית-אמת
+    // לחוסכים (אחרי-סוכן-הכספת, לפני-שאר-הטיקים — הזרימה נראית-בבלוק-עצמו).
+    savingsTick(st, t0);
+    saveDemoTick(st, rt.tickCount, exec, t0);
     const tickEvents = [...dcaTick(st, exec, t0), ...trigTick(st, exec, t0), ...protoRevTick(st, exec, t0), ...cowSettle(st, exec, t0)];
     for (const ev of tickEvents) rt.tape.unshift({ ...ev, h: st.height });
     feedPriceOracle(rt, tickEvents.length > 0 ? tickEvents : undefined, st.height);
@@ -1231,6 +1236,16 @@ export function getState() {
     // בדיוק-כמו-שקר; השדות נכנסים-לרשימה-הלבנה של getState עכשיו.
     vaults: st.vaults ?? {},
     vaultTot: st.vaultTot ?? { opened: 0, repaid: 0, liquidations: 0, interestMu: 0, backstopLossMu: 0, issuedMu: 0, burnedMu: 0 },
+    // R40 · THE-SAVE: החיסכון-גלוי-לציבור — קרן, חוסכים, ריבית-שחולקה-מצטברת,
+    // ושיעור-היום-האמיתי (מדוד-מחלון-הפירעונות — לא-הבטחה, לא-הטבעה).
+    savings: (() => {
+      const s = st.savings;
+      const income = st.vaultTot?.interestMu ?? 0;
+      if (!s) return { potMu: 0, savers: 0, paidMu: 0, dayPaidMu: 0, dayPaidPrevMu: 0, apyBps: 0, opens: 0, closes: 0, incomeSourceMu: income };
+      const base = s.potMu > 0 ? s.potMu : 1;
+      const apyBps = Math.floor((s.dayPaidPrevMu * 365 * 10_000) / base); // יום-מלא/קרן → bps-שנתי (שניהם ב-µ — יחס-טהור)
+      return { potMu: s.potMu, savers: Object.keys(s.positions).length, paidMu: s.paidMu, dayPaidMu: s.dayPaidMu, dayPaidPrevMu: s.dayPaidPrevMu, apyBps, opens: s.opens, closes: s.closes, incomeSourceMu: income };
+    })(),
     // R28 · ENGINE-TRUTH: מוני-האוטומציה-והכלכלה גלויים-לציבור. אותו-לקח-כנות
     // של-הכספת (A44): CoW, ProtoRev, DCA, טריגרים, ראוטר-ההכנסות ו-ve חיים
     // בשרשרת ורצים בכל-טיק — אבל נעדרו מהמראה-הציבורית. אמת-שקיימת-ונסתרת

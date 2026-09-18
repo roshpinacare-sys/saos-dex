@@ -91,6 +91,9 @@ export const GAS_TABLE = {
   vault_repay: 60,    // פירעון + שחרור בטחונות (הריבית → אוצר)
   vault_liquidate: 60, // ניקוי-כספת שנפלה מתחת-ל-150% — פתוח-לכל-אזרח, בונוס 5%
   vault_backstop: 40, // כיסוי-כספת-שקועה מתחת-ל-100% — אוצר-בלבד, הפסד-נרשם-בגלוי
+  // ── R40 · THE-SAVE (חיסכון-USDS בהכנסה-מדודה — התשובה ל"למה-להפקיד") ──
+  save_open: 80,   // הפקדת-USDS לחיסכון — קבלת-חלק-פרו-ראטה בהכנסה המדודה
+  save_close: 60,  // משיכה + ריבית-שנצברה מהכנסה-שהגיעה-בפועל
 } as const;
 
 export type OpKind = keyof typeof GAS_TABLE;
@@ -132,6 +135,11 @@ export const VAULT_GLOBAL_CAP_MU = 500_000;          // תקרת-חוב-גלוב
 export const VAULT_BASE_RATE_BPS = 500;              // ריבית-בסיס 5%/שנה
 export const VAULT_UTIL_SURGE_BPS = 1_000;           // תוספת-ניצולת עד +10%/שנה — מתומחר-בשרשרת
 export const BLOCKS_PER_YEAR = BLOCKS_PER_WEEK * 52; // 10,483,200 — ריבית-שלמים-בלבד
+// ── R40 · THE-SAVE — חיסכון-USDS בהכנסה-מדודה (מדפוס-הכספת: תקרות-עד-שהמכשיר-יוכח) ──
+export const SAVE_POT = "save-pot";             // חשבון-עד שמחזיק את קרן-החוסכים
+export const SAVE_CAP_MU = 10_000_000;          // תקרת-חיסכון-גלובלית ($10,000) — השקה-שמרנית
+export const SAVE_POS_CAP_MU = 2_500_000;       // תקרת-עמדה-פר-חשבון ($2,500)
+export const SAVE_DAY_BLOCKS = 28_800;          // חלון-היום הקנוני — לשיעור-המפורסם
 export const EPOCH_BLOCKS = 1_200;      // אפוק-פליפ כל-שעה (טיק 3s) — נראה-חי
 export const ROUTER_EVERY = 600;        // מחזור-קנייה-ושריפה כל-30 דק'
 export const REV_FLOOR = 200_000;       // רצפת-רווח-אוצר שהראוטר לא נוגע בה (µ)
@@ -277,6 +285,15 @@ export interface DexState {
   // ── Task 80 · THE-VAULT (רשויות: תמונות-ישנות-בלעדיהן = undefined) ──
   vaults?: Record<string, { colMu: number; debtMu: number; intMu: number; atH: number }>; // עמדת-כספת-פר-חשבון (בטחונות/קרן/ריבית-מונפת/גובה-הונפה)
   vaultTot?: { opened: number; repaid: number; liquidations: number; interestMu: number; backstopLossMu: number; issuedMu: number; burnedMu: number }; // מוני-חיים + חשבונאות-היצע-כנה (issued−burned = ההיצע שהכספת יצרה)
+  // ── R40 · THE-SAVE (רשויות: תמונות-ישנות-בלעדיהן = undefined — המכשיר טרם-נולד) ──
+  savings?: {
+    positions: Record<string, { mu: number; owedMu: number; atH: number }>; // עמדת-חוסך-פר-חשבון (קרן/ריבית-שנצברה/גובה-פתיחה-אחרון)
+    potMu: number;          // קרן-חוסכים כוללת (µ USDS) — שווה-סכום-positions.mu
+    paidMu: number;         // ריבית-שחולקה-מצטברת (מדידה-כנה, אף-µ-לא-הוטבע)
+    lastIncomeMu: number;   // תמונת-מונה-ריבית-הכספת שנראתה לאחרונה — דלתא=הכנסה-חדשה
+    dayPaidMu: number; dayPaidPrevMu: number; dayMarkH: number; // חלון-יום מתגלגל — שיעור-מפורסם-אמת
+    opens: number; closes: number;
+  };
   stats: { fills: number; swaps: number; opsTotal: number; ladders: number };
   // ── Task 54 · כלכלה (רשויות-כולן: תמונות-מצב-ישנות-בלעדיהן = undefined) ──
   ve?: Record<string, { amt: number; unlockH: number; weeks: number; atH: number }>; // עמדת-veSAOS-פר-חשבון
@@ -471,6 +488,7 @@ export function genesisState(): DexState {
     bondUserH: {},
     vaults: {},
     vaultTot: { opened: 0, repaid: 0, liquidations: 0, interestMu: 0, backstopLossMu: 0, issuedMu: 0, burnedMu: 0 },
+    savings: { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: 0, dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: 0, opens: 0, closes: 0 },
     dca: {}, trig: {}, dcaSeq: 1, trigSeq: 1,
     launch: {}, launchSeq: 1,
     revAux: { protorevMu: 0, launchpadMu: 0 },
@@ -1559,6 +1577,45 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const vt = vaultTotals(st);
       st.vaultTot = { ...vt, burnedMu: vt.burnedMu + v.debtMu, backstopLossMu: vt.backstopLossMu + (eff - colVal) };
       st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "vault_backstop", note: `vault ${owner}: debt ${eff}µ absorbed (principal ${v.debtMu}µ burned, interest self-offset) · loss ${eff - colVal}µ recorded forever` });
+      return { ok: true, gas };
+    }
+    case "save_open": {
+      // R40 · THE-SAVE: הפקדת-USDS לחיסכון — קרן בחשבון-עד, ריבית-מהכנסה-המדודה-בלבד.
+      // כל-הבדיקות לפני-כל-נגיעה-במצב (עסקה-לא-חוקית לא-נוגעת) — אותו-דוקטרינה-כפר-הכספת.
+      const amt = op.amount ?? 0;
+      if (!Number.isSafeInteger(amt) || amt <= 0) return { ok: false, err: "bad-amount", gas: 0 };
+      if (amt > SAVE_POS_CAP_MU) return { ok: false, err: "position-cap", gas: 0 };
+      if ((st.savings?.potMu ?? 0) + amt > SAVE_CAP_MU) return { ok: false, err: "savings-cap", gas: 0 };
+      if (avail(st, issuer, "USDS") < amt) return { ok: false, err: "insufficient-usds", gas };
+      const c = consume(); if (c) return c;
+      const s = st.savings ?? { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: vaultTotals(st).interestMu, dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, opens: 0, closes: 0 };
+      const prev = s.positions[issuer] ?? { mu: 0, owedMu: 0, atH: st.height };
+      addBal(st, issuer, "USDS", -amt);
+      addBal(st, SAVE_POT, "USDS", amt);
+      st.savings = { ...s, positions: { ...s.positions, [issuer]: { mu: prev.mu + amt, owedMu: prev.owedMu, atH: st.height } }, potMu: s.potMu + amt, opens: s.opens + 1 };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "save_open", note: `+${amt}µ USDS → save-pot (pot ${s.potMu + amt}µ · ${Object.keys(st.savings.positions).length} savers) · income: measured vault-interest pass-through` });
+      return { ok: true, gas };
+    }
+    case "save_close": {
+      // R40 · THE-SAVE: משיכה — קרן + כל-הריבית-שנצברה-מהכנסה-שהגיעה-בפועל.
+      // אמת-כפולה: הסירה-המלאה מוכחת-בהוכחה-המקומית; על-השרשרת-החיה העמדות-העומדות
+      // צוברות-ונשארות — ההפך-מתיאטרון-מחזורי-ריק.
+      const s = st.savings;
+      const pos = s?.positions[issuer];
+      if (!pos || pos.mu + pos.owedMu <= 0) return { ok: false, err: "no-position", gas: 0 };
+      const amt = Math.floor(op.amount ?? -1); // השמטה/-1 = הכל
+      if (amt === 0) return { ok: false, err: "bad-amount", gas: 0 };
+      const takeMu = amt < 0 ? pos.mu : Math.min(amt, pos.mu);
+      const owed = pos.owedMu;
+      if (avail(st, SAVE_POT, "USDS") < takeMu + owed) return { ok: false, err: "pot-short", gas: 0 };
+      const c = consume(); if (c) return c;
+      addBal(st, SAVE_POT, "USDS", -(takeMu + owed));
+      addBal(st, issuer, "USDS", takeMu + owed);
+      const restMu = pos.mu - takeMu;
+      const maps = { ...s!.positions };
+      if (restMu <= 0) delete maps[issuer]; else maps[issuer] = { mu: restMu, owedMu: 0, atH: st.height };
+      st.savings = { ...s!, positions: maps, potMu: s!.potMu - takeMu, paidMu: s!.paidMu + owed, closes: s!.closes + 1 };
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "save_close", note: `withdraw ${takeMu}µ + interest ${owed}µ (measured income, never minted) · pot ${s!.potMu - takeMu}µ` });
       return { ok: true, gas };
     }
     default:
