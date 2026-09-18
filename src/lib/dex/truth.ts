@@ -23,6 +23,19 @@ import { extFeeds, blurtHead, priceProof } from "./price-proof";
 import { onrampSnapshot } from "@/lib/onramp";
 import { submitOp, nextNonce } from "./chain";
 import { realSnapshotSoft, type RealSnapshot } from "./realmarket";
+import { fencedFetch } from "./fence";
+
+/** R42 · מצב-הגריד-החוץ מהמו״פ הציבורי (Console/Pages) — ההוכחה-החיה-של-כספת-המפתח:
+ * הגריד מתחמש-רק-לאחר-ש-key-verify אימת-את-ה-active ביט-מול-ביט-ואטם-אותו-לכספת-המנוע
+ * (R38). armed:true שם = המפתח-חי-בכספת, גם-כשתהליך-האמת-הזה עצמו רץ-בלי-הסוד-בסביבה. */
+async function gridArmedLive(): Promise<boolean | null> {
+  try {
+    const r = await fencedFetch("https://roshpinacare-sys.github.io/Console/dex/grid.json", "truth.grid", { cache: "no-store" });
+    if (!r.ok) return null;
+    const j = (await r.json()) as { armed?: boolean };
+    return typeof j.armed === "boolean" ? j.armed : null;
+  } catch { return null; } // כשל-רשת ≠ הפרכה — אי-ודאות-גלויה
+}
 
 // ── סולם-יציאה: פסקי-דין ומסילות ─────────────────────────────────────────────
 
@@ -232,9 +245,10 @@ export async function truthLedger(st: DexState): Promise<TruthReport> {
 }
 
 async function truthLedgerFull(st: DexState): Promise<TruthReport> {
-  const [feeds, blurt, onramp, proof, realV] = await Promise.all([
+  const [feeds, blurt, onramp, proof, realV, gridArmed] = await Promise.all([
     extFeeds(), blurtHead(), onrampSnapshot().catch(() => null), priceProof(st),
     realSnapshotSoft().catch(() => null as unknown as Awaited<ReturnType<typeof realSnapshotSoft>>),
+    gridArmedLive(),
   ]);
 
   // ── TRUTH-RAIL (WBLURT) — קריאה-בלבד: אימות-גיבוי בלבד, אין-הטבעה ──
@@ -275,8 +289,9 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
   const steemRealTotalMu = Math.floor((steemLiquid + spOwn) * 1000); // כל-מה-שלנו-על-STEEM (נזיל+SP)
   // R42 · המצא-המפתח-נגזר-חי, לא-קבוע-בקוד: מאז-R38 ה-active נאטם-בכספת-המנוע
   // (saos-dex/STEEM_ACTIVE_WIF) והגריד-החוץ-חמוש-וחותם-סדרות-אמת. הפקוד
-  // "אין-מפתח-בכספת" היה-שקר-פומבי מיום-החימום.
-  const keyInVault = Boolean(process.env.STEEM_ACTIVE_WIF);
+  // "אין-מפתח-בכספת" היה-שקר-פומבי מיום-החימום. שני-מקורות-חיים: הסוד-בסביבת-הריצה,
+  // או גריד-חמוש-במו״פ (הוכחת-כספת-שרודה-גם-בתהליך-בלי-הסוד).
+  const keyInVault = Boolean(process.env.STEEM_ACTIVE_WIF) || gridArmed === true;
   const powerdownActive = steemHead?.powerdownActive ?? false;
 
   // ── שורות-האמת פר-נכס ──
@@ -349,8 +364,8 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
     exitPath: "burn→STEEM-אמת-ב-headcorner→Binance STEEMUSDT→$-אמת. אפס-עמלת-העברה על-STEEM (RC).",
     // R42 · החוסם נגזר-מהמצב-החי: המפתח-בכספת (מאז-R38) וה-powerdown-פעיל (4-תשלומים-שבועיים).
     blocker: keyInVault
-      ? `מפתח-active-נאטם-בכספת-המנוע (R38); פדיון-מלא מחייב-שידור-מכוון מהמפעיל${powerdownActive ? ` — ה-powerdown-פעיל (SP-עצמי ${(spOwn).toFixed(0)} מתנקז-שבועית)` : ""}`
-      : `אין-מפתח-active-STEEM בסביבת-המנוע הזו${powerdownActive ? ` — powerdown-פעיל (SP-עצמי ${spOwn.toFixed(0)})` : ` — SP-עצמי ${spOwn.toFixed(0)} נעול`}`,
+      ? `המפתח-הפעיל נאטם-בכספת-המנוע ומאומת-חי${gridArmed === true ? " (גריד-חמוש במו״פ)" : ""}; הפדיון מחייב-שידור-מכוון מהמפעיל${powerdownActive ? ` — ה-powerdown פעיל (SP-עצמי ${spOwn.toFixed(0)} מתנקז-שבועית)` : ""}`
+      : `אין-הוכחה-חיה-למפתח-הפעיל בסביבת-המנוע${powerdownActive ? ` — powerdown-פעיל (SP-עצמי ${spOwn.toFixed(0)})` : ` — SP-עצמי ${spOwn.toFixed(0)} נעול`}`,
   });
 
   // STEEM — יחידת-ספר-ג'נזיס (לא-קשורה-לגיבוי-אמת)
