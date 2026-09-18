@@ -265,7 +265,13 @@ export interface DexState {
   assets: Record<string, { refPrice: number; listed: number }>;
   backing: Record<string, number>; // גיבוי נעול 1:1 לנכסים-עטופים
   extBack?: Record<string, { claim: string; mu: number; atH: number }>; // Task 61 · גיבוי-חוץ-אמת (תביעה + מדידה חיה ב-truth)
-  treasuryProfit: number; // רווח-אוצר מצטבר-מונוטוני (µ)
+  treasuryProfit: number; // יתרת-רווח-אוצר עובדת (µ) — עולה בקציר (harvest), יורדת במימון-דלק (economy/mint_fuel). זו יתרה, לא מונה.
+  // FIX(R46 · ratchet-truth): treasuryProfitEver — מונה-הצבירה-המונוטוני-האמיתי.
+  // החוזה הכתוב של "מצטבר-מונוטוני" (שהיה תלוי ב-treasuryProfit) נשבר בפועל: ה-economy
+  // מנקז את היתרה לדלק-סולם/גז, והיתרה צנחה מ-213752µ (גיט-מוכח, 4ac9369) ל-200000µ.
+  // A38 (ראצ'ט האוצר של הקונסולה) נכשלה בדיוק כפי שנועדה לתפוס. מכאן: המונה הזה
+  // עולה-רק (Σ-harvest), לעולם לא יורד, והזרע שלו הוא השיא-ההיסטורי הגיט-מוכח.
+  treasuryProfitEver?: number;
   feeMeter: number; // עמלות-שנצברו-שטרם-נקצרו (מדידה-כנה)
   feeMinted?: number; // THE-FOUNTAIN: Σקרדיטים-שהוטבעו-מעמלות-מדודות — מנוכה-באינווריאנטה (רשות: תמונות-מצב-ישנות)
   // FIX(Roast-65-a · HIGH-3d): דלי-רביעי-לביקורת-העמלות (settle.ts (d)) — Σעמלות-שנצרכו
@@ -510,6 +516,7 @@ export function genesisState(): DexState {
     balances: {}, locked: {}, credits: {}, nonces: [],
     orders: [], pools: {}, assets: {}, backing: {},
     treasuryProfit: 0,
+    treasuryProfitEver: 0, // FIX(R46): הגרעין נולד מאפס — בטעינת-תמונה-חיה הזרע ההיסטורי (213752µ) מוחל ב-chain.ts
     feeMeter: 0,
     ladder: { refPrice: 2500, stepCostMu: 8_000, lifts: 0, lastLiftHeight: 0, spentMu: 0 },
     journal: [], gasUsed: 0, nextSeq: 1,
@@ -1488,6 +1495,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const c = consume(); if (c) return c;
       st.feeMeter -= amt;
       st.treasuryProfit += amt;
+      st.treasuryProfitEver = (st.treasuryProfitEver ?? 0) + amt; // FIX(R46): המונה-המונוטוני עולה בכל-קציר — גם-אם היתרה מנוקזת אחר-כך לדלק
       st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "harvest", profitMu: amt, note: op.memo });
       return { ok: true, gas };
     }
