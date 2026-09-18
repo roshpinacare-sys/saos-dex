@@ -49,6 +49,17 @@ export const RAIL = "rail";
 export const RAIL_MIN_EDGE_BPS = 200; // מתחת-לזה המנה לא משלמת (עמלה+גז+השפעה)
 export const RAIL_SLIP_BAND = 96; // minOut = 96% מהציטוט — fail-closed (SETTLE-15)
 export const RAIL_OWNED_POOLS = new Set([poolKey("WSTEEM", "USDS")]); // נשלפים מנעילת-pegkeeper
+/* FIX(R45 · thin-pool-cure): רצפת-אבק-גלובלית לכל-השווקים — במקום-שמינימום-
+ * השוק (minDoseMu) יחסום-את-המנה. האבחנה-החיה (נמדד-על-השרשרת-הקנונית,
+ * h29308): בריכת-ENERGY/SAOS החזיקה-3,162µ SAOS בלבד → תקרת-ההשפעה rIn/4=790µ
+ * נפלה-מתחת-ל-minDoseMu=1,000µ → המסילה החזיקה-201,838µ SAOS מוכנים-לקניית
+ * ENERGY-בחצי-מחיר-העוגן (פרמיה ‎-4,788bps‎) ומעולם-לא-ירתה-מנה. קיפאון-מבני:
+ * קניית-הבסיס מעמיקה-את-צד-הציטוט-של-הבריכה (rIn גדל) — אבל המנה-הראשונה
+ * לעולם-לא-מותרת-להירות. הריפוי: minDoseMu נשאר-גודל-מועדף (ה-max בנוסחה),
+ * אבל הדילוג-הוא-רק-מתחת-לרצפת-אבק (300µ — יחס-גז-סביר-של-⅓). תקרת-ההשפעה
+ * (25%-מעתודת-הקלט) נשארת-הקובעת-הבלעדית-של-הגודל — והמנות-הקטנות משחקות-את
+ * אותו-TWAP-שפשוף-מדוד-בלי-לרסק-בריכה-מיקרו. */
+export const RAIL_DUST_MU = 300;
 
 interface RailMarket {
   id: string;
@@ -314,7 +325,7 @@ function pushFunding(st: DexState, tick: number, pushOp: (op: Op) => void, asset
     const tw = avail(st, "treasury", "WSTEEM");
     const need = Math.min(trancheMu, lifetimeCap - railLifetime[lifetimeKey]);
     if (tw < need && avail(st, "treasury", "STEEM") >= need - tw) {
-      pushOp({ type: "wrap_mint", issuer: "treasury", nonce: `rail-wrap-${tick}`, wrapAsset: "WSTEEM", amount: need - tw });
+      pushOp({ type: "wrap_mint", issuer: "treasury", nonce: `rail-wrap-h${st.height}`, wrapAsset: "WSTEEM", amount: need - tw });
     }
   }
 
@@ -322,16 +333,19 @@ function pushFunding(st: DexState, tick: number, pushOp: (op: Op) => void, asset
   if (!src) return;
   const amt = Math.min(trancheMu, lifetimeCap - railLifetime[lifetimeKey], avail(st, src, asset));
   if (amt < floorMu / 5) return; // מנה-שווה-שמה (אפס-רעש-ממפול)
+  // FIX(R45 · nonce-height): מימון-המסילה עבר-ל-nonce-מבוסס-גובה — tickCount מתאפס-בכל-אתחול-
+  // תהליך והטבעת-זוכרת-לנצח ← `rail-fund-${asset}-${tick}` מהריצה-הקודמת חסם-את-זהה-שלו
+  // בריצה-הבאה (נמדד-חי: סירול-replay-rejected על-refuel-ים בהוכחת-R45).
+  const nonce = `rail-fund-${asset}-h${st.height}`;
   // מימון-בהעברה-חינם (xfer_free — אפס-גז, תקרה-2M); האוצר/מפעיל ב-transfer רגיל.
   if (src === "treasury" || src === "operator") {
     if ((st.credits[src] ?? 0) < 100) return; // דלק-להעברה
-    pushOp({ type: "transfer", issuer: src, nonce: `rail-fund-${asset}-${tick}`, to: RAIL, asset, amount: amt });
+    pushOp({ type: "transfer", issuer: src, nonce, to: RAIL, asset, amount: amt });
   } else {
-    pushOp({ type: "xfer_free", issuer: src, nonce: `rail-fund-${asset}-${tick}`, to: RAIL, asset, amount: amt });
+    pushOp({ type: "xfer_free", issuer: src, nonce, to: RAIL, asset, amount: amt });
   }
   // FIX(Roast-67 · funding-truth): אין-קומיט-בדחיפה — המנה נרשמת-pending עד-תוצאת-הבלוק.
   // railLifetime ו-inflowMu מתעדכנים רק ב-railReconcile כשה-op אושר בפועל (אפס-נפיחה).
-  const nonce = `rail-fund-${asset}-${tick}`;
   const px = markMu(st, asset);
   sweepStaleFunding(tick);
   railRt.fundingPending.push({ nonce, key: lifetimeKey, amt, inflowMu: px > 0 ? Math.floor((amt * px) / 1000) : 0, tick });
@@ -375,15 +389,17 @@ export function railTick(st: DexState, tick: number, pushOp: (op: Op) => void): 
     const rIn = assetIn === p.a ? p.ra : p.rb;
     // גודל-לינארי-חצי-פער (אותה-ליניאריזציה של pegkeeper) בתקרת-מנה,
     // ותקרת-ריכוז 25%-מעתודת-הקלט (הבריכה-המיקרו צרה — מנה-ענקית = סליפאג')
+    // FIX(R45 · thin-pool-cure): הדילוג-מול-minDoseMu הוחלף-ברצפת-אבק-גלובלית —
+    // בריכה-דקה (rIn/4 < minDoseMu) מקבלת-מנות-קטנות-כנות-במקום-קיפאון-נצחי.
     const halfGap = Math.floor(Math.abs(Math.floor((rIn * premBps) / 10_000)) / 2);
     const size = Math.min(Math.max(halfGap, m.minDoseMu), m.maxDoseMu, Math.floor(rIn / 4), avail(st, RAIL, assetIn));
-    if (size < m.minDoseMu) continue;
+    if (size < RAIL_DUST_MU) continue;
 
     // minOut fail-closed על-ציטוט-חי (4% — רוחב-SETTLE-15)
     const q = quoteOut(p, assetIn, size);
     if (!q || q.out <= 0) continue;
-    const rec: RailDoseRec = { tick, pair: m.pair, side: sell ? "sell" : "buy", inMu: size, midMu: mid, anchorMu: anchor, premBps, nonce: `rail-${m.id}-${tick}`, ok: null };
-    pushOp({ type: "pool_swap", issuer: RAIL, nonce: `rail-${m.id}-${tick}`, pair: m.pair, assetIn, amount: size, minOut: Math.floor((q.out * RAIL_SLIP_BAND) / 100) });
+    const rec: RailDoseRec = { tick, pair: m.pair, side: sell ? "sell" : "buy", inMu: size, midMu: mid, anchorMu: anchor, premBps, nonce: `rail-${m.id}-h${st.height}`, ok: null };
+    pushOp({ type: "pool_swap", issuer: RAIL, nonce: `rail-${m.id}-h${st.height}`, pair: m.pair, assetIn, amount: size, minOut: Math.floor((q.out * RAIL_SLIP_BAND) / 100) });
     railRt.dosesPushed++;
     railRt.doseLog.push(rec);
     if (railRt.doseLog.length > 32) railRt.doseLog.splice(0, railRt.doseLog.length - 32);
