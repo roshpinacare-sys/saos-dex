@@ -13,7 +13,7 @@ import path from "path";
 import { db } from "@/lib/db";
 import {
   applyOp, genesisState, stateRoot, type DexState, type Op, type TradeEvent,
-  GAS_TABLE, notional, poolKey,
+  GAS_TABLE, notional, poolKey, VE_POT,
 } from "./kernel";
 import { economyTick } from "./economy";
 import { merkleRoot, sha256, canon, CanonicalError } from "./canonical";
@@ -30,6 +30,7 @@ import { protoRevTick } from "./protorev";
 import { cowSettle } from "./cow";
 import { vaultTick } from "./vault"; // Task 80 · THE-VAULT — סוכן-כספת-ההדגמה
 import { savingsTick, saveDemoTick } from "./save"; // R40 · THE-SAVE — צבירת-הכנסה-מדודה + עמדת-המפעיל
+import { veDemoTick, bondDemoTick } from "./ve"; // R41 · THE-VE — נעילה+הצבעה+אג"ח: סוגרים-את-המעגל-הרדום
 // Task 72 · דלת-המטבעות: פיד-האורקל — extFeeds (median חוצה-מקורות, TTL-משותף עם price-proof)
 import { extFeeds } from "./price-proof";
 
@@ -671,6 +672,12 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     // לחוסכים (אחרי-סוכן-הכספת, לפני-שאר-הטיקים — הזרימה נראית-בבלוק-עצמו).
     savingsTick(st, t0);
     saveDemoTick(st, rt.tickCount, exec, t0);
+    // R41 · THE-VE: דבר-גורר-דבר — נעילה ← הצבעה ← אפוק-פליפ מרוקן את-קרן-ה-ve
+    // לנועלים-החיים (בכל-אפוק, h%1200); האג"ח ממירה USDS-סוחר ל-SAOS-נעול — שתי
+    // החוליות-האחרונות של צינור-המפקיד: הפקדה ← זיכוי ← חיסכון ← הכנסה ← פדיון
+    // ← וגם: מסחר ← עמלות ← קרן ← נועלים. אותם-חוקים לכל-אחד.
+    veDemoTick(st, rt.tickCount, exec, t0);
+    bondDemoTick(st, rt.tickCount, exec, t0);
     const tickEvents = [...dcaTick(st, exec, t0), ...trigTick(st, exec, t0), ...protoRevTick(st, exec, t0), ...cowSettle(st, exec, t0)];
     for (const ev of tickEvents) rt.tape.unshift({ ...ev, h: st.height });
     feedPriceOracle(rt, tickEvents.length > 0 ? tickEvents : undefined, st.height);
@@ -1246,6 +1253,25 @@ export function getState() {
       const apyBps = Math.floor((s.dayPaidPrevMu * 365 * 10_000) / base); // יום-מלא/קרן → bps-שנתי (שניהם ב-µ — יחס-טהור)
       return { potMu: s.potMu, savers: Object.keys(s.positions).length, paidMu: s.paidMu, dayPaidMu: s.dayPaidMu, dayPaidPrevMu: s.dayPaidPrevMu, apyBps, opens: s.opens, closes: s.closes, incomeSourceMu: income };
     })(),
+    // R41 · THE-VE: הריבונות-הנעולה גלויה-לציבור — קרן-ve שהוזנה-מההכנסה-המדודה,
+    // נועלים-חיים, הצבעות, אפוקים — והאג"ח שהומרו. הקרן מתרוקנת-בפועל בכל-אפוק-פליפ
+    // (מי-שנועל-מרוויח) — בלי-מחלק אין-חלוקה, והצבירה-ההיסטורית הולכת-לראשון-שנועל
+    // (אותו-דין-כמו-כל-רשת-ve; הכל-מתועד-ביומן).
+    ve: (() => {
+      const potMu = st.balances[VE_POT]?.USDS ?? 0;
+      const detail = Object.entries(st.ve ?? {}).map(([who, p]) => ({ who, amtMu: p.amt, unlockH: p.unlockH, weeks: p.weeks }));
+      return {
+        potMu,
+        positions: detail.length,
+        votes: Object.keys(st.veVotes ?? {}).length,
+        epoch: st.veEpoch ?? 0,
+        fundedMu: st.rev?.vePaidMu ?? 0, // Σ מימון-קרן מצטבר (העברות-שבוצעו)
+        paidOutMu: Math.max(0, (st.rev?.vePaidMu ?? 0) - potMu), // funded − standing = שחולק-בפועל-לנועלים
+        detail,
+        votesMap: st.veVotes ?? {},
+      };
+    })(),
+    bond: st.bond ?? { soldSaosMu: 0, usdsInMu: 0, count: 0 },
     // R28 · ENGINE-TRUTH: מוני-האוטומציה-והכלכלה גלויים-לציבור. אותו-לקח-כנות
     // של-הכספת (A44): CoW, ProtoRev, DCA, טריגרים, ראוטר-ההכנסות ו-ve חיים
     // בשרשרת ורצים בכל-טיק — אבל נעדרו מהמראה-הציבורית. אמת-שקיימת-ונסתרת
