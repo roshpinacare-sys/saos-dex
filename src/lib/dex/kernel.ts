@@ -326,6 +326,7 @@ export interface DexState {
     paidMu: number;         // ריבית-שחולקה-מצטברת (מדידה-כנה, אף-µ-לא-הוטבע)
     lastIncomeMu: number;   // תמונת-מונה-ריבית-הכספת שנראתה לאחרונה — דלתא=הכנסה-חדשה
     dayPaidMu: number; dayPaidPrevMu: number; dayMarkH: number; // חלון-יום מתגלגל — שיעור-מפורסם-אמת
+    windows: number;        // FIX(R48 · calibration-truth): מונה-חלונות-יום שהושלמו — החלון-הראשון אחרי-לידת/הרחבת-בסיס-ההכנסה קולט-הצטבר-היסטורי (מיגרציה) ואינו-מייצג קצב-יומי — APY לא-יפורסם ממנו לעולם
     opens: number; closes: number;
   };
   // ── R44 · THE-MARKET (רשויות: תמונות-ישנות-בלעדיהן = השוק טרם-נולד) ──
@@ -529,7 +530,7 @@ export function genesisState(): DexState {
     bondUserH: {},
     vaults: {},
     vaultTot: { opened: 0, repaid: 0, liquidations: 0, interestMu: 0, backstopLossMu: 0, issuedMu: 0, burnedMu: 0 },
-    savings: { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: 0, dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: 0, opens: 0, closes: 0 },
+    savings: { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: 0, dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: 0, windows: 0, opens: 0, closes: 0 },
     dca: {}, trig: {}, dcaSeq: 1, trigSeq: 1,
     launch: {}, launchSeq: 1,
     revAux: { protorevMu: 0, launchpadMu: 0 },
@@ -1703,7 +1704,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if ((st.savings?.potMu ?? 0) + amt > SAVE_CAP_MU) return { ok: false, err: "savings-cap", gas: 0 };
       if (avail(st, issuer, "USDS") < amt) return { ok: false, err: "insufficient-usds", gas };
       const c = consume(); if (c) return c;
-      const s = st.savings ?? { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: savingsIncomeMu(st), dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, opens: 0, closes: 0 };
+      const s = st.savings ?? { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: savingsIncomeMu(st), dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, windows: 0, opens: 0, closes: 0 };
       const prev = s.positions[issuer] ?? { mu: 0, owedMu: 0, atH: st.height };
       addBal(st, issuer, "USDS", -amt);
       addBal(st, SAVE_POT, "USDS", amt);

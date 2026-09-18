@@ -27,7 +27,7 @@ export function savingsTick(st: DexState, nowMs: number): void {
   if (!st.savings) {
     // התחלה-קנונית-דטרמיניסטית לתמונות-מצב-ישנות (שנולדו-טרם-המכשיר):
     // lastIncomeMu נפתח במונה-ההכנסה-הנוכחי — אין-חלוקה-רטרואקטיבית לעולם.
-    st.savings = { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: savingsIncomeMu(st), dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, opens: 0, closes: 0 };
+    st.savings = { positions: {}, potMu: 0, paidMu: 0, lastIncomeMu: savingsIncomeMu(st), dayPaidMu: 0, dayPaidPrevMu: 0, dayMarkH: st.height, windows: 0, opens: 0, closes: 0 };
   }
   const s = st.savings;
   const income = savingsIncomeMu(st);
@@ -56,10 +56,14 @@ export function savingsTick(st: DexState, nowMs: number): void {
     }
   }
   // חלון-היום הקנוני (FIX R47: 5,760 בלוקים = יום-אמת-אחד בקצב-הנמדד) — לפרסום-שיעור-אמת-מתגלגל
+  // FIX(R48 · calibration-truth): כל-התגלגלות-חלון מונה-ב-windows — החלון-הראשון שלאחר
+  // לידת/הרחבת-בסיס-ההכנסה קולט-את-ההצטבר-ההיסטורי (למשל: מיגרציית-income-base של R47
+  // שילמה-77,184µ ביום-אחד — ארטיפקט-מיגרציה, לא-קצב-אמת) — לכן ה-APY יפורסם-רק-מחלון-שני-ואילך.
   while (st.height - s.dayMarkH >= SAVE_DAY_BLOCKS) {
     s.dayMarkH += SAVE_DAY_BLOCKS;
     s.dayPaidPrevMu = s.dayPaidMu;
     s.dayPaidMu = 0;
+    s.windows = (s.windows ?? 0) + 1;
   }
   void nowMs; // הצבירה גובה-טהור — ריפליי-מדויק
 }
