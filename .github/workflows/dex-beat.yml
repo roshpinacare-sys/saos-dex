@@ -12,8 +12,9 @@
 name: dex-beat
 
 on:
-  schedule:
-    - cron: '23 */2 * * *'
+  # R71 (2026-09-21, ריבונות המכסה): הקדנס הוסר — התאום הציבורי ב-Domain
+  # (dex-beat :53, דקות Actions בלתי-מוגבלות) הוא המכונה. המקור הזה — גיבוי
+  # להזנקה ידנית בלבד (workflow_dispatch); החזרת הקדנס = קומיט אחד.
   workflow_dispatch:
 
 permissions:
