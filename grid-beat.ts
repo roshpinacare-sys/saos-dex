@@ -49,18 +49,31 @@ const ASK_STEP_BPS = 50;         // 0.5% מעל הקו, ומעלה
 const PARITY_BAND_BPS = 5_000;   // סטיית-מיד מול קו-הזהות מעבר ל-50% = ספר/פיד שבור
 const EXPIRY_DAYS = 27;          // תקרת-STEEM לתוקף הזמנה
 
+/* ── R99 · מדיניות רגל-HIVE (מיקרו-סקאלות — היתרון המדוד) ────────────────────
+ * המלאי החי של headcorner ב-HIVE הוא מיקרו (0.072 HIVE / 0.074 HBD במדידת-R99)
+ * — וזה בדיוק יתרון-המיקרו של הרשת: רצפות-אבק בהתאמה, הדוקטרינה לא מתפשרת. */
+const HIVE_MIN_KEEP = 0.005;     // אבק שנשאר תמיד בחשבון-HIVE
+const HIVE_MIN_LEVEL = 0.010;   // מצומצם — רמה נספרת מ-0.01 HIVE
+const HIVE_MIN_LEVEL_HBD = 0.001; // מילי-HBD נספר — ספר-ה-HIVE חי בדיוק ברזולוציה הזו
+const HIVE_BID_LEVELS = 3;
+const HIVE_BID_STEP_BPS = 200;   // 2% בין רמות-קנייה
+const HIVE_ASK_LEVELS = 3;
+const HIVE_ASK_STEP_BPS = 50;    // 0.5% מעל קו-הזהות, ומעלה
+
 interface LedgerOrder {
   id: number; at: string; txid: string; side: "ask" | "bid";
+  chain?: "steem" | "hive";      // R99: רב-שרשרתי; v1 ישן = steem
   sell: string; receive: string; priceSbdPerSteem: number;
   status: "open" | "filled" | "cancelled" | "unknown"; lastSeenAt: string;
 }
 interface LedgerFill {
-  key: string; at: string; side: "maker" | "taker"; direction: "sold-steem" | "bought-steem";
+  key: string; at: string; side: "maker" | "taker"; direction: "sold-steem" | "bought-steem" | "sold-hive" | "bought-hive";
+  chain?: "steem" | "hive";      // R99
   paid: string; received: string; steemUsd: number; sbdUsd: number;
   paidUsd: number; recvUsd: number; edgeBps: number;
 }
 interface GridLedger {
-  version: 1;
+  version: 1 | 2;
   orders: LedgerOrder[];
   fills: LedgerFill[];
   placedTotal: number; filledTotal: number; cancelledTotal: number;
@@ -69,9 +82,15 @@ interface GridLedger {
 function loadLedger(): GridLedger {
   try {
     const raw = JSON.parse(fs.readFileSync(LEDGER_FILE, "utf8")) as GridLedger;
-    if (raw && raw.version === 1 && Array.isArray(raw.orders) && Array.isArray(raw.fills)) return raw;
+    if (raw && (raw.version === 1 || raw.version === 2) && Array.isArray(raw.orders) && Array.isArray(raw.fills)) {
+      // הגירה v1→v2: כל רשומה קיימת היא STEEM מעצם מהותה עד-R99
+      for (const o of raw.orders) if (!o.chain) o.chain = "steem";
+      for (const f of raw.fills) if (!f.chain) f.chain = "steem";
+      raw.version = 2;
+      return raw;
+    }
   } catch { /* ראשון */ }
-  return { version: 1, orders: [], fills: [], placedTotal: 0, filledTotal: 0, cancelledTotal: 0, externalFlowUsd: 0 };
+  return { version: 2, orders: [], fills: [], placedTotal: 0, filledTotal: 0, cancelledTotal: 0, externalFlowUsd: 0 };
 }
 function saveLedger(l: GridLedger): void {
   l.orders = l.orders.slice(-300);
@@ -112,7 +131,7 @@ function sbdPerSteemOf(sellSteem: number, minSbd: number): number {
 /* ═════════════════════════════ main ═════════════════════════════ */
 async function main(): Promise<void> {
   const t0 = Date.now();
-  console.log(`[grid-beat] boot · account=${ACCOUNT} · armed=${process.env.STEEM_ACTIVE_WIF ? "yes" : "no (honest)"}`);
+  console.log(`[grid-beat] boot · account=${ACCOUNT} · steem-armed=${process.env.STEEM_ACTIVE_WIF ? "yes" : "no (honest)"} · hive-armed=${process.env.HIVE_ACTIVE_WIF ? "yes" : "no (honest)"}`);
 
   const rm = await import("./src/lib/dex/realmarket");
   const pp = await import("./src/lib/dex/price-proof");
@@ -120,7 +139,7 @@ async function main(): Promise<void> {
     realSnapshotSoft: () => Promise<Record<string, unknown>>;
     activeWif: () => string | null;
   };
-  const extFeeds = (pp as unknown as { extFeeds: (force?: boolean) => Promise<{ ok: boolean; usd: { steem: number | null; sbd: number | null } }> }).extFeeds;
+  const extFeeds = (pp as unknown as { extFeeds: (force?: boolean) => Promise<{ ok: boolean; usd: { steem: number | null; sbd: number | null; hive: number | null; hbd: number | null } }> }).extFeeds;
 
   const snapRaw = await realSnapshotSoft();
   if (!("ok" in snapRaw) || snapRaw.ok !== true) {
@@ -256,8 +275,155 @@ async function main(): Promise<void> {
       console.log(`[grid-beat] REAL FILL counted: ${f.paid} -> ${f.received} · edge ${edgeBps}bps vs live marks (marked-at-detection)`);
     }
   }
-  ledger.placedTotal += placed;
-  ledger.cancelledTotal += cancelled;
+  /* ── R99 · רגל-HIVE — אותה דוקטרינה, אותו חוק, שוק-פנימי אמת שני ─────────── */
+  const hm = await import("./src/lib/dex/hivemarket");
+  const hiveUsd = feeds?.usd.hive ?? null;
+  const hbdUsd = feeds?.usd.hbd ?? null;
+  const hiveParity = hiveUsd && hbdUsd && hiveUsd > 0 && hbdUsd > 0 ? hiveUsd / hbdUsd : null; // HBD ל-1-HIVE בזהות-חוץ
+  let hivePlaced = 0, hiveCancelled = 0;
+  const hiveBlocker: string[] = [];
+  let hiveLeg: Record<string, unknown>;
+  const hsnapRaw = await hm.hiveSnapshotSoft();
+  if (!("ok" in hsnapRaw) || hsnapRaw.ok !== true) {
+    const err = String((hsnapRaw as { error?: string }).error ?? "?");
+    hiveBlocker.push(`hive snapshot failed honestly: ${err}`);
+    hiveLeg = { ok: false, chain: "HIVE-internal-market", error: err };
+    console.error(`[grid-beat] hive snapshot failed honestly: ${err}`);
+  } else {
+    const hs = hsnapRaw as Exclude<typeof hsnapRaw, { ok: false }>;
+    const hiveArmed = hm.hiveActiveWif() !== null;
+    if (!hiveArmed) hiveBlocker.push("HIVE_ACTIVE_WIF secret missing (R99: או שהרץ הזה מקומי בלי הסוד, או שהכספת נקתה — כנות, לא סימולציה)");
+    if (hiveArmed && hs.authorityOk === false) hiveBlocker.push("hive key does not derive the live active authority — refusing to trade (fail-closed)");
+    if (!hs.rc.ok) hiveBlocker.push(hs.rc.reason ?? "hive rc gated (honest skip)");
+    if (!hiveParity) hiveBlocker.push("external USD marks unavailable (hive/hbd feeds down): no marking, no trading");
+    if (!hs.book.bestBid || !hs.book.bestAsk) hiveBlocker.push("hive public book one-sided or unreachable");
+    if (hiveParity && hs.book.mid) {
+      const devBps = Math.floor(((hs.book.mid - hiveParity) / hiveParity) * 10_000);
+      if (Math.abs(devBps) > PARITY_BAND_BPS) hiveBlocker.push(`hive book mid deviates ${devBps}bps from external parity: refusing to trade a broken market`);
+    }
+
+    if (hiveArmed && hiveParity && hs.book.bestBid && hs.book.bestAsk && hs.rc.ok && hiveBlocker.length === 0) {
+      /* 1) ביטול ההזמנות שלנו — רענון אטומי (HIVE) */
+      for (const o of hs.openOrders) {
+        try {
+          await hm.hiveCancelOrder(o.id);
+          hiveCancelled++;
+          const rec = ledger.orders.find((x) => x.id === o.id && x.chain === "hive");
+          if (rec) { rec.status = "cancelled"; rec.lastSeenAt = new Date().toISOString(); }
+          console.log(`[grid-beat] hive cancelled #${o.id} (${o.sell} -> ${o.receive})`);
+        } catch (e) {
+          console.warn(`[grid-beat] hive cancel #${o.id} failed: ${String(e).slice(0, 80)}`);
+        }
+      }
+
+      /* 2) פריסת הגריד — HIVE */
+      const todayH = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      let hseq = 1;
+      const nextHiveId = (): number => {
+        let id = Number(todayH) * 100 + hseq;
+        while (ledger.orders.some((x) => x.id === id && x.chain === "hive")) { hseq++; id = Number(todayH) * 100 + hseq; }
+        return id;
+      };
+
+      // מדף-המכירה: מעל קו-הזהות החיצוני — לעולם לא מתחת (עיקרון 1, גם ב-HIVE)
+      const hiveAvail = hs.balances.hive - HIVE_MIN_KEEP;
+      const hiveCommit = Math.max(0, Math.floor(hiveAvail * COMMIT_PCT * 1000) / 1000);
+      if (hiveCommit >= HIVE_MIN_LEVEL * HIVE_ASK_LEVELS) {
+        const per = Math.floor((hiveCommit / HIVE_ASK_LEVELS) * 1000) / 1000;
+        for (let k = 1; k <= HIVE_ASK_LEVELS; k++) {
+          const px = hiveParity * (1 + (HIVE_ASK_STEP_BPS * k) / 10_000);
+          const sellAmt = per;
+          const recv = Math.floor(sellAmt * px * 1000) / 1000;
+          if (recv < HIVE_MIN_LEVEL_HBD) continue;
+          const id = nextHiveId(); hseq++;
+          try {
+            const r = await hm.hivePlaceOrder({ orderid: id, amountToSell: `${dp3(sellAmt)} HIVE`, minToReceive: `${dp3(recv)} HBD`, expirationDays: EXPIRY_DAYS });
+            hivePlaced++;
+            ledger.orders.push({ id, at: new Date().toISOString(), txid: r.txid, side: "ask", chain: "hive", sell: `${dp3(sellAmt)} HIVE`, receive: `${dp3(recv)} HBD`, priceSbdPerSteem: px, status: "open", lastSeenAt: new Date().toISOString() });
+            console.log(`[grid-beat] hive ask #${id}: ${dp3(sellAmt)} HIVE -> ${dp3(recv)} HBD @${px.toFixed(6)} (parity+${(HIVE_ASK_STEP_BPS * k) / 100}%) txid ${r.txid.slice(0, 12)}`);
+          } catch (e) {
+            console.warn(`[grid-beat] hive ask #${id} rejected: ${String(e).slice(0, 90)}`);
+          }
+        }
+      } else {
+        hiveBlocker.push(`hive sell-side waiting for fuel: ${hiveCommit.toFixed(3)} HIVE commitable < ${HIVE_MIN_LEVEL * HIVE_ASK_LEVELS} needed`);
+      }
+
+      // מדף-הקנייה: מתחת לביד הטוב — כולן מעל-ערך מדוד מול הציון (עיקרון 2, גם ב-HIVE)
+      const hbdCommit = Math.max(0, Math.floor(hs.balances.hbd * COMMIT_PCT * 1000) / 1000);
+      if (hbdCommit >= HIVE_MIN_LEVEL_HBD * HIVE_BID_LEVELS && hs.book.bestBid) {
+        const per = Math.floor((hbdCommit / HIVE_BID_LEVELS) * 1000) / 1000;
+        for (let k = 1; k <= HIVE_BID_LEVELS; k++) {
+          const px = hs.book.bestBid * (1 - (HIVE_BID_STEP_BPS * k) / 10_000);
+          // חוק-הזהות (R99): רק קנייה מתחת לקו-הזהות החיצוני נספרת כעודף —
+          // רמה מעל הקו (פרימיום-HBD חריגה) נדלגת בכנות. לעולם לא משלמים מעל-ערך.
+          if (hiveParity !== null && px >= hiveParity) continue;
+          const recv = Math.floor(per / px * 1000) / 1000; // HIVE
+          if (recv < HIVE_MIN_LEVEL) continue;
+          const id = nextHiveId(); hseq++;
+          try {
+            const r = await hm.hivePlaceOrder({ orderid: id, amountToSell: `${dp3(per)} HBD`, minToReceive: `${dp3(recv)} HIVE`, expirationDays: EXPIRY_DAYS });
+            hivePlaced++;
+            ledger.orders.push({ id, at: new Date().toISOString(), txid: r.txid, side: "bid", chain: "hive", sell: `${dp3(per)} HBD`, receive: `${dp3(recv)} HIVE`, priceSbdPerSteem: px, status: "open", lastSeenAt: new Date().toISOString() });
+            console.log(`[grid-beat] hive bid #${id}: ${dp3(per)} HBD -> ${dp3(recv)} HIVE @${px.toFixed(6)} txid ${r.txid.slice(0, 12)}`);
+          } catch (e) {
+            console.warn(`[grid-beat] hive bid #${id} rejected: ${String(e).slice(0, 90)}`);
+          }
+        }
+      } else {
+        hiveBlocker.push(`hive buy-side waiting for HBD inventory: ${hbdCommit.toFixed(3)} HBD commitable < ${(HIVE_MIN_LEVEL_HBD * HIVE_BID_LEVELS).toFixed(3)} needed`);
+      }
+    }
+
+    /* 3) הצלבת-מילויים HIVE — כל fill_order שלנו נספר במעקה עם ציון-דולר-חי */
+    if (hiveUsd && hbdUsd) {
+      for (const f of hs.fills) {
+        const key = `hive|${f.at}|${f.paid}|${f.received}`;
+        if (ledger.fills.some((x) => x.key === key)) continue;
+        const amtOf = (s: string): number => parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) || 0;
+        const paidAmt = amtOf(f.paid), recvAmt = amtOf(f.received);
+        const paidHive = f.paid.includes("HIVE"), recvHive = f.received.includes("HIVE");
+        if (!paidHive && !recvHive) continue;
+        const paidUsd = paidHive ? paidAmt * hiveUsd : paidAmt * hbdUsd;
+        const recvUsd = recvHive ? recvAmt * hiveUsd : recvAmt * hbdUsd;
+        const edgeBps = paidUsd > 0 ? Math.floor(((recvUsd - paidUsd) / paidUsd) * 10_000) : 0;
+        ledger.fills.push({
+          key, at: f.at, side: f.side === "maker" ? "maker" : "taker", chain: "hive",
+          direction: recvHive ? "bought-hive" : "sold-hive",
+          paid: f.paid, received: f.received, steemUsd: hiveUsd, sbdUsd: hbdUsd, paidUsd, recvUsd, edgeBps,
+        });
+        const oid = f.openOrderid ?? f.currentOrderid;
+        if (oid) {
+          const rec = ledger.orders.find((x) => x.id === oid && x.chain === "hive" && x.status === "open");
+          if (rec) { rec.status = "filled"; rec.lastSeenAt = new Date().toISOString(); ledger.filledTotal++; }
+        }
+        ledger.externalFlowUsd = Math.round((ledger.externalFlowUsd + (recvUsd - paidUsd)) * 1e6) / 1e6;
+        console.log(`[grid-beat] HIVE REAL FILL counted: ${f.paid} -> ${f.received} · edge ${edgeBps}bps vs live marks (marked-at-detection)`);
+      }
+    }
+
+    hiveLeg = {
+      ok: true,
+      publishedAt: new Date().toISOString(),
+      chain: "HIVE-internal-market",
+      real: true,
+      armed: hiveArmed,
+      authorityOk: hs.authorityOk,
+      rc: hs.rc,
+      verdict: !hiveArmed ? "DISARMED-NO-KEY" : hivePlaced > 0 ? "ARMED-LIVE" : hiveBlocker.length ? "ARMED-WAITING" : "ARMED-STABLE",
+      blocker: hiveBlocker.length ? hiveBlocker : null,
+      marks: { hiveUsd, hbdUsd, parityHbdPerHive: hiveParity },
+      inventory: { hive: hs.balances.hive, hbd: hs.balances.hbd, hp: hs.balances.hpOwn },
+      book: hs.book,
+      openOrdersNow: hs.openOrders.length,
+      run: { placed: hivePlaced, cancelled: hiveCancelled },
+      fills: hs.fills.slice(-8),
+      powerdown: hs.powerdown,
+    };
+  }
+
+  ledger.placedTotal += placed + hivePlaced;
+  ledger.cancelledTotal += cancelled + hiveCancelled;
   saveLedger(ledger);
 
   /* ── הפרסום הציבורי: dex/grid.json ב-Console ── */
@@ -265,13 +431,15 @@ async function main(): Promise<void> {
   const publicDoc = {
     ok: true,
     publishedAt: new Date().toISOString(),
-    engine: "saos-dex/1.0 grid-beat · R24 external flow",
+    engine: "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
     account: ACCOUNT,
     chain: "STEEM-internal-market",
+    chains: ["STEEM", "HIVE"],
     real: true,
     armed,
-    verdict: !armed ? "DISARMED-NO-KEY" : placed > 0 ? "ARMED-LIVE" : blocker.length ? "ARMED-WAITING" : "ARMED-STABLE",
+    verdict: !armed ? "DISARMED-NO-KEY" : placed + hivePlaced > 0 ? "ARMED-LIVE" : blocker.length ? "ARMED-WAITING" : "ARMED-STABLE",
     blocker: blocker.length ? blocker : null,
+    hive: hiveLeg,
     policy: {
       principle: "never sell STEEM below its external USD value; every buy below parity is measured surplus",
       commitPct: COMMIT_PCT, bidLevels: BID_LEVELS, bidStepBps: BID_STEP_BPS,
@@ -295,6 +463,14 @@ async function main(): Promise<void> {
     externalFlowUsd: ledger.externalFlowUsd,
     fills: ledger.fills.slice(-12),
     orders: ledger.orders.slice(-24),
+    vault: {
+      // R99: מצב הכספת כפי שהרץ רואה אותו — כנות מלאה על מה שחמוש
+      steemActive: !!process.env.STEEM_ACTIVE_WIF,
+      steemPosting: !!process.env.STEEM_POSTING_WIF,
+      hiveActive: !!process.env.HIVE_ACTIVE_WIF,
+      hivePosting: !!process.env.HIVE_POSTING_WIF,
+      blurtActive: !!process.env.BLURT_ACTIVE_WIF,
+    },
     honesty: "מדוד מול ספר-STEEM הציבורי ופידי-USD חיים. מילויים מסומנים בזמן-הגילוי (marked-at-detection); המעקה מתעד את הציון שנמדד. ה-SBD הפנימי נסחר בפרימיום מול הציון החיצוני; קו-הזהות מוצג בגלוי כדי שכל אחד יוכל לאמת שאנחנו לא מוכרים מתחת לערך.",
   };
 
@@ -312,7 +488,7 @@ async function main(): Promise<void> {
     execSync("git add dex/grid.json", { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
     const staged = execSync("git diff --cached --name-only", { encoding: "utf8", cwd: PUB }).trim();
     if (staged) {
-      execSync(`git commit -m "grid-beat: ${placed} placed · ${cancelled} cancelled · ${new Date().toISOString().slice(0, 16)}Z"`, { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
+      execSync(`git commit -m "grid-beat: ${placed + hivePlaced} placed (steem ${placed} / hive ${hivePlaced}) · ${cancelled + hiveCancelled} cancelled · ${new Date().toISOString().slice(0, 16)}Z"`, { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
       const ok = await pushWithRetry(PUB, "main");
       console.log(`[grid-beat] public grid state ${ok ? "published" : "PUSH FAILED (next run retries)"}`);
     } else {
@@ -326,11 +502,11 @@ async function main(): Promise<void> {
   git("add -- db/grid-ledger.json db/grid-public.json", { allowFail: true });
   const staged = git("diff --cached --name-only", { allowFail: true });
   if (staged) {
-    git(`commit -m "grid-beat: ${placed} placed · ${cancelled} cancelled · ${ledger.fills.length} fills counted · ${new Date().toISOString().slice(0, 16)}Z"`, { allowFail: true });
+    git(`commit -m "grid-beat: ${placed + hivePlaced} placed (steem ${placed} / hive ${hivePlaced}) · ${cancelled + hiveCancelled} cancelled · ${ledger.fills.length} fills counted · ${new Date().toISOString().slice(0, 16)}Z"`, { allowFail: true });
     const ok = await pushWithRetry(ROOT, "main");
     if (!ok) console.warn("[grid-beat] ledger push rejected (concurrent run) — next run rebases and continues");
   }
-  console.log(`[grid-beat] done in ${((Date.now() - t0) / 1000).toFixed(1)}s · verdict=${publicDoc.verdict}`);
+  console.log(`[grid-beat] done in ${((Date.now() - t0) / 1000).toFixed(1)}s · verdict=${publicDoc.verdict} · hive=${(hiveLeg as { verdict?: string }).verdict ?? "?"}`);
   process.exit(0);
 }
 
