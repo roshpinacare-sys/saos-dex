@@ -114,6 +114,28 @@ export async function hiveRcGate(
 
 /* ── חתימה-ושידור (הנתיב המוכח של הצי ל-HIVE) ───────────────────────────── */
 
+/**
+ * R99 · חוק-החוט-הנעלם (נמדד-חי מול חתימות אמיתיות בשרשרת): HIVE מסדרת
+ * assets במצב-legacy תחת שמות האב — "HIVE" על החוט = הבייטים של "STEEM",
+ * "HBD" על החוט = הבייטים של "SBD" (asset_symbol.hpp: OBSOLETE_SYMBOL_SER
+ * / OBD_SYMBOL_SER — טריק התאימות-לאחור של הפיצול). steem-js כותב את
+ * השם המילולי ⇒ digest שגוי ⇒ "missing required active authority" על כל
+ * אופ עם asset (cancel/custom_json עברו — אין להם assets). התיקון: לחתימה
+ * בלבד ממופים שמות ה-assets לשמות-האב; גוף ה-JSON לשידור נשאר HIVE/HBD —
+ * הצומת מסדר אותם לאותם בייטים בדיוק (from_string→legacy pack).
+ */
+function hiveLegacyWireOps(ops: [string, Record<string, unknown>][]): [string, Record<string, unknown>][] {
+  const mapAsset = (v: unknown): unknown =>
+    typeof v === "string"
+      ? v.replace(/^([\d.]+) HIVE$/, "$1 STEEM").replace(/^([\d.]+) HBD$/, "$1 SBD")
+      : Array.isArray(v)
+        ? v.map(mapAsset)
+        : v && typeof v === "object"
+          ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, mapAsset(x)]))
+          : v;
+  return ops.map(([type, o]) => [type, mapAsset({ ...o }) as Record<string, unknown>]);
+}
+
 export async function hiveSignAndBroadcast(
   ops: [string, Record<string, unknown>][]
 ): Promise<{ txid: string; block: number | null }> {
@@ -130,17 +152,20 @@ export async function hiveSignAndBroadcast(
     operations: ops,
     extensions: [],
   };
+  // החתימה על הצורה הממופה (STEEM/SBD) — הדיגסט שהצומת יחשב; השידור עם השמות האמיתיים
+  const wireTx: GrapheneTx = { ...tx, operations: hiveLegacyWireOps(ops) };
   const prev = steem.config.get("chain_id");
   steem.config.set("chain_id", HIVE_CHAIN_ID);
   let signed: GrapheneTx & { signatures?: string[] };
   try {
-    signed = steem.auth.signTransaction(tx, [wif]);
+    signed = steem.auth.signTransaction(wireTx, [wif]);
   } finally {
     try { steem.config.set("chain_id", prev ?? "0000000000000000000000000000000000000000000000000000000000000000"); } catch { /* keep */ }
   }
+  const broadcastBody = { ...tx, signatures: signed.signatures };
   const res = await hiveRpcAny<{ id?: string; block_num?: number }>(
     "condenser_api.broadcast_transaction_synchronous",
-    [{ ...signed }],
+    [broadcastBody],
   );
   if (!res?.id) throw new Error("hive broadcast answered without id (honest)");
   return { txid: res.id, block: res.block_num ?? null };
