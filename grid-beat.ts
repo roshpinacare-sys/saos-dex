@@ -55,6 +55,7 @@ const EXPIRY_DAYS = 27;          // תקרת-STEEM לתוקף הזמנה
 const HIVE_MIN_KEEP = 0.005;     // אבק שנשאר תמיד בחשבון-HIVE
 const HIVE_MIN_LEVEL = 0.010;   // מצומצם — רמה נספרת מ-0.01 HIVE
 const HIVE_MIN_LEVEL_HBD = 0.001; // מילי-HBD נספר — ספר-ה-HIVE חי בדיוק ברזולוציה הזו
+const HIVE_ASK_MIN_RECV_HBD = 0.2; // R99-מדוד: מילת-הרצף של HBD (0.001) מעוותת מחירי-אבק — רמת-מכירה נספרת רק מ-0.2 HBD (עיוות ≤ 0.5%, כצעד-הפריסה)
 const HIVE_BID_LEVELS = 3;
 const HIVE_BID_STEP_BPS = 200;   // 2% בין רמות-קנייה
 const HIVE_ASK_LEVELS = 3;
@@ -333,8 +334,13 @@ async function main(): Promise<void> {
         for (let k = 1; k <= HIVE_ASK_LEVELS; k++) {
           const px = hiveParity * (1 + (HIVE_ASK_STEP_BPS * k) / 10_000);
           const sellAmt = per;
-          const recv = Math.floor(sellAmt * px * 1000) / 1000;
-          if (recv < HIVE_MIN_LEVEL_HBD) continue;
+          // R99-מדוד (מילויים חיים על השרשרת): הרצפה על 0.001 HBD הפילה את מחיר האבק מתחת
+          // לכוונה — מכירה מתחת לערך אסורה. עתה: ceil על התקבול (לעולם לא מתחת לכוונה)
+          // + רמה שהמיל-צעד שלה מעוות את המחיר ביותר מ-0.5% נדלגת בכנות.
+          const recvTrue = sellAmt * px;
+          const recv = Math.ceil(recvTrue * 1000) / 1000;
+          if (recv < HIVE_ASK_MIN_RECV_HBD) continue; // גרעיניות-מחיר לא נשמרת — המלאי בונה
+          if (recv / recvTrue > 1.005) continue; // עיוות-מיל מעבר לצעד הפריסה — דלג בכנות
           const id = nextHiveId(); hseq++;
           try {
             const r = await hm.hivePlaceOrder({ orderid: id, amountToSell: `${dp3(sellAmt)} HIVE`, minToReceive: `${dp3(recv)} HBD`, expirationDays: EXPIRY_DAYS });
@@ -346,7 +352,7 @@ async function main(): Promise<void> {
           }
         }
       } else {
-        hiveBlocker.push(`hive sell-side waiting for fuel: ${hiveCommit.toFixed(3)} HIVE commitable < ${HIVE_MIN_LEVEL * HIVE_ASK_LEVELS} needed`);
+        hiveBlocker.push(`hive sell-side waiting for price-grade inventory: ${hiveCommit.toFixed(3)} HIVE commitable; ask levels need ≥ ${HIVE_ASK_MIN_RECV_HBD} HBD recv each (HBD mill-tick price fidelity, measured R99)`);
       }
 
       // מדף-הקנייה: מתחת לביד הטוב — כולן מעל-ערך מדוד מול הציון (עיקרון 2, גם ב-HIVE)
