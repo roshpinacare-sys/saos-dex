@@ -1,0 +1,209 @@
+// CONVERT (D-023 · T-8) — מסילת-ההמרה: קציר-אסקים → SBD נזיל → המרה בפאריטי-פנים → 3.5 ימים → STEEM → פריסה-מחדש ≥ פאריטי
+// ═══════════════════════════════════════════════════════════════════════════
+// הכלכלה הנמדדה (T-7, חי): SBD פנים = פאריטי-$1 · שוק SBD ≈ $0.59 →
+// המרה קונה STEEM ב-1/steemUsd לכל SBD — כ-69% יותר STEEM ל-SBD מאשר קנייה
+// בפאריטי בספר. העלות: נעילת 3.5 ימים + אי-ודאות מחיר-חציון. הדוקטרינה:
+//   · convert-first על ה-SBD-הנזיל-שנקצר מאסקים — אבל אף-פעם לא נוגעים
+//     ב-SBD העובד בסולם-הקניות (הרזרבה למדדים נשארת נזילה)
+//   · אפס-המצאה: המרה רק על יתרה-נזילה-אמת, רק עם סימון-שער-אמת, רק
+//     בתוך תקרת-חשיפה פתוחה (MAX_PENDING) — נעילת 3.5 ימים היא סיכון
+//   · אותה-דוקטרינת-חתימה של המוביל (R10/R81): מקור-ריבוני בזמן-ריצה
+//     בלבד, verify-then-sign מול הרשויות-החיות, fail-closed, ראיות-פומביות
+//   · המתכנן חסר-מפתחות וטהור לגמרי (selftest אופליין); המבצע = שער-יחיד
+
+import { writeFileSync, appendFileSync, existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { appendEvent } from "./events.mjs";
+import { measureMarks, measureSnapshot } from "./peg.mjs";
+import { ACCOUNT, RC_MIN, num, dp3, rpcAny, signAndBroadcast, deriveActiveWif, privToPub, privToWif } from "./mover.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const STATE_DIR = join(HERE, "state");
+const PLAN_PATH = join(STATE_DIR, "convert-plan.json");
+const CONVERT_LOG = join(STATE_DIR, "convert-log.jsonl");
+const EVENTS_LOG = join(STATE_DIR, "events.jsonl");
+
+export const CONVERT_POLICY = {
+  MIN_EDGE_BPS: 1500,    // ≥15% מתחת לפאריטי-פנים ($1) — היסטרזיס מול רעש-שער
+  MIN_CONVERT_SBD: 1.0,  // מתחת לזה — אבק, השרשרת לא שווה את-הדלק
+  BID_RESERVE_SBD: 0.5,  // שמור-נזיל לסולם-הקניות (בידים חייבים SBD נזיל)
+  MAX_PENDING_SBD: 10,   // תקרת-חשיפה פתוחה-בו-זמנית (נעילת 3.5 ימים)
+};
+
+/* ── מתכנן טהור — אפס IO, בדיקות-אופליין מלאות ──────────────────────────── */
+export function planConvert({ liquidSbd = 0, pendingSbd = 0, sbdUsd = null, steemUsd = null, policy = CONVERT_POLICY, nowIso = null } = {}) {
+  const gates = [];
+  let discountBps = null;
+  if (sbdUsd == null || !(sbdUsd > 0)) {
+    gates.push("sbd mark unavailable — no convert without price truth (fail-closed)");
+  } else {
+    discountBps = Math.round((1 - sbdUsd) * 10000); // פאריטי-פנים = $1/SBD
+    if (discountBps < policy.MIN_EDGE_BPS) gates.push(`edge ${discountBps}bps < ${policy.MIN_EDGE_BPS}bps — convert-no-edge (hold for re-mark)`);
+  }
+  const capLeft = Math.max(0, Math.round((policy.MAX_PENDING_SBD - (pendingSbd ?? 0)) * 1000) / 1000);
+  const raw = (liquidSbd ?? 0) - policy.BID_RESERVE_SBD;
+  let amount = Math.min(raw, capLeft);
+  amount = dp3(Math.max(0, amount)); // floor-3-ספרות — אותה-משמעת-סכומים של המוביל
+  if (amount < policy.MIN_CONVERT_SBD) {
+    gates.push(`convertible ${amount.toFixed(3)} SBD (liquid ${(liquidSbd ?? 0).toFixed(3)} − reserve ${policy.BID_RESERVE_SBD} ≤ cap-left ${capLeft.toFixed(3)}) < ${policy.MIN_CONVERT_SBD} — below-threshold/dust`);
+    amount = 0;
+  }
+  const ok = gates.length === 0 && amount >= policy.MIN_CONVERT_SBD;
+  return {
+    ok,
+    verdict: ok ? "CONVERT-PLAN" : "CONVERT-HOLD",
+    at: nowIso ?? null,
+    account: ACCOUNT,
+    amountSbd: ok ? amount : 0,
+    liquidSbd: Math.round((liquidSbd ?? 0) * 1000) / 1000,
+    pendingSbd: Math.round((pendingSbd ?? 0) * 1000) / 1000,
+    capLeft,
+    discountBps,
+    marks: { steemUsd, sbdUsd },
+    expectedSteem: ok && steemUsd > 0 ? Math.floor((amount / steemUsd) * 1000) / 1000 : null,
+    lockDays: 3.5,
+    gates,
+    policy,
+  };
+}
+
+/* ── מדידה-חיה: יתרה-נזילה + המרות-פתוחות ────────────────────────────────── */
+export async function measureConvertState(account = ACCOUNT) {
+  const snap = await measureSnapshot(account);
+  let pendingRaw = [];
+  try { pendingRaw = await rpcAny("condenser_api.get_conversion_requests", [account]) ?? []; } catch { pendingRaw = []; }
+  const pendingSbd = pendingRaw.reduce((s, r) => s + num(r.amount ?? r.request?.amount), 0);
+  return { liquidSbd: snap.balances.sbd, liquidSteem: snap.balances.steem, pendingSbd: dp3(pendingSbd), pendingCount: pendingRaw.length };
+}
+
+/* ── הריצה: מתכנן-חסר-מפתחות (ברירת-מחדל) · --execute = שער-החתימה ───────── */
+export async function runConvert({ execute = false, dryRun = false, masterSourcePath = process.env.MASTER_SOURCE_PATH } = {}) {
+  const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: execute ? "execute" : "plan", gates: [], txids: [] };
+  const { liquidSbd, pendingSbd, pendingCount, liquidSteem } = await measureConvertState();
+  const marks = await measureMarks();
+  const plan = planConvert({ liquidSbd, pendingSbd, sbdUsd: marks.sbdUsd, steemUsd: marks.steemUsd, nowIso: evidence.at });
+  evidence.plan = plan;
+  evidence.state = { liquidSbd, liquidSteem, pendingSbd, pendingCount };
+
+  if (!plan.ok) {
+    evidence.note = "honest hold — " + plan.gates.join(" · ");
+    persistPlan(plan, evidence);
+    appendEvent(EVENTS_LOG, { type: "convert.hold", source: "convert", sim: false, payload: { gates: plan.gates, liquidSbd: plan.liquidSbd, pendingSbd: plan.pendingSbd, discountBps: plan.discountBps } });
+    return evidence;
+  }
+
+  if (!execute) {
+    evidence.note = "keyless plan only — execution requires the single signing gate (--execute · same doctrine as mover)";
+    persistPlan(plan, evidence);
+    appendEvent(EVENTS_LOG, { type: "convert.planned", source: "convert", sim: false, payload: { amountSbd: plan.amountSbd, expectedSteem: plan.expectedSteem, discountBps: plan.discountBps } });
+    return evidence;
+  }
+
+  /* שער-החתימה — אותם-שערי-הגנה של המוביל, fail-closed */
+  const srcPath = masterSourcePath || "/tmp/keystation/live-agent/keys/hed-soldiers-source.txt";
+  if (!existsSync(srcPath)) throw new Error(`master source missing at ${srcPath} (fail-closed)`);
+  const { candidates, privFor } = deriveActiveWif(readFileSync(srcPath, "utf8"));
+  const acc = (await rpcAny("condenser_api.get_accounts", [[ACCOUNT]]))?.[0];
+  if (!acc) throw new Error("account absent from live chain (fail-closed)");
+  const liveActive = acc.active?.key_auths?.[0]?.[0];
+  const liveWif = (() => {
+    for (const pw of candidates) {
+      if (privToPub(privFor("active", pw)) === liveActive) return privToWif(privFor("active", pw));
+    }
+    return null;
+  })();
+  if (!liveWif) throw new Error("no sealed master derives the LIVE active authority — refusing to sign (fail-closed)");
+  const rc = await rpcAny("rc_api.find_rc_accounts", { accounts: [ACCOUNT] }).catch(() => null);
+  const rcNow = Number(rc?.rc_accounts?.[0]?.rc_manabar?.current_mana ?? 0);
+  if (rcNow < RC_MIN) throw new Error(`RC fuel below floor: ${rcNow} < ${RC_MIN} (fail-closed)`);
+
+  /* טריות-שער: אם ה-SBD זז מהסימון בין-המדידה-לחתימה — ידיים-בכיס */
+  const fresh = await measureConvertState();
+  if (Math.abs(fresh.liquidSbd - liquidSbd) > 0.001) throw new Error(`liquid SBD moved ${liquidSbd} → ${fresh.liquidSbd} between measure and sign — re-plan (honest)`);
+  if (fresh.pendingSbd + plan.amountSbd > CONVERT_POLICY.MAX_PENDING_SBD + 1e-9) throw new Error("pending exposure cap would be exceeded — refusing (fail-closed)");
+
+  const requestid = Math.floor(Date.parse(evidence.at) / 1000) % 2147483647;
+  if (dryRun) {
+    evidence.txids.push({ requestid, amount: `${plan.amountSbd.toFixed(3)} SBD`, dryRun: true });
+  } else {
+    const r = await signAndBroadcast(liveWif, [["convert", { owner: ACCOUNT, requestid, amount: `${plan.amountSbd.toFixed(3)} SBD` }]]);
+    evidence.txids.push({ requestid, amount: `${plan.amountSbd.toFixed(3)} SBD`, txid: r.txid, block: r.block });
+    appendFileSync(CONVERT_LOG, JSON.stringify({ at: evidence.at, requestid, amountSbd: plan.amountSbd, expectedSteem: plan.expectedSteem, discountBps: plan.discountBps, txid: r.txid, block: r.block }) + "\n");
+    appendEvent(EVENTS_LOG, { type: "convert.executed", source: "convert", sim: false, payload: { requestid, amountSbd: plan.amountSbd, txid: r.txid } });
+  }
+  evidence.summary = { converted: evidence.txids.filter((t) => t.txid).length, blocked: 0, failed: evidence.txids.filter((t) => t.error).length };
+  persistPlan(plan, evidence);
+  return evidence;
+}
+
+function persistPlan(plan, evidence) {
+  try {
+    writeFileSync(PLAN_PATH, JSON.stringify({ ...plan, evidence: { at: evidence.at, mode: evidence.mode, note: evidence.note ?? null, txids: evidence.txids } }, null, 1) + "\n");
+  } catch { /* דוח-כתיבה לא מפיל מסילה */ }
+}
+
+/* ── selftest: אופליין לגמרי — המתכנן-הטהור בלבד ─────────────────────────── */
+export async function selftest() {
+  const t = (name, ok) => {
+    console.log(`${ok ? " ✓" : " ✗"} ${name}`);
+    if (!ok) process.exitCode = 1;
+  };
+  const P = CONVERT_POLICY;
+
+  /* וקטור-1: האמת-החיה של היום (T-8 מדידה): נזיל 0.223, פתוח 0 → HOLD אבק */
+  const v1 = planConvert({ liquidSbd: 0.223, pendingSbd: 0, sbdUsd: 0.591672, steemUsd: 0.06287 });
+  t("live-truth: 0.223 liquid → CONVERT-HOLD dust", v1.verdict === "CONVERT-HOLD" && v1.amountSbd === 0 && v1.gates.length === 1);
+
+  /* וקטור-2: בלי סימון-שער — אפס-המצאה */
+  const v2 = planConvert({ liquidSbd: 5, pendingSbd: 0, sbdUsd: null });
+  t("no sbd mark → HOLD (no invention)", v2.verdict === "CONVERT-HOLD" && /mark unavailable/.test(v2.gates[0]));
+
+  /* וקטור-3: קצה-נמוך מההיסטרזיס → HOLD */
+  const v3 = planConvert({ liquidSbd: 5, pendingSbd: 0, sbdUsd: 0.90 });
+  t("edge 10% < 15% hysteresis → CONVERT-HOLD", v3.verdict === "CONVERT-HOLD" && v3.discountBps === 1000 && /no-edge/.test(v3.gates[0]));
+
+  /* וקטור-4: קציר-אמת 3.142 SBD (הספר-המלא של T-8) → PLAN 2.642 */
+  const v4 = planConvert({ liquidSbd: 3.142, pendingSbd: 0, sbdUsd: 0.591672, steemUsd: 0.06287 });
+  t("harvest 3.142 → PLAN 2.642 (reserve 0.5 kept liquid)", v4.verdict === "CONVERT-PLAN" && Math.abs(v4.amountSbd - 2.642) < 1e-9 && v4.liquidSbd === 3.142);
+  t("expectedSteem estimated from face $1", v4.expectedSteem !== null && Math.abs(v4.expectedSteem - Math.floor((2.642 / 0.06287) * 1000) / 1000) < 1e-9);
+
+  /* וקטור-5: תקרת-חשיפה — פתוח 9.7 → נותר 0.3 < מינימום → HOLD */
+  const v5 = planConvert({ liquidSbd: 5, pendingSbd: 9.7, sbdUsd: 0.59 });
+  t("pending 9.7 → cap-left 0.3 < 1.0 → CONVERT-HOLD", v5.verdict === "CONVERT-HOLD" && Math.abs(v5.capLeft - 0.3) < 1e-9);
+
+  /* וקטור-6: תקרה בדיוק — פתוח 8.5, נזיל 5 → PLAN 1.5 */
+  const v6 = planConvert({ liquidSbd: 5, pendingSbd: 8.5, sbdUsd: 0.59 });
+  t("cap-left 1.5 → PLAN 1.5 (cap binds)", v6.verdict === "CONVERT-PLAN" && Math.abs(v6.amountSbd - 1.5) < 1e-9);
+
+  /* וקטור-7: רזרבת-הבידים לא נוגעת — נזיל 0.9 → אבק */
+  const v7 = planConvert({ liquidSbd: 0.9, pendingSbd: 0, sbdUsd: 0.59 });
+  t("0.9 liquid − 0.5 reserve = 0.4 < 1.0 → HOLD", v7.verdict === "CONVERT-HOLD");
+
+  /* וקטור-8: דטרמיניזם — אותו-קלט, אותו-פלט (בלי nowIso) */
+  const a = planConvert({ liquidSbd: 4, pendingSbd: 1, sbdUsd: 0.58 });
+  const b = planConvert({ liquidSbd: 4, pendingSbd: 1, sbdUsd: 0.58 });
+  t("determinism: same input → same plan", JSON.stringify(a) === JSON.stringify(b));
+
+  /* וקטור-9: סימון-בדיוק-על-ההיסטרזיס → מותר (≥) */
+  const v9 = planConvert({ liquidSbd: 4, pendingSbd: 0, sbdUsd: 0.85 });
+  t("edge exactly 15% → allowed (≥ gate)", v9.verdict === "CONVERT-PLAN" && Math.abs(v9.amountSbd - 3.5) < 1e-9);
+
+  /* וקטור-10: שלמות-מדיניות — ההרזרבה והתקרה בתוך-הפוליטיקה המיוצאת */
+  t("policy integrity: reserve < min < cap ordering", P.BID_RESERVE_SBD < P.MIN_CONVERT_SBD && P.MIN_CONVERT_SBD <= P.MAX_PENDING_SBD);
+
+  console.log(process.exitCode === 1 ? "CONVERT-SELFTEST: FAIL" : "CONVERT-SELFTEST: PASS");
+}
+
+/* ── CLI: node grids/convert.mjs [--execute] [--dry-run] [--selftest] ─────── */
+if (process.argv[1] && process.argv[1].endsWith("convert.mjs")) {
+  if (process.argv.includes("--selftest")) { await selftest(); process.exit(process.exitCode ?? 0); }
+  try {
+    const ev = await runConvert({ execute: process.argv.includes("--execute"), dryRun: process.argv.includes("--dry-run") });
+    console.log(`[convert${process.argv.includes("--dry-run") ? " · dry" : ""}] ${ev.plan?.verdict ?? "?"} · ${ev.note ?? JSON.stringify(ev.summary ?? ev.txids)}`);
+    for (const t of ev.txids) console.log(`  ${t.txid ? "✓" : "·"} req#${t.requestid} ${t.amount}${t.txid ? ` · tx ${String(t.txid).slice(0, 14)}…` : t.dryRun ? " (dry)" : ""}`);
+  } catch (e) {
+    console.error(`[convert] refused honestly: ${String(e?.message ?? e).slice(0, 140)}`);
+    process.exit(2);
+  }
+}

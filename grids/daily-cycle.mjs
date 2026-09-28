@@ -23,6 +23,7 @@ import { dirname, join } from "node:path";
 import { appendEvent } from "./events.mjs";
 import { runTick, loadState, saveState } from "./engine.mjs";
 import { runPeg } from "./peg.mjs";
+import { runConvert } from "./convert.mjs";
 import { observeDeepWindow, realizedPnl } from "./observe.mjs";
 import { planCurations } from "./curate.mjs";
 
@@ -64,14 +65,29 @@ export async function stepObserveDeep({ account, deepLimit = 2000 } = {}) {
   return { deep: deep.fills.length, pnl, basisInfo };
 }
 
+/* ── צעד 3b: מסילת-ההמרה D-023 (T-8) — תוכנית תמיד; ביצוע רק עם מקור-ריבוני ── */
+export async function stepConvert() {
+  const ev = await runConvert({ execute: hasMasterSource() });
+  return {
+    ok: true,
+    verdict: ev.plan?.verdict ?? null,
+    amountSbd: ev.plan?.amountSbd ?? 0,
+    discountBps: ev.plan?.discountBps ?? null,
+    executed: ev.summary?.converted ?? 0,
+    txids: (ev.txids ?? []).filter((t) => t.txid).map((t) => t.txid),
+    note: ev.note ?? null,
+  };
+}
+
 /* ── צעד 4: מוביל additive — פריסת-נזיל-פנוי, רק עם מפתח בסביבה ──────────── */
 export async function stepMover() {
   if (!hasMasterSource()) {
     return { skipped: true, reason: `master source absent at ${masterSourcePath()} (fail-closed · A-7 gate) — keyless cycle continues` };
   }
-  const { runMover } = await import("./mover.mjs");
+  const { runMover, summarizeEvidence } = await import("./mover.mjs");
   const evidence = await runMover({ additive: true });
-  return { skipped: false, cancelled: evidence.summary.cancelled, placed: evidence.summary.placed, failed: evidence.summary.failed, blocked: evidence.summary.blocked };
+  const s = evidence.summary ?? summarizeEvidence(evidence); // T-8: הגנה — יציאה-מוקדמת תמיד מקבלת-סיכום
+  return { skipped: false, cancelled: s.cancelled, placed: s.placed, failed: s.failed, blocked: s.blocked, blockers: evidence.blockers ?? [] };
 }
 
 /* ── צעד 5: קיורציה — תוכנית תמיד, ביצוע רק עם posting-WIF ───────────────── */
@@ -113,6 +129,13 @@ export async function runDailyCycle({ account = process.env.SAOS_RELAY_AGENT_ACC
     report.steps.peg = { ok: true, verdict: doc.verdict, parityBps: doc.parityBps, asks: doc.plan?.asks?.length ?? 0, bids: doc.plan?.bids?.length ?? 0, blockers: doc.blocker, convertArb: doc.marks?.convertArb?.verdict ?? null };
   } catch (e) {
     report.steps.peg = { ok: false, error: String(e?.message ?? e).slice(0, 160) };
+  }
+
+  /* 3b. מסילת-ההמרה (D-023 · T-8): קציר-SBD → פאריטי-פנים → STEEM חוזר */
+  try {
+    report.steps.convert = await run("convert", () => stepConvert())();
+  } catch (e) {
+    report.steps.convert = { ok: false, error: String(e?.message ?? e).slice(0, 160) };
   }
 
   /* 4. מוביל (חתימה — שלב-אופציונלי) */
@@ -167,17 +190,25 @@ export async function selftest() {
   const raw = applyPnlFill(emptyPnl(), { side: "ask", steem: 40, sbd: 40 * 0.12, rate: 0.12, seq: 1, at: "t", counterparty: "x" });
   t("no seed: same sell honestly unbased", raw.unbasedSteem === 40 && raw.realizedSbd === 0);
 
+  /* וקטור-2b (T-8): summarizeEvidence — יציאה-מוקדמת של מוביל תמיד מקבלת-סיכום (הבאג-החי: summary undefined) */
+  const { summarizeEvidence } = await import("./mover.mjs");
+  const earlyExit = summarizeEvidence({ cancelled: [{ skipped: true }], placed: [], blockers: ["additive: both sides empty"] });
+  t("summarizeEvidence: early-exit evidence → zeros, never undefined", earlyExit.cancelled === 0 && earlyExit.placed === 0 && earlyExit.failed === 0 && earlyExit.blocked === 0);
+  const withTx = summarizeEvidence({ cancelled: [{ txid: "a" }, { error: "x" }], placed: [{ txid: "b" }, { blocked: "y" }, { error: "z" }] });
+  t("summarizeEvidence: tx-only counts (cancelled=1 placed=1 failed=1 blocked=1)", withTx.cancelled === 1 && withTx.placed === 1 && withTx.failed === 1 && withTx.blocked === 1);
+
   /* וקטור-3: מחזור מוזרק — ליבה ירוקה + סדר-ביצוע; אופליין לגמרי */
   const executed = [];
   const ov = {
     observe: async () => { executed.push("observe"); return { basisInfo: { windowFills: 34, windowBids: 29, basisEstablished: true }, pnl: { realizedSbd: -0.016, unbasedSteem: 0 } }; },
     tick: async () => { executed.push("tick"); return { ok: true, summary: "tick#1" }; },
     peg: async () => { executed.push("peg"); return { verdict: "OFFER-READY", parityBps: -267, plan: { asks: [1, 2, 3, 4, 5], bids: [] }, marks: { convertArb: { verdict: "NO-EDGE" } } }; },
+    convert: async () => { executed.push("convert"); return { ok: true, verdict: "CONVERT-HOLD", amountSbd: 0 }; },
     mover: async () => { executed.push("mover"); return { skipped: true, reason: "keyless (fail-closed)" }; },
     curate: async () => { executed.push("curate"); return { planned: 5, executed: 0, skipped: true, reason: "no posting WIF" }; },
   };
   const injected = await runDailyCycle({ quiet: true, stepOverrides: ov, persist: false });
-  t("injected cycle: all steps ran in order", JSON.stringify(executed) === JSON.stringify(["observe", "tick", "peg", "mover", "curate"]));
+  t("injected cycle: all steps ran in order", JSON.stringify(executed) === JSON.stringify(["observe", "tick", "peg", "convert", "mover", "curate"]));
   t("injected cycle: core green → ok=true", injected.ok === true);
   t("injected cycle: peg surfaces convertArb", injected.steps.peg.convertArb === "NO-EDGE");
 
