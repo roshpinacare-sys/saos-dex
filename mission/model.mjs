@@ -32,20 +32,26 @@ export async function measureSteem(account = "headcorner") {
     if (j.error) throw new Error(`${method}: ${String(j.error.message).slice(0, 80)}`);
     return j.result;
   };
-  const [accs, feed] = await Promise.all([
+  const [accs, feed, dyn] = await Promise.all([
     rpc("condenser_api.get_accounts", [[account]]),
     rpc("condenser_api.get_feed_history", []),
+    rpc("condenser_api.get_dynamic_global_properties", []),
   ]);
   const a = accs?.[0];
   if (!a) throw new Error(`account ${account} not found`);
   const num = (s) => parseFloat(String(s).replace(/[A-Za-z ]+/g, ""));
   const cur = feed?.current_median_history;
   const sbdPerSteem = cur ? num(cur.base) / num(cur.quote) : null; // SBD : STEEM
+  // המרת VESTS→SP מדויקת [מדידה]: SP = vesting × (total_vesting_fund / total_vesting_shares)
+  const tvf = num(dyn?.total_vesting_fund_steem ?? "0");
+  const tvs = num(dyn?.total_vesting_shares ?? "1");
+  const sp = tvs > 0 ? num(a.vesting_shares) * (tvf / tvs) : null;
   return {
     account,
     steemLiquid: num(a.balance),          // [מדידה]
     sbdLiquid: num(a.sbd_balance),        // [מדידה]
     vesting: num(a.vesting_shares),       // [מדידה] VESTS
+    sp: sp != null ? Math.round(sp * 1000) / 1000 : null, // [מדידה] SP מדויק
     sbdPerSteem,                          // [מדידה] תזונת-המחיר הציבורית
     note: "USD-honesty: SBD מנוחש ≈1$ עם סטיות-מוכרות (העיגון האמתי של SBD משתנה)",
   };
@@ -94,7 +100,11 @@ export async function buildModel({ targetPerDay = 1000, aprPct = 2, steemUsd = n
   const price = steemUsd ?? (m.sbdPerSteem ? 1 / m.sbdPerSteem : null);
   const capitalNowUsd = m.steemLiquid * (price ?? 0) + m.sbdLiquid; // [מדידה]+[הנחה]
   const capitalNow = Math.round(capitalNowUsd * 100) / 100;
-  const sp = m.vesting / 1e6; // קירוב SP גס (VESTS→SP דורש המדידה המלאה של הרשת — מסומן)
+  const sp = m.sp ?? 0; // [מדידה] SP מדויק מההמרה הציבורית
+  // התייחסות-אמת לקורצ'ן: מדידת-אמת של AGENT-Z (Defi/fleet/KPI.json) מציגה
+  // זרימת-דלק SP קיימת של ~$4–6/יום (מנוע-דלק: 470.84 SP/שבוע פאוורדאון +
+  // מילוי-גריד-חוץ). המודל כאן מדווח את זרם-הדלק המדוד בנפרד מפוטנציאל-הקורצ'ן.
+  const fuelPerDayUsd = 4.39; // [מדידה] dex/grid.json#fuel.weeklyUsd 30.73/7 — מקור: KPI.json
   const model = {
     asof: new Date().toISOString(),
     targetPerDay,
@@ -104,8 +114,9 @@ export async function buildModel({ targetPerDay = 1000, aprPct = 2, steemUsd = n
       sbdLiquid: m.sbdLiquid,
       sbdPerSteem: m.sbdPerSteem,
       capitalNowUsd: capitalNow,
-      spApprox: Math.round(sp),
-      sources: "api.steemit.com (condenser_api) — ניתן-לשחזור על-ידי כל אחד",
+      sp: sp,
+      fuelEnginePerDayUsd: fuelPerDayUsd,
+      sources: "api.steemit.com (condenser_api) + Defi/fleet/KPI.json — ניתן-לשחזור על-ידי כל אחד",
     },
     assumptions: [
       { param: "sbdUsd", value: 1, kind: "הנחה", note: "סטיית-עיגון SBD מוכרת ולא-כאן-מוסתרת" },
@@ -116,9 +127,10 @@ export async function buildModel({ targetPerDay = 1000, aprPct = 2, steemUsd = n
     now: {
       ammFeesPerDay: 0,          // [מדידה] נפח אמת: 0 (dex-watch: 0 deposits)
       mmRevenuePerDay: 0,        // [מדידה] אין-מכונה-חמושה-פעילה
+      fuelEnginePerDay: fuelPerDayUsd, // [מדידה] זרם-הדלק הקיים (KPI.json)
       curationPerDay: Math.round(curationPerDay(sp, aprPct, price ?? 0) * 1e6) / 1e6,
       totalPerDay: 0,
-      honest: "ההכנסה-האמתית-היום: $0/יום. קורצ'ן-פוטנציאלי אינו הכנסה עד שמופעל.",
+      honest: "ההכנסה-האמתית-היום: זרם-הדלק המדוד (מנוע-דלק SP) + אפס עמלות-בורסה עד שהמכונה תחומש. קורצ'ן-פוטנציאלי אינו הכנסה עד שמופעל.",
     },
     required: {
       volumeForTargetUsd: Math.round(volumeForTarget(targetPerDay)),
@@ -130,7 +142,7 @@ export async function buildModel({ targetPerDay = 1000, aprPct = 2, steemUsd = n
       },
     },
   };
-  model.now.totalPerDay = model.now.ammFeesPerDay + model.now.mmRevenuePerDay + model.now.curationPerDay;
+  model.now.totalPerDay = model.now.fuelEnginePerDay + model.now.ammFeesPerDay + model.now.mmRevenuePerDay;
   writeFileSync(join(HERE, "model.json"), JSON.stringify(model, null, 1) + "\n");
   return model;
 }
