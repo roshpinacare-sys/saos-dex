@@ -1,0 +1,84 @@
+{
+ "asof": "2026-09-28T12:09:17.459Z",
+ "runCount": 21,
+ "lastCheckpoint": null,
+ "market": {
+  "refPrice": 0.104111,
+  "source": "steem-feed",
+  "stale": false
+ },
+ "feeMeter": {
+  "simMu": 13.07,
+  "simFills": 33,
+  "realMu": 0,
+  "realFills": 0,
+  "milestonesHit": [],
+  "queue": [
+   "micro-arb",
+   "sweep",
+   "mm-variant-2"
+  ],
+  "_lastSimMu": 13.07
+ },
+ "spawnCount": 0,
+ "templates": {
+  "micro-arb": {
+   "strategy": "micro-arb",
+   "params": {
+    "bandBps": 25,
+    "maxNotionalMu": 400
+   }
+  },
+  "sweep": {
+   "strategy": "sweep",
+   "params": {
+    "thresholdBps": 80,
+    "touchMu": 50,
+    "capMu": 3000
+   }
+  },
+  "mm-variant-2": {
+   "strategy": "mm-grid",
+   "params": {
+    "levels": 2,
+    "widthBps": 100,
+    "levelMu": 60,
+    "capMu": 4000
+   }
+  }
+ },
+ "grids": [
+  {
+   "id": "mm-core",
+   "strategy": "mm-grid",
+   "params": {
+    "levels": 3,
+    "widthBps": 60,
+    "levelMu": 100,
+    "growth": 1.5,
+    "capMu": 10000
+   },
+   "active": true,
+   "inventoryMu": 206.54,
+   "pnlSimMu": 9.47,
+   "lastNote": "quoted"
+  },
+  {
+   "id": "anchor-q",
+   "strategy": "anchor-quote",
+   "params": {
+    "widthBps": 45,
+    "levelMu": 120,
+    "capMu": 5000
+   },
+   "active": true,
+   "inventoryMu": 45.3,
+   "pnlSimMu": 3.6,
+   "lastNote": "anchor-refresh"
+  }
+ ],
+ "mission": {
+  "checkedAt": "2026-09-28T12:09:17.459Z",
+  "simFeesMu": 13.07
+ }
+}

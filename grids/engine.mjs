@@ -95,6 +95,13 @@ export function checkInvariants(state) {
 /* ── טיק אחד ─────────────────────────────────────────────────────────── */
 export async function runTick({ seed = 20260928, injectedPrice = null, injectedEvents = [], quiet = false } = {}) {
   const state = loadState();
+  /* שער-טוהר: מצב-פגום לא רץ — HALT מיידי (האינווריאנטות קודמות לכל-פעולה) */
+  const preViolations = checkInvariants(state);
+  if (preViolations.length > 0) {
+    appendEvent(EVENTS_LOG, { type: "grid.halt", source: "invariant", payload: { violations: preViolations, at: "pre-tick" } });
+    saveState(state);
+    return { ok: false, violations: preViolations, summary: `halt(pre-tick): ${preViolations.join(", ")}` };
+  }
   state.asof = new Date().toISOString();
   state.runCount = (state.runCount ?? 0) + 1;
   const rng = mulberry32(seed + state.runCount * 7919);
@@ -134,6 +141,9 @@ export async function runTick({ seed = 20260928, injectedPrice = null, injectedE
     }
     const fills = simFill(res.orders ?? [], market, rng);
     for (const f of fills) {
+      // אסקרו-כנה: אסור למכור מה שאין (אין naked-short), ואסור לקנות מעבר לתקרה.
+      if (f.side === "ask" && g.inventoryMu < f.fillMu) continue;
+      if (f.side === "bid" && g.inventoryMu + f.fillMu > (g.params?.capMu ?? Infinity)) continue;
       g.inventoryMu = Math.round((g.inventoryMu + (f.side === "bid" ? f.fillMu : -f.fillMu)) * 100) / 100;
       g.pnlSimMu = Math.round((g.pnlSimMu + f.feeMu) * 100) / 100;
       state.feeMeter.simMu = Math.round((state.feeMeter.simMu + f.feeMu) * 100) / 100;
