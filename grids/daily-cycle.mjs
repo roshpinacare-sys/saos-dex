@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import { appendEvent } from "./events.mjs";
 import { runTick, loadState, saveState } from "./engine.mjs";
 import { runPeg } from "./peg.mjs";
-import { observeRealFills, realizedPnl } from "./observe.mjs";
+import { observeDeepWindow, realizedPnl } from "./observe.mjs";
 import { planCurations } from "./curate.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -36,9 +36,9 @@ export const masterSourcePath = () => process.env.MASTER_SOURCE_PATH || DEFAULT_
 export const hasMasterSource = () => existsSync(masterSourcePath());
 export const hasPostingWif = () => !!process.env.STEEM_POSTING_WIF;
 
-/* ── צעד 1: חלון-עמוק → יסוד-עלות אמת מה-chain (T-7) ─────────────────────── */
+/* ── צעד 1: חלון-עמוק אדפטיבי → יסוד-עלות אמת מה-chain (T-7) ─────────────── */
 export async function stepObserveDeep({ account, deepLimit = 2000 } = {}) {
-  const deep = await observeRealFills({ account, limit: deepLimit, sinceSeq: -1 });
+  const deep = await observeDeepWindow({ account, wanted: deepLimit });
   const pnl = realizedPnl(deep.fills);
   const state = loadState();
   state.feeMeter.realPnl = pnl;
@@ -47,8 +47,9 @@ export async function stepObserveDeep({ account, deepLimit = 2000 } = {}) {
   const basisInfo = {
     windowFills: deep.fills.length,
     windowBids: basisBids.length,
-    basisEstablished: pnl.basisSeededSteem === undefined && pnl.positionSteem > 0,
-    note: "יסוד מחושב-מחדש מהחלון-העמוק בכל-מחזור — דטרמיניסטי, אפס-סטייה",
+    windowServed: deep.served,
+    windowRequested: deep.window,
+    note: "יסוד מחושב-מחדש מהחלון-העמוק בכל-מחזור — דטרמיניסטי, אפס-סטייה; windowServed = מה שהשרשרת אכן מסרה",
   };
   saveState(state);
   appendEvent(EVENTS_LOG, {
@@ -57,6 +58,7 @@ export async function stepObserveDeep({ account, deepLimit = 2000 } = {}) {
     payload: {
       fills: deep.fills.length, realizedSbd: pnl.realizedSbd,
       positionSteem: pnl.positionSteem, openAvgCost: pnl.openAvgCost, unbasedSteem: pnl.unbasedSteem,
+      window: deep.window, served: deep.served,
     },
   });
   return { deep: deep.fills.length, pnl, basisInfo };
