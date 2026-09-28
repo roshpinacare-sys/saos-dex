@@ -198,34 +198,44 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
   };
 
   /* מכירה: רצפת-הפאריטי — אף-STEEM לא נמכר מתחת לערך-החוץ שלו */
+  /* הקצאה-תקציבית (תיקון-עיגול): כל-רמה מקבלת min(רצוי, נותר) — סכום-הסולם
+   * לעולם לא חורג מהניתן-להתחייבות; רמת-אבק (<0.001) מושמטת בכנות. */
   const asks = [];
-  let askSteem = 0;
+  let askRemaining = steemCommit;
   for (let i = 1; i <= policy.askLevels; i++) {
     const price = r6(parity * (1 + (effAskStepBps * i) / 10000));
-    const sizeSteem = r3((steemCommit / policy.askLevels) * Math.pow(policy.askGrowth, i - 1) * normFactor(policy.askLevels, policy.askGrowth));
-    askSteem = r3(askSteem + sizeSteem);
+    const want = r3((steemCommit / policy.askLevels) * Math.pow(policy.askGrowth, i - 1) * normFactor(policy.askLevels, policy.askGrowth));
+    const sizeSteem = Math.min(want, r3(askRemaining));
+    if (sizeSteem < 0.001) break;
+    askRemaining = r3(askRemaining - sizeSteem);
     asks.push({ side: "ask", level: i, priceSbdPerSteem: price, sizeSteem, kind: "sell-steem-above-parity" });
   }
+  const askSteem = r3(asks.reduce((s, a) => s + a.sizeSteem, 0));
 
   /* קנייה: תקרת-הפאריטי — כל קנייה מתחת לערך-החוץ היא עודף-נמדד */
+  /* הקצאה-תקציבית — זהה לצד-המכירה */
   const bids = [];
-  let bidSbd = 0;
+  let bidRemaining = sbdCommit;
   for (let i = 1; i <= policy.bidLevels; i++) {
     const price = r6(parity * (1 - (effBidStepBps * i) / 10000));
-    const spendSbd = r3((sbdCommit / policy.bidLevels) * Math.pow(policy.bidGrowth, i - 1) * normFactor(policy.bidLevels, policy.bidGrowth));
-    bidSbd = r3(bidSbd + spendSbd);
+    const want = r3((sbdCommit / policy.bidLevels) * Math.pow(policy.bidGrowth, i - 1) * normFactor(policy.bidLevels, policy.bidGrowth));
+    const spendSbd = Math.min(want, r3(bidRemaining));
+    if (spendSbd < 0.001) break;
+    bidRemaining = r3(bidRemaining - spendSbd);
     const sizeSteem = spendSbd > 0 && price > 0 ? r3(spendSbd / price) : 0;
     bids.push({ side: "bid", level: i, priceSbdPerSteem: price, spendSbd, sizeSteem, kind: "buy-steem-below-parity" });
   }
+  const bidSbd = r3(bids.reduce((s, b) => s + b.spendSbd, 0));
 
-  /* חסמי-מלאי כנים (אותם-ספים של grid-pulse): אין מכירת-עירום, אין התחייבות-יתר */
+  /* חסמי-מלאי כנים — כעת הגנה-לעומק בלבד: ההקצאה-התקציבית מבטיחה סכום ≤ ניתן.
+   * אם-החסם-נורה — יש-באג-אמת במנוע, והוא חייב לעצור (fail-closed). */
   if (askSteem > steemCommit) blockers.push(`ask plan ${askSteem} STEEM exceeds commitable ${steemCommit}`);
-  if (askSteem > 0 && askSteem < policy.minLevelSteem * policy.askLevels) {
-    blockers.push(`sell-side waiting for fuel: ${askSteem} STEEM commitable < ${(policy.minLevelSteem * policy.askLevels).toFixed(2)} needed`);
+  if (asks.length === 0 || askSteem < policy.minLevelSteem) {
+    blockers.push(`sell-side waiting for fuel: ${askSteem} STEEM commitable < minLevel ${policy.minLevelSteem}`);
   }
   if (bidSbd > sbdCommit) blockers.push(`bid plan ${bidSbd} SBD exceeds commitable ${sbdCommit}`);
-  if (bidSbd < policy.minLevelSbd * policy.bidLevels) {
-    blockers.push(`buy-side waiting for SBD inventory: ${bidSbd} SBD commitable < ${(policy.minLevelSbd * policy.bidLevels).toFixed(2)} needed`);
+  if (bidSbd < policy.minLevelSbd) {
+    blockers.push(`buy-side waiting for SBD inventory: ${bidSbd} SBD commitable < minLevel ${policy.minLevelSbd}`);
   }
 
   const ok = blockers.length === 0;
