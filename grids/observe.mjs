@@ -31,8 +31,10 @@ export function parseFills(history, account, sinceSeq = -1) {
     const [seq, x] = item;
     if (seq <= sinceSeq) continue;
     lastSeq = Math.max(lastSeq, seq);
-    const op = x?.op ?? {};
-    if (op.type !== "fill_order_operation") continue;
+    /* op בשתי-צורות: account_history_api → {type,value} · condenser → ["fill_order", {…}] */
+    const rawOp = x?.op;
+    const op = Array.isArray(rawOp) ? { type: rawOp[0], value: rawOp[1] } : rawOp ?? {};
+    if (op.type !== "fill_order_operation" && op.type !== "fill_order") continue;
     const v = op.value ?? {};
     const isCurrent = v.current_owner === account;
     const isOpen = v.open_owner === account;
