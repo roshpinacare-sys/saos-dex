@@ -144,9 +144,36 @@ export function summarizeEvidence(evidence) {
   };
 }
 
+/* ═══ מד-טהור: פקודות-ישנות-מול-רצפת-ערך (r134-VF1 · T-8b) ══════════════════
+   החוק: אסק מתחת-לפאריטי-החי = מכירה-מתחת-לערך-חוץ · ביד מעליו = תשלום-יתר.
+   סבילות-רעש ברירת-מחדל 10bps — לא מזיזים פקודה בתוך-הרעש. רק orderids-שלי
+   (ראיה-מהלוג) — דוקטרינת-מסילה D-021. */
+export const REPRICE_TOL_BPS = 10;
+export function classifyStale(openOrders, myIds, parity, tolBps = REPRICE_TOL_BPS) {
+  const mine = new Set((myIds ?? []).map(Number));
+  const stale = [];
+  for (const o of openOrders ?? []) {
+    if (!mine.has(Number(o.orderid))) continue;
+    const [bAmt, bSym] = String(o.sell_price?.base ?? "").split(" ");
+    const [qAmt] = String(o.sell_price?.quote ?? "").split(" ");
+    const base = Number(bAmt);
+    if (!(base > 0) || !(Number(qAmt) > 0)) continue;
+    const unit = Number(qAmt) / base; // אסק: SBD/STEEM · ביד: STEEM/SBD
+    if (bSym === "STEEM") {
+      const px = unit; // מחיר-אמת SBD-ל-STEEM
+      if (px < parity * (1 - tolBps / 10000)) stale.push({ orderid: Number(o.orderid), side: "ask", price: px, steem: base, sbd: Math.round(base * px * 1e6) / 1e6 });
+    } else if (bSym === "SBD") {
+      const px = 1 / unit; // היפוך: STEEM-ל-SBD → SBD-ל-STEEM (השיעור-המדוד שהטעה)
+      if (px > parity * (1 + tolBps / 10000)) stale.push({ orderid: Number(o.orderid), side: "bid", price: px, sbd: base, steem: Math.round(base / px * 1e6) / 1e6 });
+    }
+  }
+  return stale;
+}
+export const REPRICE_MIN = { STEEM: 1.0, SBD: 0.25 }; // מתחת לזה — אבק, לא מחזירים-לספר
+
 /* ═══ הריצה ═════════════════════════════════════════════════════════════════ */
-export async function runMover({ dryRun = false, additive = false } = {}) {
-  const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: additive ? "additive" : "refresh", cancelled: [], placed: [], blockers: [] };
+export async function runMover({ dryRun = false, additive = false, reprice = false } = {}) {
+  const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: reprice ? "reprice" : additive ? "additive" : "refresh", cancelled: [], placed: [], blockers: [] };
 
   /* 1. המקור-הריבוני (זמן-ריצה בלבד) */
   const srcPath = process.env.MASTER_SOURCE_PATH || "/tmp/keystation/live-agent/keys/hed-soldiers-source.txt";
@@ -170,6 +197,70 @@ export async function runMover({ dryRun = false, additive = false } = {}) {
   const rc = await rpcAny("rc_api.find_rc_accounts", { accounts: [ACCOUNT] }).catch(() => null);
   const rcNow = Number(rc?.rc_accounts?.[0]?.rc_manabar?.current_mana ?? 0);
   if (rcNow < RC_MIN) throw new Error(`RC fuel below floor: ${rcNow} < ${RC_MIN} (fail-closed)`);
+
+  /* 3b. ספר-פתוח + מצב-reprice (T-8b · לפני-בדיקות-ההצעה — reprice לא צורך offer.json):
+     ביטול-פקודות-שלי-בלבד שנפלו-מעבר-לרצפת-הערך-החיה (r134-VF1) + החזרה
+     מעליה — ראית-מסילה מהלוג-שלי בלבד (D-021). */
+  const openRaw = await rpcAny("condenser_api.get_open_orders", [ACCOUNT]).catch(() => []);
+  const takenIds = new Set((openRaw ?? []).map((o) => Number(o.orderid)));
+  if (reprice) {
+    const rparity = await freshParity();
+    if (rparity == null) throw new Error("fresh parity unavailable — no reprice without truth (fail-closed)");
+    evidence.parity = Math.round(rparity * 1e6) / 1e6;
+    const myIds = myPlacedOrderIds();
+    const stale = classifyStale(openRaw ?? [], myIds, rparity);
+    evidence.stale = stale.map((s) => ({ id: s.orderid, side: s.side, price: s.price, amount: s.side === "ask" ? `${s.steem.toFixed(3)} STEEM` : `${s.sbd.toFixed(3)} SBD` }));
+    if (stale.length === 0) {
+      evidence.blockers.push("reprice: no own orders beyond the live floor — nothing to drag (honest no-op)");
+      evidence.summary = summarizeEvidence(evidence);
+      appendFileSync(MOVER_LOG, JSON.stringify(evidence) + "\n");
+      return evidence;
+    }
+    for (const s of stale) {
+      if (dryRun) { evidence.cancelled.push({ id: s.orderid, dryRun: true }); continue; }
+      try {
+        const r = await signAndBroadcast(liveWif, [["limit_order_cancel", { owner: ACCOUNT, orderid: s.orderid }]]);
+        evidence.cancelled.push({ id: s.orderid, txid: r.txid });
+      } catch (e) {
+        evidence.cancelled.push({ id: s.orderid, error: String(e.message ?? e).slice(0, 80) });
+      }
+    }
+    /* הון-משוחרר → גרירה-חזרה-לערך: אסק מעל-הרצפה (+20bps) · ביד מתחתיה (−20bps) */
+    const freedSteem = stale.filter((s) => s.side === "ask").reduce((t, s) => t + s.steem, 0);
+    const freedSbd = stale.filter((s) => s.side === "bid").reduce((t, s) => t + s.sbd, 0);
+    const rtoday = Number(new Date().toISOString().slice(0, 10).replace(/-/g, ""));
+    let rseq = 1;
+    const nextId = () => { let id = rtoday * 100 + rseq++; while (takenIds.has(id)) id = rtoday * 100 + rseq++; takenIds.add(id); return id; };
+    const rexp = Math.floor(Date.now() / 1000) + 27 * 86_400;
+    if (freedSteem >= REPRICE_MIN.STEEM) {
+      const px = Math.round(rparity * 1.002 * 1e6) / 1e6;
+      const sell = dp3(freedSteem), recv = dp3(freedSteem * px);
+      const id = nextId();
+      if (dryRun) evidence.placed.push({ id, side: "ask", sell: `${sell.toFixed(3)} STEEM`, receive: `${recv.toFixed(3)} SBD`, price: px, dryRun: true });
+      else {
+        try {
+          const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${sell.toFixed(3)} STEEM`, min_to_receive: `${recv.toFixed(3)} SBD`, fill_or_kill: false, expiration: new Date(rexp * 1000).toISOString().slice(0, 19) }]]);
+          evidence.placed.push({ id, side: "ask", sell: `${sell.toFixed(3)} STEEM`, receive: `${recv.toFixed(3)} SBD`, price: px, txid: r.txid, block: r.block });
+        } catch (e) { evidence.placed.push({ id, side: "ask", error: String(e.message ?? e).slice(0, 80) }); }
+      }
+    } else if (freedSteem > 0) evidence.blockers.push(`freed STEEM ${freedSteem.toFixed(3)} < min ${REPRICE_MIN.STEEM} — dust, kept liquid (honest)`);
+    if (freedSbd >= REPRICE_MIN.SBD) {
+      const px = Math.round(rparity * 0.998 * 1e6) / 1e6;
+      const spend = dp3(freedSbd), recv = dp3(freedSbd / px);
+      const id = nextId();
+      if (dryRun) evidence.placed.push({ id, side: "bid", sell: `${spend.toFixed(3)} SBD`, receive: `${recv.toFixed(3)} STEEM`, price: px, dryRun: true });
+      else {
+        try {
+          const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${spend.toFixed(3)} SBD`, min_to_receive: `${recv.toFixed(3)} STEEM`, fill_or_kill: false, expiration: new Date(rexp * 1000).toISOString().slice(0, 19) }]]);
+          evidence.placed.push({ id, side: "bid", sell: `${spend.toFixed(3)} SBD`, receive: `${recv.toFixed(3)} STEEM`, price: px, txid: r.txid, block: r.block });
+        } catch (e) { evidence.placed.push({ id, side: "bid", error: String(e.message ?? e).slice(0, 80) }); }
+      }
+    } else if (freedSbd > 0) evidence.blockers.push(`freed SBD ${freedSbd.toFixed(3)} < min ${REPRICE_MIN.SBD} — dust, kept liquid (honest)`);
+    evidence.summary = summarizeEvidence(evidence);
+    appendFileSync(MOVER_LOG, JSON.stringify(evidence) + "\n");
+    appendEvent(EVENTS_LOG, { type: "offer.repriced", source: "mover", sim: false, payload: { ...evidence.summary, stale: stale.length, parity: evidence.parity } });
+    return evidence;
+  }
 
   /* 4. ההצעה — טרייה ותקינה
      רענון: OFFER-READY מלא (שלמות-סולם אטומית).
@@ -195,9 +286,8 @@ export async function runMover({ dryRun = false, additive = false } = {}) {
   if (Math.abs(offer.parityBps ?? 0) > PARITY_BAND_BPS) throw new Error("offer parity outside band — refusing (fail-closed)");
 
   /* 5. ביטול-פקודות-פתוחות (רענון אטומי של grid-beat R24)
-     מצב-additive: אף-ביטול — הסולם-הקיים (של-מוביל-אח) נשאר בעבודה. */
-  const openRaw = await rpcAny("condenser_api.get_open_orders", [ACCOUNT]).catch(() => []);
-  const takenIds = new Set((openRaw ?? []).map((o) => Number(o.orderid)));
+     מצב-additive: אף-ביטול — הסולם-הקיים (של-מוביל-אח) נשאר בעבודה.
+     (openRaw/takenIds נמדדו-כבר ב-3b; reprice חזר-מוקדם.) */
   if (additive) {
     evidence.cancelled.push({ skipped: "additive-mode — sibling ladder untouched", openOrders: (openRaw ?? []).length });
   } else {
@@ -269,12 +359,24 @@ export async function runMover({ dryRun = false, additive = false } = {}) {
   return evidence;
 }
 
-/* CLI: node grids/mover.mjs [--dry-run] [--additive] */
+/* ── ראית-מסילה: כל-orderid-שנחתם-פעם-על-ידי-המוביל-הזה (T-8b) ─────────── */
+function myPlacedOrderIds() {
+  try {
+    const ids = new Set();
+    for (const l of readFileSync(MOVER_LOG, "utf8").trim().split("\n")) {
+      try { const e = JSON.parse(l); for (const p of e.placed ?? []) if (p.txid && p.id) ids.add(Number(p.id)); } catch { /* שורה-פגומה — מדלגים */ }
+    }
+    return [...ids];
+  } catch { return []; }
+}
+
+/* CLI: node grids/mover.mjs [--dry-run] [--additive] [--reprice] */
 if (process.argv[1] && process.argv[1].endsWith("mover.mjs")) {
   const dry = process.argv.includes("--dry-run");
   const additive = process.argv.includes("--additive");
+  const reprice = process.argv.includes("--reprice");
   try {
-    const ev = await runMover({ dryRun: dry, additive });
+    const ev = await runMover({ dryRun: dry, additive, reprice });
     console.log(`[mover${dry ? " · dry" : ""}] cancelled=${ev.summary.cancelled} placed=${ev.summary.placed} failed=${ev.summary.failed} blocked=${ev.summary.blocked}`);
     for (const p of ev.placed.filter((x) => x.txid)) console.log(`  ✓ #${p.id} ${p.side}: ${p.sell} → ${p.receive} @${p.price} · tx ${String(p.txid).slice(0, 14)}…`);
     for (const p of ev.placed.filter((x) => x.error)) console.log(`  ✗ #${p.id ?? "?"} ${p.side}: ${p.error}`);
