@@ -206,7 +206,7 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
     const price = r6(parity * (1 + (effAskStepBps * i) / 10000));
     const want = r3((steemCommit / policy.askLevels) * Math.pow(policy.askGrowth, i - 1) * normFactor(policy.askLevels, policy.askGrowth));
     const sizeSteem = Math.min(want, r3(askRemaining));
-    if (sizeSteem < 0.001) break;
+    if (sizeSteem < policy.minLevelSteem) break; // רמת-אבק — לא-חוצים, חוסמים-בכנות
     askRemaining = r3(askRemaining - sizeSteem);
     asks.push({ side: "ask", level: i, priceSbdPerSteem: price, sizeSteem, kind: "sell-steem-above-parity" });
   }
@@ -220,7 +220,7 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
     const price = r6(parity * (1 - (effBidStepBps * i) / 10000));
     const want = r3((sbdCommit / policy.bidLevels) * Math.pow(policy.bidGrowth, i - 1) * normFactor(policy.bidLevels, policy.bidGrowth));
     const spendSbd = Math.min(want, r3(bidRemaining));
-    if (spendSbd < 0.001) break;
+    if (spendSbd < policy.minLevelSbd) break; // רמת-אבק — לא-חוצים, חוסמים-בכנות
     bidRemaining = r3(bidRemaining - spendSbd);
     const sizeSteem = spendSbd > 0 && price > 0 ? r3(spendSbd / price) : 0;
     bids.push({ side: "bid", level: i, priceSbdPerSteem: price, spendSbd, sizeSteem, kind: "buy-steem-below-parity" });
@@ -230,12 +230,12 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
   /* חסמי-מלאי כנים — כעת הגנה-לעומק בלבד: ההקצאה-התקציבית מבטיחה סכום ≤ ניתן.
    * אם-החסם-נורה — יש-באג-אמת במנוע, והוא חייב לעצור (fail-closed). */
   if (askSteem > steemCommit) blockers.push(`ask plan ${askSteem} STEEM exceeds commitable ${steemCommit}`);
-  if (asks.length === 0 || askSteem < policy.minLevelSteem) {
-    blockers.push(`sell-side waiting for fuel: ${askSteem} STEEM commitable < minLevel ${policy.minLevelSteem}`);
+  if (askSteem < policy.minLevelSteem * policy.askLevels) {
+    blockers.push(`sell-side waiting for fuel: ${askSteem} STEEM commitable < ${(policy.minLevelSteem * policy.askLevels).toFixed(2)} needed`);
   }
   if (bidSbd > sbdCommit) blockers.push(`bid plan ${bidSbd} SBD exceeds commitable ${sbdCommit}`);
-  if (bidSbd < policy.minLevelSbd) {
-    blockers.push(`buy-side waiting for SBD inventory: ${bidSbd} SBD commitable < minLevel ${policy.minLevelSbd}`);
+  if (bidSbd < policy.minLevelSbd * policy.bidLevels) {
+    blockers.push(`buy-side waiting for SBD inventory: ${bidSbd} SBD commitable < ${(policy.minLevelSbd * policy.bidLevels).toFixed(2)} needed`);
   }
 
   const ok = blockers.length === 0;
