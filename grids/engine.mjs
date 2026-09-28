@@ -70,11 +70,19 @@ export function saveState(state) {
   writeFileSync(PNL_PATH, JSON.stringify(pnlView(state), null, 1) + "\n");
 }
 
-/** תצוגת P&L כנה: מה נמדד בסימולציה ומה באמת. אפס-אמת נשאר אפס-אמת. */
+/** תצוגת P&L כנה: מה נמדד בסימולציה ומה באמת. אפס-אמת נשאר אפס-אמת.
+ * T-7: realPnl (מד-רווחיות A-10) + basis מוצגים כאן — פומבי ומחושב-מחדש מה-chain. */
 export function pnlView(state) {
+  const rp = state.feeMeter.realPnl ?? null;
   return {
     asof: state.asof,
     real: { feesMu: state.feeMeter.realMu ?? 0, fills: state.feeMeter.realFills ?? 0, sbdDelta: state.feeMeter.realSbdDelta ?? 0, note: "אמת מוטבעת-על-שרשרת בלבד (fill_order מה-chain)" },
+    realPnl: rp ? {
+      realizedSbd: rp.realizedSbd, positionSteem: rp.positionSteem, positionCostSbd: rp.positionCostSbd,
+      openAvgCost: rp.openAvgCost ?? null, unbasedSteem: rp.unbasedSteem ?? 0, unbasedSbd: rp.unbasedSbd ?? 0,
+      basisSeededSteem: rp.basisSeededSteem ?? 0,
+      note: "יסוד-עלות ממוצע על מילויים-אמת בלבד; unbased = מכירה-בלי-יסוד-נמדד (לא-נטען-כרווח)",
+    } : null,
     sim: { feesMu: state.feeMeter.simMu ?? 0, fills: state.feeMeter.simFills ?? 0, note: "סימולציה מסומנת sim:true" },
     grids: (state.grids ?? []).map((g) => ({ id: g.id, strategy: g.strategy, active: g.active, inventoryMu: g.inventoryMu, pnlSimMu: g.pnlSimMu ?? 0 })),
     mission: state.mission ?? null,
@@ -166,11 +174,11 @@ export async function runTick({ seed = 20260928, injectedPrice = null, injectedE
     }
   }
 
-  /* 3. עמלות → מד-העמלות */
+  /* 3. עמלות → מד-העמלות (T-7 תיקון-אמת: המד מדווח כל-טיק, לא רק כשיש-מילויים.
+   *    באג-שנחשף-בסוויפ: חציית-אבן-דרך בטיק-ללא-מילויים הייתה שקטה —
+   *    R-FEE-SPAWN לא הוצת והמיקרו-גריד לא נולד. מד שמדווח-רק-כשכיף-לו אינו מד.) */
   const fillsThisTick = events.filter((e) => e.type === "grid.fill").length;
-  if (fillsThisTick > 0) {
-    events.push({ type: "fee.meter", source: "engine", payload: { simMu: state.feeMeter.simMu, fills: state.feeMeter.simFills } });
-  }
+  events.push({ type: "fee.meter", source: "engine", payload: { simMu: state.feeMeter.simMu, fills: state.feeMeter.simFills } });
 
   /* 4. כללים: דבר-גורר-דבר */
   // אמת שנמדדה-על-השרשרת נשארת real:true — לא מסומנת sim (כנות-מובנית)

@@ -14,7 +14,7 @@
 //   9. צריכת-טריגרים       → T-PARITY-MOVE מדווח במסמך
 //  10. נרמול-גיאומטרי      → סכום-הרמות שווה בדיוק לתקציב
 
-import { computeOffer, DEFAULT_POLICY } from "./peg.mjs";
+import { computeOffer, DEFAULT_POLICY, convertArb } from "./peg.mjs";
 
 const t = (name, ok) => {
   console.log(`${ok ? " ✓" : " ✗"} ${name}`);
@@ -164,6 +164,17 @@ const good = computeOffer(base);
 {
   const inputs = { ...base, snapshot: { ...SNAPSHOT, book: { ...SNAPSHOT.book, spreadBps: 640 } } };
   t("B-3: determinism holds with drag", JSON.stringify(computeOffer(inputs)) === JSON.stringify(computeOffer(inputs)));
+}
+
+/* 18. מד-ארביטרז'-המרה (T-7): SBD מתחת-לפנים → CONVERT-POSITIVE מדוד */
+{
+  const a = convertArb(0.95);
+  t("T-7: SBD@$0.95 → CONVERT-POSITIVE +5%", a.verdict === "CONVERT-POSITIVE" && a.discountPct === 5);
+  const b = convertArb(1.02);
+  t("T-7: SBD@$1.02 → NO-EDGE (no fake profit)", b.verdict === "NO-EDGE" && b.discountPct === -2);
+  t("T-7: missing mark → null (no invention)", convertArb(null) === null && convertArb(0) === null);
+  const d = computeOffer({ ...base });
+  t("T-7: offer doc carries convertArb from marks", d.marks?.convertArb?.verdict === convertArb(MARKS.sbdUsd).verdict);
 }
 
 console.log(process.exitCode === 1 ? "PEG-SELFTEST: FAIL" : "PEG-SELFTEST: PASS");

@@ -272,6 +272,22 @@ function internalBridge(gridState) {
   };
 }
 
+/* ── מד-ארביטרז'-המרה (T-7): SBD פנים = $1 ערך-פנים בהמרה (3.5 ימים) ───────
+ * אם שוק-חוץ מתמחר SBD מתחת-לפנים — ההמרה condenser_api +EV מדוד. כנות:
+ * הנזילות-3.5-יום נחשבת, והאדג' נמדד-בלבד — אין-הנחה של רווח לפני מימוש. */
+export function convertArb(sbdUsd) {
+  if (sbdUsd == null || !(sbdUsd > 0)) return null;
+  const discountPct = r6((1 - sbdUsd) * 100);
+  return {
+    faceUsd: 1.0,
+    marketUsd: sbdUsd,
+    discountPct,
+    verdict: sbdUsd < 0.99 ? "CONVERT-POSITIVE" : "NO-EDGE",
+    lockDays: 3.5,
+    note: "condenser convert: SBD→STEEM בערך-$1-פנים אחרי 3.5d · אדג' קיים רק אם שוק-חוץ מתמחר SBD<$1 · נזילות-המרה אינה-מיידית",
+  };
+}
+
 /* ── מסמך-ההצעה: אותו-מבנה-חשיפה של grid-pulse (blocker/verdict/honesty) ─── */
 function offerDoc(o) {
   const ok = o.ok === true;
@@ -284,7 +300,7 @@ function offerDoc(o) {
     verdict: ok ? "OFFER-READY" : "OFFER-BLOCKED",
     blocker: o.blockers.length ? o.blockers : null,
     bridge: o.bridge,
-    marks: o.marks ? { steemUsd: o.marks.steemUsd, sbdUsd: o.marks.sbdUsd, paritySbdPerSteem: o.marks.parity, sources: o.marks.sources } : null,
+    marks: o.marks ? { steemUsd: o.marks.steemUsd, sbdUsd: o.marks.sbdUsd, paritySbdPerSteem: o.marks.parity, sources: o.marks.sources, convertArb: convertArb(o.marks.sbdUsd) } : null,
     book: o.snapshot?.book ?? null,
     inventory: o.snapshot?.balances ?? null,
     openOrdersNow: o.snapshot?.openOrders ?? null,
