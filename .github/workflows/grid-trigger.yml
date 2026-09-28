@@ -1,0 +1,43 @@
+# GRID-TRIGGER — פעימת רשת-הטריגרים (fleet-2-d)
+# דבר-גורר-דבר: כל 30 דק' — מדידת-אמת (RPC ציבורי + דוח-עיגון), טיק-דטרמיניסטי,
+# פרסום-מצב. חסר-מפתחות מהיסוד (דוקטרינת R83) — מודד ומפרסם, לא חותם.
+name: grid-trigger
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: grid-trigger
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: tick
+        run: node grids/run.mjs
+        continue-on-error: false
+      - name: publish heartbeat
+        run: |
+          set -u
+          git config user.name "grid-trigger[bot]"
+          git config user.email "grid-trigger[bot]@users.noreply.github.com"
+          git add grids/state/state.json 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "no state change — clean exit"
+          else
+            FEES="$(node -e 'const s=require("./grids/state/state.json");console.log(s.feeMeter?.simMu?.toFixed(1)||0)' 2>/dev/null || echo 0)"
+            N="$(node -e 'const s=require("./grids/state/state.json");console.log(s.runCount||0)' 2>/dev/null || echo 0)"
+            git commit -m "grid-heartbeat: tick#${N} · fees +${FEES}µ(sim) [skip ci]"
+            git push origin HEAD:main
+          fi
