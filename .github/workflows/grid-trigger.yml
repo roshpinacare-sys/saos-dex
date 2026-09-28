@@ -44,5 +44,6 @@ jobs:
             N="$(node -e 'const s=require("./grids/state/state.json");console.log(s.runCount||0)' 2>/dev/null || echo 0)"
             V="$(node -e 'const o=require("./grids/state/offer.json");console.log(o.verdict||"?")' 2>/dev/null || echo no-offer)"
             git commit -m "grid-heartbeat: tick#${N} · fees +${FEES}µ(sim) · peg=${V} [skip ci]"
+            git pull --rebase origin main
             git push origin HEAD:main
           fi
