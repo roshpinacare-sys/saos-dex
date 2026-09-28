@@ -197,6 +197,26 @@ export async function selftest() {
   const withTx = summarizeEvidence({ cancelled: [{ txid: "a" }, { error: "x" }], placed: [{ txid: "b" }, { blocked: "y" }, { error: "z" }] });
   t("summarizeEvidence: tx-only counts (cancelled=1 placed=1 failed=1 blocked=1)", withTx.cancelled === 1 && withTx.placed === 1 && withTx.failed === 1 && withTx.blocked === 1);
 
+  /* וקטור-2c (T-8b): classifyStale — רצפת-ערך r134-VF1 (השיעור-ההפוך לבידים!) */
+  const { classifyStale } = await import("./mover.mjs");
+  const PP = 0.106978;
+  const ord = [
+    { orderid: 1, sell_price: { base: "28.806 STEEM", quote: "3.055 SBD" } },   // ask 0.106054 מתחת-לרצפה → stale
+    { orderid: 2, sell_price: { base: "10.000 STEEM", quote: "1.070 SBD" } },   // ask 0.1070 מעל → תקין
+    { orderid: 3, sell_price: { base: "10.000 STEEM", quote: "1.06968 SBD" } }, // בתוך-סבילות-10bps → תקין
+    { orderid: 4, sell_price: { base: "2.000 STEEM", quote: "0.220 SBD" } },    // לא-שלי → מתעלם
+    { orderid: 5, sell_price: { base: "1.000 SBD", quote: "9.000 STEEM" } },    // ביד px=1/9=0.1111 מעל → stale
+    { orderid: 6, sell_price: { base: "1.000 SBD", quote: "9.900 STEEM" } },    // ביד px=0.10101 מתחת → תקין
+  ];
+  const myIds = [1, 2, 3, 5, 6];
+  const st = classifyStale(ord, myIds, PP);
+  t("classifyStale: ask below floor caught", st.some((x) => x.orderid === 1 && x.side === "ask" && Math.abs(x.price - 0.1060543) < 1e-6));
+  t("classifyStale: within-tolerance ask NOT stale (no churn on noise)", !st.some((x) => x.orderid === 3));
+  t("classifyStale: foreign orderid never stale (D-021 lane)", !st.some((x) => x.orderid === 4));
+  t("classifyStale: bid above floor caught via 1/unit inversion (the measured trap)", st.some((x) => x.orderid === 5 && x.side === "bid" && Math.abs(x.price - 1 / 9) < 1e-9));
+  t("classifyStale: healthy bid not stale", !st.some((x) => x.orderid === 6));
+  t("classifyStale: empty/foreign-only input → no invention", classifyStale([], [99], PP).length === 0);
+
   /* וקטור-3: מחזור מוזרק — ליבה ירוקה + סדר-ביצוע; אופליין לגמרי */
   const executed = [];
   const ov = {
