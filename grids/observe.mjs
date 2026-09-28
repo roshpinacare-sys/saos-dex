@@ -100,7 +100,28 @@ function normalizeHistory(result, method) {
 export async function observeRealFills({ account = ACCOUNT, limit = 200, sinceSeq = -1 } = {}) {
   const result = await rpcCall("account_history_api.get_account_history", { account, start: -1, limit });
   const history = result?.history ?? [];
-  return parseFills(history, account, sinceSeq);
+  const { fills, lastSeq } = parseFills(history, account, sinceSeq);
+  return { fills, lastSeq, served: history.length, limit };
+}
+
+/* ── חלון-עמוק אדפטיבי (T-7): לוקחים את-החלון-הכי-עמוק שהשרשרת נותנת-באמת ──
+ * צמתים תומכים בחלונות-שונים (מכסות 100/400/deep). כנות-אכיפה: חלון נחשב
+ * "נמסר" רק אם הצומת החזיר ~כל-מה-שביקשנו (served≥95%) — צומת-מוגבל שמחזיר
+ * 100 ללא-קשר-לבקשה לא נחשב חלון-עמוק; מוחזר החלון-הכי-רחב-שנמסר-באמת. */
+export async function observeDeepWindow({ account = ACCOUNT, wanted = 2000 } = {}) {
+  const tries = [...new Set([wanted, 800, 400, 200, 100])].sort((a, b) => b - a);
+  let best = null, lastErr;
+  for (const limit of tries) {
+    try {
+      const r = await observeRealFills({ account, limit, sinceSeq: -1 });
+      if (r.served >= limit * 0.95) return { ...r, window: limit };
+      if (!best || r.served > best.served) best = { ...r, window: limit };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  if (best) return best;
+  throw lastErr ?? new Error("all-history-windows-failed");
 }
 
 /* ── מד-רווחיות-אמת (A-10 · T-6): יסוד-עלות FIFO-ממוצע על מילויים-אמת ────────
