@@ -101,6 +101,59 @@ export async function observeRealFills({ account = ACCOUNT, limit = 200, sinceSe
   return parseFills(history, account, sinceSeq);
 }
 
+/* ── מד-רווחיות-אמת (A-10 · T-6): יסוד-עלות FIFO-ממוצע על מילויים-אמת ────────
+   כנות-חשבונאית: רווח-ממומש נספר רק מול יסוד-עלות-נמדד (קניות-ביד בחלון).
+   מכירה בלי-יסוד (מלאי-שנרכש-קודם-החלון) נרשמת unbased — נזילה-נמדדת,
+   אבל לא נטענת כרווח. אפס-המצאה. */
+export const emptyPnl = () => ({
+  buys: 0, sells: 0,
+  boughtSteem: 0, spentSbd: 0,
+  soldSteem: 0, proceedsSbd: 0,
+  realizedSbd: 0,
+  unbasedSteem: 0, unbasedSbd: 0,
+  positionSteem: 0, positionCostSbd: 0,
+});
+
+const r6 = (v) => Math.round(v * 1e6) / 1e6;
+
+/** צעד-טהור-אחד: מדינת-pnl + מילוי → מדינת-pnl חדשה (לסירוגין בסדר-seq). */
+export function applyPnlFill(pnl, fill) {
+  const p = { ...pnl };
+  if (fill.side === "bid") {
+    p.buys += 1;
+    p.boughtSteem = r6(p.boughtSteem + fill.steem);
+    p.spentSbd = r6(p.spentSbd + fill.sbd);
+    p.positionSteem = r6(p.positionSteem + fill.steem);
+    p.positionCostSbd = r6(p.positionCostSbd + fill.sbd);
+  } else {
+    p.sells += 1;
+    p.soldSteem = r6(p.soldSteem + fill.steem);
+    p.proceedsSbd = r6(p.proceedsSbd + fill.sbd);
+    const pos = p.positionSteem, cost = p.positionCostSbd;
+    if (pos > 1e-9) {
+      const based = Math.min(fill.steem, pos);
+      const avg = cost / pos; // יסוד-עלות-ממוצע
+      p.realizedSbd = r6(p.realizedSbd + fill.sbd * (based / fill.steem) - avg * based);
+      const rest = r6(fill.steem - based);
+      p.positionSteem = r6(pos - based);
+      p.positionCostSbd = r6(cost - avg * based);
+      if (rest > 1e-9) { p.unbasedSteem = r6(p.unbasedSteem + rest); p.unbasedSbd = r6(p.unbasedSbd + fill.sbd * (rest / fill.steem)); }
+    } else {
+      p.unbasedSteem = r6(p.unbasedSteem + fill.steem);
+      p.unbasedSbd = r6(p.unbasedSbd + fill.sbd);
+    }
+  }
+  return p;
+}
+
+/** חבילה: מילויים (בסדר-seq) → מד-רווחיות מלא. */
+export function realizedPnl(fills) {
+  let p = emptyPnl();
+  for (const f of [...fills].sort((a, b) => a.seq - b.seq)) p = applyPnlFill(p, f);
+  p.openAvgCost = p.positionSteem > 1e-9 ? r6(p.positionCostSbd / p.positionSteem) : null;
+  return p;
+}
+
 /* ── מיזוג למדינה: מעדכן feeMeter + מחזיר אירועי grid.fill אמת ───────────── */
 export function applyRealFills(state, { fills, lastSeq }) {
   if (!fills.length) return { newEvents: [], added: 0 };
@@ -122,5 +175,10 @@ export function applyRealFills(state, { fills, lastSeq }) {
   state.feeMeter.realFills = (state.feeMeter.realFills ?? 0) + fills.length;
   state.feeMeter.realSbdDelta = Math.round(((state.feeMeter.realSbdDelta ?? 0) + sbdDelta) * 1e6) / 1e6;
   state.feeMeter._lastRealSeq = lastSeq;
+  /* A-10: מד-הרווחיות מתקדם מילוי-אחר-מילוי על-גבי-המדינה-הקיימת (סדר-seq) */
+  let pnl = { ...(state.feeMeter.realPnl ?? emptyPnl()) };
+  for (const f of fills) pnl = applyPnlFill(pnl, f);
+  pnl.openAvgCost = pnl.positionSteem > 1e-9 ? Math.round((pnl.positionCostSbd / pnl.positionSteem) * 1e6) / 1e6 : null;
+  state.feeMeter.realPnl = pnl;
   return { newEvents, added: fills.length };
 }

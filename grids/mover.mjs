@@ -14,6 +14,10 @@
 //     התאמה-מלאה של active מתירה חתימה. אי-התאמה = יציאה-כנה, אפס-שידור.
 //   · סדר-הביצוע של grid-beat (R24): ביטול-פקודות-פתוחות → פריסת-הסולם
 //     מההצעה. orderid = YYYYMMDD×100+seq. סכומים בדיוק-3-ספרות.
+//   · מצב-additive (--additive · T-6): פריסה בלי-ביטול — להצעה שחושבה
+//     מול-הנזיל-הפנוי בזמן שמוביל-אח (money-mover v1.9.0) מחזיק כבר את
+//     הסולם. לא-נוגעים בפקודות-אחרות, מדלגים על orderid-תפוסים, ובדיקת-
+//     קדם: נזיל-חי ≥ סכום-התוכנית (fail-closed).
 //   · שערי-הגנה טרם-כל-שידור: ההצעה ok, פאריטי-בתוך-הרצועה (מדידה-טרייה),
 //     RC-דלק חי, אין-מכירה-מתחת-לפאריטי (אכיפה-עצמית על כל-רמה).
 //   · ראיות: כל-txid נרשם ל-mover-log.jsonl (פומבי לחלוטין) + אירוע
@@ -126,8 +130,8 @@ async function freshParity() {
 }
 
 /* ═══ הריצה ═════════════════════════════════════════════════════════════════ */
-export async function runMover({ dryRun = false } = {}) {
-  const evidence = { at: new Date().toISOString(), account: ACCOUNT, cancelled: [], placed: [], blockers: [] };
+export async function runMover({ dryRun = false, additive = false } = {}) {
+  const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: additive ? "additive" : "refresh", cancelled: [], placed: [], blockers: [] };
 
   /* 1. המקור-הריבוני (זמן-ריצה בלבד) */
   const srcPath = process.env.MASTER_SOURCE_PATH || "/tmp/keystation/live-agent/keys/hed-soldiers-source.txt";
@@ -163,22 +167,43 @@ export async function runMover({ dryRun = false } = {}) {
   if (Math.abs(driftBps) > 300) throw new Error(`offer parity drifted ${driftBps}bps from fresh marks — regenerate the offer (honest)`);
   if (Math.abs(offer.parityBps ?? 0) > PARITY_BAND_BPS) throw new Error("offer parity outside band — refusing (fail-closed)");
 
-  /* 5. ביטול-פקודות-פתוחות (רענון אטומי של grid-beat R24) */
+  /* 5. ביטול-פקודות-פתוחות (רענון אטומי של grid-beat R24)
+     מצב-additive: אף-ביטול — הסולם-הקיים (של-מוביל-אח) נשאר בעבודה. */
   const openRaw = await rpcAny("condenser_api.get_open_orders", [ACCOUNT]).catch(() => []);
-  for (const o of openRaw ?? []) {
-    if (dryRun) { evidence.cancelled.push({ id: o.orderid, dryRun: true }); continue; }
-    try {
-      const r = await signAndBroadcast(liveWif, [["limit_order_cancel", { owner: ACCOUNT, orderid: o.orderid }]]);
-      evidence.cancelled.push({ id: o.orderid, txid: r.txid });
-    } catch (e) {
-      evidence.cancelled.push({ id: o.orderid, error: String(e.message ?? e).slice(0, 80) });
+  const takenIds = new Set((openRaw ?? []).map((o) => Number(o.orderid)));
+  if (additive) {
+    evidence.cancelled.push({ skipped: "additive-mode — sibling ladder untouched", openOrders: (openRaw ?? []).length });
+  } else {
+    for (const o of openRaw ?? []) {
+      if (dryRun) { evidence.cancelled.push({ id: o.orderid, dryRun: true }); continue; }
+      try {
+        const r = await signAndBroadcast(liveWif, [["limit_order_cancel", { owner: ACCOUNT, orderid: o.orderid }]]);
+        evidence.cancelled.push({ id: o.orderid, txid: r.txid });
+      } catch (e) {
+        evidence.cancelled.push({ id: o.orderid, error: String(e.message ?? e).slice(0, 80) });
+      }
+    }
+  }
+
+  /* 5b. בדיקת-קדם-additive: הנזיל-החי חייב לכסות את סכום-התוכנית
+     (ההצעה נמדדה נגד-נזיל — אם הוא קטן מאז, ידיים-בכיס בכנות). */
+  if (additive) {
+    const wantSteem = (offer.plan.asks ?? []).reduce((s, a) => s + a.sizeSteem, 0);
+    const wantSbd = (offer.plan.bids ?? []).reduce((s, b) => s + (b.spendSbd ?? 0), 0);
+    const liqSteem = num(acc.balance), liqSbd = num(acc.sbd_balance);
+    if (liqSteem < wantSteem - 1e-9 || liqSbd < wantSbd - 1e-9) {
+      throw new Error(`additive pre-flight: plan needs ${wantSteem.toFixed(3)} STEEM/${wantSbd.toFixed(3)} SBD, live liquid ${liqSteem.toFixed(3)}/${liqSbd.toFixed(3)} — refusing (fail-closed)`);
     }
   }
 
   /* 6. פריסת-הסולם מההצעה — אכיפה-עצמית של דוקטרינת-הפאריטי בכל-רמה */
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  let seq = 1 + (evidence.cancelled.length ? 0 : 0);
-  const nextId = () => Number(today) * 100 + seq++;
+  let seq = 1;
+  const nextId = () => {
+    let id = Number(today) * 100 + seq++;
+    while (takenIds.has(id)) id = Number(today) * 100 + seq++; // additive: לא לדרוך על פקודות-חיות
+    return id;
+  };
   const expiry = Math.floor(Date.now() / 1000) + 27 * 86_400;
 
   for (const a of offer.plan.asks ?? []) {
@@ -217,11 +242,12 @@ export async function runMover({ dryRun = false } = {}) {
   return evidence;
 }
 
-/* CLI: node grids/mover.mjs [--dry-run] */
+/* CLI: node grids/mover.mjs [--dry-run] [--additive] */
 if (process.argv[1] && process.argv[1].endsWith("mover.mjs")) {
   const dry = process.argv.includes("--dry-run");
+  const additive = process.argv.includes("--additive");
   try {
-    const ev = await runMover({ dryRun: dry });
+    const ev = await runMover({ dryRun: dry, additive });
     console.log(`[mover${dry ? " · dry" : ""}] cancelled=${ev.summary.cancelled} placed=${ev.summary.placed} failed=${ev.summary.failed} blocked=${ev.summary.blocked}`);
     for (const p of ev.placed.filter((x) => x.txid)) console.log(`  ✓ #${p.id} ${p.side}: ${p.sell} → ${p.receive} @${p.price} · tx ${String(p.txid).slice(0, 14)}…`);
     for (const p of ev.placed.filter((x) => x.error)) console.log(`  ✗ #${p.id ?? "?"} ${p.side}: ${p.error}`);
