@@ -1,7 +1,8 @@
 // RUN — CLI של רשת-הטריגרים
-//   node grids/run.mjs                    → טיק אחד (ל-Actions/קרון)
+//   node grids/run.mjs                    → טיק אחד (ל-Actions/קרון) + צופה-מילויים-אמת
 //   node grids/run.mjs --loop [ms]        → לולאה אוטונומית מקומית
-//   node grids/run.mjs --selftest         → 20 טיקים דטרמיניסטיים + אסרטים
+//   node grids/run.mjs --observe          → קריאת-מילויים-אמת-בלבד (כלום-לא-כותב-חוץ-מהיומן)
+//   node grids/run.mjs --selftest         → 9 אסרטים דטרמיניסטיים (אופליין, לא נוגע ברשת)
 
 import { runTick, loadState, saveState, measureRefPrice } from "./engine.mjs";
 import { processRules } from "./rules.mjs";
@@ -16,12 +17,29 @@ const has = (f) => args.includes(f);
 
 if (has("--selftest")) {
   await selftest();
+} else if (has("--observe")) {
+  await observeOnce();
 } else if (has("--loop")) {
   const interval = Number(args[args.indexOf("--loop") + 1]) || 60000;
   await loop(interval);
 } else {
   const r = await runTick();
   process.exit(r.ok ? 0 : 2);
+}
+
+/* ── צופה-חד-פעמי: קריאת-מילויים-אמת ללא-טיק (לבדיקת-יד אנושית) ─────────── */
+async function observeOnce() {
+  const { observeRealFills } = await import("./observe.mjs");
+  const state = loadState();
+  const sinceSeq = state.feeMeter?._lastRealSeq ?? -1;
+  const obs = await observeRealFills({ sinceSeq });
+  const totalSbd = obs.fills.reduce((s, f) => s + (f.side === "ask" ? f.sbd : -f.sbd), 0);
+  console.log(`observe: ${obs.fills.length} new real fills (since seq>${sinceSeq}) · net SBD delta ${totalSbd.toFixed(4)}`);
+  for (const f of obs.fills) {
+    console.log(`  [${f.seq}] ${f.at} ${f.side.toUpperCase()} ${f.steem} STEEM <-> ${f.sbd} SBD @ ${f.rate} (vs ${f.counterparty})`);
+  }
+  console.log(`
+state real meter: fills=${state.feeMeter?.realFills ?? 0} · sbdDelta=${state.feeMeter?.realSbdDelta ?? 0} · _lastRealSeq=${state.feeMeter?._lastRealSeq ?? "none"}`);
 }
 
 /* ── לולאה אוטונומית: הרשת מריצה את עצמה ─────────────────────────────── */
@@ -48,10 +66,12 @@ async function selftest() {
     if (!ok) process.exitCode = 1;
   };
 
-  // סביבת-בדיקה נקייה
+  // סביבת-בדיקה נקייה — state.json + events.jsonl + pnl.json: הכל משוחזר בתום הבדיקה
+  // (תיקון-היגיינה: pnl.json נשפך-בעבר עם מצב-ה-HALT של הבדיקה — inventory -5 בפומבי)
   const stateDir = join(HERE, "state");
   const backup = existsSync(join(stateDir, "state.json")) ? readFileSync(join(stateDir, "state.json"), "utf8") : null;
   const evBackup = existsSync(join(stateDir, "events.jsonl")) ? readFileSync(join(stateDir, "events.jsonl"), "utf8") : null;
+  const pnlBackup = existsSync(join(stateDir, "pnl.json")) ? readFileSync(join(stateDir, "pnl.json"), "utf8") : null;
   rmSync(join(stateDir, "events.jsonl"), { force: true });
 
   const seedState = JSON.parse(backup ?? JSON.stringify(SEED));
@@ -100,11 +120,12 @@ async function selftest() {
   r = await runTick({ injectedPrice: price, quiet: true });
   t("negative inventory halts", r.ok === false && r.violations?.some((v) => v.includes("negative")));
 
-  /* שחזור המצב המחויב */
+  /* שחזור המצב המחויב — כולל pnl.json (היגיינה מלאה: הבדיקה לא משאירה עקבות) */
   if (backup !== null) writeFileSync(join(stateDir, "state.json"), backup);
   else writeFileSync(join(stateDir, "state.json"), JSON.stringify(SEED, null, 1));
   if (evBackup !== null) writeFileSync(join(stateDir, "events.jsonl"), evBackup);
   else rmSync(join(stateDir, "events.jsonl"), { force: true });
+  if (pnlBackup !== null) writeFileSync(join(stateDir, "pnl.json"), pnlBackup);
 
   console.log(process.exitCode === 1 ? "SELFTEST: FAIL" : "SELFTEST: PASS");
 }

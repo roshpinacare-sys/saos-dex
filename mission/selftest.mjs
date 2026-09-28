@@ -37,4 +37,5 @@ const s2 = simulate({ capitalUsd: 5000, seed: 7 });
 t("simulation deterministic (same seed)", JSON.stringify(s1.path) === JSON.stringify(s2.path));
 t("simulation crossing labeled honestly", s1.crossingDay === null || typeof s1.crossingDay === "number");
 
+console.log(fail ? "MISSION-SELFTEST: FAIL" : "MISSION-SELFTEST: PASS");
 process.exit(fail);
