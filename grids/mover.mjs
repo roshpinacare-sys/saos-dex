@@ -44,12 +44,12 @@ const MOVER_LOG = join(HERE, "state", "mover-log.jsonl");
 
 const STEEM_NODES = ["https://api.steemit.com", "https://api.justyy.com", "https://steem-rpc.publicnode.com"];
 const STEEM_CHAIN_ID = "0".repeat(64);
-const ACCOUNT = process.env.SAOS_RELAY_AGENT_ACCOUNT || "headcorner";
+export const ACCOUNT = process.env.SAOS_RELAY_AGENT_ACCOUNT || "headcorner";
 const PARITY_BAND_BPS = 5000;
-const RC_MIN = 1e9; // דלק-מינימלי לאומדן-פעולה (fail-closed מתחת לזה)
+export const RC_MIN = 1e9; // דלק-מינימלי לאומדן-פעולה (fail-closed מתחת לזה)
 
-const num = (s) => (s ? parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) : 0);
-const dp3 = (v) => Math.floor(v * 1000) / 1000;
+export const num = (s) => (s ? parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) : 0);
+export const dp3 = (v) => Math.floor(v * 1000) / 1000;
 
 /* ── גזירת-המפתח (R10 מדוד — זהה ל-steem-rearm.ts של הפלטפורמה) ─────────── */
 const privToPub = (priv) => {
@@ -70,9 +70,10 @@ function deriveActiveWif(masterSource) {
   if (candidates.length === 0) throw new Error("no master-password candidates in source (fail-closed)");
   return { candidates, privFor: (role, password) => Buffer.from(crypto.createHash("sha256").update(`${ACCOUNT}${role}${password}`).digest()) };
 }
+export { deriveActiveWif, extractMasterPasswords, privToWif, privToPub };
 
-/* ── RPC (אותם-צמתים של realmarket, fail-כנה) ────────────────────────────── */
-async function rpcAny(method, params) {
+/* ── RPC (אותם-צמתים של realmarket, fail-כנה) — מיוצא לשימוש מסילת-ההמרה (D-023) ── */
+export async function rpcAny(method, params) {
   const errs = [];
   for (const node of STEEM_NODES) {
     try {
@@ -92,8 +93,8 @@ async function rpcAny(method, params) {
   throw new Error(`all-steem-nodes-failed · ${errs.join(" | ")}`);
 }
 
-/* ── חתימה-ושידור (אותו-נתיב מוכח-חי של realmarket.signAndBroadcast) ────── */
-async function signAndBroadcast(wif, ops) {
+/* ── חתימה-ושידור (אותו-נתיב מוכח-חי של realmarket.signAndBroadcast) — מיוצא (D-023) ── */
+export async function signAndBroadcast(wif, ops) {
   const dgp = await rpcAny("condenser_api.get_dynamic_global_properties", []);
   const tx = {
     ref_block_num: Number(dgp.head_block_number) & 0xffff,
@@ -133,6 +134,16 @@ async function freshParity() {
   return steemUsd != null && sbdUsd != null && sbdUsd > 0 ? steemUsd / sbdUsd : null;
 }
 
+/* ═══ עזר-טהור: סיכום-ראיות — תמיד מוגדר, גם ביציאות-מוקדמות (T-8) ═════════ */
+export function summarizeEvidence(evidence) {
+  return {
+    cancelled: (evidence.cancelled ?? []).filter((c) => c.txid).length,
+    placed: (evidence.placed ?? []).filter((p) => p.txid).length,
+    failed: (evidence.placed ?? []).filter((p) => p.error).length,
+    blocked: (evidence.placed ?? []).filter((p) => p.blocked).length,
+  };
+}
+
 /* ═══ הריצה ═════════════════════════════════════════════════════════════════ */
 export async function runMover({ dryRun = false, additive = false } = {}) {
   const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: additive ? "additive" : "refresh", cancelled: [], placed: [], blockers: [] };
@@ -170,6 +181,7 @@ export async function runMover({ dryRun = false, additive = false } = {}) {
   if (additive) {
     if (planAskCount + planBidCount === 0) {
       evidence.blockers.push("additive: both sides empty in plan — honest no-op, nothing placed");
+      evidence.summary = summarizeEvidence(evidence); // T-8: יציאה-מוקדמת חייבת-סיכום (הרוסט: קריסת summary במחזור-החי)
       return evidence;
     }
   } else if (!offer.ok || offer.verdict !== "OFFER-READY") {
@@ -251,7 +263,7 @@ export async function runMover({ dryRun = false, additive = false } = {}) {
   }
 
   /* 7. ראיות-פומביות בלבד + אירוע-לולאה */
-  evidence.summary = { cancelled: evidence.cancelled.filter((c) => c.txid).length, placed: evidence.placed.filter((p) => p.txid).length, failed: evidence.placed.filter((p) => p.error).length, blocked: evidence.placed.filter((p) => p.blocked).length };
+  evidence.summary = summarizeEvidence(evidence);
   appendFileSync(MOVER_LOG, JSON.stringify(evidence) + "\n");
   appendEvent(EVENTS_LOG, { type: "offer.executed", source: "mover", sim: false, payload: { ...evidence.summary, parity: Math.round(parity * 1e6) / 1e6 } });
   return evidence;
