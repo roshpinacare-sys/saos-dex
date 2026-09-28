@@ -18,6 +18,10 @@
 //     מול-הנזיל-הפנוי בזמן שמוביל-אח (money-mover v1.9.0) מחזיק כבר את
 //     הסולם. לא-נוגעים בפקודות-אחרות, מדלגים על orderid-תפוסים, ובדיקת-
 //     קדם: נזיל-חי ≥ סכום-התוכנית (fail-closed).
+//   · ביצוע-פר-צד ב-additive (D-022 · T-7): הצעה-חסומה-חלקית לא עוצרת את
+//     הצד-הפתוח — רק-מצב-רענון דורש OFFER-READY מלא (שלמות-סולם). ב-additive
+//     הבטיחות היא שערי-הרמה-עצמם: אכיפת-פאריטי פר-רמה + קדם-נזיל-חי פר-סכום
+//     + טריות-פאריטי. צד-ריק = דילוג-כנה; שני-צדדים-ריקים = אפס-פעולה-כנה.
 //   · שערי-הגנה טרם-כל-שידור: ההצעה ok, פאריטי-בתוך-הרצועה (מדידה-טרייה),
 //     RC-דלק חי, אין-מכירה-מתחת-לפאריטי (אכיפה-עצמית על כל-רמה).
 //   · ראיות: כל-txid נרשם ל-mover-log.jsonl (פומבי לחלוטין) + אירוע
@@ -156,10 +160,21 @@ export async function runMover({ dryRun = false, additive = false } = {}) {
   const rcNow = Number(rc?.rc_accounts?.[0]?.rc_manabar?.current_mana ?? 0);
   if (rcNow < RC_MIN) throw new Error(`RC fuel below floor: ${rcNow} < ${RC_MIN} (fail-closed)`);
 
-  /* 4. ההצעה — טרייה ותקינה */
+  /* 4. ההצעה — טרייה ותקינה
+     רענון: OFFER-READY מלא (שלמות-סולם אטומית).
+     additive (D-022): מספיק צד-אחד מתוכנן — שערי-הרמה והנזיל אוכפים את-השאר. */
   if (!existsSync(OFFER_PATH)) throw new Error("offer.json missing — run grids/peg.mjs first");
   const offer = JSON.parse(readFileSync(OFFER_PATH, "utf8"));
-  if (!offer.ok || offer.verdict !== "OFFER-READY") throw new Error(`offer not executable: ${offer.verdict} · ${offer.blocker ?? ""}`);
+  const planAskCount = (offer.plan?.asks ?? []).length;
+  const planBidCount = (offer.plan?.bids ?? []).length;
+  if (additive) {
+    if (planAskCount + planBidCount === 0) {
+      evidence.blockers.push("additive: both sides empty in plan — honest no-op, nothing placed");
+      return evidence;
+    }
+  } else if (!offer.ok || offer.verdict !== "OFFER-READY") {
+    throw new Error(`offer not executable: ${offer.verdict} · ${offer.blocker ?? ""}`);
+  }
   const parity = await freshParity();
   if (parity == null) throw new Error("fresh parity unavailable — no marking, no trading (fail-closed)");
   const offerParity = offer.fair?.externalParity;

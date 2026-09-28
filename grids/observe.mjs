@@ -148,10 +148,26 @@ export function applyPnlFill(pnl, fill) {
   return p;
 }
 
-/** חבילה: מילויים (בסדר-seq) → מד-רווחיות מלא. */
-export function realizedPnl(fills) {
-  let p = emptyPnl();
+/** חבילה: מילויים (בסדר-seq) → מד-רווחיות מלא. seed אופציונלי = יסוד-פתיחה
+ * נמדד-מהשרשרת (T-7): מכירות שהיו unbased מתממשות כנגד יסוד אמת במקום חור-כנות. */
+export function realizedPnl(fills, seed = null) {
+  let p = seed ? seedPnlPosition(emptyPnl(), seed.steem, seed.costSbd) : emptyPnl();
   for (const f of [...fills].sort((a, b) => a.seq - b.seq)) p = applyPnlFill(p, f);
+  p.openAvgCost = p.positionSteem > 1e-9 ? r6(p.positionCostSbd / p.positionSteem) : null;
+  return p;
+}
+
+/* ── יסוד-פתיחה (T-7): הזרעת מלאי-פתיחה נמדד-מהשרשרת בלבד ──────────────────
+ * כנות: המספרים מגיעים מקניות-היסטוריות ב-account_history (חלון-עמוק),
+ * לעולם לא מהמצאה. לא נוגע ב-buys/sells — הזרעה אינה מילוי. */
+export function seedPnlPosition(pnl, steem, costSbd) {
+  const p = { ...pnl };
+  if (steem > 1e-9 && costSbd >= 0) {
+    p.positionSteem = r6(p.positionSteem + steem);
+    p.positionCostSbd = r6(p.positionCostSbd + costSbd);
+    p.basisSeededSteem = r6((p.basisSeededSteem ?? 0) + steem);
+    p.basisSeededCostSbd = r6((p.basisSeededCostSbd ?? 0) + costSbd);
+  }
   p.openAvgCost = p.positionSteem > 1e-9 ? r6(p.positionCostSbd / p.positionSteem) : null;
   return p;
 }

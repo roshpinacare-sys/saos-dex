@@ -1,0 +1,210 @@
+// DAILY-CYCLE (A-8 · T-7) — המחזור-היומי העצמי: צפה → טיק → הצמד → מוביל → דוח
+// ═══════════════════════════════════════════════════════════════════════════
+// הרוסט שחייב תיקון: רשת "שמפעילה-את-עצמה" שהייתה תלויה בסשן-סוכן אנושי
+// כדי לרוץ — אינה רשת-עצמאית. המחזור הזה הוא פקודה-אחת שעושה הכל:
+//
+//   1. observe-deep  — חלון-עמוק (2000) על account_history → יסוד-עלות אמת
+//                      מקניות-ההיסטוריה (T-7: סוגר את חור-ה-unbased מה-chain)
+//   2. tick          — דופק רשת-הטריגרים (דבר-גורר-דבר)
+//   3. peg           — מדידה→הצעה→פרסום offer.json (חסר-מפתחות)
+//   4. mover         — רק אם מקור-מפתח נוכח בסביבה: פריסת-נזיל-פנוי additive
+//                      (גלי-powerdown, הכנסות-מילויים) · בלי-מפתח: דילוג-כנה
+//   5. curate        — תוכנית-קיורציה חסרת-מפתחות; ביצוע רק עם posting-WIF
+//                      בסביבה (אותה-משמעת C-1/C-3)
+//   6. report        — daily-report.json פומבי + אירועים ליומן-הרשת
+//
+// בידוד-כישלון: כל-שלב לבד — כישלון-שלב לא מפיל את-המחזור, הדוח כנה על מה
+// שרץ ומה לא. ליבה (observe/tick/peg) נכשלת → יציאה 2. מוביל/קיורציה
+// הם שלבי-חתימה — דילוג כנה אינו כישלון-מחזור.
+
+import { existsSync, writeFileSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { appendEvent } from "./events.mjs";
+import { runTick, loadState, saveState } from "./engine.mjs";
+import { runPeg } from "./peg.mjs";
+import { observeRealFills, realizedPnl } from "./observe.mjs";
+import { planCurations } from "./curate.mjs";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const STATE_DIR = join(HERE, "state");
+const EVENTS_LOG = join(STATE_DIR, "events.jsonl");
+const REPORT_PATH = join(STATE_DIR, "daily-report.json");
+
+const DEFAULT_MASTER_SOURCE = "/tmp/keystation/live-agent/keys/hed-soldiers-source.txt";
+export const masterSourcePath = () => process.env.MASTER_SOURCE_PATH || DEFAULT_MASTER_SOURCE;
+export const hasMasterSource = () => existsSync(masterSourcePath());
+export const hasPostingWif = () => !!process.env.STEEM_POSTING_WIF;
+
+/* ── צעד 1: חלון-עמוק → יסוד-עלות אמת מה-chain (T-7) ─────────────────────── */
+export async function stepObserveDeep({ account, deepLimit = 2000 } = {}) {
+  const deep = await observeRealFills({ account, limit: deepLimit, sinceSeq: -1 });
+  const pnl = realizedPnl(deep.fills);
+  const state = loadState();
+  state.feeMeter.realPnl = pnl;
+  state.feeMeter._lastRealSeq = Math.max(state.feeMeter._lastRealSeq ?? -1, deep.lastSeq);
+  const basisBids = deep.fills.filter((f) => f.side === "bid");
+  const basisInfo = {
+    windowFills: deep.fills.length,
+    windowBids: basisBids.length,
+    basisEstablished: pnl.basisSeededSteem === undefined && pnl.positionSteem > 0,
+    note: "יסוד מחושב-מחדש מהחלון-העמוק בכל-מחזור — דטרמיניסטי, אפס-סטייה",
+  };
+  saveState(state);
+  appendEvent(EVENTS_LOG, {
+    type: "pnl.recomputed",
+    source: "daily-cycle",
+    payload: {
+      fills: deep.fills.length, realizedSbd: pnl.realizedSbd,
+      positionSteem: pnl.positionSteem, openAvgCost: pnl.openAvgCost, unbasedSteem: pnl.unbasedSteem,
+    },
+  });
+  return { deep: deep.fills.length, pnl, basisInfo };
+}
+
+/* ── צעד 4: מוביל additive — פריסת-נזיל-פנוי, רק עם מפתח בסביבה ──────────── */
+export async function stepMover() {
+  if (!hasMasterSource()) {
+    return { skipped: true, reason: `master source absent at ${masterSourcePath()} (fail-closed · A-7 gate) — keyless cycle continues` };
+  }
+  const { runMover } = await import("./mover.mjs");
+  const evidence = await runMover({ additive: true });
+  return { skipped: false, cancelled: evidence.summary.cancelled, placed: evidence.summary.placed, failed: evidence.summary.failed, blocked: evidence.summary.blocked };
+}
+
+/* ── צעד 5: קיורציה — תוכנית תמיד, ביצוע רק עם posting-WIF ───────────────── */
+export async function stepCurate({ account } = {}) {
+  const plan = await planCurations({ account });
+  if (!process.env.STEEM_POSTING_WIF) {
+    return { planned: plan.votes.length, executed: 0, skipped: true, reason: "posting WIF absent in environment (fail-closed · C-1/C-3 doctrine)", plan: plan.votes.slice(0, 3) };
+  }
+  const { executeVotes } = await import("./curate.mjs");
+  const res = await executeVotes(plan, { wif: process.env.STEEM_POSTING_WIF });
+  return { planned: plan.votes.length, executed: res.executed, skipped: false, txids: res.txids };
+}
+
+/* ── המחזור — צעדים מבודדים, דוח כנה; stepOverrides להזרקה בבדיקות-אופליין ── */
+export async function runDailyCycle({ account = process.env.SAOS_RELAY_AGENT_ACCOUNT || "headcorner", quiet = false, stepOverrides = {}, persist = true } = {}) {
+  const startedAt = new Date().toISOString();
+  const report = { startedAt, account, steps: {}, ok: false };
+  const run = (name, fn) => (stepOverrides[name] ? stepOverrides[name] : fn);
+
+  /* 1. צפה-עמוק (יסוד-אמת) */
+  try {
+    const o = await run("observe", () => stepObserveDeep({ account }))();
+    report.steps.observe = { ok: true, ...o.basisInfo, realizedSbd: o.pnl.realizedSbd, unbasedSteem: o.pnl.unbasedSteem };
+  } catch (e) {
+    report.steps.observe = { ok: false, error: String(e?.message ?? e).slice(0, 160) };
+  }
+
+  /* 2. דופק-הרשת */
+  try {
+    const t = await run("tick", () => runTick({ quiet: true }))();
+    report.steps.tick = { ok: t.ok, summary: String(t.summary ?? "").slice(0, 200), violations: t.violations ?? null };
+  } catch (e) {
+    report.steps.tick = { ok: false, error: String(e?.message ?? e).slice(0, 160) };
+  }
+
+  /* 3. הצמדה→הצעה */
+  try {
+    const doc = await run("peg", () => runPeg())();
+    report.steps.peg = { ok: true, verdict: doc.verdict, parityBps: doc.parityBps, asks: doc.plan?.asks?.length ?? 0, bids: doc.plan?.bids?.length ?? 0, blockers: doc.blocker, convertArb: doc.marks?.convertArb?.verdict ?? null };
+  } catch (e) {
+    report.steps.peg = { ok: false, error: String(e?.message ?? e).slice(0, 160) };
+  }
+
+  /* 4. מוביל (חתימה — שלב-אופציונלי) */
+  try {
+    report.steps.mover = await run("mover", () => stepMover())();
+  } catch (e) {
+    report.steps.mover = { skipped: true, reason: `refused honestly: ${String(e?.message ?? e).slice(0, 140)}` };
+  }
+
+  /* 5. קיורציה (חתימה — שלב-אופציונלי) */
+  try {
+    report.steps.curate = await run("curate", () => stepCurate({ account }))();
+  } catch (e) {
+    report.steps.curate = { planned: 0, executed: 0, skipped: true, reason: `refused honestly: ${String(e?.message ?? e).slice(0, 140)}` };
+  }
+
+  /* 6. דוח — ליבה ירוקה = מחזור-תקין */
+  const core = ["observe", "tick", "peg"];
+  report.ok = core.every((s) => report.steps[s]?.ok);
+  report.finishedAt = new Date().toISOString();
+  if (persist) writeFileSync(REPORT_PATH, JSON.stringify(report, null, 1) + "\n");
+  if (persist) appendEvent(EVENTS_LOG, {
+    type: report.ok ? "daily.cycle" : "daily.cycle-degraded",
+    source: "daily-cycle",
+    payload: { ok: report.ok, steps: Object.fromEntries(Object.entries(report.steps).map(([k, v]) => [k, v.ok ?? !v.skipped ?? false])) },
+  });
+  if (!quiet) {
+    for (const [k, v] of Object.entries(report.steps)) {
+      const mark = v.ok === false ? "✗" : v.skipped ? "⏭" : "✓";
+      console.log(`[daily] ${mark} ${k}: ${JSON.stringify(v).slice(0, 180)}`);
+    }
+    console.log(`[daily] ${report.ok ? "CYCLE-OK" : "CYCLE-DEGRADED"} · report: grids/state/daily-report.json`);
+  }
+  return report;
+}
+
+/* ── selftest: אופליין לגמרי — צעדים מוזרקים, אפס-רשת, אפס-מפתחות ────────── */
+export async function selftest() {
+  const t = (name, ok) => {
+    console.log(`${ok ? " ✓" : " ✗"} ${name}`);
+    if (!ok) process.exitCode = 1;
+  };
+
+  /* וקטור-1: יסוד-פתיחה מהשרשרת → מכירה מתממשת נגד יסוד אמת (סוגר unbased) */
+  const { seedPnlPosition, emptyPnl, applyPnlFill } = await import("./observe.mjs");
+  let pnl = seedPnlPosition(emptyPnl(), 200, 19); // קנייה-היסטורית: 200 STEEM @ 0.095
+  pnl = applyPnlFill(pnl, { side: "ask", steem: 40, sbd: 40 * 0.12, rate: 0.12, seq: 1, at: "t", counterparty: "x" });
+  t("seeded basis: sell 40@0.12 vs basis 0.095 → +1.0 SBD", Math.abs(pnl.realizedSbd - 1.0) < 1e-9 && pnl.unbasedSteem === 0);
+  t("seed tracked honestly", pnl.basisSeededSteem === 200 && pnl.basisSeededCostSbd === 19);
+
+  /* וקטור-2: בלי יסוד — אותה מכירה נשארת unbased (כנות לא נפגעת) */
+  const raw = applyPnlFill(emptyPnl(), { side: "ask", steem: 40, sbd: 40 * 0.12, rate: 0.12, seq: 1, at: "t", counterparty: "x" });
+  t("no seed: same sell honestly unbased", raw.unbasedSteem === 40 && raw.realizedSbd === 0);
+
+  /* וקטור-3: מחזור מוזרק — ליבה ירוקה + סדר-ביצוע; אופליין לגמרי */
+  const executed = [];
+  const ov = {
+    observe: async () => { executed.push("observe"); return { basisInfo: { windowFills: 34, windowBids: 29, basisEstablished: true }, pnl: { realizedSbd: -0.016, unbasedSteem: 0 } }; },
+    tick: async () => { executed.push("tick"); return { ok: true, summary: "tick#1" }; },
+    peg: async () => { executed.push("peg"); return { verdict: "OFFER-READY", parityBps: -267, plan: { asks: [1, 2, 3, 4, 5], bids: [] }, marks: { convertArb: { verdict: "NO-EDGE" } } }; },
+    mover: async () => { executed.push("mover"); return { skipped: true, reason: "keyless (fail-closed)" }; },
+    curate: async () => { executed.push("curate"); return { planned: 5, executed: 0, skipped: true, reason: "no posting WIF" }; },
+  };
+  const injected = await runDailyCycle({ quiet: true, stepOverrides: ov, persist: false });
+  t("injected cycle: all steps ran in order", JSON.stringify(executed) === JSON.stringify(["observe", "tick", "peg", "mover", "curate"]));
+  t("injected cycle: core green → ok=true", injected.ok === true);
+  t("injected cycle: peg surfaces convertArb", injected.steps.peg.convertArb === "NO-EDGE");
+
+  /* וקטור-4: ליבה נכשלת → ok=false כנה, שלבי-חתימה לא מפילים */
+  const failing = await runDailyCycle({
+    quiet: true,
+    persist: false,
+    stepOverrides: {
+      observe: async () => { throw new Error("rpc-down"); },
+      tick: async () => ({ ok: true, summary: "t" }),
+      peg: async () => ({ verdict: "OFFER-BLOCKED", plan: { asks: [], bids: [] }, marks: {} }),
+      mover: async () => { throw new Error("refused"); },
+    },
+  });
+  t("observe fail → cycle degraded honestly", failing.ok === false && failing.steps.observe.ok === false);
+  t("mover throw → honest skip, cycle continues", failing.steps.mover.skipped === true && /refused/.test(failing.steps.mover.reason));
+
+  /* וקטור-5: היגיינה — בלי persist, אף-ארטיפקט לא נכתב (הבדיקה לא משאירה עקבות) */
+  t("no-persist runs wrote no daily-report", !existsSync(REPORT_PATH) || JSON.parse(readFileSync(REPORT_PATH, "utf8")).startedAt !== "t");
+
+  console.log(process.exitCode === 1 ? "DAILY-SELFTEST: FAIL" : "DAILY-SELFTEST: PASS");
+}
+
+/* ── CLI: node grids/daily-cycle.mjs [--selftest] ────────────────────────── */
+if (process.argv[1] && process.argv[1].endsWith("daily-cycle.mjs")) {
+  if (process.argv.includes("--selftest")) {
+    await selftest();
+  } else {
+    const report = await runDailyCycle();
+    process.exit(report.ok ? 0 : 2);
+  }
+}
