@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-09-28T14:26:04.454Z",
+ "publishedAt": "2026-09-28T14:42:52.819Z",
  "engine": "saos-dex/grids/peg · B-1 (fleet/r130) — internal grid params → external offer; proposes, signs nothing",
  "account": "headcorner",
  "chain": "STEEM-internal-market",
@@ -15,19 +15,19 @@
    "mm-grid",
    "anchor-quote"
   ],
-  "inventoryMu": 211.72,
+  "inventoryMu": 385.37,
   "capMu": 15000,
-  "utilizationPct": 1.4,
-  "simFeesMu": 18.7,
+  "utilizationPct": 2.6,
+  "simFeesMu": 19.51,
   "contribution": "shape only — levels/widths/symmetry doctrine; real sizes come from chain balances exclusively (no self-printing)"
  },
  "marks": {
-  "steemUsd": 0.063168,
-  "sbdUsd": 0.592246,
-  "paritySbdPerSteem": 0.106658,
+  "steemUsd": 0.06245,
+  "sbdUsd": 0.591777,
+  "paritySbdPerSteem": 0.10553,
   "sources": {
-   "steem": "coingecko:steem",
-   "sbd": "coingecko:steem-dollars"
+   "steem": "binance:STEEMUSDT",
+   "sbd": "console:money.json@2026-09-28T14:21Z"
   }
  },
  "book": {
@@ -43,10 +43,10 @@
  "openOrdersNow": 7,
  "fair": {
   "internalRef": 0.104111,
-  "externalParity": 0.106658,
+  "externalParity": 0.10553,
   "boundary": "parity: asks ≥ parity (never sell below external value), bids ≤ parity (never pay above it)"
  },
- "parityBps": -239,
+ "parityBps": -135,
  "drag": {
   "k": 1,
   "spreadBps": 0,
@@ -61,35 +61,35 @@
    {
     "side": "ask",
     "level": 1,
-    "priceSbdPerSteem": 0.107191,
+    "priceSbdPerSteem": 0.106058,
     "sizeSteem": 28.806,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 2,
-    "priceSbdPerSteem": 0.107725,
+    "priceSbdPerSteem": 0.106585,
     "sizeSteem": 43.209,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 3,
-    "priceSbdPerSteem": 0.108258,
+    "priceSbdPerSteem": 0.107113,
     "sizeSteem": 64.813,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 4,
-    "priceSbdPerSteem": 0.108791,
+    "priceSbdPerSteem": 0.107641,
     "sizeSteem": 97.219,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 5,
-    "priceSbdPerSteem": 0.109324,
+    "priceSbdPerSteem": 0.108168,
     "sizeSteem": 145.828,
     "kind": "sell-steem-above-parity"
    }
@@ -98,41 +98,41 @@
    {
     "side": "bid",
     "level": 1,
-    "priceSbdPerSteem": 0.104525,
+    "priceSbdPerSteem": 0.103419,
     "spendSbd": 0.152,
-    "sizeSteem": 1.454,
+    "sizeSteem": 1.47,
     "kind": "buy-steem-below-parity"
    },
    {
     "side": "bid",
     "level": 2,
-    "priceSbdPerSteem": 0.102392,
+    "priceSbdPerSteem": 0.101309,
     "spendSbd": 0.228,
-    "sizeSteem": 2.227,
+    "sizeSteem": 2.251,
     "kind": "buy-steem-below-parity"
    },
    {
     "side": "bid",
     "level": 3,
-    "priceSbdPerSteem": 0.100259,
+    "priceSbdPerSteem": 0.099198,
     "spendSbd": 0.342,
-    "sizeSteem": 3.411,
+    "sizeSteem": 3.448,
     "kind": "buy-steem-below-parity"
    },
    {
     "side": "bid",
     "level": 4,
-    "priceSbdPerSteem": 0.098125,
+    "priceSbdPerSteem": 0.097088,
     "spendSbd": 0.513,
-    "sizeSteem": 5.228,
+    "sizeSteem": 5.284,
     "kind": "buy-steem-below-parity"
    },
    {
     "side": "bid",
     "level": 5,
-    "priceSbdPerSteem": 0.095992,
+    "priceSbdPerSteem": 0.094977,
     "spendSbd": 0.769,
-    "sizeSteem": 8.011,
+    "sizeSteem": 8.097,
     "kind": "buy-steem-below-parity"
    }
   ],
@@ -144,9 +144,9 @@
   }
  },
  "triggers": {
-  "source": null,
+  "source": "2026-09-28T12:41:33.137Z",
   "consumed": [],
-  "note": "trigger book not available"
+  "note": "no grid-relevant triggers fired"
  },
  "honesty": "הצעה חסרת-מפתחות: הצורה נגזרת מהמיקרו-גרידים הפנימיים (סימולציה sim:true), הגדלים נגזרים מיתרות-השרשרת בלבד, והמחיר-אמת כפול — feed_price פנים + פאריטי-USD חוץ. המנוע מציע ולא חותם: המוביל (R81) דרך /api/money הוא החותם היחיד, וכל-מספר כאן ניתן-לחישוב-מחדש מ-RPC ציבורי."
 }

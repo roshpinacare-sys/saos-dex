@@ -94,4 +94,47 @@ v("empty history → zero fills, lastSeq stays -1", r4.fills.length === 0 && r4.
 /* 7. הערכים-האמת-מהשרשרת 2026-09-28 (מילוי #100): rate ≈ 0.1068 SBD/STEEM */
 v("chain-truth rate in parity band [0.105,0.108]", r1.fills[0].rate > 0.105 && r1.fills[0].rate < 0.108);
 
+/* ══ A-10: מד-רווחיות-אמת (יסוד-עלות-ממוצע) — וקטורים טהורים ═══════════════ */
+import { applyPnlFill, realizedPnl, emptyPnl } from "./observe.mjs";
+const mkFill = (seq, side, steem, sbd) => ({ seq, at: "t", side, steem, sbd, rate: sbd / steem, counterparty: "x" });
+
+/* 8. קנייה→מכירה ברווח: +0.1 SBD ממומש, פוזיציה אפס */
+const pnlA = realizedPnl([mkFill(1, "bid", 10, 1.0), mkFill(2, "ask", 10, 1.1)]);
+v("pnl buy@0.10→sell@0.11: realized +0.1, flat position",
+  pnlA.realizedSbd === 0.1 && pnlA.positionSteem === 0 && pnlA.openAvgCost === null && pnlA.unbasedSteem === 0);
+
+/* 9. מכירה-לפני-קנייה: unbased בכנות — לא נספר כרווח */
+const pnlB = realizedPnl([mkFill(1, "ask", 10, 1.1)]);
+v("pnl sell-without-basis: realized 0, unbased 10 STEEM/1.1 SBD",
+  pnlB.realizedSbd === 0 && pnlB.unbasedSteem === 10 && pnlB.unbasedSbd === 1.1);
+
+/* 10. יסוד-עלות-ממוצע: 5@0.10 + 5@0.12 → ממוצע 0.11; מכירת 5@0.13 → +0.10 */
+const pnlC = realizedPnl([mkFill(1, "bid", 5, 0.5), mkFill(2, "bid", 5, 0.6), mkFill(3, "ask", 5, 0.65)]);
+v("pnl avg-cost: realized +0.10, open position 5 @ avg 0.11",
+  pnlC.realizedSbd === 0.1 && pnlC.positionSteem === 5 && pnlC.openAvgCost === 0.11 && pnlC.positionCostSbd === 0.55);
+
+/* 11. מכירה-חלקית: קנה 10@0.10, מכר 4@0.11 → +0.04, פוזיציה 6 */
+const pnlD = realizedPnl([mkFill(1, "bid", 10, 1.0), mkFill(2, "ask", 4, 0.44)]);
+v("pnl partial sell: realized +0.04, position 6 @ cost 0.60",
+  pnlD.realizedSbd === 0.04 && Math.abs(pnlD.positionSteem - 6) < 1e-9 && Math.abs(pnlD.positionCostSbd - 0.6) < 1e-9);
+
+/* 12. חלוקה-לאירועים (applyRealFills בשני-מחזורים) == חבילה-אחת */
+const st1 = { feeMeter: {} };
+const fs_ = [mkFill(1, "bid", 5, 0.5), mkFill(2, "ask", 5, 0.65), mkFill(3, "bid", 3, 0.33)];
+applyRealFills(st1, { fills: fs_.slice(0, 2), lastSeq: 2 });
+applyRealFills(st1, { fills: fs_.slice(2), lastSeq: 3 });
+const one = realizedPnl(fs_);
+v("pnl incremental == batch (state meter converges)",
+  Math.abs(st1.feeMeter.realPnl.realizedSbd - one.realizedSbd) < 1e-9
+  && Math.abs(st1.feeMeter.realPnl.positionSteem - one.positionSteem) < 1e-9
+  && st1.feeMeter.realPnl.openAvgCost === one.openAvgCost);
+
+/* 13. דטרמיניזם: אותו-קלט → אותו-פלט */
+v("pnl deterministic", JSON.stringify(realizedPnl(fs_)) === JSON.stringify(realizedPnl([...fs_].reverse())));
+
+/* 14. אמת-השרשרת-של-היום: 29 בידים-היסטוריים + אסקים — יסוד-העלות-הפתוח תואם לקניות-שנמדדו */
+const p = realizedPnl([{ seq: 1, side: "bid", steem: 230, sbd: 14.946 }, { seq: 2, side: "ask", steem: 28.393, sbd: 3.033 }]);
+v("pnl day-truth: basis ~0.0650, realized on 28.393 sold ≈ +1.188 SBD",
+  p.openAvgCost !== null && Math.abs(p.openAvgCost - 14.946 / 230) < 1e-6 && Math.abs(p.realizedSbd - (3.033 - 28.393 * (14.946 / 230))) < 1e-6);
+
 console.log(process.exitCode === 1 ? "OBSERVE-SELFTEST: FAIL" : "OBSERVE-SELFTEST: PASS");
