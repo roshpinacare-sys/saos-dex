@@ -10,6 +10,7 @@ import { dirname, join, resolve } from "node:path";
 import { appendEvent, nextSeq } from "./events.mjs";
 import { processRules, SEED_RULES } from "./rules.mjs";
 import { STRATEGIES, simFill, mulberry32, FEE_BPS } from "./strategies.mjs";
+import { observeRealFills, applyRealFills } from "./observe.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STATE_DIR = join(HERE, "state");
@@ -73,7 +74,7 @@ export function saveState(state) {
 export function pnlView(state) {
   return {
     asof: state.asof,
-    real: { feesMu: state.feeMeter.realMu ?? 0, fills: state.feeMeter.realFills ?? 0, note: "אמת מוטבעת-על-שרשרת בלבד" },
+    real: { feesMu: state.feeMeter.realMu ?? 0, fills: state.feeMeter.realFills ?? 0, sbdDelta: state.feeMeter.realSbdDelta ?? 0, note: "אמת מוטבעת-על-שרשרת בלבד (fill_order מה-chain)" },
     sim: { feesMu: state.feeMeter.simMu ?? 0, fills: state.feeMeter.simFills ?? 0, note: "סימולציה מסומנת sim:true" },
     grids: (state.grids ?? []).map((g) => ({ id: g.id, strategy: g.strategy, active: g.active, inventoryMu: g.inventoryMu, pnlSimMu: g.pnlSimMu ?? 0 })),
     mission: state.mission ?? null,
@@ -124,7 +125,16 @@ export async function runTick({ seed = 20260928, injectedPrice = null, injectedE
     events.push({ type: "anchor.new", source: "weave", payload: { checkpoint: anchor.checkpoint } });
     state.lastCheckpoint = anchor.checkpoint;
   }
-  events.push(...(injectedEvents.length ? [] : [])); // (שומר-מקום למקורות עתידיים)
+  /* 1b. צופה-מילויים-אמת (A-9): השרשרת מדברת חזרה — רק בטיק-חי, לעולם לא בבדיקות */
+  if (!injectedPrice && !injectedEvents.length) {
+    try {
+      const obs = await observeRealFills({ sinceSeq: state.feeMeter?._lastRealSeq ?? -1 });
+      const applied = applyRealFills(state, obs);
+      if (applied.added > 0) events.push(...applied.newEvents);
+    } catch {
+      /* כישלון-רשת: המשך-שקט — אמת שלא-נמדדה לא-נספרת, הגרידים ממשיכים */
+    }
+  }
 
   /* 2. אסטרטגיות → פקודות → מילויי-סימולציה */
   const market = state.market ?? { refPrice: null, stale: true };
@@ -163,7 +173,8 @@ export async function runTick({ seed = 20260928, injectedPrice = null, injectedE
   }
 
   /* 4. כללים: דבר-גורר-דבר */
-  const fresh = events.map((e) => ({ ...e, seq: nextSeq(EVENTS_LOG) + events.indexOf(e), sim: true }));
+  // אמת שנמדדה-על-השרשרת נשארת real:true — לא מסומנת sim (כנות-מובנית)
+  const fresh = events.map((e) => ({ ...e, seq: nextSeq(EVENTS_LOG) + events.indexOf(e), sim: !e.real }));
   const { actions, newEvents, fired, halted, haltReason } = processRules(state, fresh, SEED_RULES);
   for (const ev of newEvents) appendEvent(EVENTS_LOG, ev);
 
