@@ -137,4 +137,14 @@ const p = realizedPnl([{ seq: 1, side: "bid", steem: 230, sbd: 14.946 }, { seq: 
 v("pnl day-truth: basis ~0.0650, realized on 28.393 sold ≈ +1.188 SBD",
   p.openAvgCost !== null && Math.abs(p.openAvgCost - 14.946 / 230) < 1e-6 && Math.abs(p.realizedSbd - (3.033 - 28.393 * (14.946 / 230))) < 1e-6);
 
+/* 15. צורת-מערך של condenser: ["fill_order", {…}] — נפרס כמו {type,value}
+ * אמת-מהשרשרת (seq 57279): אנחנו open_owner שמשלם 0.029 SBD ומקבל 0.284 STEEM
+ * = מילוי-ביד (קנינו מתחת-לפאריטי 0.10211) — הצורה-המערכית חייבת להיפרס נכון. */
+const rArr = parseFills([[300, { op: ["fill_order", {
+  current_orderid: 1727156089, current_owner: "ecoburn", current_pays: asset(0.284, NAI_STEEM),
+  open_orderid: 2026092804, open_owner: "headcorner", open_pays: asset(0.029, NAI_SBD),
+}], timestamp: "2026-09-28T14:55:00" }]], "headcorner", -1);
+v("condenser array-form op parsed (bid: paid 0.029 SBD, got 0.284 STEEM @0.10211)",
+  rArr.fills.length === 1 && rArr.fills[0].side === "bid" && rArr.fills[0].steem === 0.284 && rArr.fills[0].sbd === 0.029 && rArr.lastSeq === 300);
+
 console.log(process.exitCode === 1 ? "OBSERVE-SELFTEST: FAIL" : "OBSERVE-SELFTEST: PASS");
