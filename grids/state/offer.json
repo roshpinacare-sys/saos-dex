@@ -1,11 +1,13 @@
 {
- "ok": true,
- "publishedAt": "2026-09-28T14:42:52.819Z",
+ "ok": false,
+ "publishedAt": "2026-09-28T14:53:04.879Z",
  "engine": "saos-dex/grids/peg · B-1 (fleet/r130) — internal grid params → external offer; proposes, signs nothing",
  "account": "headcorner",
  "chain": "STEEM-internal-market",
- "verdict": "OFFER-READY",
- "blocker": null,
+ "verdict": "OFFER-BLOCKED",
+ "blocker": [
+  "buy-side waiting for SBD inventory: 0 SBD commitable < 0.25 needed"
+ ],
  "bridge": {
   "activeGrids": [
    "mm-core",
@@ -15,19 +17,19 @@
    "mm-grid",
    "anchor-quote"
   ],
-  "inventoryMu": 385.37,
+  "inventoryMu": 128.71,
   "capMu": 15000,
-  "utilizationPct": 2.6,
-  "simFeesMu": 19.51,
+  "utilizationPct": 0.9,
+  "simFeesMu": 23.49,
   "contribution": "shape only — levels/widths/symmetry doctrine; real sizes come from chain balances exclusively (no self-printing)"
  },
  "marks": {
-  "steemUsd": 0.06245,
-  "sbdUsd": 0.591777,
-  "paritySbdPerSteem": 0.10553,
+  "steemUsd": 0.0624,
+  "sbdUsd": 0.59236,
+  "paritySbdPerSteem": 0.105341,
   "sources": {
-   "steem": "binance:STEEMUSDT",
-   "sbd": "console:money.json@2026-09-28T14:21Z"
+   "steem": "coingecko:steem",
+   "sbd": "coingecko:steem-dollars"
   }
  },
  "book": {
@@ -37,16 +39,16 @@
   "spreadBps": 0
  },
  "inventory": {
-  "steem": 422.584,
-  "sbd": 2.227
+  "steem": 42.709,
+  "sbd": 0.223
  },
- "openOrdersNow": 7,
+ "openOrdersNow": 17,
  "fair": {
   "internalRef": 0.104111,
-  "externalParity": 0.10553,
+  "externalParity": 0.105341,
   "boundary": "parity: asks ≥ parity (never sell below external value), bids ≤ parity (never pay above it)"
  },
- "parityBps": -135,
+ "parityBps": -117,
  "drag": {
   "k": 1,
   "spreadBps": 0,
@@ -61,92 +63,51 @@
    {
     "side": "ask",
     "level": 1,
-    "priceSbdPerSteem": 0.106058,
-    "sizeSteem": 28.806,
+    "priceSbdPerSteem": 0.105868,
+    "sizeSteem": 2.881,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 2,
-    "priceSbdPerSteem": 0.106585,
-    "sizeSteem": 43.209,
+    "priceSbdPerSteem": 0.106394,
+    "sizeSteem": 4.321,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 3,
-    "priceSbdPerSteem": 0.107113,
-    "sizeSteem": 64.813,
+    "priceSbdPerSteem": 0.106921,
+    "sizeSteem": 6.481,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 4,
-    "priceSbdPerSteem": 0.107641,
-    "sizeSteem": 97.219,
+    "priceSbdPerSteem": 0.107448,
+    "sizeSteem": 9.722,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 5,
-    "priceSbdPerSteem": 0.108168,
-    "sizeSteem": 145.828,
+    "priceSbdPerSteem": 0.107975,
+    "sizeSteem": 14.583,
     "kind": "sell-steem-above-parity"
    }
   ],
-  "bids": [
-   {
-    "side": "bid",
-    "level": 1,
-    "priceSbdPerSteem": 0.103419,
-    "spendSbd": 0.152,
-    "sizeSteem": 1.47,
-    "kind": "buy-steem-below-parity"
-   },
-   {
-    "side": "bid",
-    "level": 2,
-    "priceSbdPerSteem": 0.101309,
-    "spendSbd": 0.228,
-    "sizeSteem": 2.251,
-    "kind": "buy-steem-below-parity"
-   },
-   {
-    "side": "bid",
-    "level": 3,
-    "priceSbdPerSteem": 0.099198,
-    "spendSbd": 0.342,
-    "sizeSteem": 3.448,
-    "kind": "buy-steem-below-parity"
-   },
-   {
-    "side": "bid",
-    "level": 4,
-    "priceSbdPerSteem": 0.097088,
-    "spendSbd": 0.513,
-    "sizeSteem": 5.284,
-    "kind": "buy-steem-below-parity"
-   },
-   {
-    "side": "bid",
-    "level": 5,
-    "priceSbdPerSteem": 0.094977,
-    "spendSbd": 0.769,
-    "sizeSteem": 8.097,
-    "kind": "buy-steem-below-parity"
-   }
-  ],
+  "bids": [],
   "totals": {
-   "askSteem": 379.875,
-   "bidSbd": 2.004,
-   "steemCommit": 379.875,
-   "sbdCommit": 2.004
+   "askSteem": 37.988,
+   "bidSbd": 0,
+   "steemCommit": 37.988,
+   "sbdCommit": 0.2
   }
  },
  "triggers": {
-  "source": "2026-09-28T12:41:33.137Z",
+  "source": null,
   "consumed": [],
-  "note": "no grid-relevant triggers fired"
+  "note": "trigger book not available"
  },
  "honesty": "הצעה חסרת-מפתחות: הצורה נגזרת מהמיקרו-גרידים הפנימיים (סימולציה sim:true), הגדלים נגזרים מיתרות-השרשרת בלבד, והמחיר-אמת כפול — feed_price פנים + פאריטי-USD חוץ. המנוע מציע ולא חותם: המוביל (R81) דרך /api/money הוא החותם היחיד, וכל-מספר כאן ניתן-לחישוב-מחדש מ-RPC ציבורי."
 }
