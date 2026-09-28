@@ -22,6 +22,7 @@ const t = (name, ok) => {
 };
 
 const NOW = "2026-09-28T12:00:00.000Z";
+const r6 = (v) => Math.round(v * 1e6) / 1e6;
 
 /* קלטות-עוגן: ref פנימי 0.104111 (מדידת-אמת של feed), פאריטי חוץ 0.104111 */
 const MARKS = { steemUsd: 0.15, sbdUsd: 1.44, parity: 0.104167, sources: { steem: "selftest:binance", sbd: "selftest:coingecko" } };
@@ -118,6 +119,51 @@ const good = computeOffer(base);
   const p = { ...DEFAULT_POLICY, askLevels: 2, bidLevels: 2 };
   const d = computeOffer({ ...base, policy: p });
   t("injected policy respected (2 levels)", d.plan.asks.length === 2 && d.plan.bids.length === 2);
+}
+
+/* ═══ B-3: סולם-5-רמות + גרירה דינמית ═══════════════════════════════════ */
+
+/* 12. ברירת-המחדל עלתה ל-5 רמות-לצד */
+{
+  t("B-3: default ladder is 5 levels per side", good.plan.asks.length === 5 && good.plan.bids.length === 5);
+}
+
+/* 13. גרירה ניטרלית: אין-ספר (spreadBps חסר) → k=1 והרמה-1 במרחק-הבסיס */
+{
+  const d = computeOffer({ ...base, snapshot: { ...SNAPSHOT, book: { ...SNAPSHOT.book, spreadBps: null } } });
+  const l1Ask = r6(MARKS.parity * (1 + DEFAULT_POLICY.askStepBps / 10000));
+  const l1Bid = r6(MARKS.parity * (1 - DEFAULT_POLICY.bidStepBps / 10000));
+  t("B-3: no book → neutral drag k=1", d.drag.k === 1 && d.drag.spreadBps === null);
+  t("B-3: neutral drag keeps base spacing", d.plan.asks[0].priceSbdPerSteem === l1Ask && d.plan.bids[0].priceSbdPerSteem === l1Bid);
+}
+
+/* 14. גרירה דינמית: פיזור-2000bps → k=2, ריחוק-הרמות כפול */
+{
+  const d = computeOffer({ ...base, snapshot: { ...SNAPSHOT, book: { ...SNAPSHOT.book, spreadBps: 2000 } } });
+  const l1BidWide = r6(MARKS.parity * (1 - (DEFAULT_POLICY.bidStepBps * 2) / 10000));
+  t("B-3: wide book drags ladder (k=2)", d.drag.k === 2 && d.drag.effBidStepBps === DEFAULT_POLICY.bidStepBps * 2);
+  t("B-3: dragged level-1 bid priced wider", d.plan.bids[0].priceSbdPerSteem === l1BidWide);
+}
+
+/* 15. תקרת-גרירה: פיזור-קיצוני → k נעצר ב-dragMax */
+{
+  const d = computeOffer({ ...base, snapshot: { ...SNAPSHOT, book: { ...SNAPSHOT.book, spreadBps: 100000 } } });
+  t("B-3: drag capped at dragMax", d.drag.k === DEFAULT_POLICY.dragMax);
+}
+
+/* 16. משמעת-הפאריטי שרדה את הגרירה המקסימלית */
+{
+  const d = computeOffer({ ...base, snapshot: { ...SNAPSHOT, book: { ...SNAPSHOT.book, spreadBps: 100000 } } });
+  t("B-3: parity discipline survives max drag", d.plan.asks.every((a) => a.priceSbdPerSteem >= MARKS.parity) && d.plan.bids.every((b) => b.priceSbdPerSteem <= MARKS.parity));
+  const sumSteem = d.plan.asks.reduce((s, a) => Math.round((s + a.sizeSteem) * 1000) / 1000, 0);
+  const sumSbd = d.plan.bids.reduce((s, b) => Math.round((s + b.spendSbd) * 1000) / 1000, 0);
+  t("B-3: budgets hold under max drag", Math.abs(sumSteem - d.plan.totals.steemCommit) < 0.01 && Math.abs(sumSbd - d.plan.totals.sbdCommit) < 0.01);
+}
+
+/* 17. דטרמיניזם עם גרירה: שתי ריצות על-אותו-ספר → מסמך זהה */
+{
+  const inputs = { ...base, snapshot: { ...SNAPSHOT, book: { ...SNAPSHOT.book, spreadBps: 640 } } };
+  t("B-3: determinism holds with drag", JSON.stringify(computeOffer(inputs)) === JSON.stringify(computeOffer(inputs)));
 }
 
 console.log(process.exitCode === 1 ? "PEG-SELFTEST: FAIL" : "PEG-SELFTEST: PASS");

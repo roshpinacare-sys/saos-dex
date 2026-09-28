@@ -35,15 +35,22 @@ const EVENTS_LOG = join(HERE, "state", "events.jsonl");
 const OFFER_PATH = join(HERE, "state", "offer.json");
 const CONSOLE_PAGES = "https://roshpinacare-sys.github.io/Console/dex/money.json";
 
-/* ── מדיניות ברירת-מחדל (זהים לקבועי grid-pulse R83 — מקור-אחד לאמת) ─────── */
+/* ── מדיניות ברירת-מחדל (B-3: סולם-5-רמות + גרירה דינמית) ───────────────
+   הסולם עולה ל-5 רמות-לצד (בהמשך לסולם-STEEM של המנוע-המקורי), והגרירה
+   הדינמית מרחיבה את ריחוק-הרמות לפי פיזור-הספר-החי — אותה-גרירה שהמוביל R81
+   מבצעת ידנית, כאן בפורמולה גלויה ודטרמיניסטית:
+     dragK = clamp(1 + spreadBps/dragDivisorBps, 1, dragMax)
+   אין-ספר / אין-פיזור → dragK=1 (ניטרלי). הגבול-העליון חסום (dragMax). */
 export const DEFAULT_POLICY = {
   commitPct: 0.9,        // אחוז-התחייבות מהיתרות הנזילות
-  bidLevels: 3,
-  askLevels: 3,
-  bidStepBps: 200,       // ריחוק-בין-רמות קנייה (מדורג כלפי-מטה)
-  askStepBps: 50,        // ריחוק-בין-רמות מכירה (מדורג כלפי-מעלה)
+  bidLevels: 5,
+  askLevels: 5,
+  bidStepBps: 200,       // ריחוק-בסיס-בין-רמות קנייה (מדורג כלפי-מטה)
+  askStepBps: 50,        // ריחוק-בסיס-בין-רמות מכירה (מדורג כלפי-מעלה)
   askGrowth: 1.5,        // צמיחה-גיאומטרית של גודל-רמה (אותה-משמעת של mm-core)
   bidGrowth: 1.5,
+  dragDivisorBps: 2000,  // מכנת-הגרירה: spread/2000 → עד 1× נוסף
+  dragMax: 3,            // תקרת-גרירה — אף-שוק לא מפזר את הסולם מעבר לזה
   parityBandBps: 5000,   // מעבר לזה — השוק שבור, סירוב-כנה
   reserveSteem: 0.5,     // דלק-שמור (RC/עסקאות) — לא נמכר לעולם
   minLevelSteem: 1.0,    // מינימום-רמה-אמת (סף-פיזור של grid-pulse)
@@ -175,11 +182,26 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
   const steemCommit = Math.max(0, Math.floor((snapshot.balances.steem - policy.reserveSteem) * policy.commitPct * 1000) / 1000);
   const sbdCommit = Math.max(0, Math.floor(snapshot.balances.sbd * policy.commitPct * 1000) / 1000);
 
+  /* גרירה-דינמית (B-3): ריחוק-הרמות נמדד מפיזור-הספר-החי. גלוי ודטרמיניסטי. */
+  const spreadBps = Number.isFinite(snapshot?.book?.spreadBps) && snapshot.book.spreadBps >= 0 ? snapshot.book.spreadBps : null;
+  const dragK = spreadBps == null ? 1 : Math.min(policy.dragMax, Math.max(1, 1 + spreadBps / policy.dragDivisorBps));
+  const effAskStepBps = policy.askStepBps * dragK;
+  const effBidStepBps = policy.bidStepBps * dragK;
+  const drag = {
+    k: Math.round(dragK * 1e6) / 1e6,
+    spreadBps,
+    divisorBps: policy.dragDivisorBps,
+    max: policy.dragMax,
+    effAskStepBps: Math.round(effAskStepBps * 1e6) / 1e6,
+    effBidStepBps: Math.round(effBidStepBps * 1e6) / 1e6,
+    note: "ladder spacing follows the live book spread (R81 drag, deterministic); no book → neutral 1.0",
+  };
+
   /* מכירה: רצפת-הפאריטי — אף-STEEM לא נמכר מתחת לערך-החוץ שלו */
   const asks = [];
   let askSteem = 0;
   for (let i = 1; i <= policy.askLevels; i++) {
-    const price = r6(parity * (1 + (policy.askStepBps * i) / 10000));
+    const price = r6(parity * (1 + (effAskStepBps * i) / 10000));
     const sizeSteem = r3((steemCommit / policy.askLevels) * Math.pow(policy.askGrowth, i - 1) * normFactor(policy.askLevels, policy.askGrowth));
     askSteem = r3(askSteem + sizeSteem);
     asks.push({ side: "ask", level: i, priceSbdPerSteem: price, sizeSteem, kind: "sell-steem-above-parity" });
@@ -189,7 +211,7 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
   const bids = [];
   let bidSbd = 0;
   for (let i = 1; i <= policy.bidLevels; i++) {
-    const price = r6(parity * (1 - (policy.bidStepBps * i) / 10000));
+    const price = r6(parity * (1 - (effBidStepBps * i) / 10000));
     const spendSbd = r3((sbdCommit / policy.bidLevels) * Math.pow(policy.bidGrowth, i - 1) * normFactor(policy.bidLevels, policy.bidGrowth));
     bidSbd = r3(bidSbd + spendSbd);
     const sizeSteem = spendSbd > 0 && price > 0 ? r3(spendSbd / price) : 0;
@@ -209,7 +231,8 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
   const ok = blockers.length === 0;
   return offerDoc({
     ok, blockers, bridge, marks, snapshot, gridState, policy, nowIso,
-    parityBps, fair: { internalRef: ref, externalParity: parity, boundary: "parity: asks ≥ parity (never sell below external value), bids ≤ parity (never pay above it)" },
+    parityBps, drag,
+    fair: { internalRef: ref, externalParity: parity, boundary: "parity: asks ≥ parity (never sell below external value), bids ≤ parity (never pay above it)" },
     plan: { asks, bids, totals: { askSteem, bidSbd, steemCommit, sbdCommit } },
     triggers: consumeTriggers(triggerBook),
   });
@@ -257,6 +280,7 @@ function offerDoc(o) {
     openOrdersNow: o.snapshot?.openOrders ?? null,
     fair: o.fair ?? null,
     parityBps: o.parityBps ?? null,
+    drag: o.drag ?? null,
     plan: o.plan ?? null,
     triggers: o.triggers ?? consumeTriggers(null),
     honesty:
