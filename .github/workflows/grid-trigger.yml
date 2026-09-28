@@ -27,17 +27,22 @@ jobs:
       - name: tick
         run: node grids/run.mjs
         continue-on-error: false
+      - name: peg offer (B-1/B-3 — internal grid params -> external offer)
+        run: node grids/peg.mjs
+        continue-on-error: true # ההצעה לא מפילה את הטיק — חסימה-כנה מתפרסמת כ-offer.json
       - name: publish heartbeat
         run: |
           set -u
           git config user.name "grid-trigger[bot]"
           git config user.email "grid-trigger[bot]@users.noreply.github.com"
           git add grids/state/state.json 2>/dev/null || true
+          git add grids/state/offer.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "no state change — clean exit"
           else
             FEES="$(node -e 'const s=require("./grids/state/state.json");console.log(s.feeMeter?.simMu?.toFixed(1)||0)' 2>/dev/null || echo 0)"
             N="$(node -e 'const s=require("./grids/state/state.json");console.log(s.runCount||0)' 2>/dev/null || echo 0)"
-            git commit -m "grid-heartbeat: tick#${N} · fees +${FEES}µ(sim) [skip ci]"
+            V="$(node -e 'const o=require("./grids/state/offer.json");console.log(o.verdict||"?")' 2>/dev/null || echo no-offer)"
+            git commit -m "grid-heartbeat: tick#${N} · fees +${FEES}µ(sim) · peg=${V} [skip ci]"
             git push origin HEAD:main
           fi
