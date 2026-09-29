@@ -21,12 +21,12 @@ dev.log
 server.log
 
 # Task 33 · cloud chain state — הריפו הוא הבית הקנוני של השרשרת:
-# התמונה, הטייפ, ה-DB וספר-הזיכויים חייבים-להישמר-ולהתחייב בכל-פעימה.
+# התמונה, הטייפ וספר-הזיכויים חייבים-להישמר-ולהתחייב בכל-פעימה.
+# תיקון 2026-09 (Task 7-c): קובצי-DB (dex.db) הם מצב-ריצה — אינם-נעקבים יותר ב-git.
 !db/state-snapshot.json
 !db/grid-ledger.json
 !db/grid-public.json
 !db/tape.jsonl
-!db/dex.db
 !db/dex-credits.json
 !db/rail-lifetime.json
 
@@ -51,3 +51,13 @@ daemon-spawn.log
 !grids/state/
 grids/state/events.jsonl
 grids/state/pnl.json
+
+# ── 2026-09 hygiene (Task 7-c): runtime databases are state, not source ──
+# db/dex.db (~45MB) and db/dex.db.pre-migration (~6.3MB) were untracked from git
+# (local files kept). Git history still contains the old blobs — rewriting history
+# (git filter-repo) is an owner-level decision to shrink clones.
+# (db/*.db already declared under "# local data" — now effective: the !db/dex.db
+# negation above was removed. db/*.db.pre-migration added to cover the backup copy.)
+db/*.db.pre-migration
+*.sqlite
+*.sqlite3

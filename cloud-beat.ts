@@ -569,7 +569,10 @@ async function main(): Promise<void> {
   /* ── שלב-האמת: קודם-commit-השרשרת לריפו, ורק-אז-פרסום-הציבורי ── */
   git("config user.name \"dex-beat[bot]\"", { allowFail: true });
   git("config user.email \"dex-beat[bot]@users.noreply.github.com\"", { allowFail: true });
-  const chainFiles = ["db/state-snapshot.json", "db/tape.jsonl", "db/dex.db", "db/dex-credits.json", "db/rail-lifetime.json"];
+  /* 2026-09 hygiene (Task 7-c): db/dex.db removed from chainFiles — runtime
+   * databases are no longer tracked in git (45MB blob; see README "Database
+   * files (2026-09)"). The chain snapshot/tape/credits/ledger remain committed. */
+  const chainFiles = ["db/state-snapshot.json", "db/tape.jsonl", "db/dex-credits.json", "db/rail-lifetime.json"];
   for (const f of chainFiles) git(`add -- ${f}`, { allowFail: true });
   let chainPushed = false;
   const staged = git("diff --cached --name-only", { allowFail: true });
