@@ -29,6 +29,10 @@ import path from "path";
 /* ── בידוד-מצב — חייב לקרות לפני-ייבוא relay (המודול קורא את ה-env בטעינה) ── */
 const sandboxDir = fs.mkdtempSync(path.join(os.tmpdir(), "saos-chaos-"));
 process.env.SAOS_DEX_STATE_DIR = sandboxDir;
+/* Task 11-b · חוזה-החתימה שש-השלבים: הכאוס-בודק הוא קורא-אינטראקטיבי — חימוש-סשן
+ * מפורש (דו-מפתחי: מפתחות-ה-.env לבדם כבר-אינם-משדרים). בלי-זה שער-הסשן (stage 1/6
+ * ב-relay.processQueue) עוצר-את-התור לפני-נתיב-הכשל — וה-breakers לעולם לא נפתחים (A2-A4). */
+process.env.SAOS_RELAY_SIGNING_SESSION_UNLOCKED = "1";
 
 /* ── טיפוסי-עזר (type-only — לא גוררים את chain.ts לזמן-ריצה) ── */
 interface SealInfo { fromHeight: number; toHeight: number; root: string; stateRoot: string; leaves: number; at: number; digest: string; blockHashes: string[] } // FIX(Roast-65-a · MED-7): החותם נושא-את-החלון-החתום (עותק-קנוני-של-chain.SealInfo)
