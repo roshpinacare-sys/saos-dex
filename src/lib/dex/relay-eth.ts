@@ -248,14 +248,15 @@ function requireRole(record: SignerKeyRecord, role: KeyRole): void {
 
 /* ── עזרי-קנוניות (משותפים ל-policy ולשרשרת-הביקורת) ── */
 
-function stableStringify(v: unknown): string {
+/* Task 11-b: מיוצא ל-relay.ts — קנוניות-אחת לשני-החותמים (שרשרת-ביקורת אחת) */
+export function stableStringify(v: unknown): string {
   if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
   if (Array.isArray(v)) return "[" + v.map(stableStringify).join(",") + "]";
   const o = v as Record<string, unknown>;
   return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + stableStringify(o[k])).join(",") + "}";
 }
 
-function fingerprint(payload: unknown): string {
+export function fingerprint(payload: unknown): string {
   return createHash("sha256").update(stableStringify(payload)).digest("hex");
 }
 
@@ -300,7 +301,8 @@ function commitRepeat(payload: unknown, now: number): void {
 const AUDIT_DIR = process.env.SAOS_DEX_STATE_DIR
   ? path.resolve(process.env.SAOS_DEX_STATE_DIR)
   : path.join(process.cwd(), "state");
-const AUDIT_FILE = path.join(AUDIT_DIR, "signing-audit.jsonl");
+/* Task 11-b: מיוצא — relay.ts קורא-סטטיסטיקת-תקציב/replay מאותו-פנקס-מבוקר */
+export const AUDIT_FILE = path.join(AUDIT_DIR, "signing-audit.jsonl");
 const AUDIT_GENESIS_HASH = "0".repeat(64);
 
 function auditHead(): { seq: number; prevHash: string } {

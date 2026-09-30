@@ -17,16 +17,40 @@
  *     stateRoot+height מול-המקומי. אי-התאמה → ALERT בלוג + מדד-מיסמאץ'.
  *   · Reconciliation: לולאה-תקופתית מאמתת-בדיעבד כל-עיגון ששודר וטרם-אומת.
  *   · אפס סודות בלוגים/פלט/קבצים: מפתחות בזיכרון בלבד מ-.env (gitignored, אומת)
+ *
+ * חוזה-החתימה שש-השלבים (Task 11-b — port נאמן-מקור מ-relay-eth.ts · e5d22e5
+ * ומ-anchor-live.ts · 3f4eeb3; המימוש-הקנוני: Saosmartwallet orchestrator.ts 6/6):
+ *   · session-gate (stage 1/6): אין-פתרון-מפתח בלי-סשן-חתימה חי —
+ *     SAOS_RELAY_SIGNING_SESSION_UNLOCKED=1 (חימוש-מפעיל לכל-אתחול-תהליך; דו-מפתחי:
+ *     המפתחות-ב-.env לבדם כבר-אינם-משדרים) או unlockRelaySigningSession() (API · TTL).
+ *     נאכף לפני-כל-טעינת-מפתח (loadKeys) — סדר-השורות-הוא-החוזה (דוקטרינת live_gate 10-d-3).
+ *   · policy-gate (stage 2/6): evaluatePolicy לפני-כל-נגיעה-במפתח — פעולות-מותרות
+ *     (עיגון chain-seal עצמי בלבד) · resolveRoleFor prefer-posting (least-privilege
+ *     בשרשראות-התומכות) · replay-guard (אותו (chain,epoch,height) כבר-עוגן = שידור-חוזר)
+ *     · repeat-guard (port מ-budget.py — commit אחרי-הצלחה בלבד) · תקציב-נפח יומי
+ *     מהשרשרת-המבוקרת. שלילה נרשמת policy_violation ועוצרת — לעולם לא הסגרה.
+ *   · audit-trail (stage 6/6): key_used / signing_attempt / broadcast / policy_violation
+ *     — כולל כשלים והמתנות-כלכליות — בשרשרת-ה-hash המשותפת של relay-eth
+ *     (state/signing-audit.jsonl דרך appendAudit · SAOS_DEX_STATE_DIR מנתב-בידוד-בדיקות).
+ *     אפס חומר-מפתח באירועים (מזהים/גבהים/txids בלבד).
+ *   · השלבים 3-5 כבר-חיים בנתיבי-השרשרת (prefer-posting CROSS-F-01 + authorityOk ·
+ *     reveal-בזיכרון-בלבד · שידור-מוגבל-פעולה/עלות + breaker). נמדד 6/6 ב-saos-jummper
+ *     signingcontract.check.
  */
 import fs from "fs";
 import path from "path";
-import { createHash } from "crypto";
+import { createHash, timingSafeEqual } from "crypto";
 import type { SealInfo } from "./chain";
 import { chaosPartitioned } from "./chaos";
 import { fleetConfigured, fleetSealNow, fleetStatusPublic } from "./fleet";
 
 import steemLib from "steem";
-import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor, ETH_RPCS } from "./relay-eth";
+import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor, ETH_RPCS,
+  // Task 11-b · חוזה-החתימה שש-השלבים — אותם-פרימיטיבים בדיוק (שער-אחד, שרשרת-ביקורת-אחת):
+  // SigningGateError = קודי-השער · appendAudit = הפרימיטיב-המבוקר (hash-chain על
+  // state/signing-audit.jsonl) · fingerprint/AUDIT_FILE = קנוניות משותפת ל-repeat/replay/תקציב.
+  SigningGateError, appendAudit, fingerprint, AUDIT_FILE,
+  type PolicyCheck, type SigningAuditEvent } from "./relay-eth";
 import { solSealBroadcast, verifySolAnchor, solIdentity } from "./relay-sol";
 import { fencedFetch } from "./fence"; // FIX(SETTLE-11)+FIX(Roast-65-b · H2): כל-ה-fetch-ים-דרך-הגדר (redirect:error מרוכז)
 // roast-78 · רצפת-הגנת-גיבוי: קריאת-התביעות-המוטבעות (st.backing) מהמצב-הקנוני-החי.
@@ -228,6 +252,293 @@ export function assignEpoch(height: number): string {
     saveEpoch({ epochIndex: s.epochIndex, lastHeight: height });
   }
   return `e${loadEpoch().epochIndex}`;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+ * חוזה-החתימה שש-השלבים על "הדלת" (Task 11-b) — port נאמן-מקור מ-relay-eth.ts
+ * (Task 8-a · e5d22e5) ומ-anchor-live.ts (platform · 3f4eeb3). שלושת-השלבים
+ * החסרים נחוטים כאן (session-gate · policy-gate · audit-trail); השלבים 3/4/5
+ * כבר-חיים בנתיבי-השרשרת למטה. fail-closed לכל-אורכו: כשל-שלב = עצירה
+ * לפני-שידור. כלום לא נחתם על אולי.
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* ── stage 1/6 — מצב-הסשן (על globalThis — עמיד-ל-hot-reload, אותו-דפוס relay-eth) ── */
+
+const SESSION_TTL_MS = 60 * 60 * 1000; // שעה — אחריה נדרש חימוש-מחדש (re-auth)
+
+interface RelaySigningSessionState {
+  unlocked: boolean;
+  source: "env" | "api" | null;
+  unlockedAtMs: number | null;
+  stepUpAtMs: number | null;
+}
+
+const gRelaySigning = globalThis as unknown as { __saosDexRelaySigningSession?: RelaySigningSessionState };
+function relaySigningSession(): RelaySigningSessionState {
+  if (!gRelaySigning.__saosDexRelaySigningSession) {
+    gRelaySigning.__saosDexRelaySigningSession = { unlocked: false, source: null, unlockedAtMs: null, stepUpAtMs: null };
+  }
+  return gRelaySigning.__saosDexRelaySigningSession;
+}
+
+function relaySessionEnvArmed(): boolean {
+  const v = (process.env.SAOS_RELAY_SIGNING_SESSION_UNLOCKED ?? "").trim().toLowerCase();
+  return v === "1" || v === "true";
+}
+
+/** פתיחת-סשן-חתימה מפורשת (API לקוראים אינטראקטיביים). stepUpToken אופציונלי —
+ * מאומת מול SAOS_RELAY_SIGNING_STEPUP_TOKEN_SHA256 ומספק step-up (re-auth). */
+export function unlockRelaySigningSession(opts?: { stepUpToken?: string; source?: string }): void {
+  const s = relaySigningSession();
+  s.unlocked = true;
+  s.source = "api";
+  s.unlockedAtMs = Date.now();
+  if (opts?.stepUpToken && verifyRelayStepUp(opts.stepUpToken)) s.stepUpAtMs = Date.now();
+}
+
+/** step-up re-auth: השוואה timing-safe מול hash הטוקן שהמפעיל הגדיר. */
+export function verifyRelayStepUp(token: string): boolean {
+  const expected = (process.env.SAOS_RELAY_SIGNING_STEPUP_TOKEN_SHA256 ?? "").trim().toLowerCase();
+  if (!expected || !token) return false;
+  const got = createHash("sha256").update(token).digest("hex");
+  const a = Buffer.from(got, "hex");
+  const b = Buffer.from(expected, "hex");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+/**
+ * stage 1/6 — session-gate: חייב לעבור לפני loadKeys (לפני שכל בייט-מפתח נוגע).
+ * תהליך-בלתי-מושגח מחייב חימוש-מפעיל מפורש:
+ *   SAOS_RELAY_SIGNING_SESSION_UNLOCKED=1 (חימוש-לכל-אתחול-תהליך) או
+ *   unlockRelaySigningSession()          (API — עם TTL של SESSION_TTL_MS).
+ * SAOS_RELAY_SIGNING_REQUIRE_STEPUP=1 דורש step-up שהושלם גם עבור חימוש-env.
+ */
+function ensureUnlocked(): void {
+  const s = relaySigningSession();
+  if (!s.unlocked && relaySessionEnvArmed()) {
+    s.unlocked = true;
+    s.source = "env";
+    s.unlockedAtMs = Date.now();
+  }
+  if (!s.unlocked) {
+    throw new SigningGateError(
+      "SESSION_LOCKED",
+      "relay signing session is locked — no key resolution for an unattended process (stage 1/6): arm SAOS_RELAY_SIGNING_SESSION_UNLOCKED=1 (or call unlockRelaySigningSession) alongside the .env keys",
+    );
+  }
+  if (s.source === "api" && s.unlockedAtMs !== null && Date.now() - s.unlockedAtMs > SESSION_TTL_MS) {
+    s.unlocked = false;
+    s.source = null;
+    s.unlockedAtMs = null;
+    throw new SigningGateError("SESSION_EXPIRED", "relay signing session expired — re-unlock required before any key resolution (stage 1/6)");
+  }
+  if ((process.env.SAOS_RELAY_SIGNING_REQUIRE_STEPUP ?? "").trim() === "1" && s.stepUpAtMs === null) {
+    throw new SigningGateError("POLICY_STEP_UP_REQUIRED", "step-up re-authentication demanded (SAOS_RELAY_SIGNING_REQUIRE_STEPUP=1) — unlockRelaySigningSession({ stepUpToken }) required (stage 1/6)");
+  }
+}
+
+/* ── stage 3/6 — פתרון-תפקיד (הצהרת-המדיניות; הביצוע-החי כבר בנתיבי-השרשרת) ── */
+
+export type RelayAnchorRole = "active" | "posting";
+
+/**
+ * התפקיד נגזר ממה שהפעולה עושה (port של resolveRoleFor/defaultRoleFor):
+ * custom_json-עיגון הוא פרסום — prefer-posting בשרשראות-התומכות (steem/hive —
+ * אותו-דוקטרינת CROSS-F-01 ש-loadKeys מבצעת); BLURT — active-בלבד (אין-מפתח-
+ * פרסום-בכספת); tron/eth/sol — פעולות-נושאות-ערך → active; צי — POSTING-בלבד
+ * (SETTLE-13). null = חסר-תפקיד (flavor-less) — מסרב, לא ממיר.
+ * ההכרעה-החיה-בשידור (required_auths/required_posting_auths ב-buildOp) נגזרת
+ * מהתפקיד-הפתור-אחרי-ה-self-heal של authorityOk — post-policy, כמו-החוזה.
+ */
+export function resolveRoleFor(chain: ChainName): RelayAnchorRole | null {
+  switch (chain) {
+    case "steem":
+      return (process.env.STEEM_POSTING_WIF ?? "").trim() ? "posting"
+        : (process.env.STEEM_ACTIVE_WIF ?? "").trim() ? "active" : null;
+    case "hive":
+      return (process.env.HIVE_POSTING_WIF ?? "").trim() ? "posting"
+        : (process.env.HIVE_ACTIVE_WIF ?? "").trim() ? "active" : null;
+    case "blurt":
+      return (process.env.BLURT_ACTIVE_WIF ?? "").trim() ? "active" : null;
+    case "tron": // זהות-TRON נגזרת-מהסקלר-הגרפני — פעולת-ערך עצמית
+      return (process.env.STEEM_ACTIVE_WIF ?? "").trim() || (process.env.STEEM_POSTING_WIF ?? "").trim() ? "active" : null;
+    case "eth":
+    case "sol":
+      return "active"; // חתימה-חיה בתוך relay-eth/relay-sol — פעולות-ערך (גז/עמלה)
+    case "fleet":
+      return "posting"; // SETTLE-13: עיגון-צי POSTING-בלבד, אפס-עלות
+    default:
+      return null;
+  }
+}
+
+/* ── מצב-החזרה (repeat-guard) — port מ-saos-jummper budget.py RepeatGuard:
+ * כל-קריאה בודדות עוברות; הנזק הוא בחזרתיות ובצבירה. commit אחרי-הצלחה-בלבד.
+ * מפתח per-chain: אותו-payload חוקי על שרשראות-שונות (עיגון-רב-רשתי). */
+
+const REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const REPEAT_MAX = 1;
+
+const gRelayRepeat = globalThis as unknown as { __saosDexRelayRepeatSeen?: Map<string, number[]> };
+function repeatSeen(): Map<string, number[]> {
+  if (!gRelayRepeat.__saosDexRelayRepeatSeen) gRelayRepeat.__saosDexRelayRepeatSeen = new Map();
+  return gRelayRepeat.__saosDexRelayRepeatSeen;
+}
+
+function repeatKey(chain: ChainName, payload: unknown): string {
+  return `${chain}:${fingerprint(payload)}`;
+}
+
+function repeatCount(key: string, now: number): number {
+  const kept = (repeatSeen().get(key) ?? []).filter((t) => t >= now - REPEAT_WINDOW_MS);
+  repeatSeen().set(key, kept);
+  return kept.length;
+}
+
+function commitRepeat(chain: ChainName, payload: unknown, now: number): void {
+  const key = repeatKey(chain, payload);
+  const seen = repeatSeen();
+  seen.set(key, [...(seen.get(key) ?? []).filter((t) => t >= now - REPEAT_WINDOW_MS), now]);
+}
+
+/* ── שרשרת-הביקורת (stage 6/6) — נקראת מהפנקס-המשותף של relay-eth
+ * (signing-audit.jsonl · SAOS_DEX_STATE_DIR מנתב-לבידוד-בדיקות, אותו-ניתוב
+ * כמו anchors.json). ספירות-התקציב וה-replay נגזרות-ממנו — buildOperationContext
+ * של ה-orchestrator: המדיניות קוראת-היסטוריה-מבוקרת, לא מנחשת. */
+
+function readAuditStats(chain: ChainName, epoch: string, height: number): { spentToday: number; priorHeight: number | null } {
+  const day = new Date().toISOString().slice(0, 10);
+  let spentToday = 0;
+  let priorHeight: number | null = null;
+  try {
+    for (const line of fs.readFileSync(AUDIT_FILE, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const ev = JSON.parse(line) as SigningAuditEvent;
+        if (ev.type !== "broadcast" || ev.result !== "success") continue;
+        const t = (ev.target ?? {}) as { chain?: unknown; epoch?: unknown; height?: unknown };
+        if (typeof t.chain !== "string" || t.chain !== chain) continue;
+        if (typeof ev.at === "string" && ev.at.slice(0, 10) === day) spentToday += 1;
+        if (epoch && t.epoch === epoch && typeof t.height === "number" && t.height === height) {
+          priorHeight = t.height; // אותו (chain,epoch,height) כבר-עוגן-בהצלחה — שידור-חוזר
+        }
+      } catch { /* שורה-פגומה — נדלגת */ }
+    }
+  } catch { /* אין-ביקורת עדיין — תקציב מלא */ }
+  return { spentToday, priorHeight };
+}
+
+/** תקציב-נפח-יומי — סכום-תקרות-הקצב-העצמיות של המסילה (econWaitMin:
+ * 32+32+48+48+48+48+32) — רק-לולאה-חריגה-מהקצב-העצמי-מגיעה-עד-כאן.
+ * ניתן-לעקיפה-מפורשת-למפעיל. */
+function dailyAnchorLimit(): number {
+  const raw = Number.parseInt(process.env.SAOS_RELAY_ANCHOR_DAILY_LIMIT ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 288;
+}
+
+/* ── שער-המדיניות (stage 2/6) ── */
+
+export interface RelayPolicyDecision {
+  allowed: boolean;
+  reasons: string[];
+  checks: PolicyCheck[];
+  role: RelayAnchorRole | null;
+  requirements: { stepUpAuth: boolean; dailyLimit: number };
+}
+
+/**
+ * stage 2/6 — evaluatePolicy: נרץ לפני שמפתח נוגע (לפני loadKeys). כללים
+ * סטטיים fail-closed (port של הכללים הקומפילים של PolicyEngine + budget.py):
+ * שלילה = זריקה, לעולם לא הסגרה.
+ */
+export function evaluatePolicy(op: { chain: ChainName; payload: unknown }): RelayPolicyDecision {
+  const checks: PolicyCheck[] = [];
+  const reasons: string[] = [];
+  const denyGuard = (guard: string, reason: string): void => {
+    checks.push({ guard, allowed: false, reason });
+    reasons.push(`${guard}: ${reason}`);
+  };
+
+  // 1) allowed-operations — הדלת חותמת ומשדרת עיגון chain-seal עצמי בלבד
+  const p = (op.payload ?? {}) as { protocol?: unknown; action?: unknown; at?: unknown; epoch?: unknown; height?: unknown; stateRoot?: unknown; digest?: unknown };
+  if (
+    p.protocol === "saos-dex/v1" && p.action === "chain-seal" &&
+    typeof p.height === "number" && Number.isFinite(p.height) && p.height >= 0 &&
+    typeof p.stateRoot === "string" && /^[0-9a-f]{64}$/.test(p.stateRoot) &&
+    typeof p.digest === "string" && p.digest.length > 0
+  ) {
+    checks.push({ guard: "allowed-operations", allowed: true, reason: `chain-seal h${p.height}` });
+  } else {
+    denyGuard("allowed-operations", "payload is not a saos-dex/v1 chain-seal anchor — refusing to sign foreign bytes");
+  }
+
+  // 2) תפקיד-מינימלי — חסר-תפקיד מסרב (flavor-less, לא ממיר)
+  const role = resolveRoleFor(op.chain);
+  if (role === null) {
+    denyGuard("role", `no signing role for ${op.chain} — a role-less key refuses rather than defaulting (stage 3/6)`);
+  } else {
+    checks.push({ guard: "role", allowed: true, reason: `${op.chain}:${role} (prefer-posting least-privilege where the chain supports it)` });
+  }
+
+  // 3) replay-guard — הצלחה-מבוקרת-קודמת באותו (chain,epoch,height) = שידור-חוזר,
+  //    גם-אם-בייטי-ה-payload סטו (loop-containment על-זהות-העיגן, לא על-התוכן)
+  const stats = readAuditStats(op.chain, typeof p.epoch === "string" ? p.epoch : "", typeof p.height === "number" ? p.height : -1);
+  if (stats.priorHeight !== null) {
+    denyGuard("replay", `h${String(p.height)} was already anchored on ${op.chain} in epoch ${String(p.epoch)} (prior success in the audit chain) — a replayed height is a replay, not a decision`);
+  } else {
+    checks.push({ guard: "replay", allowed: true, reason: "no prior success at this height/epoch" });
+  }
+
+  // 4) repeat-guard (budget.py port) — הפעולה-הזהה-על-השרשרת-הזאת כבר שודרה-בהצלחה בחלון = לולאה
+  const now = Date.now();
+  const prior = repeatCount(repeatKey(op.chain, op.payload), now);
+  if (prior >= REPEAT_MAX) {
+    denyGuard("repeat", `identical ${op.chain} payload already broadcast ${prior} time(s) within ${REPEAT_WINDOW_MS / 60000}min — a repeating identical operation is a loop, not a decision`);
+  } else {
+    checks.push({ guard: "repeat", allowed: true, reason: "not a repeat" });
+  }
+
+  // 5) תקציב-נפח יומי (spentToday נקרא מהשרשרת-המבוקרת — buildOperationContext של ה-orchestrator)
+  const limit = dailyAnchorLimit();
+  if (stats.spentToday >= limit) {
+    denyGuard("daily-volume-budget", `daily cap reached — ${stats.spentToday}/${limit} successful broadcasts today (UTC) — honest economic hold`);
+  } else {
+    checks.push({ guard: "daily-volume-budget", allowed: true, reason: `spentToday ${stats.spentToday}/${limit}` });
+  }
+
+  return {
+    allowed: reasons.length === 0,
+    reasons,
+    checks,
+    role,
+    requirements: { stepUpAuth: (process.env.SAOS_RELAY_SIGNING_REQUIRE_STEPUP ?? "").trim() === "1", dailyLimit: limit },
+  };
+}
+
+/* ── payload קנוני משותף לכל-השרשראות — הועבר-מתוך attemptChain עבור שער-המדיניות:
+ * ההערכה-לפני-המפתח חייבת-לראות את-אותם-בייטים-שייחתמו. סדר-השדות נשמר-בדיוק —
+ * שוויון-בייטים-בין-שרשראות (EPOCH-PATCH-SPEC) לא-נפגע. ── */
+function canonicalSealPayload(job: SealJob): { protocol: string; action: string; at: string; epoch: string; height: number; stateRoot: string; digest: string } {
+  return {
+    protocol: "saos-dex/v1", action: "chain-seal", at: job.at,
+    epoch: job.epoch,
+    height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest,
+  };
+}
+
+/* ── הגבלת-תדירות-רישום-ביקורת: לולאת-הדלת רצה-כל-חותם (כל-12-בלוקים) — שלילה
+ * מתמשכת לא תהפוך-לשטף-אירועים. האכיפה-עצמה נאכפת-בכל-הערכה; רק-הרישום-מוגבל-
+ * תדירות (המצב-הכנה נשמר-תמיד ב-lastError של השרשרת). ── */
+const AUDIT_THROTTLE_MS = 60 * 60 * 1000;
+const gAuditAt = globalThis as unknown as { __saosDexRelayAuditAt?: Map<string, number> };
+function auditThrottled(key: string): boolean {
+  const now = Date.now();
+  const m = gAuditAt.__saosDexRelayAuditAt ?? (gAuditAt.__saosDexRelayAuditAt = new Map());
+  const last = m.get(key) ?? 0;
+  if (now - last < AUDIT_THROTTLE_MS) return true; // מוגבל-תדירות — המדיניות עדיין נאכפת
+  m.set(key, now);
+  return false;
 }
 
 /* ── חוזה-מפתחות-מנורמל (SETTLE-11) ── */
@@ -1032,6 +1343,11 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     rt.chainState[chain].enabled = false;
     rt.chainState[chain].status = "disabled";
     rt.chainState[chain].lastError = `authority-mismatch: המפתח-ב-.env אינו רשות-השרשרת של ${chain === "hive" ? keys.hiveAccount : keys.account} — disabled (fail-closed, נדרשת רוטציה/ייבוא-מפתח-נכון)`;
+    /* stage 6/6 — סירוב-סמכות הוא אירוע-ביקורת (מוגבל-תדירות): המפתח-שבכספת אינו
+     * רשות-חיה על-השרשרת — אף-חתימה לא תתבצע עד-רוטציה. אפס-חומר-מפתח באירוע. */
+    if (!auditThrottled(`authority:${chain}`)) {
+      appendAudit({ type: "policy_violation", actor: { keyId: `relay-${chain}`, account: chain === "hive" ? keys.hiveAccount : keys.account }, target: { chain, gate: "authority", height: job.info.toHeight, epoch: job.epoch }, result: "blocked", reason: rt.chainState[chain].lastError ?? undefined });
+    }
     return;
   }
   const b = rt.chainState[chain].breaker;
@@ -1049,6 +1365,10 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     txid: null, status: "pending", at: job.at, attempt: cs.attempts,
     verified: null, verifiedAt: null,
   };
+  /* payload קנוני משותף לכל-השרשראות — אותם בייטים על כל שרשרת (עיגון-עצמו-עקבי).
+   * Task 11-b: הועבר-למעלה-מתוך-ה-try (הפקה-טהורה-מהעבודה) — אותו-אובייקט-שנבנה
+   * כאן-הוא-זה שהוערך בשער-המדיניות (לפני-המפתח) ושייחתם במסגרת-החתימה. */
+  const payload = canonicalSealPayload(job);
   try {
     /* chaos-gate — scripts/chaos-test.ts: מחיצת-רשת מוזרקת בתוך-נתיב-הכשל הרגיל.
      * SECURITY INTENT: הזריקה חייבת לעבור בדיוק כמו RPC בלתי-נגיש — catch →
@@ -1057,14 +1377,8 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     if (chaosPartitioned(chain)) {
       throw new Error(`chaos: injected network partition on ${chain} — rpc unreachable (fault-injection)`);
     }
-    // payload קנוני משותף לכל-השרשראות — אותם בייטים על כל שרשרת (עיגון-עצמו-עקבי)
     // EPOCH-PATCH-SPEC: epoch-בתוך-ה-payload-הקנוני (לא-באתרי-קריאה-פר-שרשרת) — שומר-על
     // שוויון-בייטים-בין-שרשראות וסוגר-את-התנגשות-הגבהים-אחרי-ריסטארטים
-    const payload = {
-      protocol: "saos-dex/v1", action: "chain-seal", at: job.at,
-      epoch,
-      height: job.info.toHeight, stateRoot: job.info.stateRoot, digest: job.info.digest,
-    };
     if (chain === "tron") {
       if (!keys?.steemWif) throw new Error("tron identity requires relay keys (disabled)");
       if (!rt.tronAddress) rt.tronAddress = await tronIdentity(keys.steemWif);
@@ -1176,6 +1490,9 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
       rec.error = msg;
       rt.chainState[chain].lastError = msg;
     }
+    /* stage 6/6 — כשל-ניסיון נרשם גם-הוא (כולל-המתנה-כלכלית: "נוסה-ונדחה-תקציב");
+     * אפס חומר-מפתח באירוע — מזהים/גבהים/סיבות-חתוכות בלבד. */
+    appendAudit({ type: "signing_attempt", actor: { keyId: `relay-${chain}`, account: anchorAccount ?? null }, target: { chain, height: job.info.toHeight, epoch }, result: "failure", reason: msg });
   }
   upsertRecord(rt, rec);
   if (rec.status !== "pending") cs.done = true;
@@ -1188,6 +1505,19 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     rt.chainState[chain].anchored += 1;
     rt.chainState[chain].lastError = null;
     rt.metrics.broadcasts += 1;
+    /* ── stage 6/6 — audit-trail: key_used + broadcast (הצלחה) + commit שער-החזרה ──
+     * אותו-פרימיטיב-מבוקר של relay-eth (appendAudit — שרשרת-hash אחת לכל-החותמים
+     * בתהליך). role = התפקיד-שבאמת-חתם (post-self-heal ל-graphene; פעולות-ערך = active;
+     * צי = posting). אפס-סודות: חשבון-ציבורי/גובה/txid בלבד. */
+    const usedRole: RelayAnchorRole | null =
+      chain === "steem" ? (keys?.steemAuth ?? null)
+      : chain === "hive" ? (keys?.hiveAuth ?? null)
+      : chain === "fleet" ? "posting"
+      : "active"; // blurt (buildOp active) · tron/eth/sol (פעולות-ערך)
+    const auditActor = { keyId: `relay-${chain}`, account: rec.account ?? anchorAccount ?? rt.account ?? null };
+    appendAudit({ type: "key_used", actor: auditActor, target: { chain, role: usedRole, height: rec.height, epoch: rec.epoch }, result: "success" });
+    appendAudit({ type: "broadcast", actor: auditActor, target: { chain, height: rec.height, epoch: rec.epoch, txid: rec.txid }, result: "success", reason: `chain-seal anchored on ${chain}${usedRole ? ` with ${usedRole} role` : ""}` });
+    commitRepeat(chain, payload, Date.now());
     scheduleVerification(rt, rec); // verifyOnChain — קריאה-חוזרת מיד-אחרי-שידור (לא-חוסם)
   }
   rt.lastActivityAt = Date.now();
@@ -1200,17 +1530,59 @@ async function processQueue(rt: RelayRT): Promise<void> {
   // היו עוברות-יחד את-השומר בזמן loadKeys ומשדרות את-אותה-עבודה במקביל.
   rt.processing = true;
   try {
-    const keys = await loadKeys();
-    // SETTLE-13: גם-בלי-מפתחות-headcorner — הצי-הריבוני-ממשיך-לעגן (עיגון-לא-תלוי-זהות-אחת)
-    if (!keys && !fleetConfigured()) return;
+    /* ── stage 1/6 — session-gate: לפני **כל טעינת-מפתח** (loadKeys למטה — סדר-השורות
+     * הוא-החוזה; דוקטרינת live_gate 10-d-3: שער-לפני-מפתח). סשן-נעול = אף בייט-מפתח
+     * לא נוגע ואף שידור לא נבנה — fail-closed כנה (חימוש-דו-מפתחי, כמו relay-eth). ── */
+    try {
+      ensureUnlocked();
+    } catch (e) {
+      const reason = e instanceof SigningGateError ? `${e.code}: ${e.message}` : String((e as Error)?.message ?? e).slice(0, 200);
+      for (const c of ALL_CHAINS as ChainName[]) {
+        if (rt.chainState[c].enabled) rt.chainState[c].lastError = `session-gate: ${reason}`;
+      }
+      if (!auditThrottled("session-lock")) {
+        appendAudit({ type: "signing_attempt", actor: { keyId: "relay-anchor-1", gate: "session" }, target: { gate: "session", stage: "1/6" }, result: "failure", reason });
+      }
+      return;
+    }
+
     const now = Date.now();
-    // עיבוד כל-העבודות מהישן-לחדש — steem מעגן כל-חותם, hive/tron רק-את-החדש-ביותר
+
+    /* ── stage 2/6 — policy-gate: הערכה לפני **כל טעינת-מפתח** (loadKeys למטה); שלילה
+     * עוצרת את-השרשרת-ההיא לכל-החותם (done) + policy_violation מוגבל-תדירות.
+     * שרשרת-כבויה-תצורתית (enabled=false) ממשיכה-לנתיב-הכיבוי-השקט הקיים —
+     * כיבוי-תצורה אינו-הפרת-מדיניות (כנות, לא-רעש). ── */
+    const plan = new Map<SealJob, ChainName[]>();
     for (const job of [...rt.jobs].reverse()) {
       const due = (ALL_CHAINS as ChainName[]).filter((c) => {
         const cs = job.chains[c];
         return !cs.done && cs.attempts < RETRY_MAX && cs.nextTryAt <= now;
       });
       if (due.length === 0) continue;
+      const payload = canonicalSealPayload(job); // אותם-בייטים-שייחתמו (canonicalSealPayload למעלה)
+      const ok: ChainName[] = [];
+      for (const c of due) {
+        if (!rt.chainState[c].enabled) { ok.push(c); continue; }
+        const decision = evaluatePolicy({ chain: c, payload });
+        if (decision.allowed) { ok.push(c); continue; }
+        const reason = decision.reasons.join("; ");
+        job.chains[c].done = true;
+        rt.chainState[c].status = "failed";
+        rt.chainState[c].lastError = `policy-denied: ${reason}`;
+        if (!auditThrottled(`policy:${c}`)) {
+          appendAudit({ type: "policy_violation", actor: { keyId: "relay-anchor-1", chain: c }, target: { chain: c, height: job.info.toHeight, epoch: job.epoch }, result: "blocked", reason });
+        }
+      }
+      if (ok.length > 0) plan.set(job, ok);
+    }
+
+    const keys = await loadKeys();
+    // SETTLE-13: גם-בלי-מפתחות-headcorner — הצי-הריבוני-ממשיך-לעגן (עיגון-לא-תלוי-זהות-אחת)
+    if (!keys && !fleetConfigured()) return;
+
+    // עיבוד כל-העבודות מהישן-לחדש — steem מעגן כל-חותם, hive/tron רק-את-החדש-ביותר
+    // (רק-זוגות (עבודה,שרשרת)-שעברו-את-שער-המדיניות למעלה)
+    for (const [job, due] of plan) {
       await Promise.all(due.map((c) => attemptChain(rt, keys, job, c).catch(() => { /* לא-חוסם */ })));
     }
     rt.jobs = rt.jobs.filter((j) => !(ALL_CHAINS as ChainName[]).every((c) => j.chains[c].done));
