@@ -1,0 +1,32 @@
+name: gitleaks-secret-scan
+
+# סריקת-סודות בכל push/PR — הגנה קבועה מתוך PHASE-0 (R130)
+# מצב: רץ-מיד, ללא סודות, ללא גישה חוץ. כישלון = push נעצר.
+# NOTE (2026-10-01): org-wide coverage task 11 — pinned binary variant
+# (gitleaks-action@v2 fails silently on PRIVATE rails; direct binary is the
+# Defi/Domain-canonical approach). CI is currently red org-wide due to
+# Actions minutes exhaustion since 09-20 — owner-level billing fix pending.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks (direct pinned binary)
+        run: |
+          set -euo pipefail
+          curl -sSL -o /tmp/gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
+          tar -xzf /tmp/gl.tgz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --report-format json --report-path /tmp/gl-report.json --redact --no-banner --log-level error
+          COUNT=$(python3 -c "import json;print(len(json.load(open('/tmp/gl-report.json'))))" 2>/dev/null || echo "0")
+          echo "gitleaks findings: ${COUNT}"
