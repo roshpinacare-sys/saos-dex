@@ -176,7 +176,15 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
   const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: reprice ? "reprice" : additive ? "additive" : "refresh", cancelled: [], placed: [], blockers: [] };
 
   /* 1. המקור-הריבוני (זמן-ריצה בלבד) */
-  const srcPath = process.env.MASTER_SOURCE_PATH || "/tmp/keystation/live-agent/keys/hed-soldiers-source.txt";
+  // Task 13-c: /tmp/keystation died with the sandbox resets — the canonical org
+  // key vault is steem/agent/keys (gitignored, 0600), which HOLDS the live
+  // hed-soldiers-source.txt. Env override → legacy keystation → canonical vault.
+  const MASTER_SOURCE_CANDIDATES = [
+    process.env.MASTER_SOURCE_PATH || "",
+    "/tmp/keystation/live-agent/keys/hed-soldiers-source.txt",
+    "/home/z/git-audit/steem/agent/keys/hed-soldiers-source.txt",
+  ].filter(Boolean);
+  const srcPath = MASTER_SOURCE_CANDIDATES.find((p) => existsSync(p)) ?? "/home/z/git-audit/steem/agent/keys/hed-soldiers-source.txt";
   if (!existsSync(srcPath)) throw new Error(`master source missing at ${srcPath} (fail-closed)`);
   const { candidates, privFor } = deriveActiveWif(readFileSync(srcPath, "utf8"));
 
