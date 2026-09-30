@@ -50,6 +50,11 @@ jobs:
       - name: Prisma client
         run: bunx prisma generate
 
+      - name: Prisma schema push (Roast-65 fix — BlockHeader table must exist on the fresh runner DB before the engine boots)
+        run: bunx prisma db push --skip-generate --accept-data-loss
+        env:
+          DATABASE_URL: file:${{ github.workspace }}/db/dex.db
+
       - name: Beat (advance chain, verify claims, credit, publish)
         env:
           DATABASE_URL: file:${{ github.workspace }}/db/dex.db
