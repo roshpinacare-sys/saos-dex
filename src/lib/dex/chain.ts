@@ -207,9 +207,23 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
     // שמעבר-לתמונה; קצה-העוגן-הקודם-נשאר-היסטוריה-ציבורית-של-טיפ-נטוש.
     const gap = raw.state.height - anchorH;
     const withinWindow = anchorH > 0 && Math.abs(gap) <= SEAL_EVERY;
-    if (priorCount === 0 && withinWindow) {
-      console.warn(`[saos-dex][ALERT] BOOT-ACCEPTANCE (one-time, corroboration-layer birth): no local blockHeaders EVER (0 rows — writes were silently failing pre-65); snapshot h${raw.state.height} vs last PUBLICLY-anchored seal h${anchorH} (${extAnchor!.chain} txid ${String(extAnchor!.txid).slice(0, 12)}…, stateRoot ${String(extAnchor!.stateRoot).slice(0, 12)}…) — gap ${gap > 0 ? "+" : ""}${gap} blocks${gap < 0 ? " — HONEST REORG: rebuilding blocks ahead of the snapshot; the prior anchored tip stays public history of an abandoned tip" : ""}. Trust bounded to ≤${SEAL_EVERY} blocks around public evidence + conservation audit + drift declaration. From the next block onward every block writes a real DB header and this path is dead.`);
-      pushReceipt(rt, "boot-acceptance-corroboration-birth", { snapshotH: raw.state.height, anchoredH: anchorH, anchor: extAnchor!.chain, txid: extAnchor!.txid, gap, at: Date.now() });
+    // FIX(Z-22 · anchorless-birth · 2026-09-30): the fleet anchor rail has never
+    // anchored a seal (public mirror evidence: anchored=0, lastTxid=null — measured
+    // in Console/dex/relay.json + world.json), so anchorH is -1 and `withinWindow`
+    // was unsatisfiable BY CONSTRUCTION. As shipped, the birth acceptance bricked
+    // every fresh runner: 12 consecutive failed beats since Roast-65 landed
+    // (2026-09-29 19:01 → 09-30 15:45) — the public book froze at h91709.
+    // The bounds that remain are the ones that matter: snapshot shape + canonical
+    // stateRoot + conservation ledger-audit inside every seal + the first block
+    // writes a real DB header (this path goes quiet from block one onward).
+    // If the rail anchors again later, the windowed path (honest-reorg doctrine)
+    // applies exactly as written — nothing here weakens it.
+    const anchorlessBirth = anchorH === -1;
+    if (priorCount === 0 && (withinWindow || anchorlessBirth)) {
+      console.warn(`[saos-dex][ALERT] BOOT-ACCEPTANCE (corroboration-layer birth): no local blockHeaders EVER (0 rows)${anchorlessBirth
+        ? ` — and NO publicly-anchored seal exists anywhere (the fleet anchor rail has anchored 0 seals; the committed snapshot in the sovereign repo is the strongest evidence in existence)`
+        : ` — snapshot h${raw.state.height} vs last PUBLICLY-anchored seal h${anchorH} (${extAnchor!.chain} txid ${String(extAnchor!.txid).slice(0, 12)}…, stateRoot ${String(extAnchor!.stateRoot).slice(0, 12)}…) — gap ${gap > 0 ? "+" : ""}${gap} blocks${gap < 0 ? " — HONEST REORG: rebuilding blocks ahead of the snapshot; the prior anchored tip stays public history of an abandoned tip" : ""}`}. Trust bounded: shape + canonical stateRoot + conservation audit + ≤${SEAL_EVERY}-window doctrine once the rail anchors. From the next block onward every block writes a real DB header and this path is dead.`);
+      pushReceipt(rt, "boot-acceptance-corroboration-birth", { snapshotH: raw.state.height, anchoredH: anchorH, anchor: anchorlessBirth ? "none" : extAnchor!.chain, txid: anchorlessBirth ? "none" : extAnchor!.txid, gap, at: Date.now() });
       acceptedWithoutCorroboration = true;
     } else {
       console.error(`[saos-dex][ALERT] SNAPSHOT h${raw.state.height} HAS NO DB blockHeader TO CORROBORATE (DB down or evidence gap; priorCount=${priorCount}, anchorH=${anchorH}) — refusing load, evidence untouched`);
