@@ -32,8 +32,15 @@ const STATE_DIR = join(HERE, "state");
 const EVENTS_LOG = join(STATE_DIR, "events.jsonl");
 const REPORT_PATH = join(STATE_DIR, "daily-report.json");
 
-const DEFAULT_MASTER_SOURCE = "/tmp/keystation/live-agent/keys/hed-soldiers-source.txt";
-export const masterSourcePath = () => process.env.MASTER_SOURCE_PATH || DEFAULT_MASTER_SOURCE;
+// Task 13-c: /tmp/keystation died with the sandbox resets — the canonical org
+// key vault is steem/agent/keys (gitignored, 0600), which HOLDS the live
+// hed-soldiers-source.txt. Env override → legacy keystation → canonical vault.
+const MASTER_SOURCE_CANDIDATES = [
+  process.env.MASTER_SOURCE_PATH || "",
+  "/tmp/keystation/live-agent/keys/hed-soldiers-source.txt",
+  "/home/z/git-audit/steem/agent/keys/hed-soldiers-source.txt",
+].filter(Boolean);
+export const masterSourcePath = () => MASTER_SOURCE_CANDIDATES.find((p) => existsSync(p)) ?? "/home/z/git-audit/steem/agent/keys/hed-soldiers-source.txt";
 export const hasMasterSource = () => existsSync(masterSourcePath());
 export const hasPostingWif = () => !!process.env.STEEM_POSTING_WIF;
 

@@ -101,7 +101,11 @@ export async function runConvert({ execute = false, dryRun = false, masterSource
   }
 
   /* שער-החתימה — אותם-שערי-הגנה של המוביל, fail-closed */
-  const srcPath = masterSourcePath || "/tmp/keystation/live-agent/keys/hed-soldiers-source.txt";
+  // Task 13-c: canonical org vault (steem/agent/keys) is the honest default now;
+  // the /tmp/keystation location died with the sandbox resets (env still wins).
+  const srcPath = masterSourcePath
+    || ["/tmp/keystation/live-agent/keys/hed-soldiers-source.txt", "/home/z/git-audit/steem/agent/keys/hed-soldiers-source.txt"].find((p) => existsSync(p))
+    || "/home/z/git-audit/steem/agent/keys/hed-soldiers-source.txt";
   if (!existsSync(srcPath)) throw new Error(`master source missing at ${srcPath} (fail-closed)`);
   const { candidates, privFor } = deriveActiveWif(readFileSync(srcPath, "utf8"));
   const acc = (await rpcAny("condenser_api.get_accounts", [[ACCOUNT]]))?.[0];
