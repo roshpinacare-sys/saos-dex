@@ -1,0 +1,67 @@
+{
+ "asof": "2026-10-04T04:20:00Z",
+ "account": "headcorner",
+ "chain": "STEEM-internal-market",
+ "balances": {
+  "liquidSteem": 2.959,
+  "liquidSbd": 0.018
+ },
+ "book": {
+  "bestAsk": 0.102086,
+  "bestBid": 0.101,
+  "touchSpreadBps": 107
+ },
+ "ourOrders": {
+  "openTotal": 31,
+  "asks": 19,
+  "bids": 12,
+  "atTouchAsk": true,
+  "atTouchBid": true,
+  "askPrices": [
+   0.102086,
+   0.103183,
+   0.104167,
+   0.104281,
+   0.104313,
+   0.104548,
+   0.1046,
+   0.104666,
+   0.104835,
+   0.104839,
+   0.106
+  ],
+  "bidPrices": [
+   0.093383,
+   0.094928,
+   0.0954,
+   0.095701,
+   0.096085,
+   0.096278,
+   0.098,
+   0.0984,
+   0.099,
+   0.1,
+   0.101
+  ]
+ },
+ "measuredBleed": {
+  "window": "2026-10-03T22:39..2026-10-04T00:44",
+  "realFills": 28,
+  "takerBuys": "0.102881..0.103646 SBD/STEEM (sweeps of 14.58/25.10/17.49 STEEM)",
+  "makerSells": "0.09993..0.10066 SBD/STEEM",
+  "roundTripBps": -290,
+  "realizedSbd": -1.5418,
+  "positionSteem": 5.538,
+  "openAvgCost": 0.103631,
+  "source": "grids/state/pnl.json (fill_order on-chain only, no simulation)"
+ },
+ "fix": {
+  "law": "Z-80 BOOK-LAW: asks >= bestAsk, bids <= bestBid; no order may cross the live book; parity = value floor/ceiling only; no live book = no signing (fail-closed)",
+  "gates": "grids/book-law-selftest.mjs 27 rules incl. historical regression of the measured bleed fills",
+  "wired": [
+   "grids/peg.mjs (plan)",
+   "grids/mover.mjs (signature, incl. reprice)",
+   "grid-beat.ts (daily ladder)"
+  ]
+ }
+}

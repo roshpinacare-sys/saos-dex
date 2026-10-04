@@ -208,8 +208,12 @@ async function main(): Promise<void> {
     const steemCommit = Math.max(0, Math.floor(steemAvail * COMMIT_PCT * 1000) / 1000);
     if (steemCommit >= MIN_LEVEL_STEEM * ASK_LEVELS) {
       const per = Math.floor((steemCommit / ASK_LEVELS) * 1000) / 1000;
+      /* Z-80 חוק-הספר: רמה-1 נהדקת אל המגע-החי אם-הפאריטי מתחתיו; הרמות נפרשות
+       * כלפי-מעלה מהבסיס-המהודק — אף-אסק לא נופל מתחת ל-bestAsk (אין-taker-דימום). */
+      const touchAsk = snap.book.bestAsk ?? 0;
+      const baseAsk = Math.max(parity * (1 + ASK_STEP_BPS / 10_000), touchAsk);
       for (let k = 1; k <= ASK_LEVELS; k++) {
-        const px = parity * (1 + (ASK_STEP_BPS * k) / 10_000);
+        const px = baseAsk * (1 + (ASK_STEP_BPS * (k - 1)) / 10_000);
         const sellAmt = per;
         const recv = Math.floor(sellAmt * px * 1000) / 1000;
         if (recv < MIN_LEVEL_SBD) continue;
@@ -232,7 +236,8 @@ async function main(): Promise<void> {
     if (sbdCommit >= MIN_LEVEL_SBD * BID_LEVELS && snap.book.bestBid) {
       const per = Math.floor((sbdCommit / BID_LEVELS) * 1000) / 1000;
       for (let k = 1; k <= BID_LEVELS; k++) {
-        const px = snap.book.bestBid * (1 - (BID_STEP_BPS * k) / 10_000);
+        // Z-80: ביד לא עולה על המגע — תמיד (כפול-ביטחון; הנוסחה כבר מתחתיו)
+        const px = Math.min(snap.book.bestBid * (1 - (BID_STEP_BPS * k) / 10_000), snap.book.bestBid);
         const recv = Math.floor(per / px * 1000) / 1000; // STEEM
         if (recv < MIN_LEVEL_STEEM) continue;
         const id = nextId(); seq++;
