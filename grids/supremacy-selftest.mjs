@@ -5,7 +5,8 @@
 // Z-77: המספרים-המבניים נמדדו וננעלו מהקבלה הדטרמיניסטית (seed 20261004).
 
 import { mulberry32, FEE_BPS } from "./strategies.mjs";
-import { supremacyTick, fleetSpawn, feeCompound, captureFees, inventorySkew, updateVolEwma, modulateWidth, fleetCapState } from "./mm-supremacy.mjs";
+import { supremacyTick, fleetSpawn, feeCompound, captureFees, inventorySkew, updateVolEwma, modulateWidth, fleetCapState, calibrateCalmBps } from "./mm-supremacy.mjs";
+import { scalingStudy } from "./sim/volume-sim.mjs";
 import { runAll, SCENARIOS } from "./sim/volume-sim.mjs";
 
 let pass = 0, fail = 0;
@@ -142,11 +143,19 @@ console.log("mm-supremacy selftest — אינווריאנטות-ברזל");
   ok("fees-captured-all-calm", by["baseline-1"].feesCapturedMu > 0 && by["fleet-8"].feesCapturedMu > 0 && by["supremacy-16"].feesCapturedMu > 0);
   ok("volatility-cost-measured", by["volatile-16"].netPnlMu < by["fleet-8"].netPnlMu,
      `volatile ${by["volatile-16"].netPnlMu.toFixed(1)}μ < calm ${by["fleet-8"].netPnlMu.toFixed(1)}μ — adverse-selection נמדד`);
-  // Z-77 · A/B מבוקר: אותו-שוק (אותו-זרע, אותן-הגעות), רק-הציטוטים שונים:
-  ok("ewma-ab-win", by["volatile-16"].netPnlMu > by["volatile-16-plain"].netPnlMu,
-     `${by["volatile-16"].netPnlMu.toFixed(1)}μ > ${by["volatile-16-plain"].netPnlMu.toFixed(1)}μ — פיד-פורוורד חוסך דימום`);
-  ok("ewma-ab-magnitude-locked", by["volatile-16"].netPnlMu - by["volatile-16-plain"].netPnlMu >= 20,
-     `+${(by["volatile-16"].netPnlMu - by["volatile-16-plain"].netPnlMu).toFixed(1)}μ ≥ 20μ (נעול)`);
+  // Z-78 · הלקח-הנמדד-הכנה: בעידן-ההון-הבלתי-אחיד (Z-77) ה-A/B מדד את ה-EWMA
+  // מציל −39.6μ דרך ערוץ-הפריקה-העמוקה. אחידות-ההון (Z-78) **חיסלה את-הערוץ**
+  // (0 פריקות-עמוקות) — וההפרש בין-הטיפול לביקורת מתכנס לרעש. ההגנה האמת
+  // עכשיו מבנית (קיווי-רמות-מתאים-תקרה), וה-EWMA נשאר לרוחב-אדפטיבי, לא כמציל.
+  const abGap = Math.abs(by["volatile-16"].netPnlMu - by["volatile-16-plain"].netPnlMu);
+  ok("ewma-ab-converged-under-coherence", abGap <= 15,
+     `|טיפול−ביקורת| = ${abGap.toFixed(1)}μ ≤ 15μ — ההגנה עברה מה-EWMA למבנה (נמדד, Z-78)`);
+  // Z-78 · שאילתה 23: אחידות-הון מוכחת-קצה-לקצה — אפס-פריקות-עמוקות בכל-התרחישים
+  ok("coherence-no-deep-unwind-anywhere", rs.every((r) => r.results.deepUnwindTicks === 0),
+     `deep-unwind ticks: ${rs.map((r) => r.results.deepUnwindTicks).join(",")} — מילוי-אחד לא עובר-תקרה`);
+  // Z-78 · החוק-הגדול: עקה-תנודתית מפסידה < 5% מההון (העידן-הישן מדד −44%!)
+  ok("volatile-loss-bounded-under-coherence", by["volatile-16"].netPnlPctOfCapital > -5,
+     `${by["volatile-16"].netPnlPctOfCapital.toFixed(2)}% > −5% — העקה כמעט-שבירת-אפס (היה: −44.11%)`);
   ok("no-nan-anywhere", rs.every((r) => Object.values(r.results).every((v) => typeof v === "number" ? Number.isFinite(v) : true)));
   ok("scenario-config-sane", SCENARIOS["supremacy-16"].compound === true && SCENARIOS["volatile-16-plain"].ewma === false);
 }
@@ -243,6 +252,72 @@ ok("fee-bps-consistent", FEE_BPS === 30, `FEE_BPS=${FEE_BPS}`);
   const c = JSON.stringify(runAll({ ticks: 60, seed: 20261004 }).find((r) => r.scenario === "volatile-16"));
   ok("ab-control-reproducible", a === b);
   ok("ab-control-differs-treatment", a !== c);
+}
+
+/* ── Z-78 · שאילתה 24: העוגן-הנמדד — מתמטיקה מדויקת, חסינות-חריגים, כנות ── */
+
+/* 20) calibrateCalmBps: חציון מדויק, רצפה, fallback */
+{
+  const a = calibrateCalmBps([1, 1.01, 1.01]);   // rets=[100,0] → חציון 50
+  const b = calibrateCalmBps([1, 1, 1, 1.5, 1, 1]); // לווייתן-אחד → חציון 0 → רצפה 1
+  const c = calibrateCalmBps([]);                 // אין-מדידה → fallback 30
+  const d = calibrateCalmBps([0.2]);              // נקודה-אחת → fallback 30
+  const e = calibrateCalmBps(null);               // אין-סדרה → fallback 30
+  ok("calm-median-exact", a === 50, `rets [0,100] → ${a}`);
+  ok("calm-outlier-robust", b === 1, `לווייתן לא מזיז את-העוגן → רצפה ${b}`);
+  ok("calm-fallback-honest", c === 30 && d === 30 && e === 30, `empty/single/null → 30`);
+}
+
+/* 21) המדידה מנצחת הנחה: market.calmBps גובר על p.calmBps */
+{
+  const g = { id: "t", params: { levels: 2, widthBps: 40, levelMu: 100, growth: 1.3, capMu: 8000, minSpreadBps: 35, calmBps: 1000 } };
+  const measured = supremacyTick(g, { refPrice: 1.0, stale: false, volEwmaBps: 20, calmBps: 1 }, 0);
+  const assumed = supremacyTick(g, { refPrice: 1.0, stale: false, volEwmaBps: 20 }, 0); // p.calmBps=1000
+  const dist = (q) => q.orders.find((o) => o.side === "ask").price - 1.0;
+  ok("calm-measured-beats-assumption", dist(measured) > dist(assumed),
+     `measured-anchor ${((dist(measured) - 0) * 1e4).toFixed(1)}bps > assumed-anchor ${((dist(assumed) - 0) * 1e4).toFixed(1)}bps`);
+}
+
+/* 22) סולם-רוחבים ייחודי (שאילתה 27): אין-חיילים-תאומים ב-16 וב-32 */
+{
+  const w16 = fleetSpawn(10000, 16, 0.2).map((s) => s.params.widthBps);
+  const w32 = fleetSpawn(10000, 32, 0.2).map((s) => s.params.widthBps);
+  ok("widths-unique-16", new Set(w16).size === 16, `${w16[0]}..${w16[15]}`);
+  ok("widths-unique-32", new Set(w32).size === 32);
+  ok("widths-in-span", Math.min(...w32) >= 40 && Math.max(...w32) <= 64.001);
+}
+
+/* 23) אחידות-הון (שאילתה 23): capMu ≥ 2×רמה-מקסימלית בכל-גודל-צי */
+{
+  let allOk = true;
+  for (const n of [1, 2, 8, 16, 32]) {
+    for (const s of fleetSpawn(10000, n, 0.2)) {
+      const p = s.params;
+      const maxLevel = p.levelMu * Math.pow(p.growth, p.levels - 1);
+      if (p.capMu < 2 * maxLevel - 1e-6) allOk = false;
+    }
+  }
+  ok("capital-coherence-law", allOk, "מילוי-מלא-אחד לא יכול לעבור תקרה — בכל-צי");
+}
+
+/* 24) חקר-העלייה (שאילתה 32): משטר-≥8 משתלם; שולי-לחייל חיובי עד 32 */
+{
+  const rows = scalingStudy({ ticks: 240, seed: 20261004, counts: [1, 2, 4, 8, 16, 32] });
+  const flow = (n) => rows.find((r) => r.soldiers === n).volumeMu;
+  ok("scaling-regime-8-jump", flow(8) > flow(4), `${flow(8).toFixed(0)}μ > ${flow(4).toFixed(0)}μ — המשטר-≥8 משתלם (נמדד)`);
+  const marg = (a, b) => rows.find((r) => r.soldiers === b).marginalPerSoldierMu;
+  ok("scaling-marginal-positive-to-32", marg(8, 16) > 0 && marg(16, 32) > 0,
+     `8→16: +${marg(8, 16).toFixed(0)}μ/חייל · 16→32: +${marg(16, 32).toFixed(0)}μ/חייל`);
+  const m1 = rows.find((r) => r.soldiers === 2).marginalPerSoldierMu;
+  ok("scaling-small-fleet-honest", m1 < 0, `1→2: ${m1.toFixed(1)}μ/חייל — צי-קטן הוא-צפיפות, לא-תנועה (כנות-נמדדת)`);
+}
+
+/* 25) העוגן-בסימולציה: מתכייל כלפי-מעלה בעקה (המדידה רואה את-המשטר) */
+{
+  const rs = runAll({ ticks: 120, seed: 77 });
+  const calm = rs.find((r) => r.scenario === "baseline-1").results.calmBpsEndBps;
+  const vol = rs.find((r) => r.scenario === "volatile-16").results.calmBpsEndBps;
+  ok("calm-anchor-adapts-up-under-stress", vol > calm, `volatile ${vol.toFixed(1)}bps > calm ${calm.toFixed(1)}bps`);
 }
 
 console.log(`\nselftest: ${pass} pass / ${fail} fail`);

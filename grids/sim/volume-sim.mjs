@@ -27,7 +27,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { mulberry32, FEE_BPS } from "../strategies.mjs";
-import { supremacyTick, fleetSpawn, feeCompound, captureFees, updateVolEwma } from "../mm-supremacy.mjs";
+import { supremacyTick, fleetSpawn, feeCompound, captureFees, updateVolEwma, calibrateCalmBps } from "../mm-supremacy.mjs";
 
 const r6 = (v) => Math.round(v * 1e6) / 1e6;
 
@@ -58,6 +58,7 @@ export function runScenario(name, cfg, { ticks = 480, seed = 20261004, ref0 = 0.
   let ref = ref0;
   let prevRef = ref0;
   let volEwma = 0;
+  let series = [ref0]; // Z-78 שאילתה 24: סדרת-המחירים-הנמדדת לכיול-העוגן
   let feePool = 0, ourVol = 0, extVol = 0, bornTotal = 0;
   let peak = startCash0, maxDD = 0, lastNote = "";
   const BAND = 0.02; // 200bps סבלנות-טייקר (כמו simFill של ה-estate)
@@ -68,11 +69,16 @@ export function runScenario(name, cfg, { ticks = 480, seed = 20261004, ref0 = 0.
     if (ref <= 0) ref = ref0;
     volEwma = updateVolEwma(volEwma, ref, prevRef);
     prevRef = ref;
+    series.push(ref);
+    if (series.length > 65) series = series.slice(-64);
 
     // 2) כל-חייל מצטט (פריקה/פריקה-עמוקה מנוהלים בתוך המנוע — Z-77: אף-חייל-לא-קופא)
     const allOrders = [];
     const market = { refPrice: ref, stale: false };
-    if (cfg.ewma) market.volEwmaBps = volEwma; // קבוצת-ביקורת: בלי-מפתח = מנוע-ישן
+    if (cfg.ewma) {
+      market.volEwmaBps = volEwma;               // Z-77
+      market.calmBps = calibrateCalmBps(series); // Z-78: העוגן מהמדידה, לא מהנחה
+    } // קבוצת-ביקורת: בלי-מפתחות = מנוע-ישן
     for (const s of st) {
       const q = supremacyTick(s.grid, market, s.inv);
       lastNote = q.note;
@@ -153,6 +159,7 @@ export function runScenario(name, cfg, { ticks = 480, seed = 20261004, ref0 = 0.
       maxDrawdownMu: r6(maxDD),
       deepUnwindTicks: st.reduce((a, s) => a + s.halts, 0),
       volEwmaEndBps: cfg.ewma ? volEwma : null,
+      calmBpsEndBps: cfg.ewma ? calibrateCalmBps(series) : null,
       endSoldiers: st.length, bornFromFees: bornTotal,
       endRef: ref, lastEngineNote: lastNote,
     },
@@ -171,6 +178,23 @@ export function runAll({ ticks, seed } = {}) {
   return out;
 }
 
+/* ── Z-78 · שאילתה 32: חקר-עלייה-מדורגת בחיילים — איפה השוליים נהיים שליליים ──
+   מריץ אותו-שוק (אותו-זרע) עם 1..32 חיילים ומודד ווליום-שולי-לחייל.
+   זה מדד-ההפסקה: כשהווליום-השולי-לחייל מתחיל לרדת — שם נעצרים בהרחבה. */
+export function scalingStudy({ ticks = 480, seed = 20261004, counts = [1, 2, 4, 8, 16, 32] } = {}) {
+  const rows = [];
+  for (const n of counts) {
+    const r = runScenario(`scale-${n}`, { soldiers: n, capitalMu: 10000, volBps: 30, flowP: 0.5, compound: false, ewma: true }, { ticks, seed });
+    rows.push({ soldiers: n, volumeMu: r.results.volumeMu, fills: r.results.fills, feesCapturedMu: r.results.feesCapturedMu, netPnlMu: r.results.netPnlMu });
+  }
+  for (let i = 1; i < rows.length; i++) {
+    const added = rows[i].soldiers - rows[i - 1].soldiers;
+    rows[i].marginalVolumeMu = r6(rows[i].volumeMu - rows[i - 1].volumeMu);
+    rows[i].marginalPerSoldierMu = r6(rows[i].marginalVolumeMu / added);
+  }
+  return rows;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const ticks = parseInt(argGet("--ticks", "480"), 10);
   const seed = parseInt(argGet("--seed", "20261004"), 10);
@@ -186,6 +210,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     model: "declared assumptions in header; liquidity-begets-flow breadth term",
     honesty: "SIM-מסומן: מוכיח מנגנון, לא רווח-עתידי. האמת הריאלית נמדדת ב-observe.mjs מה-chain.",
     scenarios: receipts, runtimeMs: dur,
+    scaling: scalingStudy({ ticks, seed }),
   };
   mkdirSync(dirname(receiptPath), { recursive: true });
   mkdirSync(dirname(reportPath), { recursive: true });
@@ -209,6 +234,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     "",
     "קריאה: יותר-חיילים → יותר-ווליום ויותר-עמלות-נתפסות; תנודתיות מגדילה ווליום **וגם** מלאי-סיכון — לכן פריקה-עמוקה (Z-77: אף-חייל-לא-קופא) ומודולציית-EWMA מרחיבות-רוחב ברעילות.",
     "A/B מבוקר: volatile-16 מול volatile-16-plain — אותו-שוק-בדיוק (אותו-זרע), ההבדל = התרומה-הנמדדת של הפיד-פורוורד.",
+    "",
+    "## חקר-העלייה-המדורגת (שאילתה 32): ווליום-שולי-לחייל",
+    "",
+    "| חיילים | ווליום(μ) | מילויים | עמלות(μ) | רווח-נטו(μ) | שולי-לחייל(μ) |",
+    "|---|---|---|---|---|---|",
+    ...receipt.scaling.map((s) => `| ${s.soldiers} | ${s.volumeMu.toFixed(0)} | ${s.fills} | ${s.feesCapturedMu.toFixed(1)} | ${s.netPnlMu.toFixed(1)} | ${s.marginalPerSoldierMu != null ? s.marginalPerSoldierMu.toFixed(1) : "—"} |`),
+    "",
   ].join("\n");
   writeFileSync(reportPath, md + "\n");
 

@@ -11,7 +11,7 @@ import { appendEvent, nextSeq } from "./events.mjs";
 import { processRules, SEED_RULES } from "./rules.mjs";
 import { STRATEGIES, simFill, mulberry32, FEE_BPS } from "./strategies.mjs";
 import { observeRealFills, applyRealFills } from "./observe.mjs";
-import { supremacyTick, updateVolEwma, fleetCapState } from "./mm-supremacy.mjs";
+import { supremacyTick, updateVolEwma, fleetCapState, calibrateCalmBps } from "./mm-supremacy.mjs";
 
 /* R-Z75 · חיווט-העליונות: מנוע-ה-MM מטה-התנועה נרשם במפת-האסטרטגיות החיה —
  * מרגע-זה כל-טיק של ה-engine מצטט גם-את-חיילי-העליונות על ה-ref האמת.
@@ -142,12 +142,17 @@ export async function runTick({ seed = 20260928, injectedPrice = null, injectedE
   const price = injectedPrice ?? (await measureRefPrice());
   const prevRef = state.market?.refPrice ?? null; // Z-77: ל-EWMA — התנודתיות נמדדת מהמעבר
   const prevEwma = state.market?.volEwmaBps ?? 0; // חייב-להיתפס לפני-ההשמה (אחרת-המדידה מתאפסת כל-טיק)
+  const prevSeries = state.market?.priceSeries ?? []; // Z-78: סדרת-המחירים לכיול-העוגן
   let priceEvent = null;
   if (price) {
     priceEvent = { type: "price.ref", source: price.source, payload: { refPrice: price.refPrice, stale: !!price.stale } };
     state.market = { refPrice: r6(price.refPrice), source: price.source, stale: !!price.stale };
     // Z-77 · שאילתה 13: פיד-פורוורד — המנוע לומד את קצב-השוק מהמדידה האמת
     state.market.volEwmaBps = updateVolEwma(prevEwma, price.refPrice, prevRef);
+    // Z-78 · שאילתה 24: כיול-עצמי — עוגן-התנודתיות מהמדידה (חציון, חסין-חריגים);
+    // המדידה מנצחת הנחה: חייל עם p.calmBps מקבל את-העוגן-הנמדד כל-עוד הוא קיים.
+    state.market.priceSeries = [...prevSeries.slice(-63), r6(price.refPrice)];
+    state.market.calmBps = calibrateCalmBps(state.market.priceSeries);
   } else if (state.market?.refPrice) {
     state.market.stale = true;
     priceEvent = { type: "price.ref", source: "last-known", payload: { refPrice: state.market.refPrice, stale: true } };

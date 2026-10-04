@@ -72,6 +72,25 @@ export function fleetCapState(grids, globalCapMu) {
   return { invMu, breach: invMu > globalCapMu, headroomMu: r6(globalCapMu - invMu) };
 }
 
+/* ── Z-78 · שאילתה 24: כיול-עצמי של עוגן-התנודתיות ממדידה אמת ─────────────
+   העיקרון: **מדידה מנצחת הנחה.** במקום calmBps=30 קבוע, העוגן מחושב
+   מסדרת-המחירים-הנמדדת (חלון 64): **חציון** התשואות המוחלטות — חסין-חריגים
+   (לווייתן-אחד לא מזיז את-העוגן), רצפה 1bps (שוק-סטטי: כל-תזוזה = אירוע
+   ולא-נורמה), fallback 30 רק-באין-מדידה. דטרמיניסטי, זול (≤64 ערכים). */
+export function calibrateCalmBps(series, opts = {}) {
+  const window = opts.window ?? 64;
+  const fallback = opts.fallback ?? 30;
+  const floorBps = opts.floorBps ?? 1;
+  const w = (series ?? []).filter((v) => typeof v === "number" && v > 0).slice(-window);
+  if (w.length < 2) return fallback;
+  const rets = [];
+  for (let i = 1; i < w.length; i++) rets.push(Math.abs(w[i] / w[i - 1] - 1) * 10000);
+  rets.sort((a, b) => a - b);
+  const mid = Math.floor(rets.length / 2);
+  const median = rets.length % 2 ? rets[mid] : (rets[mid - 1] + rets[mid]) / 2;
+  return r6(Math.max(floorBps, median));
+}
+
 /* ── supremacyTick: ציטוט שני-צדדים מטה-תנועה עם הטיית-מלאי ────────────────
    פרמטרים: levels, widthBps (רוחב-בסיס), levelMu (רמה-בסיסית), growth,
    capMu (תקרת-מלאי לחייל), minSpreadBps (רוחב-מינימלי), skewAmp (עוצמת-הטיה).
@@ -96,7 +115,9 @@ export function supremacyTick(grid, market, inventoryMu) {
   const unwindOnly = deep || market.fleetUnwindOnly === true || abs >= capMu;
 
   // Z-77 פיד-פורוורד: רוחב-בסיס מתכייל לפי תנודתיות-נמדדת (undefined = אין-מדידה → קבוע)
-  const wBase = modulateWidth(widthBps, market.volEwmaBps, p);
+  // Z-78 · שאילתה 24: **המדידה מנצחת** — calmBps שנמדד (market.calmBps) גובר על
+  // הנחה (p.calmBps) ועל-ברירת-המחדל (30). פרמטר-מפורש מוצמד רק-באין-מדידה.
+  const wBase = modulateWidth(widthBps, market.volEwmaBps, { ...p, calmBps: market.calmBps ?? p.calmBps });
 
   const skew = inventorySkew(inventoryMu, capMu);
   const orders = [];
@@ -132,25 +153,36 @@ export function supremacyTick(grid, market, inventoryMu) {
 
 /* ── fleetSpawn: חלוקת-הון לצי חיילים על סולם-המחיר ────────────────────────
    המפעיל: "להשיג כמה שיותר תנועה עם כמה שיותר חיילים". חלוקה שווה-שקלית
-   עם גיוון-פרמטרים דטרמיניסטי: כל חייל מקבל רוחב/רמה שונה-מעט (index-based)
-   כדי שהצי יפרוש עומק על פני הסולם — לא 8 חיילים על אותו-מחיר. */
+   עם גיוון-פרמטרים דטרמיניסטי.
+   Z-78 · חוק-ריווח (שאילתה 27): סולם-רוחבים **רציף** — כל-חייל מקבל רוחב-ייחודי
+   (span 24bps חלוק באופן שווה) — הסכימה הישנה (k%5) שכפלה רוחבים מ-n≥6
+   = קניבליזציה-מובנית (חיילים-תאומים נלחמים על אותן-פקודות).
+   Z-78 · חוק-אחידות-הון (שאילתה 23): capMu ≥ 2×גודל-הרמה-המקסימלי —
+   מילוי-מלא-אחד **לא יכול** לעבור-תקרה (הבאג-הנמדד: levelMu≈4×capMu
+   בברירת-המחדל הישנה — כל-מילוי הכניס לפריקה-עמוקה מיד). */
 export function fleetSpawn(totalMu, count, refPrice, opts = {}) {
   const n = Math.max(1, Math.floor(count));
-  const per = r6(totalMu / n);
-  const widthJitter = opts.widthJitterBps ?? 6;   // 6bps דרגת-גיוון
+  const widthSpanBps = opts.widthSpanBps ?? 24;      // רוחבים 40..40+span, ייחודיים
+  const step = n > 1 ? widthSpanBps / (n - 1) : 0;
+  const capShare = opts.capShare ?? 0.25;            // חלק-התקרה מההון-הכולל
   const sizeJitter = opts.sizeJitter ?? 0.15;
   const soldiers = [];
   for (let k = 0; k < n; k++) {
-    const w = 40 + (k % 5) * widthJitter;          // 40..64 bps
-    const lvl = r6(per * (1 + ((k % 3) - 1) * sizeJitter));
+    const levels = 3 + (k % 2);                      // 3 או 4 רמות
+    const growth = 1.3 + (k % 3) * 0.05;             // 1.30..1.40
+    const share = Math.max(100, Math.round((totalMu * capShare) / n));
+    const capMu = opts.capMu ?? share;
+    const lvlRaw = Math.max(1, r6(share * (1 + ((k % 3) - 1) * sizeJitter)));
+    // floor (לא-r6) — עיגול-מעלה יכול לשבור את האי-שוויון הקפדני של האחידות
+    const levelMu = Math.max(1, Math.min(lvlRaw, Math.floor((capMu / (2 * Math.pow(growth, levels - 1))) * 1e6) / 1e6));
     soldiers.push({
       id: `sup-${k + 1}`,
       params: {
-        levels: 3 + (k % 2),                       // 3 או 4 רמות
-        widthBps: w,
-        levelMu: Math.max(1, lvl),
-        growth: 1.3 + (k % 3) * 0.05,              // 1.30..1.40
-        capMu: opts.capMu ?? Math.max(100, Math.round((totalMu * 0.25) / n)),
+        levels,
+        widthBps: r6(40 + k * step),                 // Z-78: ייחודי-תמיד
+        levelMu,
+        growth,
+        capMu,
         minSpreadBps: 35,
         skewAmp: 120,
       },
