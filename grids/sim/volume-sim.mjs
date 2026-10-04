@@ -27,16 +27,21 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { mulberry32, FEE_BPS } from "../strategies.mjs";
-import { supremacyTick, fleetSpawn, feeCompound, captureFees } from "../mm-supremacy.mjs";
+import { supremacyTick, fleetSpawn, feeCompound, captureFees, updateVolEwma } from "../mm-supremacy.mjs";
 
 const r6 = (v) => Math.round(v * 1e6) / 1e6;
 
-/* ── תרחישים: בסיס / צי / עליונות+התרחבות-עצמית / תנודתיות (עקה) ─────────── */
+/* ── תרחישים: בסיס / צי / עליונות+התרחבות-עצמית / תנודתיות (עקה) ───────────
+   Z-77: volatile-16-plain = קבוצת-ביקורת A/B — אותו-זרע, אותו-שוק, אותו-זרימה,
+   רק המנוע ישן (בלי-מודולציית-EWMA). ההבדל ביניהם = התרומה-הנמדדת של
+   הפיד-פורוורד (שאילתה 13). הניסוי מבוקר: updateVolEwma טהור (אפס קריאות-RNG)
+   → נתיב-המחיר והזרימה זהים ביט-ביט; רק הציטוטים שונים. */
 export const SCENARIOS = {
-  "baseline-1":   { soldiers: 1,  capitalMu: 10000, volBps: 30,  flowP: 0.5, compound: false },
-  "fleet-8":      { soldiers: 8,  capitalMu: 10000, volBps: 30,  flowP: 0.5, compound: false },
-  "supremacy-16": { soldiers: 16, capitalMu: 10000, volBps: 30,  flowP: 0.5, compound: true  },
-  "volatile-16":  { soldiers: 16, capitalMu: 10000, volBps: 120, flowP: 0.7, compound: false },
+  "baseline-1":   { soldiers: 1,  capitalMu: 10000, volBps: 30,  flowP: 0.5, compound: false, ewma: true  },
+  "fleet-8":      { soldiers: 8,  capitalMu: 10000, volBps: 30,  flowP: 0.5, compound: false, ewma: true  },
+  "supremacy-16": { soldiers: 16, capitalMu: 10000, volBps: 30,  flowP: 0.5, compound: true,  ewma: true  },
+  "volatile-16":  { soldiers: 16, capitalMu: 10000, volBps: 120, flowP: 0.7, compound: false, ewma: true  },
+  "volatile-16-plain": { soldiers: 16, capitalMu: 10000, volBps: 120, flowP: 0.7, compound: false, ewma: false },
 };
 
 /* ── ריצת-תרחיש אחת: מחזירה קבלה-מלאה (כל-המספרים, אפס-טענות) ─────────────── */
@@ -45,29 +50,34 @@ export function runScenario(name, cfg, { ticks = 480, seed = 20261004, ref0 = 0.
   const capMu = Math.max(100, Math.round((cfg.capitalMu * 0.25) / cfg.soldiers));
   const fleet = fleetSpawn(cfg.capitalMu, cfg.soldiers, ref0, { capMu });
   const mkSoldier = (id, grid, cashMul = 0.5) => ({
-    id, grid, inv: 0, cash: r6(capMu * ref0 * cashMul), halted: false, vol: 0, fills: 0, halts: 0,
+    id, grid, inv: 0, cash: r6(capMu * ref0 * cashMul), vol: 0, fills: 0, halts: 0,
   });
   const st = fleet.map((g, i) => mkSoldier(g.id, g));
   const startCash0 = st.reduce((a, s) => a + s.cash, 0);
   const state = { feeMeter: { capturedMu: 0, compoundedMu: 0, births: 0 } };
   let ref = ref0;
+  let prevRef = ref0;
+  let volEwma = 0;
   let feePool = 0, ourVol = 0, extVol = 0, bornTotal = 0;
   let peak = startCash0, maxDD = 0, lastNote = "";
   const BAND = 0.02; // 200bps סבלנות-טייקר (כמו simFill של ה-estate)
 
   for (let t = 1; t <= ticks; t++) {
-    // 1) הליכת-מחיר (אחידה, חתומה)
+    // 1) הליכת-מחיר (אחידה, חתומה) + EWMA של התנודתיות-הנמדדת (Z-77, טהור — לא צורך RNG)
     ref = r6(ref * (1 + ((rng() * 2 - 1) * cfg.volBps) / 10000));
     if (ref <= 0) ref = ref0;
+    volEwma = updateVolEwma(volEwma, ref, prevRef);
+    prevRef = ref;
 
-    // 2) כל-חייל מצטט (מצב-פריקה מנוהל בתוך המנוע; עצירה-מלאה רק 2×תקרה)
+    // 2) כל-חייל מצטט (פריקה/פריקה-עמוקה מנוהלים בתוך המנוע — Z-77: אף-חייל-לא-קופא)
     const allOrders = [];
+    const market = { refPrice: ref, stale: false };
+    if (cfg.ewma) market.volEwmaBps = volEwma; // קבוצת-ביקורת: בלי-מפתח = מנוע-ישן
     for (const s of st) {
-      if (s.halted && Math.abs(s.inv) < capMu) { s.halted = false; }
-      const q = supremacyTick(s.grid, { refPrice: ref, stale: false }, s.inv);
-      if (q.halted && !s.halted) { s.halted = true; s.halts += 1; }
+      const q = supremacyTick(s.grid, market, s.inv);
       lastNote = q.note;
-      if (!q.halted) for (const o of q.orders) allOrders.push({ ...o, owner: s.id, left: o.sizeMu });
+      if (q.note === "deep-unwind" || String(q.note).startsWith("deep-unwind")) s.halts += 1;
+      for (const o of q.orders) allOrders.push({ ...o, owner: s.id, left: o.sizeMu });
     }
 
     // 3) זרימת-טייקרים-חוץ: נגיעה בסיסית + נגיעות-רחבה (מוצהר: נזילות מושכת זרימה)
@@ -141,7 +151,8 @@ export function runScenario(name, cfg, { ticks = 480, seed = 20261004, ref0 = 0.
       netPnlMu: netPnl,
       netPnlPctOfCapital: r6((netPnl / Math.max(1e-9, startCash)) * 100),
       maxDrawdownMu: r6(maxDD),
-      halts: st.reduce((a, s) => a + s.halts, 0),
+      deepUnwindTicks: st.reduce((a, s) => a + s.halts, 0),
+      volEwmaEndBps: cfg.ewma ? volEwma : null,
       endSoldiers: st.length, bornFromFees: bornTotal,
       endRef: ref, lastEngineNote: lastNote,
     },
@@ -182,7 +193,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 
   const line = (r) => {
     const x = r.results;
-    return `| ${r.scenario} | ${x.volumeMu.toFixed(0)} | ${x.fills} | ${x.feesCapturedMu.toFixed(1)} | ${x.spreadPnlMu.toFixed(1)} | ${x.netPnlMu.toFixed(1)} (${x.netPnlPctOfCapital.toFixed(2)}%) | ${x.maxDrawdownMu.toFixed(1)} | ${x.halts} | ${x.endSoldiers} |`;
+    return `| ${r.scenario} | ${x.volumeMu.toFixed(0)} | ${x.fills} | ${x.feesCapturedMu.toFixed(1)} | ${x.spreadPnlMu.toFixed(1)} | ${x.netPnlMu.toFixed(1)} (${x.netPnlPctOfCapital.toFixed(2)}%) | ${x.maxDrawdownMu.toFixed(1)} | ${x.deepUnwindTicks} | ${x.endSoldiers} |`;
   };
   const md = [
     "# SUPREMACY-RECEIPT — קבלת-הווליום של מנוע-העליונות (SIM)",
@@ -192,17 +203,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     "· כנות: **SIM**. מוכיח מנגנון (ציטוט, הטיית-מלאי, תפיסת-עמלות, התרחבות-מעמלות) — לא רווח-עתידי.",
     "· מודל: הנחת-רחבה מוצהרת — נזילות-רחבה-יותר מושכת זרימה (כל 8 חיילים → נגיעה-פוטנציאלית נוספת).",
     "",
-    "| תרחיש | ווליום-שלנו(μ) | מילויים | עמלות-נתפסות(μ) | רווח-ספרד(μ) | רווח-נטו(μ) | ירידה-מקס(μ) | הפסקות | חיילים-סוף |",
+    "| תרחיש | ווליום-שלנו(μ) | מילויים | עמלות-נתפסות(μ) | רווח-ספרד(μ) | רווח-נטו(μ) | ירידה-מקס(μ) | פריקות-עמוקות | חיילים-סוף |",
     "|---|---|---|---|---|---|---|---|---|",
     ...receipts.map(line),
     "",
-    "קריאה: יותר-חיילים → יותר-ווליום ויותר-עמלות-נתפסות; תנודתיות מגדילה ווליום **וגם** מלאי-סיכון (ירידה-מקס, הפסקות) — לכן יש מפסקי-חירום ותקרות-מלאי.",
+    "קריאה: יותר-חיילים → יותר-ווליום ויותר-עמלות-נתפסות; תנודתיות מגדילה ווליום **וגם** מלאי-סיכון — לכן פריקה-עמוקה (Z-77: אף-חייל-לא-קופא) ומודולציית-EWMA מרחיבות-רוחב ברעילות.",
+    "A/B מבוקר: volatile-16 מול volatile-16-plain — אותו-שוק-בדיוק (אותו-זרע), ההבדל = התרומה-הנמדדת של הפיד-פורוורד.",
   ].join("\n");
   writeFileSync(reportPath, md + "\n");
 
   for (const r of receipts) {
     const x = r.results;
-    console.log(`${r.scenario}: vol=${x.volumeMu.toFixed(0)}μ fills=${x.fills} fees=${x.feesCapturedMu.toFixed(1)}μ netPnl=${x.netPnlMu.toFixed(1)}μ (${x.netPnlPctOfCapital.toFixed(2)}%) dd=${x.maxDrawdownMu.toFixed(0)}μ halts=${x.halts} soldiers=${x.endSoldiers}`);
+    console.log(`${r.scenario}: vol=${x.volumeMu.toFixed(0)}μ fills=${x.fills} fees=${x.feesCapturedMu.toFixed(1)}μ netPnl=${x.netPnlMu.toFixed(1)}μ (${x.netPnlPctOfCapital.toFixed(2)}%) dd=${x.maxDrawdownMu.toFixed(0)}μ deepUnwind=${x.deepUnwindTicks} soldiers=${x.endSoldiers}`);
   }
   console.log(`receipt → ${receiptPath} | report → ${reportPath} | ${dur}ms`);
 }

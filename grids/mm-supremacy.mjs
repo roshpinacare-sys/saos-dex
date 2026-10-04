@@ -11,11 +11,18 @@
 //   (2) בריכת-עמלות — טייקרים-חוץ משלמים FEE_BPS על ה-AMM/ספר, והמייקרים
 //       לוקחים את חלקם פרו-רטה לפי נפח-מילוי (דוקטרינת 70% AMM ב-LIQUIDITY_STRATEGY).
 //
-// חוקי-ברזל (אותם-חוקים של grid-pulse R83 + הדוקטרינה הקיימת):
+// חוקי-ברזל (אותם-חוקים של grid-pulse R83 + הדוקטרינה הקיימת + Z-77):
 //   · clamp bid < fair < ask — לעולם לא חוצים את הספר;
 //   · רוחב-מינימלי minSpreadBps — לא מצטטים רוחב שאינו מכסה עמלה+סליפ;
-//   · תקרת-מלאי capMu — מעליה מצב-פריקה (צד-מפחית-בלבד, חצי-גודל); עצירה-מלאה
-//     רק ב-2×capMu (מפסק-חירום) — חייל-עצור-עם-מלאי-תקוע הוא באג-צבא (תוקן 2026-10-04);
+//   · תקרת-מלאי capMu — מעליה מצב-פריקה (צד-מפחית-בלבד, חצי-גודל);
+//   · Z-77 פריקה-עמוקה: ב-2×capMu אין קפיאה — פריקה-עמוקה בגודל-מלא.
+//     הלקח-הנמדד: "עצירה-מלאה ב-2×cap" משאירה חייל-קפוא-עם-מלאי-תקוע
+//     (גרסה-מתקדמת של באג-הצבא מ-Z-75) — חייל-קפוא לא מפחית סיכון, הוא מקפיא אותו.
+//     כל-עוד ה-ref חי — מפחיתים; השער-הקשה נשאר ב-estate (מעל 2×cap מילוי-אמת = HALT בעלים).
+//   · Z-77 תקרת-צי גלובלית (fleetCap): סכום-המלאי של כל-החיילים חסום —
+//     תקרה-פר-חייל מגינה על חייל-בודד; תקרת-צי מגינה על הארמייה (שאילתה 19);
+//   · Z-77 פיד-פורוורד EWMA (שאילתה 13): רוחב-הציטוט לומד מהתנודתיות-הנמדדת —
+//     רעילות מתרחבת-רוחב, שקט מהדק-רוחב (ווליום-מקסימום בשלווה);
 //   · אפס-מחירים-מומצאים — refPrice חייב מדידה אמת או stale מפורסם;
 //   · דטרמיניזם — אותו-זרע → אותו-עולם (mulberry32).
 
@@ -29,6 +36,40 @@ const r6 = (v) => Math.round(v * 1e6) / 1e6;
 export function inventorySkew(inventoryMu, capMu) {
   const s = capMu > 0 ? inventoryMu / capMu : 0;
   return Math.max(-1, Math.min(1, s));
+}
+
+/* ── Z-77 · EWMA של תנודתיות-נמדדת (שאילתה 13 — פיד-פורוורד) ──────────────
+   עדכון אקספוננציאלי של |תשואה| לטיק (bps). המנוע לומד את קצב-השוק מהמדידה
+   האמת — לא מהנחות. alpha=0.2: חצי-חיים ≈ 3 טיקים — מהיר מספיק לרעילות,
+   יציב מספיק לא לרדוף אחרי רעש. אפס-קלט → אפס-שינוי (כנות). */
+export function updateVolEwma(prevBps, refPrice, prevRefPrice, alpha = 0.2) {
+  if (!prevRefPrice || prevRefPrice <= 0 || !refPrice || refPrice <= 0) return prevBps ?? 0;
+  const ret = Math.abs(refPrice / prevRefPrice - 1) * 10000;
+  const prev = prevBps ?? ret;
+  return r6(prev + alpha * (ret - prev));
+}
+
+/* ── Z-77 · מודולציית-רוחב לפי תנודתיות-נמדדת ────────────────────────────
+   ratio = volEwma / calmBps: 1 = נורמלי. רעיל (ratio>1) → מתרחב עד 1+maxWiden;
+   שקט (ratio<1) → מתהדק עד 1−maxTighten (ווליום-מקסימום בשלווה — דבר-המפעיל).
+   רציף, חסום, דטרמיניסטי. רצפת minSpreadBps נאכפת בהמשך (אחרי-המודולציה). */
+export function modulateWidth(widthBps, volEwmaBps, opts = {}) {
+  const calmBps = opts.calmBps ?? 30;        // תנודתיות-עוגן של הרשת (bps/טיק)
+  const maxWiden = opts.maxWiden ?? 1.0;     // עד ×2 בתנודתיות-קיצון
+  const maxTighten = opts.maxTighten ?? 0.3; // עד ×0.7 בשקט-עמוק
+  if (!(volEwmaBps > 0) || calmBps <= 0) return r6(widthBps); // אין-מדידה → אין-מודולציה
+  const ratio = volEwmaBps / calmBps;
+  const f = Math.max(1 - maxTighten, Math.min(1 + maxWiden, ratio));
+  return r6(widthBps * f);
+}
+
+/* ── Z-77 · תקרת-צי גלובלית (שאילתה 19) ──────────────────────────────────
+   מדינת-הצי: סכום-מלאי, חריגה, יתרת-מקום. חריגה רכה → כל-הצי בפריקה
+   (market.fleetUnwindOnly, מנוהל ב-engine); חריגה קשה (>2×globalCap) →
+   אינווריאנט-estate עוצר-הכל (HALT בעלים). */
+export function fleetCapState(grids, globalCapMu) {
+  const invMu = r6((grids ?? []).reduce((a, g) => a + (g.inventoryMu ?? 0), 0));
+  return { invMu, breach: invMu > globalCapMu, headroomMu: r6(globalCapMu - invMu) };
 }
 
 /* ── supremacyTick: ציטוט שני-צדדים מטה-תנועה עם הטיית-מלאי ────────────────
@@ -49,32 +90,43 @@ export function supremacyTick(grid, market, inventoryMu) {
   const ref = market.refPrice;
   if (!ref || market.stale) return { orders: [], note: "no-fresh-ref" };
   const abs = Math.abs(inventoryMu);
-  if (abs >= capMu * 2) return { orders: [], note: "emergency-halt", halted: true };
-  const unwindOnly = abs >= capMu; // מצב-פריקה: לא עוד-מלאי, רק פריקה
+  // Z-77: אין-קפיאה-עם-מלאי. 2×capMu = פריקה-עמוקה (גודל-מלא), לא עצירה.
+  const deep = abs >= capMu * 2;
+  // פריקה: חייל-מעל-התקרה שלו, או שהצי-כולו מעל התקרה-הגלובלית (שאילתה 19)
+  const unwindOnly = deep || market.fleetUnwindOnly === true || abs >= capMu;
+
+  // Z-77 פיד-פורוורד: רוחב-בסיס מתכייל לפי תנודתיות-נמדדת (undefined = אין-מדידה → קבוע)
+  const wBase = modulateWidth(widthBps, market.volEwmaBps, p);
 
   const skew = inventorySkew(inventoryMu, capMu);
   const orders = [];
   for (let i = 1; i <= levels; i++) {
     // רוחב נכנס: ארוך → bid רחוק, ask קרוב (מוכרים יותר); קצר → ההפך
-    const bidW = Math.max(minSpreadBps / 2, widthBps * i + skewAmp * skew) * ref / 10000;
-    const askW = Math.max(minSpreadBps / 2, widthBps * i - skewAmp * skew) * ref / 10000;
+    const bidW = Math.max(minSpreadBps / 2, wBase * i + skewAmp * skew) * ref / 10000;
+    const askW = Math.max(minSpreadBps / 2, wBase * i - skewAmp * skew) * ref / 10000;
     const bid = r6(ref - bidW);
     const ask = r6(ref + askW);
     if (bid >= ref || ask <= ref) continue; // חוק-ברזל: bid<fair<ask
     const size = r6(levelMu * Math.pow(growth, i - 1));
     if (size <= 0) continue;
     if (unwindOnly) {
-      // מצב-פריקה: רק הצד שמקטין מלאי, חצי-גודל, ברוחב-המינימום (הצמוד ביותר)
+      // מצב-פריקה: רק הצד שמקטין מלאי, ברוחב-המינימום (הצמוד ביותר).
+      // תיקון-Z77 (קצה-נסתר): חייל-אפס-מלאי בפריקת-צי לא מוסיף-מלאי —
+      // הענף-הישן היה דוחף bid לחייל-ריק (else של >0) = הוספת-סיכון בדיוק
+      // ברגע-החריגה הגלובלית. ריק → אפס-פקודות.
+      if (abs < 1e-9) return { orders: [], note: "unwind-idle" };
       const wMin = (minSpreadBps / 2) * ref / 10000;
-      const sz = r6(levelMu * 0.5);
-      if (inventoryMu > 0) orders.push({ side: "ask", price: r6(ref + wMin), sizeMu: sz, gridId: grid.id, strat: "supremacy-unwind" });
-      else orders.push({ side: "bid", price: r6(ref - wMin), sizeMu: sz, gridId: grid.id, strat: "supremacy-unwind" });
+      const sz = deep ? r6(levelMu) : r6(levelMu * 0.5); // פריקה-עמוקה = גודל-מלא
+      if (inventoryMu > 0) orders.push({ side: "ask", price: r6(ref + wMin), sizeMu: sz, gridId: grid.id, strat: deep ? "supremacy-deep-unwind" : "supremacy-unwind" });
+      else orders.push({ side: "bid", price: r6(ref - wMin), sizeMu: sz, gridId: grid.id, strat: deep ? "supremacy-deep-unwind" : "supremacy-unwind" });
       break; // רמה-אחת צמודה מספיקה לפריקה
     }
     orders.push({ side: "bid", price: bid, sizeMu: size, gridId: grid.id, strat: "supremacy" });
     orders.push({ side: "ask", price: ask, sizeMu: size, gridId: grid.id, strat: "supremacy" });
   }
-  const note = unwindOnly ? `unwind-only inv=${inventoryMu}` : `supremacy skew=${skew.toFixed(2)} levels=${orders.length / 2}`;
+  const note = deep ? `deep-unwind inv=${inventoryMu}`
+    : unwindOnly ? `unwind-only inv=${inventoryMu}`
+    : `supremacy skew=${skew.toFixed(2)} levels=${orders.length / 2} w=${wBase.toFixed(1)}`;
   return { orders, note };
 }
 
