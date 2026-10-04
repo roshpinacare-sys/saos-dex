@@ -1,0 +1,70 @@
+# MM-SUPREMACY — מנוע-העליונות בענן · ריבוני לגמרי (אפס-Actions-צד-ג)
+# =============================================================================
+# התשובה לשאלת-הריבונות של המפעיל: הריצה הזו לא תלויה ב-action צד-שלישי אחד.
+# · אין actions/checkout — שכפול-native עם git (טוקן-מובנה של הריפו);
+# · אין setup-node/cache-צד-ג — node מובנה ב-runner;
+# · הקבלה נקבעת-על-ידי-ה-CI עצמו לריפו — commit = קבלה-חיצונית.
+# תדירות: יומית אחת (מכבד-מכסת-דקות) + הזנקה-ידנית בכל-עת.
+
+name: mm-supremacy
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mm-supremacy
+  cancel-in-progress: false
+
+jobs:
+  supremacy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: sovereign-clone (git native — אפס-תלות)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git config user.name "mm-supremacy-bot"
+          git config user.email "noreply@users.noreply.github.com"
+
+      - name: selftest (אינווריאנטות-ברזל — שער)
+        run: |
+          set -euo pipefail
+          cd repo
+          node grids/supremacy-selftest.mjs
+
+      - name: volume-sim (קבלת-ווליום דטרמיניסטית)
+        run: |
+          set -euo pipefail
+          cd repo
+          node grids/sim/volume-sim.mjs \
+            --receipt grids/state/supremacy-receipt.json \
+            --report grids/state/SUPREMACY-RECEIPT.md
+
+      - name: receipt-summary (לוג-הריצה הוא-הקבלה)
+        if: always()
+        run: |
+          cd repo
+          if [ -f grids/state/SUPREMACY-RECEIPT.md ]; then
+            cat grids/state/SUPREMACY-RECEIPT.md >> "${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          fi
+
+      - name: commit-receipt (קומיט = קבלה-חיצונית)
+        run: |
+          set -euo pipefail
+          cd repo
+          git add -A grids/state
+          if git diff --cached --quiet; then
+            echo "receipt unchanged — nothing to commit"
+          else
+            git commit -m "mm-supremacy: volume receipt $(date -u +%FT%TZ) [seed 20261004]"
+            git push
+          fi
