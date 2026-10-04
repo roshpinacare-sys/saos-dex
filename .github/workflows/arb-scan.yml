@@ -1,0 +1,88 @@
+# ARB-SCAN — סורק-הארביטרז'-החוצה-וניוז של הצי · ריבוני (אפס-Actions-צד-ג · אפס-סודות)
+# =============================================================================
+# Z-87a · מסגרת-השוק של הסוכנים (audit-Z86c פער-c): הרווחיות מוכחת בקבלות-נייר
+# מצטברות (grids/state/arb-ledger.json — arb-ledger-v1) לפני-שמישהו מחמש ביצוע.
+# · אין actions/checkout — שכפול-native עם git (טוקן-מובנה) — אותו-דפוס-בית של llm-bridge;
+# · keyless לגמרי: כל-הפידים ציבוריים (condenser/HTX/Binance/Engine/llama/coingecko/blurt);
+# · feed-שנכשל → רשומת-דילוג כנה בפנקס (fail-closed) — הסריקה לעולם לא נופלת;
+# · PLAN/SCAN-ONLY: המודולים מציעים, לא חותמים — אף-שער-חתימה לא קיים בקו-הזה;
+# · דקות-קרון נקיות-במפת-הדקות (Z-70): 24,54 — אין-התנגשות עם אף-מכונה בצי.
+# הקבלה נקבעת-על-ידי-ה-CI עצמו לריפו — commit = קבלה-חיצונית (חוק-אמת Z-85).
+
+name: arb-scan
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "24,54 * * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: arb-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - name: sovereign-clone (git native — אפס-תלות)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git config user.name "arb-scan-bot"
+          git config user.email "noreply@users.noreply.github.com"
+
+      - name: selftest (שער-ברזל — תמיד ראשון, אפס-רשת)
+        run: |
+          set -euo pipefail
+          cd repo
+          node grids/arb-selftest.mjs
+
+      - name: keyless-scan (סריקה-חיה → פנקס-מצטבר · continue-on-error כן)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd repo
+          node grids/arb-scan.mjs || echo "scan degraded honestly — ledger keeps its fail-closed state"
+
+      - name: scan-summary (שמות-מדידה בלבד — אף-סוד לא קיים בקו-הזה)
+        if: always()
+        run: |
+          set -euo pipefail
+          cd repo
+          node -e '
+            const fs = require("fs");
+            try {
+              const l = JSON.parse(fs.readFileSync("grids/state/arb-ledger.json", "utf8"));
+              const live = (l.entries ?? []).filter((e) => !e.degraded);
+              const best = live.filter((e) => typeof e.edgeBps === "number").sort((a, b) => b.edgeBps - a.edgeBps)[0];
+              console.log(JSON.stringify({
+                schema: l.schema, generatedAt: l.generatedAt,
+                entriesInFile: (l.entries ?? []).length, degradedInFile: (l.entries ?? []).length - live.length,
+                cumulative: l.cumulative,
+                bestEdge: best ? { pair: best.pair, edgeBps: best.edgeBps, size: best.executableSize, realness: best.realness } : null,
+                law: "scan-only receipts — execution stays owner-armed and gated",
+              }, null, 2));
+            } catch (e) { console.log("ledger unreadable (honest): " + String(e.message).slice(0, 80)); }
+          '
+
+      - name: commit-receipt (קומיט = קבלה-חיצונית — הפנקס המצטבר)
+        if: always()
+        run: |
+          set -euo pipefail
+          cd repo
+          git add -A grids/state/arb-ledger.json
+          if git diff --cached --quiet; then
+            echo "ledger unchanged — nothing to commit"
+          else
+            CUM=$(node -e 'try{const l=require("./grids/state/arb-ledger.json");console.log(`${l.cumulative.paperPnlSbd}SBD/${l.cumulative.entries}e`)}catch(e){console.log("unreadable")}')
+            BEST=$(node -e 'try{const l=require("./grids/state/arb-ledger.json");const v=(l.entries||[]).filter(e=>!e.degraded&&typeof e.edgeBps==="number").sort((a,b)=>b.edgeBps-a.edgeBps)[0];console.log(v?`${v.edgeBps}bps ${v.pair}`:"no-edge")}' 2>/dev/null || echo "no-edge")
+            git commit -m "arb-scan: paper-pnl ledger $(date -u +%FT%TZ) · cumulative ${CUM} · best ${BEST} [skip ci]"
+            git push
+          fi

@@ -116,3 +116,33 @@ dragK = clamp(1 + spreadBps / 2000, 1, 3)
 אין-ספר → k=1 (ניטרלי) · פיזור-2000bps → k=2 · תקרה חסומה k≤3.
 המכנה המלא מפורסם בתוך `offer.json` (`drag:`) — נמדד, לא נסתר.
 ההצבה-בפועל על-השרשרת נשארת **שער-מפעיל** (X-1).
+
+## Z-87a — קו-הארביטרז' והניתוב (ריבוני · plan/scan-ONLY · אפס-ביצוע)
+
+הרחבת-ה-DEX (audit-Z86c פערים b–e + תיקון-S): כל-המודולים חסרי-מפתחות,
+דטרמיניסטיים, מקבלות-בלבד. אף-מספר לא מומצא; פיד-שנכשל → רשומה-דגרדד/חסימה
+כנה (fail-closed). הביצוע נשאר שער-בעלים בלבד.
+
+| מודול | תפקיד | בית-בדיקה |
+|---|---|---|
+| `grids/convert.mjs` | קבלת-בשלות: requestid+conversion_date+amount נשמרים **מילולית** מ-get_conversion_requests (audit: convert.mjs:76-78 היה שומר-רק-סכום) → convert-plan.json ניתן-לאימות | selftest וקטור-10b |
+| `grids/arb-scan.mjs` | סורק-ארביטרז'-חוצה-וניוז: ספר-STEEM/ HIVE פנים, HTX/Binance עומק, ספרי-Engine buyBook/sellBook, שערי-ייחוס llama/coingecko/blurt — קצה-נטו-אחרי-FEE_BPS=30 לרגל, גודל-בר-ביצוע=min-עומק, תגיות-אמת (ONCHAIN_REAL/L2_REAL/CEX_REF/PAPER/DEGRADED) → **פנק׸ arb-ledger.json** (arb-ledger-v1, 200-רשומות + מצטבר-כל-הזמנים) | `grids/arb-selftest.mjs` |
+| `grids/split-router.mjs` | מתכנן-פיצול-לעומק לסכומים-גדולים: הליכה-חמדנית-אופטימלית על-רמות-ממוזגות (נירמול quoteToUsd), vwap/impact-bps, שיפור-מול-מילוי-נאיבי, סניטי-מול-חציון-הפיד, DEPTH-LIMIT, maker-repost עם crossAudit-מחייב (Z-80) | אותו-selftest §7 |
+| `grids/counter-grid.mjs` | סולמות-נגדיים (אסקים מול בידים) עם **חלוקת-הון פר-צד** + הטיית-מלאי-נגדית (מהמילויים-האמת או בעלים) — אינוואריאנטת-שימור-מוכחת-בכל-תוכנית; peg/mover לא-נגעו | אותו-selftest §8 |
+| `grids/agent-swap-api.mjs` | שער-שוק-הסוכנים: (pair, side, amount, agentId) → תוכנית-חסרת-מפתחות + תקרה-פר-סוכן + שער-ביצוע-יחיד **FAIL-CLOSED** (דגל-רוסטר full+economicUse · STEEM_ACTIVE_WIF חמוש-בעלים · crossAudit · קצה-חיובי · verify-then-sign) — ברירת-מחדל DISARMED | אותו-selftest §9 |
+| `grids/agent-roster.mjs` | דגלי-שליטה פר-סוכן (אחות fleet-roster.cjs של ה-steem-repo): `grids/state/agent-swap-flags.json` — אין-דגל = blocked-no-key | אותו-selftest §9 |
+| `grids/venues/blurt-quote.mjs` | רגל-בלרט כנה: **BRIDGE** — אין-ספר-בלרט-ציבורי, אין-BLURT-BD; יציאה = memo-bridge ל@graphene-swap/@blurt-swap → SWAP.BLURT ב-Engine (עמלת-גשר unknown — לא-מומצאת) | אותו-selftest §10 |
+
+```bash
+node grids/arb-scan.mjs            # סריקה-חיה → הפנקס המצטבר (never throws)
+node grids/arb-selftest.mjs        # שער-הברזל של קו-הארב (141 כללים, אפס-רשת)
+node grids/split-router.mjs --side buy --amount 500 --receipt
+node grids/counter-grid.mjs        # תוכנית-נגדית על-מדידה-חיה (plan receipt בלבד)
+node grids/agent-swap-api.mjs --agent sup-1 --side buy --amount 2
+node grids/venues/blurt-quote.mjs --amount 1000
+```
+
+CI: `.github/workflows/arb-scan.yml` — cron `24,54 * * * *` (דקות-נקיות-במפת-הדקות,
+Z-70), selftest תמיד → סריקה-חיה (continue-on-error) → קומיט-קבלה של
+`grids/state/arb-ledger.json`. אפס-סודות; הפנקס הוא הקבלה-המצטברת שמוכיחה
+רווחיות-נייר **לפני** שמישהו מחמש ביצוע.
