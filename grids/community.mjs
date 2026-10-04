@@ -217,10 +217,13 @@ async function main() {
     const rcNow = Number(rc?.rc_accounts?.[0]?.rc_manabar?.current_mana ?? 0);
     if (rcNow < RC_MIN) throw new Error(`RC fuel below floor: ${rcNow} < ${RC_MIN} (fail-closed)`);
 
-    /* (א) נתיב-claim: דלק-RC בלבד — אפס-STEEM */
+    /* (א) נתיב-claim: דלק-RC בלבד — אפס-STEEM.
+     * Z-83-תיקון-חי: שם-האופ הנכון הוא claim_account (יחיד — אופ-אחד = קרדיט-אחד,
+     * בלי number_of_accounts) — השער-החי תפס את claim_accounts (רבים) כאופ-לא-מוכר
+     * בסריאליזר (fail-closed כנה לפני-כל-שידור). create_claimed_account מאושר ברישום. */
     if (plan.path === "claim") {
-      const r = await signAndBroadcast(liveWif, [["claim_accounts", { fee: "0.000 STEEM", creator: ACCOUNT, number_of_accounts: 1, extensions: [] }]]);
-      evidence.txids.push({ op: "claim_accounts", txid: r.txid, block: r.block });
+      const r = await signAndBroadcast(liveWif, [["claim_account", { fee: "0.000 STEEM", creator: ACCOUNT, extensions: [] }]]);
+      evidence.txids.push({ op: "claim_account", txid: r.txid, block: r.block });
       let claimed = 0;
       for (let i = 0; i < 4; i++) {
         await sleep(2000);
