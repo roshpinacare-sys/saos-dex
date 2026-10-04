@@ -24,8 +24,8 @@ export const BRIDGE_PATHS = Object.freeze([
     id: "graphene-swap",
     kind: "BLURT→SWAP.BLURT deposit",
     op: "transfer BLURT to @graphene-swap with memo 'SWAP.BLURT <hive-account>'",
-    fee: "unknown (not publicly documented — never invented)",
-    evidence: "on-chain deposits observed: b4bull→graphene-swap 148.918 BLURT (2025-06-05); issuer of SWAP.BLURT (Engine tokens table)",
+    fee: "unknown — not documented; Z-89 on-chain measurement 2026-10-04: in-path shows NO haircut (1:1) across available evidence; terms unverified — never invented",
+    evidence: "deposits re-measured live 2026-10-04 (blurt-rpc.saboin.com): b4bull→graphene-swap 148.918 BLURT memo 'SWAP.BLURT b4bull' · tydynrain 311.907+5.000 · misslea→memo oneplus7 47,353 · rubenstorm 5.000 · reverse path exists (blurt-swap→graphene-swap 'Token Conversion from SWAP.BLURT account lutx0'). Engine side (api.hive-engine.com): SWAP.BLURT issuer=graphene-swap, issuer balance 2,046,812.626434, holder balances tydynrain 350.953894 (≥ deposited 316.907 → no haircut visible), oneplus7 0 (sold after credit), stormruben 0.000794 (sold)",
   },
   {
     id: "blurt-swap",
@@ -39,7 +39,7 @@ export const BRIDGE_PATHS = Object.freeze([
 export const BLURT_HONESTY = Object.freeze({
   noBlurtBook: "NO-BLURT-BOOK: no public Blurt node exposes get_order_book (measured 2026-10-04) — Blurt itself is unquotable; only a USD reference price exists",
   noBlurtBd: "NO-BLURT-BD-STABLECOIN: 'BLURT-BD' does not exist (current_sbd_supply null; official README) — operator-directive correction",
-  bridgeFeeUnknown: "BRIDGE-FEE-UNKNOWN: graphene-swap/blurt-swap memo-bridge fee is not publicly documented — recorded as unknown, not estimated",
+  bridgeFeeUnknown: "BRIDGE-FEE-UNKNOWN: graphene-swap/blurt-swap memo-bridge fee is not publicly documented — recorded as unknown, not estimated. Z-89 measured evidence (2026-10-04, keyless, on-chain both sides): bridge-IN appears 1:1 with no haircut (tydynrain deposited 316.907 BLURT, holds 350.953894 SWAP.BLURT — surplus, not deficit); bridge terms remain unverified and can change — no fee number is invented here",
   wireFeeAfterBridge: "post-bridge exit costs: Hive-Engine orderbook 0% engine fee (source-verified) + HIVE⇄SWAP.HIVE wire 0.75% (min 0.001) if leaving L2 (source-verified hivepegged.js)",
   planOnly: "plan-only: this module signs nothing and requires no keys",
 });
@@ -94,7 +94,7 @@ export function planBlurtExit({ amountBlurt, book = null, blurtUsd = null, hiveU
     at: nowIso ?? null,
     amountBlurt: amt,
     steps: [
-      { n: 1, kind: "BRIDGE", what: `transfer ${amt} BLURT → @graphene-swap (או @blurt-swap) memo "SWAP.BLURT <hive-account>"`, fee: "unknown — not publicly documented", evidence: BRIDGE_PATHS.map((b) => `${b.id}: ${b.evidence}`) },
+      { n: 1, kind: "BRIDGE", what: `transfer ${amt} BLURT → @graphene-swap (או @blurt-swap) memo "SWAP.BLURT <hive-account>"`, fee: "unknown — not documented (measured evidence: in-path 1:1, no haircut visible; terms unverified)", evidence: BRIDGE_PATHS.map((b) => `${b.id}: ${b.evidence}`) },
       { n: 2, kind: "L2-ARRIVAL", what: "SWAP.BLURT credited on Hive-Engine (same account named in memo)", fee: "bridge-side unknown; Engine token credit 0%" },
       { n: 3, kind: "SELL-L2", what: `sell SWAP.BLURT into the live Engine bid book (${book.venue})`, fee: `house fee model ${feeBps}bps/leg (measured plan only)` },
     ],
