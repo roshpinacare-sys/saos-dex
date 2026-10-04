@@ -38,6 +38,21 @@ jobs:
           git config user.name "arb-scan-bot"
           git config user.email "noreply@users.noreply.github.com"
 
+      # Z-89 FIX (ריצה #37201710735: ERR_MODULE_NOT_FOUND 'bs58' — mover.mjs
+      # יובא-בקו-ישר על-ידי arb-selftest והוא תלוי bs58/noble/steem מתוך
+      # package.json). אותו-דפוס-בית-מוכח של dex-grid.yml (#22 ירוק):
+      # bun + install מוקפא-לוקפייל לפני-כל-ריצת node.
+      - name: bun (זהה ל-dex-grid — תבנית-מוכחת)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: install (frozen-lockfile — לפני-שער-הברזל)
+        run: |
+          set -euo pipefail
+          cd repo
+          bun install --frozen-lockfile
+
       - name: selftest (שער-ברזל — תמיד ראשון, אפס-רשת)
         run: |
           set -euo pipefail
