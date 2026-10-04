@@ -36,6 +36,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { ripemd160 } from "@noble/hashes/ripemd160";
 import steem from "steem";
 import { appendEvent } from "./events.mjs";
+import { stasisHalt } from "./brake.mjs"; // owner directive 2026-10-04: think-before-sign — the signer obeys the brake
 import { normBook, crossAudit } from "./book-law.mjs"; // Z-80: חוק-הספר — אף-חתימה לא חוצה את הספר-החי
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -203,6 +204,10 @@ export function clampToTouch(side, px, book) {
 
 /* ═══ הריצה ═════════════════════════════════════════════════════════════════ */
 export async function runMover({ dryRun = false, additive = false, reprice = false } = {}) {
+  /* 0. בלם-ההון (owner 2026-10-04): קודם-לכל החתימה — השאלה "האם מותר?" */
+  if (stasisHalt("mover")) {
+    return { at: new Date().toISOString(), account: ACCOUNT, mode: reprice ? "reprice" : additive ? "additive" : "refresh", cancelled: [], placed: [], blockers: ["STASIS active — capital lane halted (think-before-sign, owner directive 2026-10-04)"], summary: { cancelled: 0, placed: 0, failed: 0, blocked: 0, halted: "STASIS" } };
+  }
   const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: reprice ? "reprice" : additive ? "additive" : "refresh", cancelled: [], placed: [], blockers: [] };
 
   /* 1. המקור-הריבוני (זמן-ריצה בלבד) */
