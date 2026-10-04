@@ -233,6 +233,9 @@ async function main() {
     const l2 = updateLedger(l1, many, { generatedAt: NOW });
     check("ledger: file capped at last 200 entries", l2.entries.length === LEDGER_CAP);
     check("ledger: cumulative survives the cap (all-time counters)", l2.cumulative.entries === 3 + LEDGER_CAP + 50);
+    check("ledger: layer provenance stamped (Z-88 audit)", l1.layer === "sovereign-CI", l1.layer);
+    const l2b = updateLedger({ schema: LEDGER_SCHEMA, generatedAt: NOW, entries: [e1], cumulative: { paperPnlSbd: 0.5, entries: 1, positiveEntries: 1, realized: false } }, [e2], { generatedAt: NOW });
+    check("ledger: prev WITHOUT layer → output still carries provenance + cumulative preserved", l2b.layer === "sovereign-CI" && l2b.cumulative.entries === 2, l2b.layer);
     const l3 = updateLedger({ schema: "corrupt", entries: "garbage" }, [e1], { generatedAt: NOW });
     check("ledger: corrupt prev → honest fresh base, never throws", l3.cumulative.entries === 1 && l3.entries.length === 1);
   }
