@@ -12,7 +12,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { summarizeConversionRequests, planConvert, CONVERT_POLICY } from "./convert.mjs";
+import { summarizeConversionRequests, planConvert, CONVERT_POLICY, medianFromFeedHistory, estimateMaturityPayout } from "./convert.mjs";
 import {
   FEE_BPS, LEDGER_SCHEMA, LEDGER_CAP,
   parseCondenserBook, parseHtxDepth, parseEngineBooks,
@@ -70,6 +70,24 @@ async function main() {
   const pConv = planConvert({ liquidSbd: 4, pendingSbd: sum.pendingSbd, pendingRequests: sum.requests, sbdUsd: 0.59 });
   check("convert-maturity: plan doc carries pendingRequests → convert-plan.json", Array.isArray(pConv.pendingRequests) && pConv.pendingRequests[0]?.requestid !== undefined);
   check("convert-maturity: non-array input fail-closed", JSON.stringify(summarizeConversionRequests(null)) === JSON.stringify({ pendingSbd: 0, pendingCount: 0, requests: [] }));
+
+  /* ══ 1b. Z-89 · חוק-תשלום-הבשלות: הערכה-מסומנת-כך, לא-עובדה ══
+   * החוק מקוד-השרשרת (database.cpp process_conversions): התשלום = amount ÷ חציון-זמן-העיבוד.
+   * הווקטורים: 131.856 SBD @חציון-חי 0.1041 → 1266.628 · פס-היסטוריה [0.0705..0.1041] → עד 1870.297. */
+  const medLive = medianFromFeedHistory({ current_median_history: { base: { amount: "1041" }, quote: { amount: "10000" } }, price_history: [{ base: { amount: "705" }, quote: { amount: "10000" } }, { base: { amount: "1041" }, quote: { amount: "10000" } }] });
+  check("maturity-law: median parsed SBD-per-STEEM = 0.1041", medLive.medianNow !== null && Math.abs(medLive.medianNow - 0.1041) < 1e-9, medLive.medianNow);
+  check("maturity-law: feed history extracted [0.0705, 0.1041]", medLive.feedMedians.length === 2 && Math.abs(medLive.feedMedians[0] - 0.0705) < 1e-9);
+  const medGarbage = medianFromFeedHistory({ current_median_history: { base: { amount: "0" }, quote: { amount: "0" } }, price_history: "junk" });
+  check("maturity-law: garbage feed → fail-closed (null median, no throw)", medGarbage.medianNow === null && medGarbage.feedMedians.length === 0);
+  const est131 = estimateMaturityPayout({ rows: [{ amount: "131.856 SBD" }], medianNow: 0.1041, feedMedians: [0.0705, 0.1041] });
+  check("maturity-law: 131.856 SBD @0.1041 → estimate 1266.628 (floor-3)", est131.estimate === 1266.628, est131.estimate);
+  check("maturity-law: band measured [1266.628..1870.297] from history", est131.band && est131.band.minSteem === 1266.628 && est131.band.maxSteem === 1870.297 && est131.band.samples === 2);
+  check("maturity-law: semantics says ESTIMATE + cites source", /ESTIMATE/.test(est131.semantics) && /process_conversions/.test(est131.semantics));
+  const estNoMed = estimateMaturityPayout({ rows: [{ amount: "5.000 SBD" }], medianNow: null });
+  check("maturity-law: no median → estimate null, no invention", estNoMed.estimate === null && /fail-closed/.test(estNoMed.reason));
+  const estNoRows = estimateMaturityPayout({ rows: [], medianNow: 0.1041 });
+  check("maturity-law: no rows → estimate null", estNoRows.estimate === null && estNoRows.pendingSbd === 0);
+  check("maturity-law: realized=false world — estimate never enters cumulative PnL", typeof est131.estimate === "number" && est131.band.note.length > 0);
 
   /* ══ 2. פרסרי-ספרים על-fixtures חיים ══ */
   const steemFix = hasFixtures ? fixture("steem-order-book.json") : null;

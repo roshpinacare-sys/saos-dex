@@ -89,6 +89,43 @@ export function summarizeConversionRequests(rawRows) {
   return { pendingSbd, pendingCount: requests.length, requests };
 }
 
+/* ── Z-89 · חוק-תשלום-הבשלות — קבוע-בקוד-השרשרת, לא-בפרוזה ─────────────────
+ * libraries/chain/database.cpp :: process_conversions() (steemit/steem master,
+ * נשלף-ואומת 2026-10-04): amount_to_issue = itr->amount × fhistory.current_median_history
+ * — נמדד בזמן-העיבוד (הבשלות), לא בזמן-הבקשה. לכן התשלום צף עד הבשלות וכל
+ * "expectedSteem" הוא הערכה-מסומנת-כך ולא עובדה (חוק-אף-המצאה).
+ * medianFromFeedHistory: חציון-נוכחי + היסטוריית-חציונים (עד 20) מ-condenser_api.get_feed_history.
+ * estimateMaturityPayout: פס-הערכה [minSteem..maxSteem] מהיסטוריית-החציונים. */
+export function medianFromFeedHistory(feedHistory) {
+  const medOf = (e) => {
+    const b = num(e?.base?.amount), q = num(e?.quote?.amount);
+    return (b > 0 && q > 0) ? b / q : null; // base=SBD, quote=STEEM → SBD-ל-STEEM
+  };
+  const medianNow = medOf(feedHistory?.current_median_history);
+  const feedMedians = (Array.isArray(feedHistory?.price_history) ? feedHistory.price_history : []).map(medOf).filter((m) => m > 0);
+  return { medianNow: medianNow > 0 ? medianNow : null, feedMedians };
+}
+
+export function estimateMaturityPayout({ rows = null, medianNow = null, feedMedians = null } = {}) {
+  const list = Array.isArray(rows) ? rows : [];
+  const pendingSbd = dp3(list.reduce((s, r) => s + num((r ?? {}).amount ?? (r?.request ?? {}).amount), 0));
+  const semantics = "payout = amount / median-at-maturity (steem database.cpp process_conversions) — ESTIMATE, floats until conversion_date";
+  if (!(pendingSbd > 0)) return { pendingSbd, estimate: null, reason: "no pending rows", semantics };
+  if (!(medianNow > 0)) return { pendingSbd, estimate: null, reason: "no median mark — no invention (fail-closed)", semantics };
+  const estimate = Math.floor((pendingSbd / medianNow) * 1000) / 1000; // אותו-רצפה-שמרני של expectedSteem
+  let band = null;
+  if (Array.isArray(feedMedians) && feedMedians.length >= 2) {
+    const maxMed = Math.max(...feedMedians), minMed = Math.min(...feedMedians);
+    band = {
+      minSteem: Math.floor((pendingSbd / maxMed) * 1000) / 1000,
+      maxSteem: Math.floor((pendingSbd / minMed) * 1000) / 1000,
+      samples: feedMedians.length,
+      note: "payout floats with the maturity-time median inside this measured band",
+    };
+  }
+  return { pendingSbd, medianNow, estimate, band, semantics };
+}
+
 /* ── מדידה-חיה: יתרה-נזילה + המרות-פתוחות ────────────────────────────────── */
 export async function measureConvertState(account = ACCOUNT) {
   const snap = await measureSnapshot(account);
@@ -103,8 +140,15 @@ export async function runConvert({ execute = false, dryRun = false, masterSource
   const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: execute ? "execute" : "plan", gates: [], txids: [] };
   const { liquidSbd, pendingSbd, pendingCount, pendingRequests, liquidSteem } = await measureConvertState();
   const marks = await measureMarks();
+  // Z-89: הערכת-בשלות מסומנת-כך — חוק-התשלום מקוד-השרשרת (process_conversions),
+  // חציון-זמן-עיבוד + פס-היסטוריה. keyless, fail-closed בלי-חציון.
+  const feedHist = await rpcAny("condenser_api.get_feed_history", []).catch(() => null);
+  const med = medianFromFeedHistory(feedHist);
+  const maturityEstimate = estimateMaturityPayout({ rows: pendingRequests, medianNow: med.medianNow, feedMedians: med.feedMedians });
   const plan = planConvert({ liquidSbd, pendingSbd, pendingRequests, sbdUsd: marks.sbdUsd, steemUsd: marks.steemUsd, nowIso: evidence.at });
+  plan.maturityEstimate = maturityEstimate; // הערכה — לא עובדה (ראה semantics)
   evidence.plan = plan;
+  evidence.maturityEstimate = maturityEstimate;
   evidence.state = { liquidSbd, liquidSteem, pendingSbd, pendingCount, pendingRequests };
 
   if (!plan.ok) {
