@@ -1,0 +1,98 @@
+{
+  "$comment": "sovereign-gateway provider registry. Free-tier numbers are provider-documented at publish time — verify at signup. The law: keys via env only — never logged, never returned.",
+  "reachability": "verified-reachable 2026-10-04 sandbox (api.groq.com 403=reachable/auth-gated; generativelanguage.googleapis.com 404=reachable; openrouter.ai 200; api.mistral.ai 404=reachable)",
+  "priority": ["z-ai", "groq", "gemini", "mistral", "openrouter", "ollama"],
+  "providers": [
+    {
+      "id": "z-ai",
+      "signupUrl": null,
+      "keyEnvVar": null,
+      "docsUrl": "mini-services/zai-openai-shim (CR-0015 / CR-0024 sibling artifact)",
+      "freeTier": {
+        "rpm": null,
+        "rpd": null,
+        "notes": "keyless via z-ai-web-dev-sdk in-sandbox backend — ZERO signup, ZERO keys; limits undocumented, treat as unmeasured"
+      },
+      "models": ["z-ai"],
+      "reachability": "verified-reachable 2026-10-04 sandbox (always ready, priority 1)",
+      "note": "limits are provider-documented, verify at signup — for z-ai there is no signup; it is the keyless floor of the fleet"
+    },
+    {
+      "id": "groq",
+      "signupUrl": "https://console.groq.com/keys",
+      "keyEnvVar": "GROQ_API_KEY",
+      "docsUrl": "https://console.groq.com/docs/openai",
+      "freeTier": {
+        "rpm": 30,
+        "rpd": 14400,
+        "notes": "free tier ~30 req/min, ~14,400 req/day on standard models — limits are provider-documented, verify at signup"
+      },
+      "models": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"],
+      "reachability": "verified-reachable 2026-10-04 sandbox",
+      "note": "limits are provider-documented, verify at signup"
+    },
+    {
+      "id": "gemini",
+      "signupUrl": "https://aistudio.google.com/app/apikey",
+      "keyEnvVar": "GEMINI_API_KEY",
+      "docsUrl": "https://ai.google.dev/gemini-api/docs",
+      "freeTier": {
+        "rpm": 15,
+        "rpd": 1500,
+        "notes": "AI Studio free tier ~15 req/min, ~1,500 req/day on 2.0-flash class — limits are provider-documented, verify at signup"
+      },
+      "models": ["gemini-2.0-flash", "gemini-2.0-flash-lite"],
+      "reachability": "verified-reachable 2026-10-04 sandbox",
+      "note": "limits are provider-documented, verify at signup"
+    },
+    {
+      "id": "mistral",
+      "signupUrl": "https://console.mistral.ai/",
+      "keyEnvVar": "MISTRAL_API_KEY",
+      "docsUrl": "https://docs.mistral.ai/",
+      "freeTier": {
+        "rpm": 60,
+        "rpd": null,
+        "tpm": 500000,
+        "notes": "free 'Experiment' plan ~1 req/s (~60/min), ~500k tokens/min — limits are provider-documented, verify at signup"
+      },
+      "models": ["mistral-small-latest"],
+      "reachability": "verified-reachable 2026-10-04 sandbox",
+      "note": "limits are provider-documented, verify at signup"
+    },
+    {
+      "id": "openrouter",
+      "signupUrl": "https://openrouter.ai/settings/keys",
+      "keyEnvVar": "OPENROUTER_API_KEY",
+      "docsUrl": "https://openrouter.ai/docs",
+      "freeTier": {
+        "rpm": 20,
+        "rpd": 50,
+        "notes": ":free models ~20 req/min, ~50 req/day (raises to ~1000/day with a $10 credit) — limits are provider-documented, verify at signup"
+      },
+      "models": [
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "deepseek/deepseek-r1:free",
+        "google/gemini-2.0-flash-exp:free",
+        "qwen/qwen3-32b:free"
+      ],
+      "reachability": "verified-reachable 2026-10-04 sandbox",
+      "note": "limits are provider-documented, verify at signup"
+    },
+    {
+      "id": "ollama",
+      "signupUrl": null,
+      "keyEnvVar": null,
+      "hostEnvVar": "OLLAMA_HOST",
+      "docsUrl": "https://ollama.com",
+      "freeTier": {
+        "rpm": null,
+        "rpd": null,
+        "notes": "local machine — no provider limits; readiness = 800ms probe of GET {OLLAMA_HOST}/api/tags, fail-soft when absent"
+      },
+      "models": ["llama3.2"],
+      "reachability": "not present in this sandbox (no ollama binary by law) — becomes ready when OLLAMA_HOST answers",
+      "note": "readiness-probed, fail-soft; default host http://127.0.0.1:11434"
+    }
+  ]
+}

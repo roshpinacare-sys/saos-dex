@@ -1,0 +1,109 @@
+# LLM-BRIDGE — גשר-ה-LLM של הצי · ריבוני לגמרי (אפס-Actions-צד-ג)
+# =============================================================================
+# הכוח-האמיתי של הצי חי כאן: CI רץ 24/7 ללא-תלות בסנדבוקס-סשן.
+# · אין actions/checkout — שכפול-native עם git (טוקן-מובנה);
+# · המפתחות באים רק מסודות-GitHub המוצפנים (GROQ_API_KEY / GEMINI_API_KEY /
+#   MISTRAL_API_KEY / OPENROUTER_API_KEY) — ההצטיידות היא צעד-בעלים;
+# · אין-מפתח = HOLD כן (fail-closed), ה-selftest עדיין ירוק ומוכיח את החוק;
+# · הקבלה נקבעת-על-ידי-ה-CI עצמו לריפו — commit = קבלה-חיצונית.
+# אפס-סודות-בקבלה: חוק-ההשתקה ב-llm-call.mjs אוכף [REDACTED].
+
+name: llm-bridge
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 5 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: llm-bridge
+  cancel-in-progress: false
+
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - name: sovereign-clone (git native — אפס-תלות)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+          cd repo
+          git config user.name "llm-bridge-bot"
+          git config user.email "noreply@users.noreply.github.com"
+
+      - name: selftest (שער-ברזל 24 כללים — רץ-תמיד, גם-ללא-מפתחות)
+        run: |
+          set -euo pipefail
+          cd repo
+          node grids/llm/llm-selftest.mjs
+
+      - name: arming-status (שמות-משתנים בלבד — אף-ערך-מפתח לא נדפס)
+        run: |
+          set -euo pipefail
+          armed=""
+          for v in GROQ_API_KEY GEMINI_API_KEY MISTRAL_API_KEY OPENROUTER_API_KEY; do
+            if [ -n "${!v:-}" ]; then armed="$armed $v"; fi
+          done
+          echo "armed providers:${armed:- NONE (HOLD — צעד-ההצטיידות הוא של-הבעלים)}"
+
+      - name: live-smoke (קריאת-אמת אחת דרך הגשר — continue-on-error כן)
+        if: ${{ env.GROQ_API_KEY != '' || env.GEMINI_API_KEY != '' || env.MISTRAL_API_KEY != '' || env.OPENROUTER_API_KEY != '' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd repo
+          mkdir -p grids/state
+          node grids/llm/llm-call.mjs \
+            --prompt "Reply with exactly: BRIDGE-OK" \
+            --timeout-ms 30000 \
+            > grids/state/llm-bridge-live.json || true
+
+      - name: receipt (קבלה כנה — חמוש/HOLD/חי)
+        if: always()
+        run: |
+          set -euo pipefail
+          cd repo
+          node -e '
+            const fs = require("fs");
+            const armed = ["GROQ_API_KEY","GEMINI_API_KEY","MISTRAL_API_KEY","OPENROUTER_API_KEY"].filter(v => (process.env[v]||"").length > 0);
+            let live = null;
+            try {
+              const p = JSON.parse(fs.readFileSync("grids/state/llm-bridge-live.json", "utf8"));
+              if (p && p.ok === true) live = { ok: true, provider: p.provider, model: p.model, contentLength: (p.content||"").length };
+              else live = { ok: false, hold: (p && p.hold) || "LLM-HOLD" };
+            } catch { live = armed.length === 0 ? { ok: false, hold: "LLM-HOLD (no keys armed)" } : { ok: false, hold: "no live run recorded" }; }
+            const receipt = {
+              bridge: "llm-bridge",
+              generatedAt: new Date().toISOString(),
+              law: "keys from GitHub secrets only — never logged, never stored; fail-closed HOLD without keys",
+              armedProviderEnvNames: armed,
+              armedCount: armed.length,
+              live,
+              selftest: "grids/llm/llm-selftest.mjs (24 rules) ran as gate before this receipt",
+              zeroSecrets: true
+            };
+            fs.writeFileSync("grids/state/llm-bridge-receipt.json", JSON.stringify(receipt, null, 2) + "\n");
+            console.log(JSON.stringify(receipt, null, 2));
+          '
+
+      - name: commit-receipt (קומיט = קבלה-חיצונית)
+        run: |
+          set -euo pipefail
+          cd repo
+          git add -A grids/state
+          if git diff --cached --quiet; then
+            echo "receipt unchanged — nothing to commit"
+          else
+            git commit -m "llm-bridge: receipt $(date -u +%FT%TZ) · armed=${{ env.GROQ_API_KEY != '' || env.GEMINI_API_KEY != '' || env.MISTRAL_API_KEY != '' || env.OPENROUTER_API_KEY != '' }}"
+            git push
+          fi
