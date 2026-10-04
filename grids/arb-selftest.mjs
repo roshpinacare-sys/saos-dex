@@ -174,9 +174,10 @@ async function main() {
     check("paper round-trip: zero-depth ref leg → size 0, honest nulls", refOnly.executableSize === 0);
   }
   {
-    // Z-87a: רגל-ייחוס (מחיר-קבוע בלי-ספר) → קצה-נמדד, גודל-בר-ביצוע 0, PnL-נייר מוקלט
+    // Z-88 תיקון-אמת (מבטל-החלטת-Z87a): רגל-ייחוס → קצה-נמדד, גודל-בר-ביצוע 0, PnL null —
+    // אין-מקום-אמיתי-שבו-הרגל-מתבצעת; PnL-עליה = כסף-מומצא (האופרטור: לא-סתם-שקר).
     const refLeg = paperRoundTrip({ buyLevels: [{ price: 0.0175, qty: 100 }], sellLevels: null, size: 100, buyQuoteUsd: 0.0562, refSellPriceUsd: 0.00098, sbdUsd: 0.6 });
-    check("paper round-trip: ref-price leg → edge numeric + size 0 (no invented depth)", typeof refLeg.edgeBps === "number" && refLeg.executableSize === 0 && refLeg.paperPnlSbd != null, refLeg);
+    check("paper round-trip: ref-price leg → edge numeric + size 0 + pnl NULL (no invented money)", typeof refLeg.edgeBps === "number" && refLeg.executableSize === 0 && refLeg.paperPnlSbd === null, refLeg);
     const noSbd = paperRoundTrip({ buyLevels: [{ price: 1.0, qty: 10 }], sellLevels: [{ price: 1.02, qty: 10 }], size: 10, sbdUsd: null });
     check("paper round-trip: sbdUsd missing → paperPnlSbd null (never mislabel USD as SBD)", noSbd.paperPnlSbd === null && typeof noSbd.edgeBps === "number", noSbd);
   }
@@ -205,7 +206,7 @@ async function main() {
     const blurtEntry = entriesNow.find((e) => e.pair === "SWAP.BLURT:SWAP.HIVE" && !e.degraded);
     if (blurtEntry) {
       check("evaluate: BLURT legs PAPER (no blurt book exists — Z-86a truth)", blurtEntry.realness === "PAPER" && blurtEntry.executableSize === 0);
-      check("evaluate: BLURT edge measured vs ref (numeric — no invention), not dropped", typeof blurtEntry.edgeBps === "number" && typeof blurtEntry.paperPnlSbd === "number", blurtEntry);
+      check("evaluate: BLURT edge measured vs ref (numeric signal) + pnl NULL (Z-88 no-invented-money)", typeof blurtEntry.edgeBps === "number" && blurtEntry.paperPnlSbd === null, blurtEntry);
       check("evaluate: BLURT notes carry the no-book honesty", /no Blurt orderbook|price_ref/i.test(blurtEntry.notes));
       const blurtOpp = entriesNow.find((e) => e.pair === "SWAP.BLURT:SWAP.HIVE" && !e.degraded && e.venueA === "blurt-price-ref");
       check("evaluate: BLURT both directions measured (engine→ref and ref→engine)", blurtOpp != null && typeof blurtOpp.edgeBps === "number");
@@ -238,6 +239,9 @@ async function main() {
     check("ledger: prev WITHOUT layer → output still carries provenance + cumulative preserved", l2b.layer === "sovereign-CI" && l2b.cumulative.entries === 2, l2b.layer);
     const l3 = updateLedger({ schema: "corrupt", entries: "garbage" }, [e1], { generatedAt: NOW });
     check("ledger: corrupt prev → honest fresh base, never throws", l3.cumulative.entries === 1 && l3.entries.length === 1);
+    const eRef = { ts: NOW, pair: "B:R", venueA: "a", venueB: "ref", edgeBps: 900, direction: "d4", executableSize: 0, realness: "PAPER", paperPnlSbd: null, degraded: false, notes: "" };
+    const lRef = updateLedger(emptyLedger(), [eRef], { generatedAt: NOW });
+    check("ledger: PAPER ref-leg (null pnl) adds ZERO money to cumulative — no invented profit", lRef.cumulative.paperPnlSbd === 0 && lRef.cumulative.entries === 1, lRef.cumulative);
   }
 
   /* ══ 7. split-router: אופטימלי-מול-נאיבי + חוק-impact + חוק-ספר ══ */
