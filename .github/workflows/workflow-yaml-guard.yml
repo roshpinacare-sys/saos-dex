@@ -1,0 +1,37 @@
+# WORKFLOW-YAML-GUARD — חוק-Z74 מופץ (ריבוני, אפס-actions-צד-ג)
+# כל-push מפרק-YAML את-כל-קבצי-ה-workflows; קובץ-שבור נופל-כאדום-על-שמו
+# (קובץ+שורה+סיבה) בדיוק-ב-push שהכניס-אותו.
+# שורש-הלקח (נמדד ב-Zip 2026-10-03): גוף-heredoc בעמודה-1 פיצל את-בלוק `run: |`
+# → 10 ריצות-מוות-בפרסור שזויפו-כ"מכסת-דקות". עוד-קובץ-workflow לא נוחת שבור-בשקט.
+
+name: workflow-yaml-guard
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-yaml-guard
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: sovereign-clone (git native — אפס-תלות)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" repo
+
+      - name: yaml-parse-every-workflow (שער-על-שמו)
+        run: |
+          set -euo pipefail
+          cd repo
+          python3 .github/scripts/yaml_guard.py
