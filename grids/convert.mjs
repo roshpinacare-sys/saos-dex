@@ -33,7 +33,7 @@ export const CONVERT_POLICY = {
 };
 
 /* ── מתכנן טהור — אפס IO, בדיקות-אופליין מלאות ──────────────────────────── */
-export function planConvert({ liquidSbd = 0, pendingSbd = 0, sbdUsd = null, steemUsd = null, policy = CONVERT_POLICY, nowIso = null } = {}) {
+export function planConvert({ liquidSbd = 0, pendingSbd = 0, pendingRequests = null, sbdUsd = null, steemUsd = null, policy = CONVERT_POLICY, nowIso = null } = {}) {
   const gates = [];
   let discountBps = null;
   if (sbdUsd == null || !(sbdUsd > 0)) {
@@ -59,6 +59,7 @@ export function planConvert({ liquidSbd = 0, pendingSbd = 0, sbdUsd = null, stee
     amountSbd: ok ? amount : 0,
     liquidSbd: Math.round((liquidSbd ?? 0) * 1000) / 1000,
     pendingSbd: Math.round((pendingSbd ?? 0) * 1000) / 1000,
+    pendingRequests: Array.isArray(pendingRequests) ? pendingRequests : null, // Z-87a: קבלת-בשלות — הרשומות-המילוליות מ-get_conversion_requests
     capLeft,
     discountBps,
     marks: { steemUsd, sbdUsd },
@@ -69,23 +70,42 @@ export function planConvert({ liquidSbd = 0, pendingSbd = 0, sbdUsd = null, stee
   };
 }
 
+/* ── Z-87a · קבלת-בשלות: שדות-האמת של get_conversion_requests נשמרים-כמו-שהם ──
+ * הבאג-שנמדד (audit-Z86c): convert.mjs:76-78 קרא את הרשומות-חי אך שמר רק את-הסכום —
+ * requestid ותאריך-הבשלות נשרו → הפאי-אאוט של 2026-10-06 לא היה ניתן-לאימות-קבלה.
+ * החוק-החדש: כל-רשומה נשמרת מילולית — רק שדות-שה-API אכן החזיר (חוק-אף-המצאה):
+ *   {requestid, amount, conversion_date, id, owner}. שדה-שלא-חזר — לא מומצא כאן.
+ * הערת-מיפוי: "completion_time" בשפת-ההנחיה = השדה conversion_date שה-API מחזיר בפועל. */
+export const CONVERSION_VERBATIM_FIELDS = ["requestid", "amount", "conversion_date", "id", "owner"];
+export function summarizeConversionRequests(rawRows) {
+  const rows = Array.isArray(rawRows) ? rawRows : [];
+  const requests = rows.map((r) => {
+    const src = r && typeof r === "object" && r.request ? r.request : (r || {});
+    const out = {};
+    for (const f of CONVERSION_VERBATIM_FIELDS) if (src[f] !== undefined) out[f] = src[f]; // מילולי — בלי-עיבוד
+    return out;
+  });
+  const pendingSbd = dp3(rows.reduce((s, r) => s + num((r ?? {}).amount ?? (r?.request ?? {}).amount), 0));
+  return { pendingSbd, pendingCount: requests.length, requests };
+}
+
 /* ── מדידה-חיה: יתרה-נזילה + המרות-פתוחות ────────────────────────────────── */
 export async function measureConvertState(account = ACCOUNT) {
   const snap = await measureSnapshot(account);
   let pendingRaw = [];
   try { pendingRaw = await rpcAny("condenser_api.get_conversion_requests", [account]) ?? []; } catch { pendingRaw = []; }
-  const pendingSbd = pendingRaw.reduce((s, r) => s + num(r.amount ?? r.request?.amount), 0);
-  return { liquidSbd: snap.balances.sbd, liquidSteem: snap.balances.steem, pendingSbd: dp3(pendingSbd), pendingCount: pendingRaw.length };
+  const sum = summarizeConversionRequests(pendingRaw);
+  return { liquidSbd: snap.balances.sbd, liquidSteem: snap.balances.steem, pendingSbd: sum.pendingSbd, pendingCount: sum.pendingCount, pendingRequests: sum.requests };
 }
 
 /* ── הריצה: מתכנן-חסר-מפתחות (ברירת-מחדל) · --execute = שער-החתימה ───────── */
 export async function runConvert({ execute = false, dryRun = false, masterSourcePath = process.env.MASTER_SOURCE_PATH } = {}) {
   const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: execute ? "execute" : "plan", gates: [], txids: [] };
-  const { liquidSbd, pendingSbd, pendingCount, liquidSteem } = await measureConvertState();
+  const { liquidSbd, pendingSbd, pendingCount, pendingRequests, liquidSteem } = await measureConvertState();
   const marks = await measureMarks();
-  const plan = planConvert({ liquidSbd, pendingSbd, sbdUsd: marks.sbdUsd, steemUsd: marks.steemUsd, nowIso: evidence.at });
+  const plan = planConvert({ liquidSbd, pendingSbd, pendingRequests, sbdUsd: marks.sbdUsd, steemUsd: marks.steemUsd, nowIso: evidence.at });
   evidence.plan = plan;
-  evidence.state = { liquidSbd, liquidSteem, pendingSbd, pendingCount };
+  evidence.state = { liquidSbd, liquidSteem, pendingSbd, pendingCount, pendingRequests };
 
   if (!plan.ok) {
     evidence.note = "honest hold — " + plan.gates.join(" · ");
@@ -205,6 +225,22 @@ export async function selftest() {
 
   /* וקטור-10: שלמות-מדיניות — ההרזרבה והתקרה בתוך-הפוליטיקה המיוצאת */
   t("policy integrity: reserve < min < cap ordering", P.BID_RESERVE_SBD < P.MIN_CONVERT_SBD && P.MIN_CONVERT_SBD <= P.MAX_PENDING_SBD);
+
+  /* וקטור-10b (Z-87a): קבלת-בשלות — requestid+conversion_date+amount נשמרים-מילולית.
+   * הרשומות-מטה מוקלטות-חי מ-condenser_api.get_conversion_requests (2026-10-04,
+   * grids/state/fixtures/steem-conversion-requests.json) — לא-המצאה: כל-שדה הוחזר-בפועל. */
+  const liveRows = [
+    { amount: "0.001 SBD", conversion_date: "2026-10-06T00:02:12", id: 135589, owner: "headcorner", requestid: 1790942528 },
+    { amount: "7.611 SBD", conversion_date: "2026-10-06T00:02:30", id: 135590, owner: "headcorner", requestid: 1790942546 },
+  ];
+  const sum10b = summarizeConversionRequests(liveRows);
+  t("maturity receipt: requestid + conversion_date kept verbatim (Z-87a)", sum10b.requests.length === 2 && sum10b.requests[0].requestid === 1790942528 && sum10b.requests[1].conversion_date === "2026-10-06T00:02:30");
+  t("maturity receipt: pendingSbd = sum of verbatim amounts", Math.abs(sum10b.pendingSbd - 7.612) < 1e-9);
+  t("maturity receipt: no invented fields (keys ⊆ returned set)", sum10b.requests.every((r) => Object.keys(r).every((k) => CONVERSION_VERBATIM_FIELDS.includes(k))));
+  const s10c = summarizeConversionRequests("garbage");
+  t("maturity receipt: non-array input → zero pending, never throws (fail-closed)", s10c.pendingCount === 0 && s10c.pendingSbd === 0 && s10c.requests.length === 0);
+  const v10d = planConvert({ liquidSbd: 4, pendingSbd: 7.612, pendingRequests: sum10b.requests, sbdUsd: 0.59 });
+  t("maturity receipt: plan carries pendingRequests → convert-plan.json shape", v10d.verdict === "CONVERT-PLAN" && Array.isArray(v10d.pendingRequests) && v10d.pendingRequests[0].requestid === 1790942528);
 
   /* וקטור-11 (Z-81): היפוך-WIF — roundtrip מושלם + fail-closed על צורה פגומה */
   try {
