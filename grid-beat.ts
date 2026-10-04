@@ -181,6 +181,28 @@ async function main(): Promise<void> {
       realCancelOrder: (orderid: number) => Promise<{ txid: string; block: number | null }>;
     };
 
+    /* Z-81 · שני-שערים-חדשים על-בסיס-פענוח-הפקודות-שלנו מהתמונה:
+     * (1) שימור-תור — סולם שלם-ומעל-קו-הערך לא מבוטל (ביטול-הצבה כל-30-דק'
+     *     שורף-RC ומאבד-מקום-בתור-ההתאמה — המיקרו-מבנה המדוד-חי); רענון רק
+     *     כשנעקפנו-מהמגע או כשקו-הערך עלה מעל האסק-שלנו.
+     * (2) תיקון-רעב-האסקים — הדלק נמדד אחרי-הביטולים: ה-STEEM/SBD הנעולים
+     *     בפקודות-שלנו חוזרים-לנזיל עם הביטול, ולכן נספרים. הבאג החי-שנמדד:
+     *     צילום-מצב לפני-ביטול → 24 STEEM נעולים נראו "אפס-דלק" → האסקים
+     *     נבלעו והסולם נשאר בלי-צד-מכירה שעות. */
+    const amtOfStr = (s: string): number => parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) || 0;
+    const ourAsks = snap.openOrders.filter((o) => o.sell.includes("STEEM")).map((o) => ({ id: o.id, px: amtOfStr(o.receive) / amtOfStr(o.sell), steem: amtOfStr(o.sell) }));
+    const ourBids = snap.openOrders.filter((o) => o.sell.includes("SBD")).map((o) => ({ id: o.id, px: amtOfStr(o.sell) / amtOfStr(o.receive), sbd: amtOfStr(o.sell) }));
+    const bestOurAsk = ourAsks.length ? Math.min(...ourAsks.map((a) => a.px)) : null;
+    const bestOurBid = ourBids.length ? Math.max(...ourBids.map((b) => b.px)) : null;
+    const TOUCH_EPS = 1e-4; // סובלנות-השוואת-מגע (0.01%)
+    const ownsAsk = bestOurAsk != null && Math.abs(bestOurAsk - snap.book.bestAsk) <= snap.book.bestAsk * TOUCH_EPS;
+    const ownsBid = bestOurBid != null && Math.abs(bestOurBid - snap.book.bestBid) <= snap.book.bestBid * TOUCH_EPS;
+    const askValueLine = parity * (1 + ASK_STEP_BPS / 10_000);
+    const ladderIntact = ownsAsk && ownsBid && bestOurAsk !== null && bestOurAsk >= askValueLine && bestOurBid !== null && bestOurBid <= parity;
+
+    if (ladderIntact) {
+      console.log(`[grid-beat] ladder intact & above value line — queue preserved · ask ${bestOurAsk?.toFixed(5)} ≥ ${askValueLine.toFixed(5)} · bid ${bestOurBid?.toFixed(5)} ≤ parity ${parity.toFixed(5)} · ${snap.openOrders.length} orders untouched`);
+    } else {
     /* 1) ביטול ההזמנות שלנו — רענון אטומי */
     for (const o of snap.openOrders) {
       try {
@@ -194,6 +216,15 @@ async function main(): Promise<void> {
       }
     }
 
+    /* Z-81 התאמת-מעקה: פקודה שנרשמה פתוחה אבל כבר לא על-השרשרת (נאכלה/
+     * פגה/בוטלה ע"י-רץ-אח) — נחשפת בכנות כ-unknown, לא ממשיכה להיספר פתוחה. */
+    for (const rec of ledger.orders) {
+      if (rec.chain !== "hive" && rec.status === "open" && !snap.openOrders.some((o) => o.id === rec.id)) {
+        rec.status = "unknown";
+        rec.lastSeenAt = new Date().toISOString();
+      }
+    }
+
     /* 2) פריסת הגריד */
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     let seq = 1;
@@ -204,7 +235,9 @@ async function main(): Promise<void> {
     };
 
     // מדף-המכירה: מעל קו-הזהות החיצוני — אף-פעם לא מתחת (עיקרון 1)
-    const steemAvail = snap.balances.steem - MIN_KEEP_STEEM;
+    // Z-81: הדלק = נזיל-עכשיו + מה שהביטולים-שביצענו-מעלה מחזירים (אסקים נעולים)
+    const steemReturned = ourAsks.reduce((s, a) => s + a.steem, 0);
+    const steemAvail = snap.balances.steem + steemReturned - MIN_KEEP_STEEM;
     const steemCommit = Math.max(0, Math.floor(steemAvail * COMMIT_PCT * 1000) / 1000);
     if (steemCommit >= MIN_LEVEL_STEEM * ASK_LEVELS) {
       const per = Math.floor((steemCommit / ASK_LEVELS) * 1000) / 1000;
@@ -232,7 +265,9 @@ async function main(): Promise<void> {
     }
 
     // מדף-הקנייה: מתחת לביד הטוב — כולן מעל-ערך מדוד מול הציון (עיקרון 2)
-    const sbdCommit = Math.max(0, Math.floor(snap.balances.sbd * COMMIT_PCT * 1000) / 1000);
+    // Z-81: גם-כאן — ה-SBD הנעול בבידים-שבוטלו חוזר לפני-ההצבה
+    const sbdReturned = ourBids.reduce((s, b) => s + b.sbd, 0);
+    const sbdCommit = Math.max(0, Math.floor((snap.balances.sbd + sbdReturned) * COMMIT_PCT * 1000) / 1000);
     if (sbdCommit >= MIN_LEVEL_SBD * BID_LEVELS && snap.book.bestBid) {
       const per = Math.floor((sbdCommit / BID_LEVELS) * 1000) / 1000;
       for (let k = 1; k <= BID_LEVELS; k++) {
@@ -253,6 +288,7 @@ async function main(): Promise<void> {
     } else {
       blocker.push(`buy-side waiting for SBD inventory: ${sbdCommit.toFixed(3)} SBD commitable < ${(MIN_LEVEL_SBD * BID_LEVELS).toFixed(2)} needed`);
     }
+    } /* סוף-מסלול-הרענון (Z-81: שימור-תור מדלג על ביטול+פריסה בשלמותם) */
   }
 
   /* 3) הצלבת-מילויים: כל fill_order שלנו נספר במעקה עם ציון-דולר-חי */

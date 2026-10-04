@@ -14,9 +14,10 @@
 import { writeFileSync, appendFileSync, existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import crypto from "node:crypto";
 import { appendEvent } from "./events.mjs";
 import { measureMarks, measureSnapshot } from "./peg.mjs";
-import { ACCOUNT, RC_MIN, num, dp3, rpcAny, signAndBroadcast, deriveActiveWif, privToPub, privToWif } from "./mover.mjs";
+import { ACCOUNT, RC_MIN, num, dp3, rpcAny, signAndBroadcast, deriveActiveWif, privToPub, privToWif, wifToPriv } from "./mover.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STATE_DIR = join(HERE, "state");
@@ -100,24 +101,33 @@ export async function runConvert({ execute = false, dryRun = false, masterSource
     return evidence;
   }
 
-  /* שער-החתימה — אותם-שערי-הגנה של המוביל, fail-closed */
-  // Task 13-c: canonical org vault (steem/agent/keys) is the honest default now;
-  // the /tmp/keystation location died with the sandbox resets (env still wins).
+  /* שער-החתימה — אותם-שערי-הגנה של המוביל, fail-closed.
+   * Z-81: שני-מקורות-מפתח, שניהם verify-then-sign מול הרשויות-החיות:
+   *  (א) כספת-האב הקנונית (master-source file) — כפי-שהיה;
+   *  (ב) STEEM_ACTIVE_WIF (סוד-ה-CI שכבר מחמש את grid-beat) — כגיבוי
+   *      כשהכספת לא קיימת בסביבת-הריצה. אותו-חוק: רק התאמת-active מלאה
+   *      מתירה חתימה; אף-מפתח לא נכתב לדיסק/לוג/קבלה. */
   const srcPath = masterSourcePath
     || ["/tmp/keystation/live-agent/keys/hed-soldiers-source.txt", "/home/z/git-audit/steem/agent/keys/hed-soldiers-source.txt"].find((p) => existsSync(p))
-    || "/home/z/git-audit/steem/agent/keys/hed-soldiers-source.txt";
-  if (!existsSync(srcPath)) throw new Error(`master source missing at ${srcPath} (fail-closed)`);
-  const { candidates, privFor } = deriveActiveWif(readFileSync(srcPath, "utf8"));
+    || null;
   const acc = (await rpcAny("condenser_api.get_accounts", [[ACCOUNT]]))?.[0];
   if (!acc) throw new Error("account absent from live chain (fail-closed)");
   const liveActive = acc.active?.key_auths?.[0]?.[0];
-  const liveWif = (() => {
+  let liveWif = null;
+  let keySource = null;
+  if (srcPath && existsSync(srcPath)) {
+    const { candidates, privFor } = deriveActiveWif(readFileSync(srcPath, "utf8"));
     for (const pw of candidates) {
-      if (privToPub(privFor("active", pw)) === liveActive) return privToWif(privFor("active", pw));
+      if (privToPub(privFor("active", pw)) === liveActive) { liveWif = privToWif(privFor("active", pw)); keySource = "master-vault"; break; }
     }
-    return null;
-  })();
-  if (!liveWif) throw new Error("no sealed master derives the LIVE active authority — refusing to sign (fail-closed)");
+  }
+  if (!liveWif && process.env.STEEM_ACTIVE_WIF) {
+    try {
+      if (privToPub(wifToPriv(process.env.STEEM_ACTIVE_WIF)) === liveActive) { liveWif = process.env.STEEM_ACTIVE_WIF; keySource = "ci-secret (verified-against-live-authority)"; }
+    } catch { /* WIF פגום — נשאר fail-closed למטה */ }
+  }
+  if (!liveWif) throw new Error("no key source derives the LIVE active authority (master vault absent + no valid STEEM_ACTIVE_WIF) — refusing to sign (fail-closed)");
+  evidence.keySource = keySource; // הוכחת-מקור-מכובדת בלי לחשוף את המפתח
   const rc = await rpcAny("rc_api.find_rc_accounts", { accounts: [ACCOUNT] }).catch(() => null);
   const rcNow = Number(rc?.rc_accounts?.[0]?.rc_manabar?.current_mana ?? 0);
   if (rcNow < RC_MIN) throw new Error(`RC fuel below floor: ${rcNow} < ${RC_MIN} (fail-closed)`);
@@ -195,6 +205,17 @@ export async function selftest() {
 
   /* וקטור-10: שלמות-מדיניות — ההרזרבה והתקרה בתוך-הפוליטיקה המיוצאת */
   t("policy integrity: reserve < min < cap ordering", P.BID_RESERVE_SBD < P.MIN_CONVERT_SBD && P.MIN_CONVERT_SBD <= P.MAX_PENDING_SBD);
+
+  /* וקטור-11 (Z-81): היפוך-WIF — roundtrip מושלם + fail-closed על צורה פגומה */
+  try {
+    const { privToWif, wifToPriv } = await import("./mover.mjs");
+    const priv = Buffer.from(crypto.createHash("sha256").update("z81-wif-roundtrip-vector").digest());
+    const wif = privToWif(priv);
+    t("wifToPriv ∘ privToWif = identity (Z-81)", Buffer.from(wifToPriv(wif)).equals(priv));
+    let refused = false;
+    try { wifToPriv("STMbogusNotAWif"); } catch { refused = true; }
+    t("wifToPriv refuses non-WIF shape (fail-closed)", refused);
+  } catch (e) { t("wif roundtrip vector failed: " + String(e).slice(0, 60), false); }
 
   console.log(process.exitCode === 1 ? "CONVERT-SELFTEST: FAIL" : "CONVERT-SELFTEST: PASS");
 }

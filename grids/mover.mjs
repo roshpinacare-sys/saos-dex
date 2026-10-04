@@ -63,6 +63,17 @@ const privToWif = (priv) => {
   const chk = crypto.createHash("sha256").update(crypto.createHash("sha256").update(body).digest()).digest().subarray(0, 4);
   return bs58.encode(Buffer.concat([body, chk]));
 };
+/* Z-81: היפוך-WIF — אותו-פורמט (0x80+priv32+צ'קסאם-כפול), fail-closed על צורה וצ'קסאם.
+ * מאפשר לשער-החתימה לקבל WIF חתום-סוד (STEEM_ACTIVE_WIF) כמקור-חלופי לכספת-האב,
+ * באותו-verify-then-sign מול הרשויות-החיות — אף-מפתח לא נכתב לדיסק/לוג/קבלה. */
+const wifToPriv = (wif) => {
+  const raw = bs58.decode(String(wif ?? ""));
+  if (raw.length !== 37 || raw[0] !== 0x80) throw new Error("bad WIF shape (fail-closed)");
+  const body = raw.subarray(0, 33);
+  const chk = crypto.createHash("sha256").update(crypto.createHash("sha256").update(body).digest()).digest().subarray(0, 4);
+  if (!chk.equals(raw.subarray(33))) throw new Error("WIF checksum mismatch (fail-closed)");
+  return Buffer.from(body.subarray(1));
+};
 const extractMasterPasswords = (content) =>
   [...new Set([...content.matchAll(/\bP[57][1-9A-HJ-NP-Za-km-z]{48,50}\b/g)].map((m) => m[0]))];
 
@@ -71,7 +82,7 @@ function deriveActiveWif(masterSource) {
   if (candidates.length === 0) throw new Error("no master-password candidates in source (fail-closed)");
   return { candidates, privFor: (role, password) => Buffer.from(crypto.createHash("sha256").update(`${ACCOUNT}${role}${password}`).digest()) };
 }
-export { deriveActiveWif, extractMasterPasswords, privToWif, privToPub };
+export { deriveActiveWif, extractMasterPasswords, privToWif, privToPub, wifToPriv };
 
 /* ── RPC (אותם-צמתים של realmarket, fail-כנה) — מיוצא לשימוש מסילת-ההמרה (D-023) ── */
 export async function rpcAny(method, params) {
