@@ -214,3 +214,51 @@ export function captureFees(feePoolMu, ourVolumeMu, totalVolumeMu) {
 }
 
 export const SUPREMACY_FEE_BPS = FEE_BPS;
+
+/* ── Z-79 · שאילתה 34: מודל-השוליים — נקודת-העצירה מחוזה מהמדידה ──────────
+   חקר-העלייה (שאילתה 32) מדד דעיכת-שוליים (619→480→325μ/חייל). שאילתה 34
+   שואלת: איזה מודל מציב את נקודת-העצירה **לפני** שהשוליים נהיים שליליים?
+   המודל (מוצהר, מקומי, פשוט-לביקורת): m(n) = a − b·ln(n) — דעיכה לוגריתמית
+   (זרימת-השוק מתפזרת בין-חיילים בקצב תת-ליניארי). רגרסיה ליניארית על
+   (ln n, m) → חיזוי m(n) לכל-n, ונקודת-האפס n* = exp(−a/b) = נקודת-העצירה.
+   כנות: מודל-חוזה אינו אמת — הוא חייב אימות על-עוד-זרעים (selftest, שאילתה 34). */
+export function marginalModel(rows) {
+  const pts = (rows ?? [])
+    .filter((r) => r && r.marginalPerSoldierMu != null && Number.isFinite(r.marginalPerSoldierMu))
+    .map((r) => ({ n: r.soldiers, m: r.marginalPerSoldierMu }))
+    .filter((p) => p.n > 1);
+  if (pts.length < 2) return null;
+  const N = pts.length;
+  const sx = pts.reduce((a, p) => a + Math.log(p.n), 0);
+  const sy = pts.reduce((a, p) => a + p.m, 0);
+  const sxx = pts.reduce((a, p) => a + Math.log(p.n) * Math.log(p.n), 0);
+  const sxy = pts.reduce((a, p) => a + Math.log(p.n) * p.m, 0);
+  const d = N * sxx - sx * sx;
+  if (Math.abs(d) < 1e-12) return null;
+  const slope = (N * sxy - sx * sy) / d;      // שיפוע b — שלילי = דעיכה
+  const intercept = (sy - slope * sx) / N;    // חיתוך a
+  const predict = (n) => intercept + slope * Math.log(Math.max(2, n));
+  const stopAt = slope < -1e-12 ? Math.exp(-intercept / slope) : Infinity; // m=0 → n*
+  return {
+    slope: r6(slope), intercept: r6(intercept), stopAt: r6(Math.min(stopAt, 1e9)),
+    predict,
+    model: "m(n)=intercept−|slope|·ln(n) (declared, verified across seeds in selftest)",
+  };
+}
+
+/* ── Z-79 · פס-דין-צמיחה: GO רק אם השוליים-החזויים ביעד חיוביים ולפני-n* ──
+   מדד-העצירה שנעול ב-Z-78 ("כל-צעד-צמיחה חייב שולי-חיובי") הופך כאן לפונקציה.
+   STOP = אין-צמיחה. זו לא המלצה — זה שער. */
+export function growthVerdict(model, targetCount) {
+  if (!model || !(targetCount > 1)) return { verdict: "STOP", predictedMarginalMu: null, note: "no-model-or-target" };
+  const m = model.predict(targetCount);
+  const go = m > 0 && targetCount < model.stopAt;
+  return {
+    verdict: go ? "GO" : "STOP",
+    predictedMarginalMu: r6(m),
+    stopAt: model.stopAt,
+    note: go
+      ? `predicted +${m.toFixed(1)}μ/soldier at n=${targetCount} (stop-point ${model.stopAt.toFixed(0)}) — growth measured-justified`
+      : `predicted ${m.toFixed(1)}μ/soldier at n=${targetCount} — past/below the measured stop-point, growth denied`,
+  };
+}

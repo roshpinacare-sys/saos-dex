@@ -11,8 +11,17 @@
 //     **הנחה-מוצהרת של-מיקרו-מבנה: נזילות-רחבה-יותר מושכת זרימה** — כל 8
 //     חיילים בצי מוסיפים נגיעה-פוטנציאלית אחת בהסתברות flowP/2. זה כלל-אצבע
 //     מוצהר, לא חוק-טבע: בלעדיו "יותר-חיילים" לא יכול להתבטא בשוק-זרימה-קבועה;
-//   · עומק-אמת: טייקר צועד בספר — כל הזמנה נצרכת (fill = min(שארית, רמה));
+//   · עומק-אמת: טייקר צועד בספר — fill = min(שארית, **רמה-זמינה-בתור**);
 //     5% מהנגיעות הן לווייתנים (×10) שבודקים עומק;
+//   · Z-79 שאילתה 35 — מיקרו-מבנה מוצהר (שני-ערוצים, שניהם דטרמיניסטיים מהזרע):
+//     (א) **הגרלת-תור** (QUEUE_FLOOR=0.25): כשטייקר פוגע ברמה — המייקר לא בטוח
+//         שהוא הראשון בתור; חלק-המילוי שלו = left×(floor + (1−floor)·U).
+//         השארית עוברת לנזילות-האחרת (extVol) — זה הערוץ שמפריד "ווליום"
+//         מ"ווליום-שהגיע-אלינו";
+//     (ב) **לטנטיות-ציטוט** (LATENCY_P=0.3): בהסתברות-p הטייקר רואה את הספר
+//         של **הטיק-הקודם** (כולל שאריות-שלא-נמלאו) — בשוק-נע הציטוטים-הפגים
+//         נקטפים (adverse selection אמת). זה הערוץ שבו רוחב-אדפטיבי (EWMA)
+//         אמור להפריש הגנה-מדידה — שאילתה 35 בדיוק;
 //   · פגיעה-חמצנה: שארית-שלא-נמצאה-עומק בטווח 200bps נסחרת עם נזילות-אחרת —
 //     העמלה שלה עדיין לבריכה, אבל לא לספרד שלנו;
 //   · עמלת-טייקר: FEE_BPS=30 מכל-notional → בריכת-עמלות;
@@ -30,6 +39,11 @@ import { mulberry32, FEE_BPS } from "../strategies.mjs";
 import { supremacyTick, fleetSpawn, feeCompound, captureFees, updateVolEwma, calibrateCalmBps } from "../mm-supremacy.mjs";
 
 const r6 = (v) => Math.round(v * 1e6) / 1e6;
+
+/* Z-79 · שאילתה 35: קבועי-המיקרו-מבנה — מוצהרים, גלובליים לכל-התרחישים
+   (ה-A/B של המנוע דורש שוק-זהה: הערוצים לא משתנים בין-טיפול לביקורת). */
+export const QUEUE_FLOOR = 0.25; // חלק-המילוי המובטח לכל-רמה (מיקום-תור אופטימי-קרקע)
+export const LATENCY_P = 0.3;    // הסתברות שטייקר פוגע בספר-הטיק-הקודם
 
 /* ── תרחישים: בסיס / צי / עליונות+התרחבות-עצמית / תנודתיות (עקה) ───────────
    Z-77: volatile-16-plain = קבוצת-ביקורת A/B — אותו-זרע, אותו-שוק, אותו-זרימה,
@@ -61,6 +75,7 @@ export function runScenario(name, cfg, { ticks = 480, seed = 20261004, ref0 = 0.
   let series = [ref0]; // Z-78 שאילתה 24: סדרת-המחירים-הנמדדת לכיול-העוגן
   let feePool = 0, ourVol = 0, extVol = 0, bornTotal = 0;
   let peak = startCash0, maxDD = 0, lastNote = "";
+  let prevBook = []; // Z-79: שאריות-הספר של הטיק-הקודם (לערוץ-הלטנטיות)
   const BAND = 0.02; // 200bps סבלנות-טייקר (כמו simFill של ה-estate)
 
   for (let t = 1; t <= ticks; t++) {
@@ -97,12 +112,17 @@ export function runScenario(name, cfg, { ticks = 480, seed = 20261004, ref0 = 0.
       const whale = rng() < 0.05;
       let remaining = r6((40 + rng() * 80) * (whale ? 10 : 1)); // 40..120μ (לווייתן ×10)
       const band = ref * BAND;
-      const cands = allOrders
+      // Z-79 שאילתה 35: לטנטיות-ציטוט — הטייקר רואה ספר-אמת של הטיק הקודם ב-p
+      const book = rng() < LATENCY_P ? prevBook : allOrders;
+      const cands = book
         .filter((o) => o.side === side && Math.abs(o.price - ref) <= band && o.left > 0)
         .sort((a, b) => (buy ? a.price - b.price : b.price - a.price));
       for (const o of cands) {
         if (remaining <= 0) break;
-        const f = Math.min(o.left, remaining);
+        // Z-79 שאילתה 35: הגרלת-תור — חלק-הרמה שהגיע **אלינו** (השאר → נזילות-אחרת)
+        const avail = r6(o.left * (QUEUE_FLOOR + (1 - QUEUE_FLOOR) * rng()));
+        const f = Math.min(avail, remaining);
+        if (f <= 0) continue;
         const px = o.price;
         const s = st.find((x) => x.id === o.owner);
         if (side === "bid") { s.inv = r6(s.inv + f); s.cash = r6(s.cash - f * px); }
@@ -120,6 +140,8 @@ export function runScenario(name, cfg, { ticks = 480, seed = 20261004, ref0 = 0.
         feePool = r6(feePool + missNotional * (FEE_BPS / 10000));
       }
     }
+    // Z-79: שאריות-הספר נשמרות לטיק-הבא (ערוץ-הלטנטיות רואה אותן)
+    prevBook = allOrders.map((o) => ({ ...o }));
 
     // 4) התרחבות-עצמית: עמלות-שנמדדו → מיקרו-גריד-חדש (רק כשהתרחיש מרשה)
     if (cfg.compound && t % 60 === 0) {
@@ -146,7 +168,7 @@ export function runScenario(name, cfg, { ticks = 480, seed = 20261004, ref0 = 0.
   const netPnl = r6(equityFinal - startCash + feesCaptured);
   return {
     scenario: name, sim: true, seed, ticks,
-    config: { ...cfg, capMu, ref0, breadthArrivals: "liquidity-begets-flow (declared)" },
+    config: { ...cfg, capMu, ref0, breadthArrivals: "liquidity-begets-flow (declared)", microstructure: { queueFloor: QUEUE_FLOOR, latencyP: LATENCY_P, declared: "Z-79 query 35: queue-lottery + quote-latency" } },
     results: {
       volumeMu: ourVol, fills: st.reduce((a, s) => a + s.fills, 0),
       extVolumeMu: extVol, feePoolMu: feePool,
@@ -227,6 +249,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     "· דטרמיניזם: אותו-זרע → אותם-מספרים בדיוק (mulberry32). שחזור: `node grids/sim/volume-sim.mjs`",
     "· כנות: **SIM**. מוכיח מנגנון (ציטוט, הטיית-מלאי, תפיסת-עמלות, התרחבות-מעמלות) — לא רווח-עתידי.",
     "· מודל: הנחת-רחבה מוצהרת — נזילות-רחבה-יותר מושכת זרימה (כל 8 חיילים → נגיעה-פוטנציאלית נוספת).",
+    `· מיקרו-מבנה (Z-79 שאילתה 35): הגרלת-תור floor=${QUEUE_FLOOR} + לטנטיות-ציטוט p=${LATENCY_P} — שאריות-המילוי עוברות לנזילות-האחרת; טייקר-פג-עיתוי קוטף-ציטוטים-ישנים.`,
     "",
     "| תרחיש | ווליום-שלנו(μ) | מילויים | עמלות-נתפסות(μ) | רווח-ספרד(μ) | רווח-נטו(μ) | ירידה-מקס(μ) | פריקות-עמוקות | חיילים-סוף |",
     "|---|---|---|---|---|---|---|---|---|",
