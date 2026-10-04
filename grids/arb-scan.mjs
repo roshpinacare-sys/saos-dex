@@ -29,7 +29,7 @@
 //   · שערי-ייחוס      : coins.llama.fi (confidence 0.99) → coingecko → blurt price_info
 //
 // סכימת-הפנקס (מדויקת — arb-ledger-v1):
-//   {"schema":"arb-ledger-v1","generatedAt":"<iso>",
+//   {"schema":"arb-ledger-v1","layer":"sovereign-CI","generatedAt":"<iso>",
 //    "entries":[{"ts","pair","venueA","venueB","edgeBps","direction","executableSize",
 //                "realness","paperPnlSbd","degraded","notes"}],
 //    "cumulative":{"paperPnlSbd":<sum>,"entries":<n>,"positiveEntries":<n>,"realized":false}}
@@ -47,6 +47,7 @@ export const FIXTURES_DIR = join(HERE, "state", "fixtures");
 export const FEE_BPS = 30;               // מודל-העמלה של הבית — 30bps לרגל (strategies.mjs)
 export const LEDGER_CAP = 200;           // תקרת-רשומות בקובץ (המצטבר חי-מעבר-לה)
 export const LEDGER_SCHEMA = "arb-ledger-v1";
+export const LEDGER_LAYER = "sovereign-CI"; // provenance: written by CI arb-scan.yml (or its verified build rung), committed in the sovereign repo
 export const REALNESS_RANK = { ONCHAIN_REAL: 4, L2_REAL: 3, CEX_REF: 2, PAPER: 1, DEGRADED: 0 };
 
 export const NODES_STEEM = ["https://api.steemit.com", "https://api.justyy.com"];
@@ -456,7 +457,7 @@ export function evaluateFeeds({ feeds, refs, nowIso }) {
 /* ══ הפנקס המצטבר — הסכימה המדויקת arb-ledger-v1 ═══════════════════════════ */
 
 export function emptyLedger() {
-  return { schema: LEDGER_SCHEMA, generatedAt: null, entries: [], cumulative: { paperPnlSbd: 0, entries: 0, positiveEntries: 0, realized: false } };
+  return { schema: LEDGER_SCHEMA, layer: LEDGER_LAYER, generatedAt: null, entries: [], cumulative: { paperPnlSbd: 0, entries: 0, positiveEntries: 0, realized: false } };
 }
 
 /** עדכון-פנקס טהור: מצטבר-כל-הזמנים שורד את-תקרת-ה-200-רשומות. */
@@ -468,6 +469,7 @@ export function updateLedger(prev, newEntries, { generatedAt, cap = LEDGER_CAP }
   const sumPos = added.filter((e) => !e?.degraded && typeof e?.edgeBps === "number" && e.edgeBps > 0).length;
   return {
     schema: LEDGER_SCHEMA,
+    layer: LEDGER_LAYER, // provenance stamped on every write — even when base prev lacked it
     generatedAt: generatedAt ?? null,
     entries,
     cumulative: {
