@@ -1,0 +1,103 @@
+{
+ "schema": "custody-v1",
+ "at": "2026-10-04T12:40:56.004Z",
+ "account": "headcorner",
+ "rows": [
+  {
+   "chain": "steem",
+   "venue": "chain-liquid",
+   "asset": "STEEM",
+   "amount": 14.681,
+   "ownership": "anchor (fleet-signed)",
+   "realness": "ONCHAIN_REAL",
+   "source": "condenser_api.get_accounts @steem",
+   "note": null
+  },
+  {
+   "chain": "steem",
+   "venue": "chain-liquid",
+   "asset": "SBD",
+   "amount": 0.366,
+   "ownership": "anchor (fleet-signed)",
+   "realness": "ONCHAIN_REAL",
+   "source": "condenser_api.get_accounts @steem",
+   "note": null
+  },
+  {
+   "chain": "steem",
+   "venue": "chain-locked",
+   "asset": "SBD-IN-CONVERT",
+   "amount": 131.856,
+   "ownership": "anchor (fleet-signed)",
+   "realness": "ONCHAIN_REAL",
+   "source": "condenser_api.get_conversion_requests",
+   "note": "matures 2026-10-06→10-07; payout estimate lives in convert-plan.json maturityEstimate"
+  },
+  {
+   "chain": "steem",
+   "venue": "chain-vests",
+   "asset": "VESTS",
+   "amount": "6366749.189565 VESTS",
+   "ownership": "anchor (fleet-signed)",
+   "realness": "ONCHAIN_REAL",
+   "source": "condenser_api.get_accounts",
+   "note": null
+  },
+  {
+   "chain": "blurt",
+   "venue": "chain-liquid",
+   "asset": "BLURT",
+   "amount": 67.841,
+   "ownership": "verified-key-controlled",
+   "realness": "ONCHAIN_REAL",
+   "source": "condenser_api.get_accounts @blurt (blurt-rpc.saboin.com) + authority match vs anchor",
+   "note": "authorities byte-identical to the fleet-signed STEEM anchor — same controller, zero secrets touched"
+  },
+  {
+   "chain": "blurt",
+   "venue": "chain-vests",
+   "asset": "VESTS",
+   "amount": "7600.869321 VESTS",
+   "ownership": "verified-key-controlled",
+   "realness": "ONCHAIN_REAL",
+   "source": "condenser_api.get_accounts @blurt (blurt-rpc.saboin.com) + authority match vs anchor",
+   "note": null
+  },
+  {
+   "chain": "hive",
+   "venue": "chain-liquid",
+   "asset": "HIVE",
+   "amount": 0.034,
+   "ownership": "name-match-unverified",
+   "realness": "ONCHAIN_REAL",
+   "source": "condenser_api.get_accounts @hive (api.hive.blog) + authority match vs anchor",
+   "note": "name exists on-chain; authorities DIFFER from the fleet anchor — NOT counted as fleet custody"
+  },
+  {
+   "chain": "cex",
+   "venue": "htx/binance",
+   "asset": "STEEM/HIVE/SBD",
+   "amount": null,
+   "ownership": null,
+   "realness": "UNMEASURABLE-NO-RAIL",
+   "source": "no API key held (zero-secrets law) — balances unmeasurable without owner rail",
+   "note": "rail-readiness measured 2026-10-04: HTX steem deposit/withdraw ALLOWED, withdraw fee 0.01 STEEM, min 4, memo required"
+  },
+  {
+   "chain": "hive-engine",
+   "venue": "L2",
+   "asset": "SWAP.HIVE/SWAP.BLURT",
+   "amount": null,
+   "ownership": null,
+   "realness": "ABSENT",
+   "source": "no fleet Engine holdings measured — bridge-in path exists (1:1 measured evidence, see venues/blurt-quote.mjs)",
+   "note": null
+  }
+ ],
+ "counts": {
+  "onchainReal": 7,
+  "absent": 1,
+  "unmeasurable": 1
+ },
+ "law": "measure-only custody truth — every row is a live receipt or an honest absence; ownership via public key-authority match, zero secrets"
+}

@@ -66,6 +66,13 @@ jobs:
           cd repo
           node grids/arb-scan.mjs || echo "scan degraded honestly — ledger keeps its fail-closed state"
 
+      - name: custody-receipt (Z-89 — מדידת-חזקות-רב-שרשרת, keyless · continue-on-error כן)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd repo
+          node grids/custody.mjs || echo "custody degraded honestly — receipt keeps its fail-closed state"
+
       - name: scan-summary (שמות-מדידה בלבד — אף-סוד לא קיים בקו-הזה)
         if: always()
         run: |
@@ -92,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           cd repo
-          git add -A grids/state/arb-ledger.json
+          git add -A grids/state/arb-ledger.json grids/state/custody.json
           if git diff --cached --quiet; then
             echo "ledger unchanged — nothing to commit"
           else
