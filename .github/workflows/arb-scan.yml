@@ -73,6 +73,22 @@ jobs:
           cd repo
           node grids/custody.mjs || echo "custody degraded honestly — receipt keeps its fail-closed state"
 
+      # Z-90-c: הנקודה-החלופית להיסטוריית-עברות-ה-Engine (מנפיק-חתום-על-Hive + ספרי-גשר-בלרט)
+      - name: engine-transfers-receipt (Z-90-c — היסטוריית-העברות-החלופית, keyless · continue-on-error כן)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd repo
+          node grids/engine-transfers.mjs || echo "engine-transfers degraded honestly — receipt keeps its fail-closed state"
+
+      # Z-90-c: קבלת-הדוקטרינה-לתשלום — בונה-מראש את-החלטות-הבשלות מהקבלות-הטריות (custody שנכתב זה-עתה)
+      - name: payout-doctrine-receipt (Z-90-c — החלטות-הבשלות-מראש, keyless · continue-on-error כן)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd repo
+          node grids/payout-doctrine.mjs || echo "payout-doctrine degraded honestly — receipt keeps its fail-closed state"
+
       - name: scan-summary (שמות-מדידה בלבד — אף-סוד לא קיים בקו-הזה)
         if: always()
         run: |
@@ -99,7 +115,7 @@ jobs:
         run: |
           set -euo pipefail
           cd repo
-          git add -A grids/state/arb-ledger.json grids/state/custody.json
+          git add -A grids/state/arb-ledger.json grids/state/custody.json grids/state/engine-transfers.json grids/state/payout-doctrine.json
           if git diff --cached --quiet; then
             echo "ledger unchanged — nothing to commit"
           else

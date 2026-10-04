@@ -11,6 +11,7 @@ import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ACCOUNT, rpcAny, num, dp3 } from "./mover.mjs";
+import { runEngineTransfers, condenseForCustody } from "./engine-transfers.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STATE_DIR = join(HERE, "state");
@@ -46,12 +47,16 @@ export function ownershipVerdict({ anchorActive, anchorOwner, candActive, candOw
 }
 
 /** וקטור-טהור: שורת-חזקה אחת. אפס-המצאה: מה-שנמדד — כתוב; מה-שלא — נעדר. */
-export function custodyRow({ chain, venue, asset, amount = null, ownership = null, realness = null, source = null, note = null }) {
-  return { chain, venue, asset, amount, ownership, realness, source, note };
+export function custodyRow({ chain, venue, asset, amount = null, ownership = null, realness = null, source = null, note = null, engineTransfers = undefined }) {
+  // engineTransfers (Z-90-c): מפתח-אופציונלי — נשמר רק כשהמדידה נוכחת (תאימות-לאחור)
+  return { chain, venue, asset, amount, ownership, realness, source, note, ...(engineTransfers !== undefined && engineTransfers !== null ? { engineTransfers } : {}) };
 }
 
-/** ההרכבה-הטהורה: מהמדידות-הגולמיות לפנקס custody-v1. */
-export function buildCustodyInventory({ anchor = {}, blurt = {}, hive = {}, cex = {}, nowIso = null } = {}) {
+/** ההרכבה-הטהורה: מהמדידות-הגולמיות לפנקס custody-v1.
+ *  engineTransfers (אופציונלי, Z-90-c): המדידה-המעובה של היסטוריית-עברות-הגשר
+ *  (engine-transfers-v1) — כשהיא נוכחת שורת-ה-Engine עולה מ-ABSENT ל-MEASURED;
+ *  בלעדיה הפנקס נשאר בדיוק כמו-שהיה (תאימות-לאחור מלאה לצרכנים הקיימים). */
+export function buildCustodyInventory({ anchor = {}, blurt = {}, hive = {}, cex = {}, engineTransfers = null, nowIso = null } = {}) {
   const rows = [];
   // STEEM — חשבון-העוגן (נשלט-וחתום-על-ידי-הצי; רשויות-המפתח-שלו = המקור-לאימות)
   if (anchor.account) {
@@ -115,22 +120,32 @@ export function buildCustodyInventory({ anchor = {}, blurt = {}, hive = {}, cex 
     source: cex.source ?? "no API key held (zero-secrets law) — balances unmeasurable without owner rail",
     note: "rail-readiness measured 2026-10-04: HTX steem deposit/withdraw ALLOWED, withdraw fee 0.01 STEEM, min 4, memo required",
   }));
-  // ENGINE (L2) — אין-חשבון-צי-מזוהה → שורה-כנה
+  // ENGINE (L2) — זרימות-הגשר נמדדו (Z-90-c) אך-עדיין-אין-חזקות-צי-מזוהות-שם:
+  // אמת-השורה היא על-הזרימות, לא על-בעלות — amount נשאר null בכנות.
   rows.push(custodyRow({
     chain: "hive-engine", venue: "L2", asset: "SWAP.HIVE/SWAP.BLURT",
-    amount: null, ownership: null, realness: "ABSENT",
-    source: "no fleet Engine holdings measured — bridge-in path exists (1:1 measured evidence, see venues/blurt-quote.mjs)",
+    amount: null, ownership: null,
+    realness: engineTransfers ? "MEASURED" : "ABSENT",
+    source: engineTransfers
+      ? (engineTransfers.source ?? "bridge-transfer history measured — see grids/state/engine-transfers.json")
+      : "no fleet Engine holdings measured — bridge-in path exists (paired-flow measured evidence, see venues/blurt-quote.mjs + grids/state/engine-transfers.json)",
+    note: engineTransfers
+      ? `bridge flows measured: in ${engineTransfers.inCount}/${engineTransfers.inSum} SWAP.BLURT (engine credits), out ${engineTransfers.outCount}/${engineTransfers.outSum} (blurt payouts); haircut ${engineTransfers.haircut ? `${engineTransfers.haircut.ratio} (fee ${engineTransfers.haircut.feeBps}bps, ${engineTransfers.haircut.pairs} paired flows)` : "null — no paired evidence in window"} — ${engineTransfers.honesty ?? "terms unverified — measured-only"}`
+      : null,
+    engineTransfers,
   }));
 
   return {
     schema: CUSTODY_SCHEMA,
     at: nowIso,
     account: anchor.account ?? null,
+    engineTransfers: engineTransfers ?? null,
     rows,
     counts: {
       onchainReal: rows.filter((r) => r.realness === "ONCHAIN_REAL").length,
       absent: rows.filter((r) => r.realness === "ABSENT").length,
       unmeasurable: rows.filter((r) => r.realness === "UNMEASURABLE-NO-RAIL").length,
+      measured: rows.filter((r) => r.realness === "MEASURED").length,
     },
     law: "measure-only custody truth — every row is a live receipt or an honest absence; ownership via public key-authority match, zero secrets",
   };
@@ -204,10 +219,17 @@ export async function runCustody({ nowIso = null } = {}) {
     };
   }
 
+  // ENGINE-TRANSFERS (Z-90-c): המדידה-החלופית להיסטוריית-העברות (כשל → null → שורת-ABSENT כמו-קודם)
+  let engineTransfers = null;
+  try {
+    engineTransfers = condenseForCustody(await runEngineTransfers({ nowIso: at }));
+  } catch (e) { engineTransfers = null; }
+
   const inv = buildCustodyInventory({
     anchor: anchor.account ? { account: anchor.account, liquidSteem: anchor.liquidSteem, liquidSbd: anchor.liquidSbd, vests: anchor.vests, pendingSbd, source: anchor.source } : {},
     blurt: blurtRow.account ? blurtRow : {},
     hive: hiveRow.account ? hiveRow : {},
+    engineTransfers,
     nowIso: at,
   });
   return inv;
