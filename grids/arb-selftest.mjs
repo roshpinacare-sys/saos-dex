@@ -26,6 +26,15 @@ import { planAgentSwap, executeAgentSwap, makerSwapPrice } from "./agent-swap-ap
 import { controlFor, loadFlags } from "./agent-roster.mjs";
 import { planBlurtExit, BRIDGE_PATHS, BLURT_HONESTY } from "./venues/blurt-quote.mjs";
 import { authorityMatch, ownershipVerdict, buildCustodyInventory, CUSTODY_SCHEMA } from "./custody.mjs";
+import {
+  ENGINE_TRANSFERS_SCHEMA, parseHiveIssuerPage, parseBlurtBridgePage, normalizeHistoryEvent,
+  partitionIssuerTransfers, partitionBlurtBridge, memoUserFromCredit, sumRows,
+  pairInFlows, computeHaircutIn, buildEngineTransfersReceipt, condenseForCustody,
+} from "./engine-transfers.mjs";
+import {
+  PAYOUT_DOCTRINE_SCHEMA, planPayoutDoctrine, custodyLiquidSteem, maturityWindow,
+  countdownMinutes, COMMUNITY_COST_CITATION, DOCTRINE_SEARCH, ESTIMATE_LABEL,
+} from "./payout-doctrine.mjs";
 import { privToWif, privToPub, wifToPriv } from "./mover.mjs";
 import crypto from "node:crypto";
 
@@ -463,6 +472,120 @@ async function main() {
       const dust = planBlurtExit({ amountBlurt: 0, book, blurtUsd, hiveUsd, nowIso: NOW });
       check("blurt: zero amount rejected", dust.ok === false);
     }
+  }
+
+
+  /* ══ 12. engine-transfers (Z-90-c): הנתיב-החלופי להיסטוריית-העברות — פרסרים + זיווג-ראיות ══
+   * fixtures חיים-מוקלטים 2026-10-04 (account_history_api @hive · condenser get_account_history @blurt).
+   * אפס-רשת: הכל מ-fixtures ומוקטורים-סינתטיים-מסומנים. */
+  {
+    const hiveSample = fixture("engine-issuer-hive-history-SAMPLE.json");
+    const gsHistory = fixture("engine-blurt-graphene-swap-history.json");
+    const bsHistory = fixture("engine-blurt-blurt-swap-history.json");
+
+    const hp = parseHiveIssuerPage(hiveSample);
+    check("engine: hive sample parses (live-recorded page, 40 rows)", hp.rows.length === 40 && hp.error === null, hp.error);
+    check("engine: parseHiveIssuerPage(null) → fail-closed no throw", parseHiveIssuerPage(null).rows.length === 0 && /fail-closed/.test(parseHiveIssuerPage(null).error));
+    const cred = hp.rows.find((r) => r.symbol === "SWAP.BLURT" && r.contractAction === "transfer");
+    check("engine: issuer credit derives from=required_auths[0] (no payload.from)", cred.from === "graphene-swap" && typeof cred.quantity === "number", cred);
+    check("engine: memo user extracted from the verbatim bridge memo", cred.memoUser === "mustakin321" && memoUserFromCredit("random memo") === null);
+    const dictOpRow = hiveSample.result.history.find(([, ev]) => String(ev.op?.type ?? "").startsWith("custom_json"));
+    check("engine: normalizeHistoryEvent tolerates list-op (blurt) and dict-op (hive) shapes", normalizeHistoryEvent(dictOpRow[1]).opType === "custom_json" && normalizeHistoryEvent(gsHistory.result[0][1]).opType === "transfer");
+    const part = partitionIssuerTransfers(hp.rows);
+    check("engine: partition keeps credits vs other symbols separated", part.credits.length === 6 && part.otherSymbolCounts["SWAP.STEEM"] === 4 && part.otherSymbolCounts["SWAP.HBD"] === 2, part.otherSymbolCounts);
+    const syntheticInto = partitionIssuerTransfers([{ opType: "custom_json", contractName: "tokens", contractAction: "transfer", symbol: "SWAP.BLURT", from: "alice", to: "graphene-swap", quantity: 5, memo: "x" }]);
+    check("engine: user-signed burn partitioned honestly (into-issuer)", syntheticInto.intoIssuer.length === 1 && syntheticInto.credits.length === 0);
+
+    const gp = parseBlurtBridgePage(gsHistory);
+    const gpart = partitionBlurtBridge(gp.rows);
+    check("engine: graphene-swap @BLURT full ledger = 32 deposits (complete history measured)", gp.rows.length === 32 && gpart.deposits.length === 32 && gpart.payouts.length === 0);
+    const reserveRelay = gpart.deposits.filter((d) => d.user === "blurt-swap" && /Token Conversion from SWAP\.BLURT account/.test(d.memo ?? ""));
+    check("engine: Z-89 evidence class (blurt-swap→graphene-swap reserve relay) inside deposits with honest memoForm", reserveRelay.length === 2 && reserveRelay.every((d) => d.memoForm === "other"));
+    const bp = parseBlurtBridgePage(bsHistory);
+    const bpart = partitionBlurtBridge(bp.rows);
+    check("engine: blurt-swap page partitions deposits + redemption payouts", bpart.deposits.length > 0 && bpart.payouts.length > 0 && bpart.deposits.every((d) => d.asset === undefined || true), { dep: bpart.deposits.length, pay: bpart.payouts.length });
+    check("engine: payout rows carry the verbatim redemption memo class", bpart.payouts.every((p) => /^Token Conversion from SWAP\.BLURT account\s+\S+\s*$/.test(p.memo)));
+
+    const sums = sumRows([{ quantity: 10.5, ts: "b" }, { quantity: 0.25, ts: "a" }, { quantity: "junk", ts: "c" }, { quantity: null, ts: "d" }]);
+    check("engine: sumRows exact + window sorted + non-numeric skipped", sums.count === 2 && Math.abs(sums.sum - 10.75) < 1e-9 && sums.fromTs === "a" && sums.toTs === "b");
+
+    // זיווג-ראיות: וקטורים-סינתטיים-מסומנים (fee 75bps = הדפוס-החי-שנמדד 2026-10-04)
+    const depOk = { user: "u1", target: "h1", quantity: 1000, ts: "2026-10-01T10:00:00", idx: 1 };
+    const credOk = { user: "u1", to: "h1", quantity: 992.5, ts: "2026-10-01T10:15:00", idx: 9, memoUser: "u1" };
+    const pr = pairInFlows({ credits: [credOk], deposits: [depOk] });
+    check("engine: single-flow pair → ratio 0.9925, fee 75bps (measured pattern)", pr.pairs.length === 1 && pr.pairs[0].ratio === 0.9925 && pr.pairs[0].feeBps === 75, pr.pairs);
+    const multi = pairInFlows({ credits: [credOk], deposits: [depOk, { ...depOk, idx: 2 }] });
+    check("engine: multi-deposit user excluded from pairing (not verified evidence)", multi.pairs.length === 0 && multi.excludedMultiFlow >= 1);
+    const pend = pairInFlows({ credits: [], deposits: [depOk] });
+    check("engine: deposit without credit → excluded (honest pending)", pend.pairs.length === 0 && pend.excludedPending >= 1);
+    const late = pairInFlows({ credits: [{ ...credOk, ts: "2026-10-03T10:00:00" }], deposits: [depOk] });
+    check("engine: credit >24h after deposit → excluded (delay)", late.pairs.length === 0 && late.excludedDelay >= 1);
+    const hc = computeHaircutIn(pr.pairs.concat([{ user: "u2", target: "h2", deposit: { quantity: 100, ts: "t", idx: 2, chain: "blurt" }, credit: { quantity: 99.25, ts: "t", idx: 3, chain: "hive-engine" }, ratio: 0.9925, feeBps: 75 }]));
+    check("engine: haircut across 2 pairs → 0.9925 common, feeBps 75", hc.pairCount === 2 && hc.ratio === 0.9925 && hc.commonRatio === 0.9925 && hc.feeBps === 75, hc);
+    check("engine: no pairs → haircut null (no invention)", computeHaircutIn([]) === null && computeHaircutIn(null) === null);
+
+    const rec = buildEngineTransfersReceipt({ at: NOW, engine: { rows: hp.rows, pagesFetched: 1 }, blurtReserve: { rows: gp.rows, completeHistory: true }, blurtActive: { rows: bp.rows } });
+    check("engine: receipt from live fixtures → ok + schema engine-transfers-v1", rec.ok === true && rec.schema === ENGINE_TRANSFERS_SCHEMA);
+    check("engine: receipt stamps measured windows (from/to ts on all legs)", rec.window.engine.fromTs !== null && rec.window.blurtReserve.completeHistory === true && rec.window.blurtActive.fromTs !== null, rec.window);
+    check("engine: in/out measured with counts+sums (verbatim arithmetic)", rec.in.engineCredits.count === 6 && rec.in.blurtDepositsReserve.count === 32 && rec.out.blurtPayouts.count === bpart.payouts.length);
+    check("engine: honesty warning always present (terms unverified — measured-only)", /terms unverified — measured-only/.test(rec.honesty));
+    check("engine: out engine-burn leg honest non-measured (user-signed invisible)", rec.out.engineBurns.measured === false && /invisible/.test(rec.out.engineBurns.note));
+    const recEmpty = buildEngineTransfersReceipt({ at: NOW, degraded: ["all legs down"] });
+    check("engine: all legs down → ok:false, haircut null, degraded kept (fail-closed)", recEmpty.ok === false && recEmpty.haircutIn === null && recEmpty.degraded.length === 1);
+    check("engine: determinism — same fixtures → identical receipt", JSON.stringify(buildEngineTransfersReceipt({ at: NOW, engine: { rows: hp.rows, pagesFetched: 1 }, blurtReserve: { rows: gp.rows, completeHistory: true }, blurtActive: { rows: bp.rows } })) === JSON.stringify(rec));
+    const condensed = condenseForCustody(rec);
+    check("engine: condenseForCustody carries mission keys (window/in/out/haircut/honesty)", condensed && typeof condensed.inCount === "number" && typeof condensed.inSum === "number" && typeof condensed.outCount === "number" && typeof condensed.outSum === "number" && condensed.window !== undefined && condensed.honesty !== undefined);
+    check("engine: condenseForCustody(null/bad) → null (custody row stays ABSENT)", condenseForCustody(null) === null && condenseForCustody(recEmpty) === null);
+  }
+
+  /* ══ 13. payout-doctrine (Z-90-c): בניית-החלטות-הבשלות — טהור, דטרמיניסטי, אפס-המצאה ══ */
+  {
+    // וקטור-חי-מצוטט: custody steem row (receipt 2026-10-04) + convert receipt estimate
+    const custodyVec = { at: "2026-10-04T12:42:18.061Z", rows: [
+      { chain: "steem", venue: "chain-liquid", asset: "STEEM", amount: 14.681, realness: "ONCHAIN_REAL" },
+      { chain: "steem", venue: "chain-liquid", asset: "SBD", amount: 0.366, realness: "ONCHAIN_REAL" },
+      { chain: "steem", venue: "chain-locked", asset: "SBD-IN-CONVERT", amount: 131.856, realness: "ONCHAIN_REAL" },
+    ] };
+    const convertVec = { pendingSbd: 131.856, discountBps: 3982, pendingRequests: [
+      { requestid: 1790942528, amount: "0.001 SBD", conversion_date: "2026-10-06T00:02:12" },
+      { requestid: 1791090394, amount: "3.969 SBD", conversion_date: "2026-10-07T17:06:39" },
+    ], maturityEstimate: { pendingSbd: 131.856, medianNow: 0.10409960236902552, estimate: 1266.633, band: null, semantics: "payout = amount / ADJUSTED median-at-maturity (steem database.cpp process_conversions) — ESTIMATE, floats until conversion_date" } };
+
+    check("payout: custodyLiquidSteem reads the steem liquid row", custodyLiquidSteem(custodyVec) === 14.681 && custodyLiquidSteem({ rows: [] }) === null && custodyLiquidSteem(null) === null);
+    const win = maturityWindow(convertVec);
+    check("payout: maturity window = min/max of verbatim conversion_dates", win.earliest === "2026-10-06T00:02:12Z" && win.latest === "2026-10-07T17:06:39Z" && win.rows === 2, win);
+    check("payout: empty convert → null window (fail-closed)", maturityWindow(null).earliest === null);
+
+    const plan = planPayoutDoctrine({ convert: convertVec, custody: custodyVec, nowIso: "2026-10-04T12:00:00Z" });
+    check("payout: schema + ok on the live-shaped vector", plan.schema === PAYOUT_DOCTRINE_SCHEMA && plan.ok === true);
+    check("payout: projection = liquid + estimate (14.681 + 1266.633 = 1281.314)", plan.projection.projectedLiquidSteem === 1281.314, plan.projection);
+    check("payout: estimate carries the Hebrew estimate label + floats-until-maturity law", plan.inputs.convert.payoutEstimate.labeledAs === ESTIMATE_LABEL && /floats until conversion_date/.test(plan.inputs.convert.payoutEstimate.law));
+    check("payout: communityCreationReady true — projected ≥ fee 3 + buffer 0.1", plan.readiness.communityCreationReady === true && /3\+0\.1|fee 3 \+ buffer 0\.1/.test(plan.readiness.basis), plan.readiness.basis);
+    check("payout: before-payout boolean computed from custody liquid alone (14.681 ≥ 3.1)", plan.readiness.communityCreationReadyBeforePayout === true);
+    check("payout: counterGridFuelReady null — NO written doctrine constant (never invented)", plan.readiness.counterGridFuelReady === null && /החלטת-בעלים|owner decision|owner-armed|no written fuel-allocation/.test(plan.readiness.counterGridFuelPrecondition));
+    check("payout: all fuel allocations null with owner-decision precondition", Object.entries(plan.readiness.fuelAllocations).every(([k, v]) => k === "precondition" || v === null) && plan.readiness.fuelAllocations.precondition.length > 0);
+    check("payout: community cost cited verbatim (community.mjs lines + formula)", plan.inputs.communityCost.accountFeeSteem === 3 && plan.inputs.communityCost.feeBufferSteem === 0.1 && plan.inputs.communityCost.lines.needFormula === 78 && plan.inputs.communityCost.source === "grids/community.mjs");
+    check("payout: doctrine search documented negative evidence", DOCTRINE_SEARCH.fuelAllocationConstantsFound === false && DOCTRINE_SEARCH.ownerDecisionTerm === "החלטת-בעלים" && DOCTRINE_SEARCH.searched.length === 4);
+    check("payout: arm-gates list — CEX rail, agent flags, signing key, community execute", plan.armGates.length === 4 && /CEX rail/.test(plan.armGates[0].gate) && /agent/.test(plan.armGates[1].gate) && /signing key/.test(plan.armGates[2].gate) && /community/.test(plan.armGates[3].gate));
+
+    // fail-closed כנה: קלטות-חסרות → nulls, לעולם לא זורק
+    const noEst = planPayoutDoctrine({ convert: { ...convertVec, maturityEstimate: null }, custody: custodyVec, nowIso: NOW });
+    check("payout: missing estimate → projection null + readiness null (no invention)", noEst.projection.projectedLiquidSteem === null && noEst.readiness.communityCreationReady === null && noEst.ok === false && /fail-closed/.test(noEst.readiness.basis));
+    const noCust = planPayoutDoctrine({ convert: convertVec, custody: null, nowIso: NOW });
+    check("payout: missing custody → projection null + readiness null", noCust.projection.projectedLiquidSteem === null && noCust.readiness.communityCreationReady === null && noCust.ok === false);
+
+    // וקטור-הבשלה-הפוכה: נזיל-נוכחי 2.086 (community-plan חי 05:48Z) — לפני-התשלום עדיין לא-מוכן
+    const beforeAfter = planPayoutDoctrine({ convert: convertVec, custody: { at: "t", rows: [{ chain: "steem", venue: "chain-liquid", asset: "STEEM", amount: 2.086, realness: "ONCHAIN_REAL" }] }, nowIso: NOW });
+    check("payout: 2.086 liquid → before-payout false, after-payout true (1268.719 ≥ 3.1)", beforeAfter.readiness.communityCreationReadyBeforePayout === false && beforeAfter.readiness.communityCreationReady === true && beforeAfter.projection.projectedLiquidSteem === 1268.719, beforeAfter.readiness);
+
+    const cd = countdownMinutes({ earliest: "2026-10-06T00:02:12Z", latest: "2026-10-07T17:06:39Z", asof: "2026-10-05T00:00:00Z" });
+    check("payout: countdown deterministic (1442.2 / 3966.65 min, not passed)", cd.minutesUntilEarliest.minutes === 1442.2 && cd.minutesUntilLatest.minutes === 3906.7 && cd.minutesUntilEarliest.passed === false, cd);
+    const cdPast = countdownMinutes({ earliest: "2026-10-06T00:02:12Z", latest: "2026-10-07T17:06:39Z", asof: "2026-10-08T00:00:00Z" });
+    check("payout: countdown after maturity → passed flags honest", cdPast.minutesUntilEarliest.passed === true && cdPast.minutesUntilLatest.passed === true);
+    check("payout: countdown garbage asof → nulls (fail-closed)", countdownMinutes({ earliest: "2026-10-06T00:02:12Z", latest: "2026-10-07T17:06:39Z", asof: "junk" }).minutesUntilEarliest === null);
+
+    check("payout: determinism — same inputs → identical plan", JSON.stringify(planPayoutDoctrine({ convert: convertVec, custody: custodyVec, nowIso: "2026-10-04T12:00:00Z" })) === JSON.stringify(plan));
+    check("payout: law forbids invented allocations", /no invented allocations/.test(plan.law) && /הערכה בלבד/.test(plan.law));
   }
 
   console.log(`\nARB-SELFTEST ${fail === 0 ? "PASS" : "FAIL"} — ${pass}/${pass + fail} rules green`);

@@ -1,7 +1,42 @@
 {
  "schema": "custody-v1",
- "at": "2026-10-04T12:42:18.061Z",
+ "at": "2026-10-04T13:45:07.231Z",
  "account": "headcorner",
+ "engineTransfers": {
+  "at": "2026-10-04T13:45:07.231Z",
+  "window": {
+   "engine": {
+    "opsFetched": 2000,
+    "pagesFetched": 2,
+    "fromTs": "2026-05-13T16:18:09",
+    "toTs": "2026-10-04T13:33:09",
+    "note": "window = the measured fetched page, not all history (issuance history on-chain since 2020-03-30, account id 1373937)"
+   },
+   "blurtReserve": {
+    "opsFetched": 32,
+    "completeHistory": true,
+    "fromTs": "2020-07-28T10:22:15",
+    "toTs": "2026-05-02T12:46:33"
+   },
+   "blurtActive": {
+    "opsFetched": 858,
+    "fromTs": "2026-06-12T06:33:24",
+    "toTs": "2026-10-04T13:11:15"
+   }
+  },
+  "inCount": 833,
+  "inSum": 4523437.729117,
+  "outCount": 139,
+  "outSum": 2017372.69,
+  "haircut": {
+   "ratio": 0.9925,
+   "feeBps": 75,
+   "pairs": 36,
+   "method": "paired single-flow evidence (1 deposit → 1 credit, same user+target, ≤24h) — measured only"
+  },
+  "honesty": "bridge terms unverified — measured-only: every figure here is a live on-chain measurement, no fee is assumed and none is invented",
+  "source": "account_history_api.get_account_history @hive (issuer-signed custom_json ops) + condenser_api.get_account_history @blurt (bridge ledgers)"
+ },
  "rows": [
   {
    "chain": "steem",
@@ -47,21 +82,11 @@
    "chain": "blurt",
    "venue": "chain-liquid",
    "asset": "BLURT",
-   "amount": 67.841,
-   "ownership": "verified-key-controlled",
-   "realness": "ONCHAIN_REAL",
-   "source": "condenser_api.get_accounts @blurt (blurt-rpc.saboin.com) + authority match vs anchor",
-   "note": "authorities byte-identical to the fleet-signed STEEM anchor — same controller, zero secrets touched"
-  },
-  {
-   "chain": "blurt",
-   "venue": "chain-vests",
-   "asset": "VESTS",
-   "amount": "7600.869321 VESTS",
-   "ownership": "verified-key-controlled",
-   "realness": "ONCHAIN_REAL",
-   "source": "condenser_api.get_accounts @blurt (blurt-rpc.saboin.com) + authority match vs anchor",
-   "note": null
+   "amount": null,
+   "ownership": null,
+   "realness": "ABSENT",
+   "source": "blurt account unmeasured — fail-closed row",
+   "note": "no invention"
   },
   {
    "chain": "hive",
@@ -89,15 +114,51 @@
    "asset": "SWAP.HIVE/SWAP.BLURT",
    "amount": null,
    "ownership": null,
-   "realness": "ABSENT",
-   "source": "no fleet Engine holdings measured — bridge-in path exists (1:1 measured evidence, see venues/blurt-quote.mjs)",
-   "note": null
+   "realness": "MEASURED",
+   "source": "account_history_api.get_account_history @hive (issuer-signed custom_json ops) + condenser_api.get_account_history @blurt (bridge ledgers)",
+   "note": "bridge flows measured: in 833/4523437.729117 SWAP.BLURT (engine credits), out 139/2017372.69 (blurt payouts); haircut 0.9925 (fee 75bps, 36 paired flows) — bridge terms unverified — measured-only: every figure here is a live on-chain measurement, no fee is assumed and none is invented",
+   "engineTransfers": {
+    "at": "2026-10-04T13:45:07.231Z",
+    "window": {
+     "engine": {
+      "opsFetched": 2000,
+      "pagesFetched": 2,
+      "fromTs": "2026-05-13T16:18:09",
+      "toTs": "2026-10-04T13:33:09",
+      "note": "window = the measured fetched page, not all history (issuance history on-chain since 2020-03-30, account id 1373937)"
+     },
+     "blurtReserve": {
+      "opsFetched": 32,
+      "completeHistory": true,
+      "fromTs": "2020-07-28T10:22:15",
+      "toTs": "2026-05-02T12:46:33"
+     },
+     "blurtActive": {
+      "opsFetched": 858,
+      "fromTs": "2026-06-12T06:33:24",
+      "toTs": "2026-10-04T13:11:15"
+     }
+    },
+    "inCount": 833,
+    "inSum": 4523437.729117,
+    "outCount": 139,
+    "outSum": 2017372.69,
+    "haircut": {
+     "ratio": 0.9925,
+     "feeBps": 75,
+     "pairs": 36,
+     "method": "paired single-flow evidence (1 deposit → 1 credit, same user+target, ≤24h) — measured only"
+    },
+    "honesty": "bridge terms unverified — measured-only: every figure here is a live on-chain measurement, no fee is assumed and none is invented",
+    "source": "account_history_api.get_account_history @hive (issuer-signed custom_json ops) + condenser_api.get_account_history @blurt (bridge ledgers)"
+   }
   }
  ],
  "counts": {
-  "onchainReal": 7,
+  "onchainReal": 5,
   "absent": 1,
-  "unmeasurable": 1
+  "unmeasurable": 1,
+  "measured": 1
  },
  "law": "measure-only custody truth — every row is a live receipt or an honest absence; ownership via public key-authority match, zero secrets"
 }
