@@ -1,6 +1,6 @@
 {
  "schema": "engine-transfers-v1",
- "at": "2026-10-04T13:39:34.269Z",
+ "at": "2026-10-04T13:47:37.059Z",
  "ok": true,
  "endpoint": {
   "alternativeTo": "POST https://api.hive-engine.com/rpc/contracts find tokens:transfers → {\"result\":null} (measured 2026-10-04, incl. Z-89; table absent from official docs)",
@@ -77,7 +77,7 @@
    "SWAP.HBD": 119
   },
   "reserveMovements": 0,
-  "reserveMovementsNote": "e.g. blurt-swap→graphene-swap memos 'Token Conversion from SWAP.BLURT account …' (Z-89 evidence class) live inside the reserve ledger"
+  "reserveMovementsNote": "Z-89's evidence class (blurt-swap→graphene-swap memos 'Token Conversion from SWAP.BLURT account …') is counted inside blurtDepositsReserve when to=issuer — not double-counted here"
  },
  "haircutIn": {
   "method": "paired single-flow evidence (1 deposit → 1 credit, same user+target, ≤24h) — measured only",
@@ -90,8 +90,8 @@
   "note": "supersedes the Z-89 holder-balance surplus inference (1:1) with direct per-flow pairing; bridge terms remain unverified"
  },
  "pairingStats": {
-  "excludedMultiFlow": 100,
-  "excludedPending": 18,
+  "excludedMultiFlow": 97,
+  "excludedPending": 21,
   "excludedDelay": 0
  },
  "honesty": "bridge terms unverified — measured-only: every figure here is a live on-chain measurement, no fee is assumed and none is invented",

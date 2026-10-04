@@ -1,9 +1,9 @@
 {
  "schema": "custody-v1",
- "at": "2026-10-04T13:45:07.231Z",
+ "at": "2026-10-04T13:47:34.489Z",
  "account": "headcorner",
  "engineTransfers": {
-  "at": "2026-10-04T13:45:07.231Z",
+  "at": "2026-10-04T13:47:34.489Z",
   "window": {
    "engine": {
     "opsFetched": 2000,
@@ -82,11 +82,21 @@
    "chain": "blurt",
    "venue": "chain-liquid",
    "asset": "BLURT",
-   "amount": null,
-   "ownership": null,
-   "realness": "ABSENT",
-   "source": "blurt account unmeasured — fail-closed row",
-   "note": "no invention"
+   "amount": 67.841,
+   "ownership": "verified-key-controlled",
+   "realness": "ONCHAIN_REAL",
+   "source": "condenser_api.get_accounts @blurt (blurt-rpc.saboin.com) + authority match vs anchor",
+   "note": "authorities byte-identical to the fleet-signed STEEM anchor — same controller, zero secrets touched"
+  },
+  {
+   "chain": "blurt",
+   "venue": "chain-vests",
+   "asset": "VESTS",
+   "amount": "7600.869321 VESTS",
+   "ownership": "verified-key-controlled",
+   "realness": "ONCHAIN_REAL",
+   "source": "condenser_api.get_accounts @blurt (blurt-rpc.saboin.com) + authority match vs anchor",
+   "note": null
   },
   {
    "chain": "hive",
@@ -118,7 +128,7 @@
    "source": "account_history_api.get_account_history @hive (issuer-signed custom_json ops) + condenser_api.get_account_history @blurt (bridge ledgers)",
    "note": "bridge flows measured: in 833/4523437.729117 SWAP.BLURT (engine credits), out 139/2017372.69 (blurt payouts); haircut 0.9925 (fee 75bps, 36 paired flows) — bridge terms unverified — measured-only: every figure here is a live on-chain measurement, no fee is assumed and none is invented",
    "engineTransfers": {
-    "at": "2026-10-04T13:45:07.231Z",
+    "at": "2026-10-04T13:47:34.489Z",
     "window": {
      "engine": {
       "opsFetched": 2000,
@@ -155,8 +165,8 @@
   }
  ],
  "counts": {
-  "onchainReal": 5,
-  "absent": 1,
+  "onchainReal": 7,
+  "absent": 0,
   "unmeasurable": 1,
   "measured": 1
  },
