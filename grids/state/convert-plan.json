@@ -1,7 +1,7 @@
 {
  "ok": false,
  "verdict": "CONVERT-HOLD",
- "at": "2026-10-04T12:29:29.895Z",
+ "at": "2026-10-04T12:32:48.584Z",
  "account": "headcorner",
  "amountSbd": 0,
  "liquidSbd": 0.366,
@@ -184,10 +184,10 @@
   }
  ],
  "capLeft": 0,
- "discountBps": 4032,
+ "discountBps": 3982,
  "marks": {
   "steemUsd": 0.06344,
-  "sbdUsd": 0.596794
+  "sbdUsd": 0.601803
  },
  "expectedSteem": null,
  "lockDays": 3.5,
@@ -202,12 +202,14 @@
  },
  "maturityEstimate": {
   "pendingSbd": 131.856,
-  "estimate": null,
-  "reason": "no median mark — no invention (fail-closed)",
-  "semantics": "payout = amount / median-at-maturity (steem database.cpp process_conversions) — ESTIMATE, floats until conversion_date"
+  "medianNow": 0.10409960236902552,
+  "estimate": 1266.633,
+  "rawMedianNow": 0.064,
+  "band": null,
+  "semantics": "payout = amount / ADJUSTED median-at-maturity (steem database.cpp process_conversions) — ESTIMATE, floats until conversion_date"
  },
  "evidence": {
-  "at": "2026-10-04T12:29:29.895Z",
+  "at": "2026-10-04T12:32:48.584Z",
   "mode": "plan",
   "note": "honest hold — convertible 0.000 SBD (liquid 0.366 − reserve 0.5 ≤ cap-left 0.000) < 1 — below-threshold/dust",
   "txids": []
