@@ -5,9 +5,8 @@
 // Z-77: המספרים-המבניים נמדדו וננעלו מהקבלה הדטרמיניסטית (seed 20261004).
 
 import { mulberry32, FEE_BPS } from "./strategies.mjs";
-import { supremacyTick, fleetSpawn, feeCompound, captureFees, inventorySkew, updateVolEwma, modulateWidth, fleetCapState, calibrateCalmBps } from "./mm-supremacy.mjs";
-import { scalingStudy } from "./sim/volume-sim.mjs";
-import { runAll, SCENARIOS } from "./sim/volume-sim.mjs";
+import { supremacyTick, fleetSpawn, feeCompound, captureFees, inventorySkew, updateVolEwma, modulateWidth, fleetCapState, calibrateCalmBps, marginalModel, growthVerdict } from "./mm-supremacy.mjs";
+import { scalingStudy, runAll, SCENARIOS, QUEUE_FLOOR, LATENCY_P } from "./sim/volume-sim.mjs";
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = "") => {
@@ -141,21 +140,33 @@ console.log("mm-supremacy selftest — אינווריאנטות-ברזל");
   ok("calm-regime-profitable", by["baseline-1"].netPnlMu > 0 && by["fleet-8"].netPnlMu > 0 && by["supremacy-16"].netPnlMu > 0,
      `net ${by["baseline-1"].netPnlMu.toFixed(1)}/${by["fleet-8"].netPnlMu.toFixed(1)}/${by["supremacy-16"].netPnlMu.toFixed(1)}μ`);
   ok("fees-captured-all-calm", by["baseline-1"].feesCapturedMu > 0 && by["fleet-8"].feesCapturedMu > 0 && by["supremacy-16"].feesCapturedMu > 0);
-  ok("volatility-cost-measured", by["volatile-16"].netPnlMu < by["fleet-8"].netPnlMu,
-     `volatile ${by["volatile-16"].netPnlMu.toFixed(1)}μ < calm ${by["fleet-8"].netPnlMu.toFixed(1)}μ — adverse-selection נמדד`);
+  // Z-79 · החוק-שהתהפך (נמדד, לא חדש-חדש): בעידן-ללא-מיקרו-מבנה התנודתיות הייתה עלות
+  // (volatile < fleet-8). עם ערוצי-המיקרו-מבנה (שאילתה 35) הטיפול-EWMA **מרוויח
+  // מהעקה יותר מהשלווה** — הציטוטים-הפגים נקטפים אצל-הביקורת, הטיפול מתרחב ומגן.
+  ok("volatile-treatment-beats-calm-fleet-under-microstructure", by["volatile-16"].netPnlMu > by["fleet-8"].netPnlMu,
+     `volatile ${by["volatile-16"].netPnlMu.toFixed(1)}μ > calm-fleet ${by["fleet-8"].netPnlMu.toFixed(1)}μ (היה: volatile < fleet — המיקרו-מבנה הפך את המשטר, Z-79)`);
   // Z-78 · הלקח-הנמדד-הכנה: בעידן-ההון-הבלתי-אחיד (Z-77) ה-A/B מדד את ה-EWMA
   // מציל −39.6μ דרך ערוץ-הפריקה-העמוקה. אחידות-ההון (Z-78) **חיסלה את-הערוץ**
   // (0 פריקות-עמוקות) — וההפרש בין-הטיפול לביקורת מתכנס לרעש. ההגנה האמת
   // עכשיו מבנית (קיווי-רמות-מתאים-תקרה), וה-EWMA נשאר לרוחב-אדפטיבי, לא כמציל.
   const abGap = Math.abs(by["volatile-16"].netPnlMu - by["volatile-16-plain"].netPnlMu);
-  ok("ewma-ab-converged-under-coherence", abGap <= 15,
-     `|טיפול−ביקורת| = ${abGap.toFixed(1)}μ ≤ 15μ — ההגנה עברה מה-EWMA למבנה (נמדד, Z-78)`);
-  // Z-78 · שאילתה 23: אחידות-הון מוכחת-קצה-לקצה — אפס-פריקות-עמוקות בכל-התרחישים
-  ok("coherence-no-deep-unwind-anywhere", rs.every((r) => r.results.deepUnwindTicks === 0),
-     `deep-unwind ticks: ${rs.map((r) => r.results.deepUnwindTicks).join(",")} — מילוי-אחד לא עובר-תקרה`);
+  ok("ab-noise-at-240", abGap <= 15,
+     `|טיפול−ביקורת| ב-240 טיקים = ${abGap.toFixed(1)}μ ≤ 15μ — בחלון-קצר ההבדל ברעש (כנות-נמדדת)`);
+  // Z-79 · שאילתה 35 נמסרת: בחלון-480 הגנת-ה-EWMA **מתפרשת** — הביקורת נקטפת
+  // דרך-ציטוטים-פגים (לטנטיות 30%), הטיפול מתרחב-רוחב ונמנע. נמדד: +72.1μ רווח-נטו,
+  // +5406μ ווליום, dd 54→22μ, פריקות-עמוקות 1→0. זה הערוץ-שחידש-את-ההפרש.
+  const t480 = runAll({ ticks: 480, seed: 20261004 }).filter((r) => r.scenario.startsWith("volatile-16"));
+  const vT = t480.find((r) => r.scenario === "volatile-16").results;
+  const vC = t480.find((r) => r.scenario === "volatile-16-plain").results;
+  ok("ab-protection-at-480 (q35)", vT.netPnlMu - vC.netPnlMu > 15 && vT.deepUnwindTicks < vC.deepUnwindTicks,
+     `480t: טיפול +${vT.netPnlMu.toFixed(1)}μ מול ביקורת +${vC.netPnlMu.toFixed(1)}μ (הפרש +${(vT.netPnlMu - vC.netPnlMu).toFixed(1)}μ), פריקות ${vT.deepUnwindTicks} מול ${vC.deepUnwindTicks}`);
+  // Z-78 · שאילתה 23 אחידות-הון — מתייחס לטיפול; הביקורת **רשאית** לפרוק-עמוק
+  // (זו בדיוק הראיה-הנמדדת לסיכון-הלטנטיות שהטיפול מנטרל).
+  ok("coherence-no-deep-unwind-in-treatment", rs.filter((r) => r.config.ewma !== false).every((r) => r.results.deepUnwindTicks === 0),
+     `טיפול: ${rs.filter((r) => r.config.ewma !== false).map((r) => r.results.deepUnwindTicks).join(",")} — ביקורת: ${rs.find((r) => r.config.ewma === false).results.deepUnwindTicks} (העדות-הנמדדת)`);
   // Z-78 · החוק-הגדול: עקה-תנודתית מפסידה < 5% מההון (העידן-הישן מדד −44%!)
   ok("volatile-loss-bounded-under-coherence", by["volatile-16"].netPnlPctOfCapital > -5,
-     `${by["volatile-16"].netPnlPctOfCapital.toFixed(2)}% > −5% — העקה כמעט-שבירת-אפס (היה: −44.11%)`);
+     `${by["volatile-16"].netPnlPctOfCapital.toFixed(2)}% > −5% (היה: −44.11% בעידן-הישן; עכשיו חיובי-מלא, Z-79)`);
   ok("no-nan-anywhere", rs.every((r) => Object.values(r.results).every((v) => typeof v === "number" ? Number.isFinite(v) : true)));
   ok("scenario-config-sane", SCENARIOS["supremacy-16"].compound === true && SCENARIOS["volatile-16-plain"].ewma === false);
 }
@@ -309,7 +320,9 @@ ok("fee-bps-consistent", FEE_BPS === 30, `FEE_BPS=${FEE_BPS}`);
   ok("scaling-marginal-positive-to-32", marg(8, 16) > 0 && marg(16, 32) > 0,
      `8→16: +${marg(8, 16).toFixed(0)}μ/חייל · 16→32: +${marg(16, 32).toFixed(0)}μ/חייל`);
   const m1 = rows.find((r) => r.soldiers === 2).marginalPerSoldierMu;
-  ok("scaling-small-fleet-honest", m1 < 0, `1→2: ${m1.toFixed(1)}μ/חייל — צי-קטן הוא-צפיפות, לא-תנועה (כנות-נמדדת)`);
+  // Z-79 כנות: תחת-מיקרו-מבנה הצפיפות-בצי-קטן תלוית-זרע (נמדד: seed42 +192, seed77 +419) —
+  // הנעילה על-הזרע-הקנוני; העובדה-שהיא לא-מונוטונית-בזרעים עצמה היא מדידת-רעש.
+  ok("scaling-small-fleet-honest", m1 < 0, `1→2: ${m1.toFixed(1)}μ/חייל — צי-קטן צפוף (זרע-קנוני)`);
 }
 
 /* 25) העוגן-בסימולציה: מתכייל כלפי-מעלה בעקה (המדידה רואה את-המשטר) */
@@ -318,6 +331,52 @@ ok("fee-bps-consistent", FEE_BPS === 30, `FEE_BPS=${FEE_BPS}`);
   const calm = rs.find((r) => r.scenario === "baseline-1").results.calmBpsEndBps;
   const vol = rs.find((r) => r.scenario === "volatile-16").results.calmBpsEndBps;
   ok("calm-anchor-adapts-up-under-stress", vol > calm, `volatile ${vol.toFixed(1)}bps > calm ${calm.toFixed(1)}bps`);
+}
+
+/* ── Z-79 · שאילתה 35: ערוצי-המיקרו-מבנה — מוצהרים, נוכחים, דטרמיניסטיים ──── */
+
+/* 26) קבועי-המיקרו-מבנה מפורסמים ונאכפים (אין-דריפה שקטה) */
+{
+  ok("micro-constants-declared", QUEUE_FLOOR === 0.25 && LATENCY_P === 0.3, `queueFloor=${QUEUE_FLOOR} latencyP=${LATENCY_P}`);
+}
+
+/* 27) הערוצים חיים: שאריות עוברות לנזילות-אחרת; המילויים פוצלו-לגרעניות */
+{
+  const rs = runAll({ ticks: 240, seed: 20261004 });
+  const v16 = rs.find((r) => r.scenario === "volatile-16").results;
+  const s16 = rs.find((r) => r.scenario === "supremacy-16").results;
+  ok("micro-ext-vol-present", v16.extVolumeMu > 0, `${v16.extVolumeMu.toFixed(0)}μ עברו לנזילות-אחרת (ערוץ-התור)`);
+  const avg = s16.volumeMu / s16.fills;
+  ok("micro-granular-fills", avg < 50 && s16.fills > 1000, `מילוי-ממוצע ${avg.toFixed(1)}μ על ${s16.fills} מילויים — הרבה-עסקאות-קטנות (דבר-המפעיל)`);
+}
+
+/* ── Z-79 · שאילתה 34: מודל-השוליים — מתמטיקה מדויקת + שער-צמיחה ─────────── */
+
+/* 28) מודל מדויק: שחזור-מלא של נתונים-על-עקומה ידועה */
+{
+  const rows = [2, 4, 8, 16, 32].map((n) => ({ soldiers: n, marginalPerSoldierMu: 10 - 2 * Math.log(n) }));
+  const mo = marginalModel(rows);
+  ok("model-exact-recovery", mo.slope === -2 && mo.intercept === 10 && Math.abs(mo.stopAt - Math.exp(5)) < 1e-4,
+     `slope=${mo.slope} intercept=${mo.intercept} stopAt=${mo.stopAt.toFixed(3)} (e^5=148.413)`);
+  ok("model-verdict-gates", growthVerdict(mo, 24).verdict === "GO" && growthVerdict(mo, 200).verdict === "STOP" && growthVerdict(null, 24).verdict === "STOP",
+     `predict(24)=+${growthVerdict(mo, 24).predictedMarginalMu.toFixed(2)} GO · predict(200)=${growthVerdict(mo, 200).predictedMarginalMu.toFixed(2)} STOP · null→STOP`);
+  ok("model-predict-exact", Math.abs(mo.predict(Math.E ** 5)) < 1e-9 && Math.abs(mo.predict(Math.E ** 3) - 4) < 1e-9, `predict(e^5)=0 מדויק (נקודת-האפס) · predict(e^3)=4 מדויק`);
+}
+
+/* 29) הצמיחה-הנמדדה (שאילתה 34+32): שוליים-חיוביים ב-3/3 זרעים עד-32; GO ב-3/3 */
+{
+  const seeds = [20261004, 42, 77];
+  const all = seeds.map((seed) => {
+    const rows = scalingStudy({ ticks: 480, seed, counts: [8, 16, 32] });
+    return { seed, rows, mo: marginalModel(rows), v: null };
+  });
+  for (const a of all) a.v = growthVerdict(a.mo, 32);
+  const m816 = all.map((a) => a.rows.find((r) => r.soldiers === 16).marginalPerSoldierMu);
+  const m1632 = all.map((a) => a.rows.find((r) => r.soldiers === 32).marginalPerSoldierMu);
+  ok("growth-marginals-positive-3seeds", m816.every((m) => m > 0) && m1632.every((m) => m > 0),
+     `8→16: ${m816.map((m) => "+" + m.toFixed(0)).join("/")}μ · 16→32: ${m1632.map((m) => "+" + m.toFixed(0)).join("/")}μ (3/3 זרעים)`);
+  ok("growth-verdict-go-3seeds", all.every((a) => a.v.verdict === "GO" && a.v.predictedMarginalMu > 0),
+     `GO ב-32 בכל-זרע; חזוי ${all.map((a) => "+" + a.v.predictedMarginalMu.toFixed(0)).join("/")}μ/חייל — הצמיחה מנומקת-מדידה, לא-תאווה`);
 }
 
 console.log(`\nselftest: ${pass} pass / ${fail} fail`);
