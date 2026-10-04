@@ -36,6 +36,7 @@ import { secp256k1 } from "@noble/curves/secp256k1";
 import { ripemd160 } from "@noble/hashes/ripemd160";
 import steem from "steem";
 import { appendEvent } from "./events.mjs";
+import { normBook, crossAudit } from "./book-law.mjs"; // Z-80: חוק-הספר — אף-חתימה לא חוצה את הספר-החי
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EVENTS_LOG = join(HERE, "state", "events.jsonl");
@@ -169,7 +170,25 @@ export function classifyStale(openOrders, myIds, parity, tolBps = REPRICE_TOL_BP
   }
   return stale;
 }
-export const REPRICE_MIN = { STEEM: 1.0, SBD: 0.25 }; // מתחת לזה — אבק, לא מחזירים-לספר
+export const REPRICE_MIN = { STEEM: 1.0, SBD: 0.25 };
+
+/* ── Z-80 חוק-הספר: ספר-חי או אף-חתימה ──────────────────────────────────── */
+export async function freshBook() {
+  const raw = await rpcAny("condenser_api.get_order_book", [5]).catch(() => null);
+  if (!raw?.asks?.[0] || !raw?.bids?.[0]) return null;
+  const nb = normBook({ bestAsk: parseFloat(raw.asks[0].real_price), bestBid: parseFloat(raw.bids[0].real_price) });
+  return nb.bestAsk != null && nb.bestBid != null && nb.bestAsk > nb.bestBid ? { bestAsk: nb.bestAsk, bestBid: nb.bestBid } : null;
+}
+/* מהדק-מחיר-אחד אל המגע: אסק רק כלפי-מעלה, ביד רק כלפי-מטה (ההידוק לעולם
+ * לא מפר את רצפת/תקרת-הפאריטי — ראה book-law.mjs). מחזיר {px, clamped} או null (אין-ספר). */
+export function clampToTouch(side, px, book) {
+  if (!book) return null;
+  const b = normBook(book);
+  if (side === "ask" && b.bestAsk != null && px < b.bestAsk) return { px: b.bestAsk, clamped: true };
+  if (side === "bid" && b.bestBid != null && px > b.bestBid) return { px: b.bestBid, clamped: true };
+  return { px, clamped: false };
+}
+ // מתחת לזה — אבק, לא מחזירים-לספר
 
 /* ═══ הריצה ═════════════════════════════════════════════════════════════════ */
 export async function runMover({ dryRun = false, additive = false, reprice = false } = {}) {
@@ -240,8 +259,19 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
     let rseq = 1;
     const nextId = () => { let id = rtoday * 100 + rseq++; while (takenIds.has(id)) id = rtoday * 100 + rseq++; takenIds.add(id); return id; };
     const rexp = Math.floor(Date.now() / 1000) + 27 * 86_400;
+    const rbook = await freshBook(); // Z-80: גם-הגרירה-חזרה-לערך נכשלת-סגור בלי-ספר-חי
+    if (!rbook) {
+      evidence.blockers.push("reprice: live book unavailable — no replacement signing blind (Z-80 fail-closed)");
+      evidence.summary = summarizeEvidence(evidence);
+      appendFileSync(MOVER_LOG, JSON.stringify(evidence) + "\n");
+      return evidence;
+    }
     if (freedSteem >= REPRICE_MIN.STEEM) {
-      const px = Math.round(rparity * 1.002 * 1e6) / 1e6;
+      const rawPx = Math.round(rparity * 1.002 * 1e6) / 1e6;
+      const rct = clampToTouch("ask", rawPx, rbook);
+      if (!rct) { evidence.placed.push({ side: "ask", blocked: "book vanished (reprice) — skipped (Z-80)" }); }
+      const px = rct ? rct.px : rawPx;
+      if (rct?.clamped) evidence.placed.push({ side: "ask", clampedFrom: rawPx, clampedTo: px, law: "Z-80 book-touch (reprice)" });
       const sell = dp3(freedSteem), recv = dp3(freedSteem * px);
       const id = nextId();
       if (dryRun) evidence.placed.push({ id, side: "ask", sell: `${sell.toFixed(3)} STEEM`, receive: `${recv.toFixed(3)} SBD`, price: px, dryRun: true });
@@ -253,7 +283,11 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
       }
     } else if (freedSteem > 0) evidence.blockers.push(`freed STEEM ${freedSteem.toFixed(3)} < min ${REPRICE_MIN.STEEM} — dust, kept liquid (honest)`);
     if (freedSbd >= REPRICE_MIN.SBD) {
-      const px = Math.round(rparity * 0.998 * 1e6) / 1e6;
+      const rawPx = Math.round(rparity * 0.998 * 1e6) / 1e6;
+      const rct2 = clampToTouch("bid", rawPx, rbook);
+      if (!rct2) { evidence.placed.push({ side: "bid", blocked: "book vanished (reprice) — skipped (Z-80)" }); }
+      const px = rct2 ? rct2.px : rawPx;
+      if (rct2?.clamped) evidence.placed.push({ side: "bid", clampedFrom: rawPx, clampedTo: px, law: "Z-80 book-touch (reprice)" });
       const spend = dp3(freedSbd), recv = dp3(freedSbd / px);
       const id = nextId();
       if (dryRun) evidence.placed.push({ id, side: "bid", sell: `${spend.toFixed(3)} SBD`, receive: `${recv.toFixed(3)} STEEM`, price: px, dryRun: true });
@@ -321,7 +355,16 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
     }
   }
 
-  /* 6. פריסת-הסולם מההצעה — אכיפה-עצמית של דוקטרינת-הפאריטי בכל-רמה */
+  /* 6. פריסת-הסולם מההצעה — אכיפה-עצמית של דוקטרינת-הפאריטי בכל-רמה
+     + Z-80 חוק-הספר: ספר-חי נמדד עכשיו (לא-בזמן-ההצעה) — בלי-ספר, אף-חתימה. */
+  const liveBook = await freshBook();
+  if (!liveBook) {
+    evidence.blockers.push("live book unavailable — no signing blind (Z-80 fail-closed)");
+    evidence.summary = summarizeEvidence(evidence);
+    appendFileSync(MOVER_LOG, JSON.stringify(evidence) + "\n");
+    return evidence;
+  }
+  evidence.book = liveBook;
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   let seq = 1;
   const nextId = () => {
@@ -332,7 +375,13 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
   const expiry = Math.floor(Date.now() / 1000) + 27 * 86_400;
 
   for (const a of offer.plan.asks ?? []) {
-    const px = a.priceSbdPerSteem;
+    let px = a.priceSbdPerSteem;
+    const ct = clampToTouch("ask", px, liveBook);
+    if (!ct) { evidence.placed.push({ level: a.level, side: "ask", blocked: "book vanished mid-loop — skipped (Z-80)" }); continue; }
+    if (ct.clamped) evidence.placed.push({ level: a.level, side: "ask", clampedFrom: px, clampedTo: ct.px, law: "Z-80 book-touch: an ask below bestAsk is taker-bleed" });
+    px = ct.px;
+    const audit = crossAudit({ side: "ask", price: px }, liveBook);
+    if (!audit.ok) { evidence.placed.push({ level: a.level, side: "ask", blocked: `book-law audit: ${audit.why}` }); continue; }
     if (px < parity) { evidence.placed.push({ level: a.level, side: "ask", blocked: `price ${px} < parity ${parity.toFixed(6)} — never sell below external value` }); continue; }
     const sell = dp3(a.sizeSteem), recv = dp3(a.sizeSteem * px);
     if (sell <= 0 || recv <= 0) continue;
@@ -346,7 +395,13 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
     }
   }
   for (const b of offer.plan.bids ?? []) {
-    const px = b.priceSbdPerSteem;
+    let px = b.priceSbdPerSteem;
+    const ct = clampToTouch("bid", px, liveBook);
+    if (!ct) { evidence.placed.push({ level: b.level, side: "bid", blocked: "book vanished mid-loop — skipped (Z-80)" }); continue; }
+    if (ct.clamped) evidence.placed.push({ level: b.level, side: "bid", clampedFrom: px, clampedTo: ct.px, law: "Z-80 book-touch: a bid above bestBid is taker-bleed" });
+    px = ct.px;
+    const audit = crossAudit({ side: "bid", price: px }, liveBook);
+    if (!audit.ok) { evidence.placed.push({ level: b.level, side: "bid", blocked: `book-law audit: ${audit.why}` }); continue; }
     if (px > parity) { evidence.placed.push({ level: b.level, side: "bid", blocked: `price ${px} > parity ${parity.toFixed(6)} — never pay above external value` }); continue; }
     const spend = dp3(b.spendSbd), recv = dp3(b.sizeSteem);
     if (spend <= 0 || recv <= 0) continue;

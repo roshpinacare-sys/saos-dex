@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { appendEvent } from "./events.mjs";
 import { loadState } from "./engine.mjs";
+import { makerLadder, normBook, touchSpreadBps } from "./book-law.mjs"; // Z-80: חוק-הספר — אף-רמה לא חוצה את המגע
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const EVENTS_LOG = join(HERE, "state", "events.jsonl");
@@ -175,7 +176,7 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
   const parityBps = Math.floor(((ref - parity) / parity) * 10000);
   if (Math.abs(parityBps) > policy.parityBandBps) {
     blockers.push(`internal ref deviates ${parityBps}bps from external parity: refusing to quote a broken market`);
-    return offerDoc({ ok: false, blockers, bridge, marks, snapshot, gridState, policy, nowIso, parityBps, triggers: consumeTriggers(triggerBook) });
+    return offerDoc({ ok: false, blockers, bridge, marks, snapshot, gridState, policy, nowIso, parityBps, bookLaw: (() => { const nb = normBook(snapshot?.book ?? null); return { bestAsk: nb.bestAsk, bestBid: nb.bestBid, mid: nb.mid, touchSpreadBps: touchSpreadBps(snapshot?.book ?? null) }; })(), triggers: consumeTriggers(triggerBook) });
   }
 
   /* גדלים-אמת מיתרות-השרשרת בלבד (אין-מכשור-עצמי — עקרון 4) */
@@ -202,8 +203,12 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
    * לעולם לא חורג מהניתן-להתחייבות; רמת-אבק (<0.001) מושמטת בכנות. */
   const asks = [];
   let askRemaining = steemCommit;
+  /* Z-80 חוק-הספר: העוגן הוא עדיין הפאריטי (רצפת-ערך-חוץ), אך רמה-1 נהדקת
+   * אל המגע-החי אם-הפאריטי מתחתיו — והרמות נפרשות כלפי-מעלה מהבסיס-המהודק.
+   * כך אף-אסק לא נופל מתחת ל-bestAsk → אף-מכירה-מיידית-כ-taker בצד-הלא-נכון. */
+  const askPx = makerLadder({ anchor: parity, book: snapshot?.book ?? null, levels: policy.askLevels, stepBps: effAskStepBps, side: "ask" });
   for (let i = 1; i <= policy.askLevels; i++) {
-    const price = r6(parity * (1 + (effAskStepBps * i) / 10000));
+    const price = askPx[i - 1] ?? r6(parity * (1 + (effAskStepBps * i) / 10000));
     const want = r3((steemCommit / policy.askLevels) * Math.pow(policy.askGrowth, i - 1) * normFactor(policy.askLevels, policy.askGrowth));
     const sizeSteem = Math.min(want, r3(askRemaining));
     if (sizeSteem < policy.minLevelSteem) break; // רמת-אבק — לא-חוצים, חוסמים-בכנות
@@ -216,8 +221,12 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
   /* הקצאה-תקציבית — זהה לצד-המכירה */
   const bids = [];
   let bidRemaining = sbdCommit;
+  /* Z-80 חוק-הספר בהיפוך: רמה-1 נהדקת אל המגע-מלמטה אם-הפאריטי מעליו —
+   * אף-ביד לא עולה על bestBid → אף-קנייה-מיידית-כ-taker. ההידוק מזיז רק
+   * כלפי-מטה, לכן תקרת-הפאריטי ("לא משלמים מעל ערך-חוץ") נשמרת תמיד. */
+  const bidPx = makerLadder({ anchor: parity, book: snapshot?.book ?? null, levels: policy.bidLevels, stepBps: effBidStepBps, side: "bid" });
   for (let i = 1; i <= policy.bidLevels; i++) {
-    const price = r6(parity * (1 - (effBidStepBps * i) / 10000));
+    const price = bidPx[i - 1] ?? r6(parity * (1 - (effBidStepBps * i) / 10000));
     const want = r3((sbdCommit / policy.bidLevels) * Math.pow(policy.bidGrowth, i - 1) * normFactor(policy.bidLevels, policy.bidGrowth));
     const spendSbd = Math.min(want, r3(bidRemaining));
     if (spendSbd < policy.minLevelSbd) break; // רמת-אבק — לא-חוצים, חוסמים-בכנות
@@ -242,7 +251,8 @@ export function computeOffer({ gridState, snapshot, marks, triggerBook = null, p
   return offerDoc({
     ok, blockers, bridge, marks, snapshot, gridState, policy, nowIso,
     parityBps, drag,
-    fair: { internalRef: ref, externalParity: parity, boundary: "parity: asks ≥ parity (never sell below external value), bids ≤ parity (never pay above it)" },
+    fair: { internalRef: ref, externalParity: parity, boundary: "parity floor/ceiling (never sell below / pay above external value) + Z-80 book-touch maker clamp (asks ≥ bestAsk, bids ≤ bestBid)" },
+    bookLaw: { ...(() => { const nb = normBook(snapshot?.book ?? null); return { bestAsk: nb.bestAsk, bestBid: nb.bestBid, mid: nb.mid, touchSpreadBps: touchSpreadBps(snapshot?.book ?? null) }; })(), law: "Z-80: no order may cross the live book — the bleed of 2026-10-04 (taker 0.10365→0.0999) is structurally banned" },
     plan: { asks, bids, totals: { askSteem, bidSbd, steemCommit, sbdCommit } },
     triggers: consumeTriggers(triggerBook),
   });
