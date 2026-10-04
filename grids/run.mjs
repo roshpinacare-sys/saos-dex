@@ -24,7 +24,13 @@ if (has("--selftest")) {
   await loop(interval);
 } else {
   const r = await runTick();
-  process.exit(r.ok ? 0 : 2);
+  if (!r.ok) {
+    // owner directive 2026-10-04 (trace 1a108e28015b0451): a halt must SPEAK —
+    // the twin kept failing exit-2 with zero output; from now the reason is loud.
+    console.error(`run: tick not-ok — honest exit 2 · summary=${r.summary ?? "?"}${Array.isArray(r.violations) && r.violations.length ? ` · violations=${r.violations.join(" | ")}` : ""}${r.haltReason ? ` · halt=${r.haltReason}` : ""}`);
+    process.exit(2);
+  }
+  process.exit(0);
 }
 
 /* ── צופה-חד-פעמי: קריאת-מילויים-אמת ללא-טיק (לבדיקת-יד אנושית) ─────────── */

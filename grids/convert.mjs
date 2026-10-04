@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import crypto from "node:crypto";
 import { appendEvent } from "./events.mjs";
+import { stasisHalt } from "./brake.mjs"; // owner directive 2026-10-04: think-before-sign — the signer obeys the brake
 import { measureMarks, measureSnapshot } from "./peg.mjs";
 import { ACCOUNT, RC_MIN, num, dp3, rpcAny, signAndBroadcast, deriveActiveWif, privToPub, privToWif, wifToPriv } from "./mover.mjs";
 
@@ -148,6 +149,10 @@ export async function measureConvertState(account = ACCOUNT) {
 
 /* ── הריצה: מתכנן-חסר-מפתחות (ברירת-מחדל) · --execute = שער-החתימה ───────── */
 export async function runConvert({ execute = false, dryRun = false, masterSourcePath = process.env.MASTER_SOURCE_PATH } = {}) {
+  /* 0. בלם-ההון (owner 2026-10-04): חתימת-המרה אסורה בזמן-הקפאה; תוכנית-מדידה ממשיכה */
+  if (execute && stasisHalt("convert")) {
+    return { at: new Date().toISOString(), account: ACCOUNT, mode: "execute", gates: ["STASIS active — convert signing halted (think-before-sign, owner directive 2026-10-04)"], txids: [], summary: { converted: 0, blocked: 1, failed: 0 }, halted: "STASIS" };
+  }
   const evidence = { at: new Date().toISOString(), account: ACCOUNT, mode: execute ? "execute" : "plan", gates: [], txids: [] };
   const { liquidSbd, pendingSbd, pendingCount, pendingRequests, liquidSteem } = await measureConvertState();
   const marks = await measureMarks();
