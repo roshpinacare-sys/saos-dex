@@ -312,6 +312,8 @@ export function netEdgeBps(buyPrice, sellPrice, feeBps = FEE_BPS) {
  * refBuyPriceUsd/refSellPriceUsd (Z-87a): רגל-ייחוס-בלי-ספר (PAPER) — המחיר קבוע-מהמדד,
  *   אפס-עומק: הקצה נמדד מול-הייחוס אבל הגודל-בר-הביצוע נשאר 0 (כנות מוחלטת).
  * paperPnlSbd = הרווח/הפסד ב-SBD — עלול-להיות-שלילי (אין-קטיף-דובדבנים);
+ *   חוק-Z88: PnL מחייב כמות-דו-צדדית-ברת-מימוש — רגל-ייחוס (אפס-עומק) → paperPnlSbd null
+ *   (הקצה נשאר אות-מחיר; רווח-על-רגל-שאי-אפשר-לבצע-בה = כסף-מומצא);
  *   sbdUsd חסר → null (אסור לשקר ביחידות: PnL ב-USD לא נרשם כ-SBD).
  */
 export function paperRoundTrip({ buyLevels, sellLevels, size, feeBps = FEE_BPS, buyQuoteUsd = 1, sellQuoteUsd = 1, sbdUsd = 1, refBuyPriceUsd = null, refSellPriceUsd = null }) {
@@ -325,9 +327,12 @@ export function paperRoundTrip({ buyLevels, sellLevels, size, feeBps = FEE_BPS, 
   const edgeBps = r6(((effSell - effBuy) / effBuy) * 1e4);
   // גודל-בר-ביצוע = מינימום-העומק-על-הרגליים; רגל-ייחוס (אפס-עומק) → 0 כנה
   const sizeLim = Math.min(size, b.filled, s.filled);
-  const executableSize = buyHasDepth && sellHasDepth ? r6(sizeLim) : 0;
-  const pnlSize = buyHasDepth && sellHasDepth ? sizeLim : (b.filled > 0 ? b.filled : s.filled); // נייר: על-העומק-האמת-היחיד
-  const paperPnlSbd = sbdUsd != null && sbdUsd > 0 ? r6(((effSell - effBuy) * pnlSize) / sbdUsd) : null;
+  const twoSided = buyHasDepth && sellHasDepth;
+  const executableSize = twoSided ? r6(sizeLim) : 0;
+  // Z-88 truth-fix (בחן-היטב-ותקן): paperPnlSbd מחייב כמות-דו-צדדית-ברת-מימוש. רגל-ייחוס
+  // אינה-ברת-ביצוע (אין-ספר-אמיתי שבו-הצד-ההוא נסחר) — הקצה נשאר אות-מחיר, ה-PnL = null.
+  // עקביות-שכבות: זהו החוק שכבר-היה קיים בשכבת-הסשן (dex-core: ref-legs → size0/null-PnL).
+  const paperPnlSbd = twoSided && sbdUsd != null && sbdUsd > 0 ? r6(((effSell - effBuy) * sizeLim) / sbdUsd) : null;
   return { edgeBps, paperPnlSbd, executableSize, buyVwap: buyHasDepth ? r6(b.vwap) : null, sellVwap: sellHasDepth ? r6(s.vwap) : null };
 }
 
@@ -423,7 +428,7 @@ export function evaluateFeeds({ feeds, refs, nowIso }) {
     const eng = feeds.engineBook;
     const tags = [eng.realness, "PAPER"];
     // Z-87a: הקצה נמדד מול-הייחוס (רגל-הייחוס היא מחיר-קבוע בלי-עומק — refSell/refBuy),
-    // הגודל-בר-הביצוע נשאר 0 כנה, realness PAPER, וה-PnL-הנייר מוקלט (חיובי ושלילי כאחד).
+    // הגודל-בר-הביצוע נשאר 0 כנה, realness PAPER, paperPnlSbd = null (חוק-Z88: אין-כמות-ברת-מימוש).
     const refInHive = hiveUsd > 0 ? blurtUsd / hiveUsd : null; // BLURT price expressed in SWAP.HIVE units
     if (eng.asks[0] && refInHive != null) {
       entries.push(makeEntry({
