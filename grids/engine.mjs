@@ -11,6 +11,12 @@ import { appendEvent, nextSeq } from "./events.mjs";
 import { processRules, SEED_RULES } from "./rules.mjs";
 import { STRATEGIES, simFill, mulberry32, FEE_BPS } from "./strategies.mjs";
 import { observeRealFills, applyRealFills } from "./observe.mjs";
+import { supremacyTick } from "./mm-supremacy.mjs";
+
+/* R-Z75 · חיווט-העליונות: מנוע-ה-MM מטה-התנועה נרשם במפת-האסטרטגיות החיה —
+ * מרגע-זה כל-טיק של ה-engine מצטט גם-את-חיילי-העליונות על ה-ref האמת.
+ * הרישום כאן (ולא ב-strategies.mjs) כדי לשמור-על-מודול-העליונות ללא-ייבוא-מעגלי. */
+STRATEGIES.supremacy = supremacyTick;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STATE_DIR = join(HERE, "state");
