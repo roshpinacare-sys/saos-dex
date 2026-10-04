@@ -25,6 +25,7 @@ import { planCounterGrid, suggestedBias, normFactor, COUNTER_POLICY } from "./co
 import { planAgentSwap, executeAgentSwap, makerSwapPrice } from "./agent-swap-api.mjs";
 import { controlFor, loadFlags } from "./agent-roster.mjs";
 import { planBlurtExit, BRIDGE_PATHS, BLURT_HONESTY } from "./venues/blurt-quote.mjs";
+import { authorityMatch, ownershipVerdict, buildCustodyInventory, CUSTODY_SCHEMA } from "./custody.mjs";
 import { privToWif, privToPub, wifToPriv } from "./mover.mjs";
 import crypto from "node:crypto";
 
@@ -92,6 +93,29 @@ async function main() {
   check("maturity-law: no median → estimate null, no invention", estNoMed.estimate === null && /fail-closed/.test(estNoMed.reason));
   const estNoRows = estimateMaturityPayout({ rows: [], medianNow: 0.1041 });
   check("maturity-law: no rows → estimate null", estNoRows.estimate === null && estNoRows.pendingSbd === 0);
+
+  /* ══ 1c. Z-89 · שכבת-האחזקה (custody-v1): בעלות-מפתח-ציבורי, אפס-המצאה ══ */
+  const kSteem = [["5HhJD5WUXu8vPhDmLaC2fTuuJYkwxF62Rt17HZ5G2PbnBvuHXF", 1]];
+  const kBlurt = [["5HhJD5WUXu8vPhDmLaC2fTuuJYkwxF62Rt17HZ5G2PbnBvuHXF", 1]]; // זהה-לגמרי (נמדד-חי 2026-10-04)
+  const kHive = [["8c9vp3hUnNsXHaWLPTpcYWkPpK5GrnySgN51FiGX9dxhwVz8YZ", 1]]; // שונה (נמדד-חי)
+  check("custody: authorityMatch identical key sets → true", authorityMatch(kSteem, kBlurt) === true);
+  check("custody: authorityMatch different keys → false", authorityMatch(kSteem, kHive) === false);
+  check("custody: authorityMatch empty authority → false (fail-closed)", authorityMatch(kSteem, []) === false);
+  check("custody: prefix stripping STM/BLT treated as same body", authorityMatch([["STM5HhJD5WUXu8vPhDmLaC2fTuuJYkwxF62Rt17HZ5G2PbnBvuHXF", 1]], [["BLT5HhJD5WUXu8vPhDmLaC2fTuuJYkwxF62Rt17HZ5G2PbnBvuHXF", 1]]) === true);
+  const vVer = ownershipVerdict({ anchorActive: kSteem, anchorOwner: [["5aUKyd9LzENnMti5tS478Zu1SLJW51VHyu2gvSNGKhwfyMFpvv", 1]], candActive: kBlurt, candOwner: [["5aUKyd9LzENnMti5tS478Zu1SLJW51VHyu2gvSNGKhwfyMFpvv", 1]] });
+  check("custody: identical active+owner → verified-key-controlled", vVer === "verified-key-controlled");
+  const vName = ownershipVerdict({ anchorActive: kSteem, anchorOwner: [["5aUKyd9LzENnMti5tS478Zu1SLJW51VHyu2gvSNGKhwfyMFpvv", 1]], candActive: kHive, candOwner: [["8mSbBz8zsMfBow2xa1yfTuNhdp6KZf3v7kAs1BSQAB1AMQM1Fw", 1]] });
+  check("custody: different keys → name-match-unverified (NOT counted)", vName === "name-match-unverified");
+  const vPart = ownershipVerdict({ anchorActive: kSteem, anchorOwner: [["5aUKyd9LzENnMti5tS478Zu1SLJW51VHyu2gvSNGKhwfyMFpvv", 1]], candActive: kSteem, candOwner: kHive });
+  check("custody: only active matches → partial-match-unverified", vPart === "partial-match-unverified");
+  const invEmpty = buildCustodyInventory({});
+  check("custody: empty input → honest absent rows, no throw", invEmpty.schema === CUSTODY_SCHEMA && invEmpty.rows.some((r) => r.realness === "ABSENT") && invEmpty.account === null);
+  const invFull = buildCustodyInventory({ anchor: { account: "headcorner", liquidSteem: 14.681, liquidSbd: 0.366, vests: "6366749.189565 VESTS", pendingSbd: 131.856 }, blurt: { account: "headcorner", liquidBlurt: 67.841, vests: "7600.869321 VESTS", ownership: "verified-key-controlled" }, hive: { account: "headcorner", liquidHive: 0.034, ownership: "name-match-unverified" }, nowIso: "2026-10-04T12:40:56.004Z" });
+  check("custody: live-shaped vector keeps verbatim amounts", invFull.rows.find((r) => r.asset === "BLURT")?.amount === 67.841 && invFull.rows.find((r) => r.asset === "SBD-IN-CONVERT")?.amount === 131.856);
+  check("custody: unverified hive row NOT ownership-claimed", invFull.rows.find((r) => r.chain === "hive")?.ownership === "name-match-unverified");
+  check("custody: cex row stays unmeasurable (zero-secrets law)", invFull.rows.find((r) => r.chain === "cex")?.realness === "UNMEASURABLE-NO-RAIL" && invFull.rows.find((r) => r.chain === "cex")?.amount === null);
+  check("custody: counts honest (onchainReal/absent/unmeasurable)", invFull.counts.onchainReal === 7 && invFull.counts.absent === 1 && invFull.counts.unmeasurable === 1);
+  check("custody: law text forbids secrets", /zero secrets/.test(invFull.law));
 
   /* ══ 2. פרסרי-ספרים על-fixtures חיים ══ */
   const steemFix = hasFixtures ? fixture("steem-order-book.json") : null;
