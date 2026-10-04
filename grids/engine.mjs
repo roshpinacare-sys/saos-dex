@@ -11,11 +11,13 @@ import { appendEvent, nextSeq } from "./events.mjs";
 import { processRules, SEED_RULES } from "./rules.mjs";
 import { STRATEGIES, simFill, mulberry32, FEE_BPS } from "./strategies.mjs";
 import { observeRealFills, applyRealFills } from "./observe.mjs";
-import { supremacyTick } from "./mm-supremacy.mjs";
+import { supremacyTick, updateVolEwma, fleetCapState } from "./mm-supremacy.mjs";
 
 /* R-Z75 · חיווט-העליונות: מנוע-ה-MM מטה-התנועה נרשם במפת-האסטרטגיות החיה —
  * מרגע-זה כל-טיק של ה-engine מצטט גם-את-חיילי-העליונות על ה-ref האמת.
- * הרישום כאן (ולא ב-strategies.mjs) כדי לשמור-על-מודול-העליונות ללא-ייבוא-מעגלי. */
+ * הרישום כאן (ולא ב-strategies.mjs) כדי לשמור-על-מודול-העליונות ללא-ייבוא-מעגלי.
+ * R-Z77 · supremacyTick לא מחזיר לעולם halted — פריקה-עמוקה במקום קפיאה
+ * (חייל-קפוא-עם-מלאי = באג-צבא; השער-הקשה נשאר באינווריאנטות למטה). */
 STRATEGIES.supremacy = supremacyTick;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -95,12 +97,27 @@ export function pnlView(state) {
   };
 }
 
-/** אינווריאנטות — הפרה אחת = HALT כללי ויציאה 2. */
+/** אינווריאנטות — הפרה אחת = HALT כללי ויציאה 2.
+ * R-Z77 · חוק-התקרה מתיישר עם דוקטרינת-המנוע: אסטרטגיית supremacy מחזיקה
+ * אזור-פריקה (cap..2×cap — חוקי, המנוע מפחית לבד), השער-הקשה רק מעל 2×cap
+ * (מילוי-אמת דחף מעבר = HALT בעלים). שאר-האסטרטגיות: תקרה-קשה ב-capMu.
+ * R-Z77 · תקרת-צי גלובלית (שאילתה 19): סכום-הצי מעל 2×globalCap → HALT;
+ * מעל globalCap (רך) — מטופל בטיק (פריקת-צי), לא כאן. */
 export function checkInvariants(state) {
   const bad = [];
   for (const g of state.grids ?? []) {
     if (g.inventoryMu < 0) bad.push(`${g.id}:negative-inventory`);
-    if ((g.params?.capMu ?? Infinity) < g.inventoryMu) bad.push(`${g.id}:cap-breached`);
+    const cap = g.params?.capMu;
+    if (cap != null) {
+      const hardCap = g.strategy === "supremacy" ? cap * 2 : cap;
+      if (g.inventoryMu > hardCap) bad.push(`${g.id}:cap-breached`);
+    }
+  }
+  const globalCap = state.fleetCap?.globalCapMu;
+  if (globalCap != null) {
+    const army = (state.grids ?? []).filter((g) => g.strategy === "supremacy");
+    const fc = fleetCapState(army, globalCap);
+    if (fc.invMu > globalCap * 2) bad.push(`fleet:cap-breached(${fc.invMu}>${globalCap * 2})`);
   }
   if (state.feeMeter.simMu < (state.feeMeter._lastSimMu ?? 0)) bad.push("fee-meter-non-monotonic");
   state.feeMeter._lastSimMu = state.feeMeter.simMu;
@@ -123,10 +140,14 @@ export async function runTick({ seed = 20260928, injectedPrice = null, injectedE
 
   /* 1. מדידות אמת */
   const price = injectedPrice ?? (await measureRefPrice());
+  const prevRef = state.market?.refPrice ?? null; // Z-77: ל-EWMA — התנודתיות נמדדת מהמעבר
+  const prevEwma = state.market?.volEwmaBps ?? 0; // חייב-להיתפס לפני-ההשמה (אחרת-המדידה מתאפסת כל-טיק)
   let priceEvent = null;
   if (price) {
     priceEvent = { type: "price.ref", source: price.source, payload: { refPrice: price.refPrice, stale: !!price.stale } };
     state.market = { refPrice: r6(price.refPrice), source: price.source, stale: !!price.stale };
+    // Z-77 · שאילתה 13: פיד-פורוורד — המנוע לומד את קצב-השוק מהמדידה האמת
+    state.market.volEwmaBps = updateVolEwma(prevEwma, price.refPrice, prevRef);
   } else if (state.market?.refPrice) {
     state.market.stale = true;
     priceEvent = { type: "price.ref", source: "last-known", payload: { refPrice: state.market.refPrice, stale: true } };
@@ -152,6 +173,17 @@ export async function runTick({ seed = 20260928, injectedPrice = null, injectedE
 
   /* 2. אסטרטגיות → פקודות → מילויי-סימולציה */
   const market = state.market ?? { refPrice: null, stale: true };
+  /* R-Z77 · תקרת-צי גלובלית (שאילתה 19): חריגה-רכה → כל-הצי בפריקה-עד-חזרה-מתחת-לתקרה.
+   * זו הגנת-הארמייה: תקרה-פר-חייל מגינה על החייל, התקרה-הגלובלית מגינה על המלחמה. */
+  const globalCap = state.fleetCap?.globalCapMu ?? null;
+  if (globalCap != null && market.refPrice) {
+    const army = (state.grids ?? []).filter((g) => g.strategy === "supremacy");
+    const fc = fleetCapState(army, globalCap);
+    if (fc.breach) {
+      market.fleetUnwindOnly = true;
+      events.push({ type: "fleet.unwind", source: "fleet-cap", payload: { invMu: fc.invMu, globalCapMu: globalCap, headroomMu: fc.headroomMu }, real: true });
+    }
+  }
   for (const g of state.grids ?? []) {
     if (!g.active) continue;
     const strat = STRATEGIES[g.strategy];
