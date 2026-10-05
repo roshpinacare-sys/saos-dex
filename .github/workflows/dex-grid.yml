@@ -7,14 +7,21 @@
 #
 # תדירות: יומי ב-03:17 UTC — תופס את דלק-ה-powerdown של יום-ה' (02:01)
 # ומרכז מחדש את הגריד סביב הספר החי. אפשר להפעיל ידנית בכל-רגע.
+#
+# ריבונות-המכסה (T-B 2026-10-05, החלטה-נמדדת):
+#   הקדנס היומי מוחזר מ-R71 — המדידה-מה-API (3-ימים אחרונים): arb-scan 27.3s ממוצע
+#   (12–24 ריצות/יום בפועל מול ה-cron של 48 — GitHub מדלל קרונות-דקות),
+#   llm-bridge 11s, mm-supremacy 12.4s, dex-grid היסטורי 43–119s (ממוצע 77s).
+#   תחזית-חודשית: dex-grid יומי ≈ 39 דק' + arb-scan 164–327 (מדוד) / 654 (תיאורטי-מלא)
+#   + llm-bridge ~6 + mm-supremacy ~6 ⇒ 215–705 דק'/חודש ≪ 1,600 (מרווח-ביטחון)
+#   ≪ 2,000 (מכסת-החינם). grid-trigger נשאר dispatch-only (פסק בקבלה).
 
 name: dex-grid
 
 on:
-  # R71 (2026-09-21, ריבונות המכסה): הקדנס הוסר — התאום הציבורי ב-Domain
-  # (dex-grid 03:48, דקות Actions בלתי-מוגבלות) הוא המכונה. המקור הזה — גיבוי
-  # להזנקה ידנית בלבד (workflow_dispatch); החזרת הקדנס = קומיט אחד.
   workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'  # יומי 03:17 UTC — דלק-ה-powerdown נוחת 02:01 (Wave-3 · T-B)
 
 permissions:
   contents: write
@@ -30,6 +37,30 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # T-B (owner directive 2026-10-05, trace 1a10bfe1342b2391 — staged re-entry):
+      # השער המכני ברמת-המתזמן — מפרסם את-מצב-הבלם ואת-המסילות-הפתוחות.
+      # fail-closed: קובץ-חסר/פגום → הצעד נופל → המשמרות-החתימה לא רצות.
+      # lane נגזר מ-DEX_LANE (מסילת-הגריד) — אותו-מיפוי של grids/brake.mjs laneOf.
+      - name: STASIS gate (mechanical, FATE-DEFENSE law #1 — lane-aware staged preflight)
+        id: brake
+        env:
+          DEX_LANE: grid
+        run: |
+          set -eu
+          S=$(node -e "const s=JSON.parse(require('fs').readFileSync('grids/state/STASIS.json','utf8'));console.log([s.active===true?'true':'false',String(s.mode||'full'),(Array.isArray(s.stagedLanes&&s.stagedLanes.allow)&&s.stagedLanes.allow.map(String).map(x=>x.toLowerCase()).includes(process.env.DEX_LANE))?'true':'false'].join(' '))")
+          ACTIVE=$(echo "$S" | cut -d' ' -f1); MODE=$(echo "$S" | cut -d' ' -f2); LANE_OK=$(echo "$S" | cut -d' ' -f3)
+          echo "active=$ACTIVE" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "lane_allowed=$LANE_OK" >> "$GITHUB_OUTPUT"
+          echo "lane=$DEX_LANE" >> "$GITHUB_OUTPUT"
+          if [ "$ACTIVE" = "true" ] && [ "$MODE" = "staged" ] && [ "$LANE_OK" = "true" ]; then
+            echo "[CAPITAL-GATE] STASIS-STAGED-ALLOW dex-grid.yml (lane=$DEX_LANE) · owner directive 2026-10-05 trace 1a10bfe1342b2391 — staged lane open; the in-code brake (grids/brake.mjs) re-checks at sign-time"
+          elif [ "$ACTIVE" = "true" ]; then
+            echo "STASIS-HALT dex-grid.yml (lane=$DEX_LANE) · breaker active (mode=$MODE) — capital lanes obey (see grids/state/STASIS.json)"
+          else
+            echo "STASIS-LIFTED dex-grid.yml · active=false — full operation (master flag)"
+          fi
 
       - name: Bun
         uses: oven-sh/setup-bun@v2
@@ -50,6 +81,7 @@ jobs:
         run: bunx prisma generate
 
       - name: Grid (read public book, mark to live feeds, place if armed, publish)
+        if: steps.brake.outputs.active != 'true' || steps.brake.outputs.lane_allowed == 'true'
         env:
           SAOS_RELAY_AGENT_ACCOUNT: headcorner
           STEEM_ACTIVE_WIF: ${{ secrets.STEEM_ACTIVE_WIF }}
@@ -61,7 +93,10 @@ jobs:
       # אותם-שערי-מדיניות (היסטרזיס ≥1500bps, תקרת-חשיפה, רזרבת-בידים, fail-closed).
       # המדידה-החיה: הנחה-מתמדת של SBD מול ערך-ההמרה ($1) — המרה קונה ~69% יותר
       # STEEM ל-SBD מאשר הספר. חסימה-כנה מפרסמת convert-plan.json ולא מפילה את הביט.
+      # T-B staged-lane law: convert = מסילה-כללית (general) — רץ רק בליפת-הבלם המלאה
+      # (active=false); תחת staged היא נשארת-עצורה בדיוק-כמו-שהבעלים הורה.
       - name: Convert leg (SBD-discount harvest — D-023 doctrine, fail-closed)
+        if: steps.brake.outputs.active != 'true'
         env:
           SAOS_RELAY_AGENT_ACCOUNT: headcorner
           STEEM_ACTIVE_WIF: ${{ secrets.STEEM_ACTIVE_WIF }}
