@@ -1,99 +1,8 @@
 {
  "schema": "arb-ledger-v1",
  "layer": "sovereign-CI",
- "generatedAt": "2026-10-05T17:01:27.820Z",
+ "generatedAt": "2026-10-05T17:36:33.145Z",
  "entries": [
-  {
-   "ts": "2026-10-05T02:37:05.060Z",
-   "pair": "SWAP.BLURT:SWAP.HIVE",
-   "venueA": "hive-engine",
-   "venueB": "blurt-price-ref",
-   "edgeBps": 1455.106017,
-   "direction": "buy SWAP.BLURT on Engine → sell BLURT at USD ref (paper)",
-   "executableSize": 0,
-   "realness": "PAPER",
-   "paperPnlSbd": null,
-   "degraded": false,
-   "notes": "sell side is price_ref only — no Blurt orderbook on public nodes (Z-86a); edge measured vs ref, executable size 0 — PAPER"
-  },
-  {
-   "ts": "2026-10-05T02:37:05.060Z",
-   "pair": "SWAP.BLURT:SWAP.HIVE",
-   "venueA": "blurt-price-ref",
-   "venueB": "hive-engine",
-   "edgeBps": -2615.734157,
-   "direction": "buy BLURT at USD ref (paper) → sell SWAP.BLURT on Engine",
-   "executableSize": 0,
-   "realness": "PAPER",
-   "paperPnlSbd": null,
-   "degraded": false,
-   "notes": "buy side is price_ref only — PAPER; bridge exit = memo to @graphene-swap/@blurt-swap (fee unknown, not invented); executable size 0"
-  },
-  {
-   "ts": "2026-10-05T03:01:46.263Z",
-   "pair": "STEEM:SBD",
-   "venueA": "steem-internal",
-   "venueB": "htx",
-   "edgeBps": 645.788054,
-   "direction": "buy STEEM on-chain with SBD → sell on htx (USDT)",
-   "executableSize": 19.032,
-   "realness": "CEX_REF",
-   "paperPnlSbd": 0.128185,
-   "degraded": false,
-   "notes": "chain quote=SBD×sbdUsd→USD; CEX leg is REF until a wallet rail is armed (Z-86a: HTX wallets verified-allowed)"
-  },
-  {
-   "ts": "2026-10-05T03:01:46.263Z",
-   "pair": "STEEM:SBD",
-   "venueA": "htx",
-   "venueB": "steem-internal",
-   "edgeBps": -942.449788,
-   "direction": "buy STEEM on htx (USDT) → sell on-chain for SBD",
-   "executableSize": 18.871,
-   "realness": "CEX_REF",
-   "paperPnlSbd": -0.200217,
-   "degraded": false,
-   "notes": "chain quote=SBD×sbdUsd→USD; CEX leg is REF until a wallet rail is armed (Z-86a: HTX wallets verified-allowed)"
-  },
-  {
-   "ts": "2026-10-05T03:01:46.263Z",
-   "pair": "STEEM:SBD",
-   "venueA": "steem-internal",
-   "venueB": "binance",
-   "edgeBps": 722.785892,
-   "direction": "buy STEEM on-chain with SBD → sell on binance (USDT)",
-   "executableSize": 19.032,
-   "realness": "CEX_REF",
-   "paperPnlSbd": 0.143468,
-   "degraded": false,
-   "notes": "chain quote=SBD×sbdUsd→USD; CEX leg is REF until a wallet rail is armed (Z-86a: HTX wallets verified-allowed)"
-  },
-  {
-   "ts": "2026-10-05T03:01:46.263Z",
-   "pair": "STEEM:SBD",
-   "venueA": "binance",
-   "venueB": "steem-internal",
-   "edgeBps": -939.622837,
-   "direction": "buy STEEM on binance (USDT) → sell on-chain for SBD",
-   "executableSize": 18.871,
-   "realness": "CEX_REF",
-   "paperPnlSbd": -0.199554,
-   "degraded": false,
-   "notes": "chain quote=SBD×sbdUsd→USD; CEX leg is REF until a wallet rail is armed (Z-86a: HTX wallets verified-allowed)"
-  },
-  {
-   "ts": "2026-10-05T03:01:46.263Z",
-   "pair": "HIVE:HBD",
-   "venueA": "hive-internal",
-   "venueB": "htx",
-   "edgeBps": -629.480782,
-   "direction": "buy HIVE on-chain with HBD → sell on htx (USDT)",
-   "executableSize": 18.42,
-   "realness": "CEX_REF",
-   "paperPnlSbd": -0.117298,
-   "degraded": false,
-   "notes": "chain quote=HBD assumed $1.00 (haircut regime, no floor bids measured — Z-86a); CEX leg REF"
-  },
   {
    "ts": "2026-10-05T03:01:46.263Z",
    "pair": "HIVE:HBD",
@@ -2666,16 +2575,114 @@
    "paperMuted": true,
    "degraded": false,
    "notes": "PAPER-NO-EXECUTION: buy side is price_ref only — PAPER; bridge exit = memo to @graphene-swap/@blurt-swap (fee unknown, not invented); executable size 0"
+  },
+  {
+   "ts": "2026-10-05T17:36:33.145Z",
+   "pair": "STEEM:SBD",
+   "venueA": "steem-internal",
+   "venueB": "htx",
+   "edgeBps": 237.362805,
+   "direction": "buy STEEM on-chain with SBD → sell on htx (USDT)",
+   "executableSize": 35.936,
+   "realness": "CEX_REF",
+   "paperPnlSbd": 0.08804,
+   "paperMuted": false,
+   "degraded": false,
+   "notes": "chain quote=SBD×sbdUsd→USD; CEX leg is REF until a wallet rail is armed (Z-86a: HTX wallets verified-allowed)"
+  },
+  {
+   "ts": "2026-10-05T17:36:33.145Z",
+   "pair": "STEEM:SBD",
+   "venueA": "htx",
+   "venueB": "steem-internal",
+   "edgeBps": -578.297972,
+   "direction": "buy STEEM on htx (USDT) → sell on-chain for SBD",
+   "executableSize": 30.069,
+   "realness": "CEX_REF",
+   "paperPnlSbd": -0.186033,
+   "paperMuted": false,
+   "degraded": false,
+   "notes": "chain quote=SBD×sbdUsd→USD; CEX leg is REF until a wallet rail is armed (Z-86a: HTX wallets verified-allowed)"
+  },
+  {
+   "ts": "2026-10-05T17:36:33.145Z",
+   "pair": "STEEM:SBD",
+   "venueA": "steem-internal",
+   "venueB": "binance",
+   "edgeBps": null,
+   "direction": "STEEM:SBD cross-venue scan",
+   "executableSize": 0,
+   "realness": "DEGRADED",
+   "paperPnlSbd": 0,
+   "paperMuted": true,
+   "degraded": true,
+   "notes": "fail-closed skip: binance STEEMUSDT: HTTP 451"
+  },
+  {
+   "ts": "2026-10-05T17:36:33.145Z",
+   "pair": "HIVE:HBD",
+   "venueA": "hive-internal",
+   "venueB": "htx",
+   "edgeBps": -1392.654529,
+   "direction": "buy HIVE on-chain with HBD → sell on htx (USDT)",
+   "executableSize": 16.776,
+   "realness": "CEX_REF",
+   "paperPnlSbd": -0.228614,
+   "paperMuted": false,
+   "degraded": false,
+   "notes": "chain quote=HBD assumed $1.00 (haircut regime, no floor bids measured — Z-86a); CEX leg REF"
+  },
+  {
+   "ts": "2026-10-05T17:36:33.145Z",
+   "pair": "HIVE:HBD",
+   "venueA": "htx",
+   "venueB": "hive-internal",
+   "edgeBps": 63.491045,
+   "direction": "buy HIVE on htx (USDT) → sell on-chain for HBD",
+   "executableSize": 17.198,
+   "realness": "CEX_REF",
+   "paperPnlSbd": 0.010542,
+   "paperMuted": false,
+   "degraded": false,
+   "notes": "chain quote=HBD assumed $1.00 (haircut regime, no floor bids measured — Z-86a); CEX leg REF"
+  },
+  {
+   "ts": "2026-10-05T17:36:33.145Z",
+   "pair": "SWAP.BLURT:SWAP.HIVE",
+   "venueA": "hive-engine",
+   "venueB": "blurt-price-ref",
+   "edgeBps": 1625.928843,
+   "direction": "buy SWAP.BLURT on Engine → sell BLURT at USD ref (paper)",
+   "executableSize": 0,
+   "realness": "PAPER",
+   "paperPnlSbd": null,
+   "paperMuted": true,
+   "degraded": false,
+   "notes": "PAPER-NO-EXECUTION: sell side is price_ref only — no Blurt orderbook on public nodes (Z-86a); edge measured vs ref, executable size 0 — PAPER"
+  },
+  {
+   "ts": "2026-10-05T17:36:33.145Z",
+   "pair": "SWAP.BLURT:SWAP.HIVE",
+   "venueA": "blurt-price-ref",
+   "venueB": "hive-engine",
+   "edgeBps": -2724.233115,
+   "direction": "buy BLURT at USD ref (paper) → sell SWAP.BLURT on Engine",
+   "executableSize": 0,
+   "realness": "PAPER",
+   "paperPnlSbd": null,
+   "paperMuted": true,
+   "degraded": false,
+   "notes": "PAPER-NO-EXECUTION: buy side is price_ref only — PAPER; bridge exit = memo to @graphene-swap/@blurt-swap (fee unknown, not invented); executable size 0"
   }
  ],
  "cumulative": {
-  "paperPnlSbd": -334.324411,
-  "entries": 352,
-  "positiveEntries": 100,
+  "paperPnlSbd": -334.640476,
+  "entries": 359,
+  "positiveEntries": 103,
   "realized": false,
-  "strategyPnlSbd": 0.587807,
-  "strategyEntries": 16,
-  "mutedEntries": 18
+  "strategyPnlSbd": 0.686389,
+  "strategyEntries": 18,
+  "mutedEntries": 20
  },
  "truthGate": {
   "engine": "saos-dex",
@@ -2694,7 +2701,7 @@
     "name": "saos-dex feeMeter (observe.mjs ← chain fill_order)",
     "kind": "chain-meter",
     "fills": 250,
-    "asof": "2026-10-05T16:50:27.528Z",
+    "asof": "2026-10-05T17:18:52.209Z",
     "realSbdDelta": 112.155,
     "realizedSbd": -1.5418,
     "note": "מד-המנוע — צפיה אחת על אמת-השרשרת; לא מתווסף לאחרים (max rule)"
@@ -2740,13 +2747,13 @@
     "present": true,
     "note": "רשויות-נייר בפנקס-הארביטרז' — נייר הוא נייר; הפסיקה לעולם לא נגזרת מהן",
     "cumulative": {
-     "paperPnlSbd": -305.279532,
-     "entries": 345,
-     "positiveEntries": 97,
+     "paperPnlSbd": -334.324411,
+     "entries": 352,
+     "positiveEntries": 100,
      "realized": false,
-     "strategyPnlSbd": 0.538045,
-     "strategyEntries": 14,
-     "mutedEntries": 16
+     "strategyPnlSbd": 0.587807,
+     "strategyEntries": 16,
+     "mutedEntries": 18
     }
    }
   ],
@@ -2773,7 +2780,7 @@
    "note": "הבלם של הבעלים פעיל — מסילות-ההון עצורות; מדידה ממשיכה"
   },
   "publishedVia": "grids/state/arb-ledger.json (arb-scan cadence, arb-ledger-v1 receipt)",
-  "computedAt": "2026-10-05T17:01:27.820Z",
+  "computedAt": "2026-10-05T17:36:33.145Z",
   "law": "fake exchange = failure"
  }
 }
