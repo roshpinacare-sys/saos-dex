@@ -18,7 +18,7 @@ const t = (name, ok) => {
 
 /* ── חול: עותק של brake.mjs + state/STASIS.json פיקטיבי לכל-וקטור ────────── */
 const SANDBOXES = [];
-function sandbox(stasisDoc) {
+function sandbox(stasisDoc, guardsDoc) {
   const root = mkdtempSync(join(tmpdir(), "brake-selftest-"));
   SANDBOXES.push(root);
   mkdirSync(join(root, "grids", "state"), { recursive: true });
@@ -31,11 +31,16 @@ function sandbox(stasisDoc) {
     else if (typeof stasisDoc === "string") writeFileSync(join(root, "grids", "state", "STASIS.json"), stasisDoc);
     else writeFileSync(join(root, "grids", "state", "STASIS.json"), JSON.stringify(stasisDoc, null, 2));
   }
+  if (guardsDoc !== undefined) {
+    if (guardsDoc === null) { /* leave missing */ }
+    else if (typeof guardsDoc === "string") writeFileSync(join(root, "grids", "state", "lane-guards.json"), guardsDoc);
+    else writeFileSync(join(root, "grids", "state", "lane-guards.json"), JSON.stringify(guardsDoc, null, 2));
+  }
   return root;
 }
 
-async function loadWith(stasisDoc, captured) {
-  const root = sandbox(stasisDoc); // החול נשאר-חי עד-סוף-הריצה — stasisHalt נקרא אחרי-ה-import
+async function loadWith(stasisDoc, captured, guardsDoc) {
+  const root = sandbox(stasisDoc, guardsDoc); // החול נשאר-חי עד-סוף-הריצה — stasisHalt נקרא אחרי-ה-import
   const origLog = console.log;
   console.log = (...a) => { captured.lines.push(a.join(" ")); };
   try {
@@ -117,3 +122,23 @@ t("laneOf maps ladder machines to grid, everything else to general", ok);
 
 for (const s of SANDBOXES) rmSync(s, { recursive: true, force: true }); // ניקוי-החול בתום-הריצה
 console.log(process.exitCode ? "brake-selftest: FAIL" : "brake-selftest: all vectors PASS");
+
+/* ── LANE-GUARDS vectors (SAOS-LANE-GUARDS/1 — cognition-beat 1a10c90522120149) ── */
+{
+  const cap = { lines: [] };
+  const staged = { protocol: "SAOS-FATE-DEFENSE-STASIS/1", active: true, mode: "staged", since: "2026-10-05T13:05:00Z", stagedLanes: { allow: ["grid"] }, reason: "staged test" };
+  let m = await loadWith(staged, cap, { protocol: "SAOS-LANE-GUARDS/1", guards: [{ id: "g1", lane: "grid", closed: true, reason: "unknown-writer ttl=12h", openedAt: "2026-10-05T16:42:08Z", expiresAt: "2027-01-01T00:00:00Z" }] });
+  t("guard closes staged-allowed grid lane", m.stasisHalt("grid-beat:steem") === true);
+  m = await loadWith(staged, cap, { protocol: "SAOS-LANE-GUARDS/1", guards: [{ id: "g2", lane: "grid", closed: false, open: true, reason: "forged-open" }] });
+  t("guard open-attempt ignored → staged allow stands", m.stasisHalt("grid-beat:steem") === false);
+  m = await loadWith(staged, cap, "{ GARBAGE {{{");
+  t("corrupt guards file → fail-closed halt", m.stasisHalt("grid-beat:steem") === true);
+  m = await loadWith(staged, cap, { protocol: "FOREIGN/9", guards: [] });
+  t("foreign guards protocol → fail-closed halt", m.stasisHalt("grid-beat:steem") === true);
+  m = await loadWith(staged, cap, { protocol: "SAOS-LANE-GUARDS/1", guards: [{ id: "g3", lane: "grid", closed: true, reason: "expired", expiresAt: "2020-01-01T00:00:00Z" }] });
+  t("expired guard is inert → staged allow stands", m.stasisHalt("grid-beat:steem") === false);
+  m = await loadWith(staged, cap, null);
+  t("missing guards file → staged baseline unchanged (allow)", m.stasisHalt("grid-beat:steem") === false);
+  m = await loadWith({ protocol: "SAOS-FATE-DEFENSE-STASIS/1", active: true, mode: "full", since: "2026-10-04T22:18:00Z", reason: "full" }, cap, { protocol: "SAOS-LANE-GUARDS/1", guards: [{ id: "g4", lane: "grid", closed: false, open: true }] });
+  t("guard cannot open a full-STASIS home", m.stasisHalt("grid-beat:steem") === true);
+}
