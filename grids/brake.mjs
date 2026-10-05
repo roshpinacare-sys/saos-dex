@@ -47,8 +47,47 @@ export function laneOf(tool) {
   return "general";
 }
 
+// ── LANE-GUARDS (SAOS-LANE-GUARDS/1 — cognition-beat 1a10c90522120149) ──────────────
+// שכבת-הלמידה-המכנית: ה-cognition-beat (הלולאה-הפנימית של האורגניזם) כותב סורגים
+// שיכולים רק לסגור מסילות — לעולם לא לפתוח. קובץ-חסר = אין-סורגים (רגיל);
+// קובץ-פגום/פרוטוקול-זר = fail-closed לכל-המסילות; שדות open/allow זרים = מוזנחים-
+// ומדווחים (הסורגים חד-כיווניים). תפוגה (expiresAt בעבר) = סורג-מת.
+export const GUARDS_PATH = join(HERE, "state", "lane-guards.json");
+
+export function readGuards() {
+  if (!existsSync(GUARDS_PATH)) return { missing: true, guards: [], foreignFields: [] };
+  try {
+    const j = JSON.parse(readFileSync(GUARDS_PATH, "utf8"));
+    if (j.protocol !== "SAOS-LANE-GUARDS/1") return { missing: false, unreadable: true, reason: `unknown guards protocol '${j.protocol}' — fail-closed`, guards: [], foreignFields: [] };
+    const all = Array.isArray(j.guards) ? j.guards : [];
+    const foreignFields = all.filter((g) => g && (g.closed === false || "open" in g || "allow" in g)).map((g) => String(g.id ?? "?"));
+    const now = Date.now();
+    const active = all.filter((g) => g && g.closed === true && (!g.expiresAt || new Date(g.expiresAt).getTime() > now));
+    return { missing: false, guards: active, foreignFields };
+  } catch (_) {
+    return { missing: false, unreadable: true, reason: "guards file unreadable — fail-closed", guards: [], foreignFields: [] };
+  }
+}
+
+export function guardHalt(lane) {
+  const g = readGuards();
+  if (g.unreadable) {
+    console.log(`[CAPITAL-GATE] LANE-GUARD-HALT ${lane} · guard=guards-unreadable · reason: ${g.reason}`);
+    return { halt: true, guard: null, foreignFields: [] };
+  }
+  const hit = g.guards.find((x) => String(x.lane ?? "").toLowerCase() === String(lane).toLowerCase());
+  if (hit) {
+    console.log(`[CAPITAL-GATE] LANE-GUARD-HALT ${lane} · guard=${hit.id} · reason: ${String(hit.reason ?? "").slice(0, 160)}`);
+    return { halt: true, guard: hit, foreignFields: g.foreignFields };
+  }
+  if (g.foreignFields.length) console.log(`[LOOPGUARD] foreign open/allow fields ignored — guards can only close: ${g.foreignFields.join(",")}`);
+  return { halt: false, guard: null, foreignFields: g.foreignFields };
+}
+
 /** true = החותם חייב לצאת no-op בריר עם הסבר (אסור לחתום). */
 export function stasisHalt(tool) {
+  const gh = guardHalt(laneOf(tool));
+  if (gh.halt) return true;
   const s = stasisState();
   if (s.active !== true) return false;
   const lane = laneOf(tool);
