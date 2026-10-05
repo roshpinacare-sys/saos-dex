@@ -27,6 +27,11 @@
 import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
+/* R25 · בלם-ההון בזמן-חתימה (owner directive 2026-10-04, trace 1a108e28015b0451):
+ * הרץ-הזה מסוגל-הון (realmarket/hivemarket + STEEM/HIVE_ACTIVE_WIF) והיה המסילה
+ * האחרונה-שלא-מוקשה בקוד (עד-כה רק שער-workflow). החוק-המעוגן ב-Domain/steem:
+ * כל-חותם שואל את-הבלם בטרם-חתימה — fail-closed, קריאה-טרייה בכל-ריצה. */
+import { stasisHalt } from "./grids/brake.mjs";
 
 /* ── סביבה לפני-כל-ייבוא-מנוע (אותו-כוח-ולא-ב-??= של-cloud-beat): שומר-ה-db
  * מאמת בטעינת-מודול (שרשרת-הייבוא של-realmarket מגיעה אליו דרך-fleet).
@@ -174,6 +179,9 @@ async function main(): Promise<void> {
     const devBps = Math.floor(((snap.book.mid - parity) / parity) * 10_000);
     if (Math.abs(devBps) > PARITY_BAND_BPS) blocker.push(`book mid deviates ${devBps}bps from external parity: refusing to trade a broken market`);
   }
+  /* R25 · שער-STASIS: הבלם נקרא טרי בכל-ריצה, לפני-כל-מסילת-חתימה —
+   * active=true → חוסם-כנה (no-op בריא) עם הסיבה-מפורסמת בגלוי. */
+  if (stasisHalt("grid-beat:steem")) blocker.push("STASIS capital brake active (owner directive 2026-10-04): signing lanes halt — see grids/state/STASIS.json");
 
   if (armed && parity && snap.book.bestBid && snap.book.bestAsk && blocker.length === 0) {
     const { realPlaceOrder, realCancelOrder } = rm as unknown as {
@@ -335,6 +343,8 @@ async function main(): Promise<void> {
     const hs = hsnapRaw as Exclude<typeof hsnapRaw, { ok: false }>;
     const hiveArmed = hm.hiveActiveWif() !== null;
     if (!hiveArmed) hiveBlocker.push("HIVE_ACTIVE_WIF secret missing (R99: או שהרץ הזה מקומי בלי הסוד, או שהכספת נקתה — כנות, לא סימולציה)");
+    /* R25 · שער-STASIS גם על רגל-ה-HIVE — אותו-בלם, אותו-חוק */
+    if (stasisHalt("grid-beat:hive")) hiveBlocker.push("STASIS capital brake active (owner directive 2026-10-04): signing lanes halt — see grids/state/STASIS.json");
     if (hiveArmed && hs.authorityOk === false) hiveBlocker.push("hive key does not derive the live active authority — refusing to trade (fail-closed)");
     if (!hs.rc.ok) hiveBlocker.push(hs.rc.reason ?? "hive rc gated (honest skip)");
     if (!hiveParity) hiveBlocker.push("external USD marks unavailable (hive/hbd feeds down): no marking, no trading");

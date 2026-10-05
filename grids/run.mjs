@@ -2,7 +2,7 @@
 //   node grids/run.mjs                    → טיק אחד (ל-Actions/קרון) + צופה-מילויים-אמת
 //   node grids/run.mjs --loop [ms]        → לולאה אוטונומית מקומית
 //   node grids/run.mjs --observe          → קריאת-מילויים-אמת-בלבד (כלום-לא-כותב-חוץ-מהיומן)
-//   node grids/run.mjs --selftest         → 9 אסרטים דטרמיניסטיים (אופליין, לא נוגע ברשת)
+//   node grids/run.mjs --selftest         → 11 אסרטים דטרמיניסטיים (אופליין, לא נוגע ברשת)
 
 import { runTick, loadState, saveState, measureRefPrice } from "./engine.mjs";
 import { processRules } from "./rules.mjs";
@@ -111,6 +111,18 @@ async function selftest() {
   const chainRules = [{ id: "X", on: "parity.drift", when: () => true, then: () => [{ action: "noop", emit: { type: "parity.drift", source: "chain", payload: { driftBps: 100, bandBps: 10 } } }] }];
   const res = processRules({ grids: [], feeMeter: { queue: [] } }, [deepEv], chainRules);
   t("loop guard blocks runaway chain", res.halted === true);
+
+  /* 5b. רגרסיית 09-30 (R25): צי-חוקי עסוק (תצפיות-עומק-0 בלבד) לא עוצר את-עצמו —
+   * הצתות-תצפית סופיות-מעצמן ולא נספרות-נגד תקציב-המשוב */
+  const busy = Array.from({ length: 200 }, (_, i) => ({ type: "grid.fill", source: "g", payload: { gridId: `g${i}` } }));
+  const busyRules = [{ id: "R-FILL-REBAL", on: "grid.fill", when: () => true, then: () => [{ action: "rebalance" }] }];
+  const resBusy = processRules({ grids: [], feeMeter: { queue: [] } }, busy, busyRules);
+  t("busy legal fleet (200 depth-0 fires) never halts", resBusy.halted === false && resBusy.fired === 200);
+
+  /* 5c. משוב-מסתעף (כל-הצתה פולטת 2 אירועים) נעצר על-ידי תקציב-המשוב לפני מגן-העומק */
+  const branchRules = [{ id: "B", on: "parity.drift", when: () => true, then: () => [{ action: "noop", emit: { type: "parity.drift", source: "b1", payload: { driftBps: 1, bandBps: 1 } } }, { action: "noop", emit: { type: "parity.drift", source: "b2", payload: { driftBps: 1, bandBps: 1 } } }] }];
+  const resBranch = processRules({ grids: [], feeMeter: { queue: [] } }, [deepEv], branchRules);
+  t("feedback cascade halts on fires budget", resBranch.halted === true && String(resBranch.haltReason ?? "").startsWith("feedback-fires"));
 
   /* 6. שוק-קפוא: בלי מחיר אמת — ידיים-בכיס (כנות) */
   writeFileSync(join(stateDir, "state.json"), JSON.stringify(seedState));
