@@ -18,9 +18,11 @@ import {
   FEE_BPS, LEDGER_SCHEMA, LEDGER_CAP,
   parseCondenserBook, parseHtxDepth, parseEngineBooks,
   steemBookFeed, hiveBookFeed, htxDepthFeed, binanceTopFeed, engineBookFeed, blurtPriceRefFeed, llamaRefFeed,
-  walkVwap, netEdgeBps, paperRoundTrip, makeEntry, degradedEntry,
+  walkVwap, netEdgeBps, paperRoundTrip, makeEntry, degradedEntry, isPaperMuted,
   evaluateFeeds, emptyLedger, updateLedger,
 } from "./arb-scan.mjs";
+import { computeTruthGate, fillsInWindow, ageHours, TRUTH_GATE_LAW, VERDICTS } from "./truth-gate.mjs";
+import { planSteemHiveRoute, walkBuyWithBudget, ARMED_STAGED, ROUTE_SCHEMA } from "./route-receipt.mjs";
 import { planSplit, mergeBooks, naiveSingleVenue, walkDepth, makerRepost } from "./split-router.mjs";
 import { planCounterGrid, suggestedBias, normFactor, COUNTER_POLICY } from "./counter-grid.mjs";
 import { planAgentSwap, executeAgentSwap, makerSwapPrice } from "./agent-swap-api.mjs";
@@ -252,7 +254,7 @@ async function main() {
     return evaluateFeeds({ feeds, refs, nowIso: NOW });
   })() : [];
   if (hasFixtures) {
-    const SCHEMA_KEYS = ["ts", "pair", "venueA", "venueB", "edgeBps", "direction", "executableSize", "realness", "paperPnlSbd", "degraded", "notes"];
+    const SCHEMA_KEYS = ["ts", "pair", "venueA", "venueB", "edgeBps", "direction", "executableSize", "realness", "paperPnlSbd", "paperMuted", "degraded", "notes"];
     check("evaluate: every entry has EXACTLY the arb-ledger-v1 entry keys", entriesNow.every((e) => JSON.stringify(Object.keys(e)) === JSON.stringify(SCHEMA_KEYS)), entriesNow[0] && Object.keys(entriesNow[0]));
     check("evaluate: degraded entry recorded for missing HTX hive feed (fail-closed skip)", entriesNow.some((e) => e.degraded === true && e.pair === "HIVE:HBD" && e.edgeBps === null && e.paperPnlSbd === 0));
     const steemEntry = entriesNow.find((e) => e.pair === "STEEM:SBD" && !e.degraded && e.direction.includes("buy STEEM on-chain"));
@@ -591,6 +593,101 @@ async function main() {
 
     check("payout: determinism — same inputs → identical plan", JSON.stringify(planPayoutDoctrine({ convert: convertVec, custody: custodyVec, nowIso: "2026-10-04T12:00:00Z" })) === JSON.stringify(plan));
     check("payout: law forbids invented allocations", /no invented allocations/.test(plan.law) && /הערכה בלבד/.test(plan.law));
+  }
+
+  /* ══ 14. Wave-2 §4 · חוק-ההשתקה: קצה בלי-ביצוע לא מכתר יותר ══
+   * מדוד-חי 2026-10-05: ה-BEST בפנקס היה 1584bps SWAP.BLURT — רשומת-PAPER בגודל-0.
+   * הווקטורים: קצה-נייר → מושתק + מחוץ-לאסטרטגיה · קצה-בר-ביצוע → נכלל · מעורב → ה-BEST הבר-ביצוע. */
+  {
+    const paperEdge = makeEntry({ ts: NOW, pair: "SWAP.BLURT:SWAP.HIVE", venueA: "hive-engine", venueB: "blurt-price-ref", direction: "paper ref edge", buyLevels: [{ price: 0.0175, qty: 100 }], sellLevels: null, size: 100, buyQuoteUsd: 0.0562, refSellPriceUsd: 0.00098, sbdUsd: 0.6, realnessTags: ["L2_REAL", "PAPER"], notes: "sell side is price_ref only" });
+    check("mute: paper ref edge → edge numeric BUT paperMuted=true + labeled", typeof paperEdge.edgeBps === "number" && paperEdge.executableSize === 0 && paperEdge.paperMuted === true && paperEdge.notes.startsWith("PAPER-NO-EXECUTION:"), paperEdge);
+    const execEdge = makeEntry({ ts: NOW, pair: "X:Y", venueA: "a", venueB: "b", direction: "executable", buyLevels: [{ price: 1, qty: 10 }], sellLevels: [{ price: 1.05, qty: 10 }], size: 5, realnessTags: ["ONCHAIN_REAL", "CEX_REF"] });
+    check("mute: executable edge (two-sided depth) → NOT muted", execEdge.executableSize > 0 && execEdge.paperMuted === false && !execEdge.notes.startsWith("PAPER-NO-EXECUTION:"), execEdge);
+    check("mute: separation holds (R25-b) — positive pnl ⟹ executableSize>0", execEdge.paperPnlSbd != null && execEdge.paperPnlSbd > 0 && execEdge.executableSize > 0);
+    const mixed = updateLedger(emptyLedger(), [paperEdge, execEdge], { generatedAt: NOW });
+    check("mute: paper edge excluded from strategy accumulator", mixed.cumulative.strategyEntries === 1 && Math.abs(mixed.cumulative.strategyPnlSbd - execEdge.paperPnlSbd) < 1e-6, mixed.cumulative);
+    check("mute: mutedEntries counter counts the paper edge", mixed.cumulative.mutedEntries === 1 && mixed.cumulative.entries === 2, mixed.cumulative);
+    const bestOfMixed = [paperEdge, execEdge].filter((e) => !e.degraded && !isPaperMuted(e) && typeof e.edgeBps === "number").sort((a, b) => b.edgeBps - a.edgeBps)[0];
+    check("mute: best-selection over mixed edges picks ONLY the executable one", bestOfMixed === execEdge && isPaperMuted(paperEdge), bestOfMixed?.direction);
+    const bigPaper = makeEntry({ ts: NOW, pair: "P:Q", venueA: "r", venueB: "e", direction: "huge paper edge", buyLevels: [{ price: 1, qty: 10 }], sellLevels: null, size: 10, refSellPriceUsd: 99, sbdUsd: 1, realnessTags: ["ONCHAIN_REAL", "PAPER"] });
+    const bestWithBigPaper = [bigPaper, execEdge].filter((e) => !e.degraded && !isPaperMuted(e) && typeof e.edgeBps === "number").sort((a, b) => b.edgeBps - a.edgeBps)[0];
+    check("mute: 7000bps+ paper edge does NOT headline over a 200bps executable edge", bestWithBigPaper === execEdge, { bigPaperEdge: bigPaper.edgeBps });
+    check("mute: degraded rows muted too (never headline, never strategy)", isPaperMuted(degradedEntry({ ts: NOW, pair: "A:B", venueA: "x", venueB: "y", direction: "d", reason: "feed down" })));
+    const lBack = updateLedger({ schema: LEDGER_SCHEMA, generatedAt: NOW, entries: [], cumulative: { paperPnlSbd: 1, entries: 1, positiveEntries: 0, realized: false, strategyPnlSbd: 0, strategyEntries: 0 } }, [execEdge, paperEdge], { generatedAt: NOW });
+    check("mute: prev ledger WITHOUT mutedEntries → backward-compatible (?? 0, field appears)", typeof lBack.cumulative.mutedEntries === "number" && lBack.cumulative.mutedEntries === 1, lBack.cumulative);
+  }
+
+  /* ══ 15. Wave-2 §1 · שער-האמת על מילויים (truth-gate) — מטריצת-הפסיקה המקודדת ══
+   * ווקטורים סינתטיים-מסומנים — האמת-החיה נמדדת בקבלה (state/truth-gate.json + ledger.truthGate). */
+  {
+    const chainRows = (atList) => atList.map((at, i) => ({ idx: 70000 + i, at, side: "bought-steem", steem: 1, sbd: 0.1, maker: true })); // SYNTHETIC
+    const eng = (fills) => ({ feeMeter: { realFills: fills, realSbdDelta: 1, realPnl: { realizedSbd: 0 } }, asof: NOW });
+    const t0 = NOW;
+    // (a) מילוי-אמת בחלון → ALIVE
+    const a = computeTruthGate({ nowIso: t0, engineState: eng(243), stasis: { active: true, since: "x" }, zipScan: { savedAt: t0, fills: chainRows(["2026-10-04T08:30:00Z", "2026-10-03T09:00:00Z"]) }, zipSnapshots: null, arbLedger: null, tapePresent: true });
+    check("truth-gate: fill inside 24h window (boundary inclusive) → ALIVE-REAL-FILLS", a.verdict === "ALIVE-REAL-FILLS" && a.realFills24h === 2 && a.realFillsEver === 243, { v: a.verdict, w: a.realFills24h, e: a.realFillsEver });
+    check("truth-gate: max-rule across coherent views (no double counting)", a.realFillsEver === Math.max(243, 2));
+    // (b) אפס-מילויים-מעולם → FAILURE (הקו-האדום)
+    const b = computeTruthGate({ nowIso: t0, engineState: eng(0), stasis: { active: true }, zipScan: { savedAt: t0, fills: [] }, zipSnapshots: null, arbLedger: null, tapePresent: false });
+    check("truth-gate: zero real fills EVER → FAILURE-NO-REAL-FILLS even under STASIS", b.verdict === "FAILURE-NO-REAL-FILLS" && b.realFillsEver === 0, b.verdict);
+    // (c) היו-מילויים, אין-בחלון, STASIS → CONTAINED
+    const c = computeTruthGate({ nowIso: t0, engineState: eng(300), stasis: { active: true, since: "2026-10-04T22:12:00Z" }, zipScan: { savedAt: t0, fills: chainRows(["2026-10-01T08:00:00Z"]) }, zipSnapshots: { savedAt: "2026-10-01T00:00:29.171Z", entries: [{ seq: 11, at: "2026-10-01T00:00:29.171Z", realized: { fillsTotal: 327, trips: 246, capturedSbd: -1.362068 } }] }, arbLedger: null, tapePresent: false });
+    check("truth-gate: fills exist but window empty + STASIS → STASIS-CONTAINED", c.verdict === "STASIS-CONTAINED", c.verdict);
+    check("truth-gate: realFillsEver = max(engine, rows, snapshot) = 327", c.realFillsEver === 327, c.realFillsEver);
+    check("truth-gate: microGrid PnL carried verbatim (−1.362068, measured)", c.microGrid.capturedSbd === -1.362068 && c.microGrid.measured === true && c.microGrid.seq === 11, c.microGrid);
+    check("truth-gate: stale snapshot flagged (>48h)", c.microGrid.snapshotStale === true && c.microGrid.snapshotAgeHours > 24, c.microGrid.snapshotAgeHours);
+    // (d) היו-מילויים, אין-בחלון, אין-STASIS → FAILURE
+    const d = computeTruthGate({ nowIso: t0, engineState: eng(300), stasis: { active: false }, zipScan: { savedAt: t0, fills: chainRows(["2026-10-01T08:00:00Z"]) }, zipSnapshots: null, arbLedger: null, tapePresent: false });
+    check("truth-gate: window empty + no STASIS → FAILURE-NO-REAL-FILLS", d.verdict === "FAILURE-NO-REAL-FILLS", d.verdict);
+    // (e) כנות: אין-ראיה בסביבה → null (לא 0) + fail-closed
+    const e = computeTruthGate({ nowIso: t0, engineState: null, stasis: { active: true }, zipScan: null, zipSnapshots: null, arbLedger: null, tapePresent: false });
+    check("truth-gate: no evidence files → realFills24h null (NOT 0) + absent rows", e.realFills24h === null && e.sources.some((s) => s.kind === "absent"), { w: e.realFills24h });
+    check("truth-gate: no-evidence + STASIS → CONTAINED (fail-closed, never invented ALIVE)", e.verdict === "STASIS-CONTAINED" && e.realFillsEver === 0, e.verdict);
+    // (f) נייר לעולם לא נספר
+    const f = computeTruthGate({ nowIso: t0, engineState: eng(0), stasis: { active: false }, zipScan: { savedAt: t0, fills: [] }, zipSnapshots: null, arbLedger: { schema: "arb-ledger-v1", cumulative: { paperPnlSbd: -200, entries: 267 } }, tapePresent: true });
+    check("truth-gate: paper ledger + sim tape EXCLUDED from truth (267 paper entries ≠ fills)", f.verdict === "FAILURE-NO-REAL-FILLS" && f.excludedFromTruth.length === 2 && f.excludedFromTruth[1].present === true, f.excludedFromTruth);
+    check("truth-gate: law string is the owner red line", f.law === TRUTH_GATE_LAW && TRUTH_GATE_LAW === "fake exchange = failure");
+    check("truth-gate: verdict enum closed set", VERDICTS.length === 3 && [a.verdict, b.verdict, c.verdict, d.verdict, e.verdict, f.verdict].every((v) => VERDICTS.includes(v)));
+    // עזרים
+    check("truth-gate: fillsInWindow ignores future/garbage stamps (honest)", fillsInWindow([{ at: "2099-01-01T00:00:00Z" }, { at: "junk" }], NOW) !== null && fillsInWindow([{ at: "2099-01-01T00:00:00Z" }, { at: "junk" }], NOW).count === 0);
+    check("truth-gate: fillsInWindow empty input → null (unmeasured, not zero)", fillsInWindow([], NOW) === null && fillsInWindow(null, NOW) === null);
+    check("truth-gate: ageHours deterministic", ageHours("2026-10-04T00:00:00Z", "2026-10-05T12:00:00Z") === 36);
+    check("truth-gate: determinism — same inputs → identical verdict", JSON.stringify(computeTruthGate({ nowIso: t0, engineState: eng(243), stasis: { active: true }, zipScan: { savedAt: t0, fills: chainRows(["2026-10-04T08:30:00Z"]) }, zipSnapshots: null, arbLedger: null, tapePresent: true })) === JSON.stringify(computeTruthGate({ nowIso: t0, engineState: eng(243), stasis: { active: true }, zipScan: { savedAt: t0, fills: chainRows(["2026-10-04T08:30:00Z"]) }, zipSnapshots: null, arbLedger: null, tapePresent: true })));
+  }
+
+  /* ══ 16. Wave-2 §3 · מסלול-הראוטר הראשון STEEM→HIVE — מתוכנן-על-ספרים-אמת, ARMED-STAGED ══
+   * על fixtures חיים-מוקלטים (steem-order-book.json · hive-order-book.json) — אפס-רשת. */
+  {
+    const sb = hasFixtures ? parseCondenserBook(steemFix.result, { venue: "steem-internal", baseField: "steem", quoteField: "sbd" }) : null;
+    const hb = hasFixtures ? parseCondenserBook(hiveFix.result, { venue: "hive-internal", baseField: "hive", quoteField: "hbd" }) : null;
+    const refsFix = hasFixtures ? fixture("llama-prices.json").coins : null;
+    const sbdUsd = refsFix ? refsFix["coingecko:steem-dollars"]?.price ?? 0.6 : 0.6;
+    if (sb && hb) {
+      const SIZE = 50; // SYNTHETIC size — the books are real-recorded, the size is a labeled vector
+      const plan = planSteemHiveRoute({ steemBook: sb, hiveBook: hb, sbdUsd, hbdUsd: 1, size: SIZE, nowIso: NOW });
+      check("route: plan ok + schema + ARMED-STAGED (never READY by default)", plan.ok === true && plan.schema === ROUTE_SCHEMA && plan.armState === ARMED_STAGED, plan.armState);
+      check("route: 3 legs — sell-book / parity-bridge / buy-book", plan.legs.length === 3 && plan.legs[0].kind === "SELL-BOOK" && plan.legs[1].kind === "PARITY-BRIDGE" && plan.legs[2].kind === "BUY-BOOK");
+      check("route: leg1 fills against steem bids (≤ requested size)", plan.legs[0].sizeIn <= SIZE && plan.legs[0].out > 0, plan.legs[0]);
+      check("route: bridge rate = sbdUsd/hbdUsd (parity via USD, haircut regime)", Math.abs(plan.legs[1].rate - sbdUsd) < 1e-6, plan.legs[1].rate);
+      check("route: expectedOut positive HIVE + per-STEEM", plan.expectedOut.hive > 0 && plan.expectedOut.perSteem > 0, plan.expectedOut);
+      check("route: executableSize ≤ expectedOut (budget cut, not invented)", plan.executableSize > 0 && plan.executableSize <= plan.expectedOut.hive, { exec: plan.executableSize, out: plan.expectedOut.hive });
+      check("route: slippage vs mid-mid numeric (negative = cost of crossing)", typeof plan.slippageBps === "number" && plan.slippageBps <= 0, plan.slippageBps);
+      check("route: execution honest — NOT-EXECUTED, zero broadcast, unlock named", /NOT-EXECUTED/.test(plan.execution) && /T-B/.test(plan.unlockCondition));
+      check("route: owner note in Hebrew present", /[\u05d0-\u05ea]/.test(plan.ownerNote));
+      const det = planSteemHiveRoute({ steemBook: sb, hiveBook: hb, sbdUsd, hbdUsd: 1, size: SIZE, nowIso: NOW });
+      check("route: determinism — same books+refs → identical plan", JSON.stringify(det) === JSON.stringify(plan));
+      const deep = planSteemHiveRoute({ steemBook: sb, hiveBook: hb, sbdUsd, hbdUsd: 1, size: 1e9, nowIso: NOW });
+      check("route: size beyond depth → fill capped by real book depth (no invention)", deep.legs[0].sizeIn < 1e9 && deep.legs[0].sizeIn <= deep.bookDepth.steemBidDepthSteem, { in: deep.legs[0].sizeIn, depth: deep.bookDepth.steemBidDepthSteem });
+      const noBook = planSteemHiveRoute({ steemBook: null, hiveBook: hb, sbdUsd, hbdUsd: 1, size: 10, nowIso: NOW });
+      check("route: missing book → fail-closed ok:false (no route without real books)", noBook.ok === false && noBook.missing.includes("steem-internal bids"), noBook.missing);
+      const noRef = planSteemHiveRoute({ steemBook: sb, hiveBook: hb, sbdUsd: null, hbdUsd: 1, size: 10, nowIso: NOW });
+      check("route: missing ref → fail-closed (parity not invented)", noRef.ok === false && noRef.missing.includes("sbdUsd ref"));
+    } else check("route: fixtures absent in sandbox → vector skipped honestly", true);
+    // עזר-הליכת-התקציב
+    const wb = walkBuyWithBudget([{ price: 2, qty: 1 }, { price: 3, qty: 1 }], 5);
+    check("route: walkBuyWithBudget walks asks by budget (2×1 + 1×3)", wb.filled === 2 && Math.abs(wb.spent - 5) < 1e-9 && Math.abs(wb.vwap - 2.5) < 1e-9, wb);
+    check("route: walkBuyWithBudget partial level fill honest", walkBuyWithBudget([{ price: 2, qty: 10 }], 6).filled === 3);
+    check("route: walkBuyWithBudget empty/garbage → zeros (never throws)", walkBuyWithBudget([], 5).filled === 0 && walkBuyWithBudget(null, 5).filled === 0);
   }
 
   console.log(`\nARB-SELFTEST ${fail === 0 ? "PASS" : "FAIL"} — ${pass}/${pass + fail} rules green`);

@@ -1,0 +1,86 @@
+{
+ "engine": "saos-dex",
+ "verdict": "ALIVE-REAL-FILLS",
+ "basis": [
+  "realFills24h == 7 — מילוי-אמת בחלון-המדידה (ראיה: Zip sovereign/money/pnl-scan.json (fill_order rows, idx evidence))"
+ ],
+ "realFills24h": 7,
+ "realFillsEver": 368,
+ "fillsWindow": {
+  "hours": 24,
+  "lastFillAt": "2026-10-04T16:07:54Z"
+ },
+ "sources": [
+  {
+   "name": "saos-dex feeMeter (observe.mjs ← chain fill_order)",
+   "kind": "chain-meter",
+   "fills": 250,
+   "asof": "2026-10-05T12:37:29.537Z",
+   "realSbdDelta": 112.155,
+   "realizedSbd": -1.5418,
+   "note": "מד-המנוע — צפיה אחת על אמת-השרשרת; לא מתווסף לאחרים (max rule)"
+  },
+  {
+   "name": "Zip sovereign/money/pnl-scan.json (fill_order rows, idx evidence)",
+   "kind": "chain-fill-rows",
+   "fills": 368,
+   "savedAt": "2026-10-04T20:42:21.418Z",
+   "maxIndex": 65891,
+   "lastFillAt": "2026-10-04T16:07:54Z",
+   "note": "כל-מילוי נושא אינדקס-היסטוריית-חשבון (idx) — ראיה יציבה; מקור-החלון-בן-24h"
+  },
+  {
+   "name": "Zip sovereign/economy/pnl-snapshots.json (FIFO micro-grid)",
+   "kind": "fifo-snapshot",
+   "fills": 327,
+   "savedAt": "2026-10-04T00:00:29.171Z",
+   "seq": 11,
+   "capturedSbd": -1.362068,
+   "trips": 246,
+   "note": "FIFO על fill_order אמת; מקור-ה-PnL-הממומש של המיקרו-גריד"
+  }
+ ],
+ "excludedFromTruth": [
+  {
+   "name": "db/tape.jsonl (SAOS/USDS sim tape)",
+   "present": true,
+   "note": "מילויי-סימולציה — לעולם לא נספרים כמילויי-אמת"
+  },
+  {
+   "name": "arb-ledger paper rows (realness PAPER / executableSize 0)",
+   "present": true,
+   "note": "רשויות-נייר בפנקס-הארביטרז' — נייר הוא נייר; הפסיקה לעולם לא נגזרת מהן",
+   "cumulative": {
+    "paperPnlSbd": -200.107107,
+    "entries": 267,
+    "positiveEntries": 72,
+    "realized": false
+   }
+  }
+ ],
+ "microGrid": {
+  "measured": true,
+  "seq": 11,
+  "at": "2026-10-04T00:00:29.171Z",
+  "capturedSbd": -1.362068,
+  "fillsTotal": 327,
+  "trips": 246,
+  "lastFillAt": "2026-10-04T16:07:54Z",
+  "snapshotAgeHours": 36.793793,
+  "snapshotStale": false,
+  "plan": {
+   "dueAt": "2026-10-09",
+   "goal": "PnL-המיקרו-גריד חיובי נמדד (מ−1.362 SBD)",
+   "source": "MASTER-ORDER-DRAFT-2026-10-05.md §Wave-2 + item 12 (r151 armBuy tightening → impact measurement ~2026-10-09) · Zip session-handoff.md (r151/r156)"
+  },
+  "note": "PnL-המיקרו-גריד מדוד-מהשרשרת (FIFO, ראית-idx) — לא מתומרף; תמונה עודנית >48h מסומנת stale (הרצת-המדידה תלוית-אפליקציה ב-Zip — דורשת-הצבה בראנג הבא)"
+ },
+ "stasis": {
+  "active": true,
+  "since": "2026-10-04T22:12:00Z",
+  "note": "הבלם של הבעלים פעיל — מסילות-ההון עצורות; מדידה ממשיכה"
+ },
+ "publishedVia": "grids/state/arb-ledger.json (arb-scan cadence, arb-ledger-v1 receipt)",
+ "computedAt": "2026-10-05T12:48:06.827Z",
+ "law": "fake exchange = failure"
+}
