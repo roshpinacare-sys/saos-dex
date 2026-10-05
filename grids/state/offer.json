@@ -1,12 +1,13 @@
 {
  "ok": false,
- "publishedAt": "2026-10-04T02:55:14.799Z",
+ "publishedAt": "2026-10-05T11:50:25.052Z",
  "engine": "saos-dex/grids/peg · B-1 (fleet/r130) — internal grid params → external offer; proposes, signs nothing",
  "account": "headcorner",
  "chain": "STEEM-internal-market",
  "verdict": "OFFER-BLOCKED",
  "blocker": [
-  "sell-side waiting for fuel: 0 STEEM commitable < 5.00 needed"
+  "sell-side waiting for fuel: 0 STEEM commitable < 5.00 needed",
+  "buy-side waiting for SBD inventory: 0 SBD commitable < 0.25 needed"
  ],
  "bridge": {
   "activeGrids": [
@@ -27,111 +28,86 @@
    "sup-13",
    "sup-14",
    "sup-15",
-   "sup-16"
+   "sup-16",
+   "sup-17",
+   "sup-18",
+   "sup-19",
+   "sup-20",
+   "sup-21",
+   "sup-22",
+   "sup-23",
+   "sup-24",
+   "sup-25",
+   "sup-26",
+   "sup-27",
+   "sup-28",
+   "sup-29",
+   "sup-30",
+   "sup-31",
+   "sup-32"
   ],
   "strategies": [
    "mm-grid",
    "anchor-quote",
    "supremacy"
   ],
-  "inventoryMu": 2235.98,
-  "capMu": 63000,
-  "utilizationPct": 3.5,
-  "simFeesMu": 311.72,
+  "inventoryMu": 3739.1,
+  "capMu": 111000,
+  "utilizationPct": 3.4,
+  "simFeesMu": 399.16,
   "contribution": "shape only — levels/widths/symmetry doctrine; real sizes come from chain balances exclusively (no self-printing)"
  },
  "marks": {
-  "steemUsd": 0.062592,
-  "sbdUsd": 0.6482,
-  "paritySbdPerSteem": 0.096563,
+  "steemUsd": 0.062854,
+  "sbdUsd": 0.585579,
+  "paritySbdPerSteem": 0.107336,
   "sources": {
    "steem": "coingecko:steem",
    "sbd": "coingecko:steem-dollars"
   },
   "convertArb": {
    "faceUsd": 1,
-   "marketUsd": 0.6482,
-   "discountPct": 35.18,
+   "marketUsd": 0.585579,
+   "discountPct": 41.4421,
    "verdict": "CONVERT-POSITIVE",
    "lockDays": 3.5,
    "note": "condenser convert: SBD→STEEM בערך-$1-פנים אחרי 3.5d · אדג' קיים רק אם שוק-חוץ מתמחר SBD<$1 · נזילות-המרה אינה-מיידית"
   }
  },
  "book": {
-  "bestBid": 0.10009017132551848,
-  "bestAsk": 0.10262725779967159,
-  "mid": 0.101359,
-  "spreadBps": 253
+  "bestBid": 0.10239606799098915,
+  "bestAsk": 0.10263396911898275,
+  "mid": 0.102515,
+  "spreadBps": 23
  },
  "inventory": {
-  "steem": 13.013,
-  "sbd": 1.484
+  "steem": 1.531,
+  "sbd": 0.015
  },
- "openOrdersNow": 13,
+ "openOrdersNow": 3,
  "fair": {
   "internalRef": 0.1041,
-  "externalParity": 0.096563,
-  "boundary": "parity: asks ≥ parity (never sell below external value), bids ≤ parity (never pay above it)"
+  "externalParity": 0.107336,
+  "boundary": "parity floor/ceiling (never sell below / pay above external value) + Z-80 book-touch maker clamp (asks ≥ bestAsk, bids ≤ bestBid)"
  },
- "parityBps": 780,
+ "parityBps": -302,
  "drag": {
-  "k": 1.1265,
-  "spreadBps": 253,
+  "k": 1.0115,
+  "spreadBps": 23,
   "divisorBps": 2000,
   "max": 3,
-  "effAskStepBps": 56.325,
-  "effBidStepBps": 225.3,
+  "effAskStepBps": 50.575,
+  "effBidStepBps": 202.3,
   "note": "ladder spacing follows the live book spread (R81 drag, deterministic); no book → neutral 1.0"
  },
  "plan": {
   "asks": [],
-  "bids": [
-   {
-    "side": "bid",
-    "level": 1,
-    "priceSbdPerSteem": 0.094387,
-    "spendSbd": 0.101,
-    "sizeSteem": 1.07,
-    "kind": "buy-steem-below-parity"
-   },
-   {
-    "side": "bid",
-    "level": 2,
-    "priceSbdPerSteem": 0.092212,
-    "spendSbd": 0.152,
-    "sizeSteem": 1.648,
-    "kind": "buy-steem-below-parity"
-   },
-   {
-    "side": "bid",
-    "level": 3,
-    "priceSbdPerSteem": 0.090036,
-    "spendSbd": 0.228,
-    "sizeSteem": 2.532,
-    "kind": "buy-steem-below-parity"
-   },
-   {
-    "side": "bid",
-    "level": 4,
-    "priceSbdPerSteem": 0.087861,
-    "spendSbd": 0.342,
-    "sizeSteem": 3.893,
-    "kind": "buy-steem-below-parity"
-   },
-   {
-    "side": "bid",
-    "level": 5,
-    "priceSbdPerSteem": 0.085685,
-    "spendSbd": 0.512,
-    "sizeSteem": 5.975,
-    "kind": "buy-steem-below-parity"
-   }
-  ],
+  "bids": [],
   "totals": {
    "askSteem": 0,
-   "bidSbd": 1.335,
-   "steemCommit": 11.261,
-   "sbdCommit": 1.335
+   "bidSbd": 0,
+   "steemCommit": 0.927,
+   "sbdCommit": 0.013
   }
  },
  "triggers": {
