@@ -119,8 +119,10 @@ jobs:
           if git diff --cached --quiet; then
             echo "ledger unchanged — nothing to commit"
           else
-            CUM=$(node -e 'try{const l=require("./grids/state/arb-ledger.json");console.log(`${l.cumulative.paperPnlSbd}SBD/${l.cumulative.entries}e`)}catch(e){console.log("unreadable")}')
-            BEST=$(node -e 'try{const l=require("./grids/state/arb-ledger.json");const v=(l.entries||[]).filter(e=>!e.degraded&&typeof e.edgeBps==="number").sort((a,b)=>b.edgeBps-a.edgeBps)[0];console.log(v?`${v.edgeBps}bps ${v.pair}`:"no-edge")}' 2>/dev/null || echo "no-edge")
+            CUM=$(node -e 'try{const l=require("./grids/state/arb-ledger.json");console.log(`${l.cumulative.paperPnlSbd}SBD/${l.cumulative.entries}e · strategy ${l.cumulative.strategyPnlSbd??0}SBD/${l.cumulative.strategyEntries??0}e`)}catch(e){console.log("unreadable")}')
+            # R25: try/catch מלא — הבאג-הישן (try בלי catch = SyntaxError) ייצר "best no-edge"
+            # מזויף-בכל-ריצה. עתה: "no-edge" = באמת אין-קצה; "ledger-unreadable" = כשל-קריאה כנה.
+            BEST=$(node -e 'try{const l=require("./grids/state/arb-ledger.json");const v=(l.entries||[]).filter(e=>!e.degraded&&typeof e.edgeBps==="number").sort((a,b)=>b.edgeBps-a.edgeBps)[0];console.log(v?`${v.edgeBps}bps ${v.pair}`:"no-edge")}catch(e){console.log("ledger-unreadable")}')
             git commit -m "arb-scan: paper-pnl ledger $(date -u +%FT%TZ) · cumulative ${CUM} · best ${BEST} [skip ci]"
             git push
           fi

@@ -285,6 +285,8 @@ async function main() {
     check("ledger: schema v1 exact", l1.schema === LEDGER_SCHEMA && Array.isArray(l1.entries));
     check("ledger: cumulative sums pnl incl. negative", l1.cumulative.entries === 3 && Math.abs(l1.cumulative.paperPnlSbd - (e1.paperPnlSbd + e2.paperPnlSbd + 0)) < 1e-6, l1.cumulative);
     check("ledger: positiveEntries counts only positive non-degraded edges", l1.cumulative.positiveEntries === 1, l1.cumulative);
+    check("ledger: strategy accumulator = only executable positive-edge entries (R25)", l1.cumulative.strategyEntries === 1 && Math.abs(l1.cumulative.strategyPnlSbd - e1.paperPnlSbd) < 1e-6, l1.cumulative);
+    check("ledger: negative edges never enter the strategy accumulator", l1.cumulative.strategyPnlSbd > 0, l1.cumulative);
     check("ledger: realized=false — paper only", l1.cumulative.realized === false);
     const many = Array.from({ length: LEDGER_CAP + 50 }, (_, i) => ({ ...e1, edgeBps: i % 2 ? i : -i, paperPnlSbd: (i % 2 ? 1 : -1) * 0.1 }));
     const l2 = updateLedger(l1, many, { generatedAt: NOW });
@@ -293,11 +295,13 @@ async function main() {
     check("ledger: layer provenance stamped (Z-88 audit)", l1.layer === "sovereign-CI", l1.layer);
     const l2b = updateLedger({ schema: LEDGER_SCHEMA, generatedAt: NOW, entries: [e1], cumulative: { paperPnlSbd: 0.5, entries: 1, positiveEntries: 1, realized: false } }, [e2], { generatedAt: NOW });
     check("ledger: prev WITHOUT layer → output still carries provenance + cumulative preserved", l2b.layer === "sovereign-CI" && l2b.cumulative.entries === 2, l2b.layer);
+    check("ledger: prev WITHOUT strategy fields → backward-compatible (?? 0, R25)", l2b.cumulative.strategyEntries === 0 && l2b.cumulative.strategyPnlSbd === 0, l2b.cumulative);
     const l3 = updateLedger({ schema: "corrupt", entries: "garbage" }, [e1], { generatedAt: NOW });
     check("ledger: corrupt prev → honest fresh base, never throws", l3.cumulative.entries === 1 && l3.entries.length === 1);
     const eRef = { ts: NOW, pair: "B:R", venueA: "a", venueB: "ref", edgeBps: 900, direction: "d4", executableSize: 0, realness: "PAPER", paperPnlSbd: null, degraded: false, notes: "" };
     const lRef = updateLedger(emptyLedger(), [eRef], { generatedAt: NOW });
     check("ledger: PAPER ref-leg (null pnl) adds ZERO money to cumulative — no invented profit", lRef.cumulative.paperPnlSbd === 0 && lRef.cumulative.entries === 1, lRef.cumulative);
+    check("ledger: PAPER ref-leg (null pnl) enters NEITHER strategy accumulator — unexecutable is unexecutable (R25)", lRef.cumulative.strategyPnlSbd === 0 && lRef.cumulative.strategyEntries === 0, lRef.cumulative);
   }
 
   /* ══ 7. split-router: אופטימלי-מול-נאיבי + חוק-impact + חוק-ספר ══ */

@@ -3,11 +3,21 @@
 // כלל = {on: טיפוס-אירוע, when: תנאי, then: פעולות}. פעולה מייצרת אירועים,
 // האירועים נכנסים חזרה ללולאה — כך הרשת מפעילה את עצמה. שני מגני-לולאה:
 //   · maxDepth=8   — עומק שרשור מרבי לאירוע בודד
-//   · maxFires=64  — מספר הצתות מרבי לכל-טיק (חריגה → grid.halt)
+//   · maxFires=64  — תקציב-ההצתות של משוב (אירועים שנפלטו מכללים, depth≥1)
+//                   (חריגה → grid.halt)
+//
+// R25 · תיקון-שורש של תקלת 09-30: התקרה הישנה ספרה גם-הצתות-תצפית (אירועי-המנוע
+// ב-depth=0 — grid.fill/grid.quote/fee.meter) ולכן צי-חוקי שגדל (34 גרידים ×
+// מילויים) עצר את-עצמו בכנות-שקרית. האמת-המבנית: הצתות-תצפית סופיות-מעצמן
+// (רשימת-אירועים סופית × כללים סופיים, כל-זוג בדיוק-פעם) — אי-אפשר שיברחו.
+// מה שיכול-לברוח הוא רק משוב: כלל שפולט אירוע שמצית כללים שוב — ולזה יש גם
+// את מגן-העומק. תקציב-ההצתות מגן על משוב; רשת-ביטחון מוחלטת מגנה מפיצול-
+// פתולוגי (אזרוק-רחב לפני-עומק-8).
 // סדר דטרמיניסטי מלא: לפי seq של האירוע ואז לפי id הכלל.
 
 export const MAX_DEPTH = 8;
-export const MAX_FIRES = 64;
+export const MAX_FIRES = 64;             // תקציב-משוב (depth ≥ 1) בלבד
+export const MAX_FIRES_ABSOLUTE = 4096;  // רשת-ביטחון מוחלטת (כל-העומקים)
 
 /* ── הכללים המייסדים ──────────────────────────────────────────────────────
    R-ANCHOR-QUOTE  · עיגון חדש ב-weave → רענון-ציטוטים בכל-הגרידים החיים
@@ -75,7 +85,8 @@ export function nextMilestone(state) {
 export function processRules(state, events, rules = SEED_RULES) {
   const actions = [];
   const newEvents = [];
-  let fired = 0;
+  let fired = 0;          // סך-הכל (דיווח) — כל-העומקים
+  let feedbackFires = 0;  // הצתות-משוב בלבד (depth ≥ 1) — אלו שנגד-תקציב-הלולאה
   let halted = false;
   let haltReason = null;
 
@@ -88,11 +99,6 @@ export function processRules(state, events, rules = SEED_RULES) {
       haltReason = `depth>${MAX_DEPTH} on ${ev.type}`;
       break;
     }
-    if (fired >= MAX_FIRES) {
-      halted = true;
-      haltReason = `fires>${MAX_FIRES}`;
-      break;
-    }
     for (const rule of rules) {
       if (rule.on !== ev.type) continue;
       let ok = false;
@@ -103,9 +109,17 @@ export function processRules(state, events, rules = SEED_RULES) {
       }
       if (!ok) continue;
       fired += 1;
-      if (fired > MAX_FIRES) {
+      if (depth > 0) feedbackFires += 1;
+      if (feedbackFires > MAX_FIRES) {
+        // מגן-הלולאה: רק משוב (כללים-שפולטים) יכול לברוח — הצתות-תצפית סופיות-מעצמן
         halted = true;
-        haltReason = `fires>${MAX_FIRES}`;
+        haltReason = `feedback-fires>${MAX_FIRES} (rule-emitted cascade)`;
+        break;
+      }
+      if (fired > MAX_FIRES_ABSOLUTE) {
+        // רשת-ביטחון אחרונה: פיצול-פתולוגי לפני-מגן-העומק
+        halted = true;
+        haltReason = `fires>${MAX_FIRES_ABSOLUTE} (absolute net)`;
         break;
       }
       const ctx = { state, event: ev, activeGrids: () => (state.grids ?? []).filter((g) => g.active).map((g) => g.id) };

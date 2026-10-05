@@ -32,8 +32,15 @@
 //   {"schema":"arb-ledger-v1","layer":"sovereign-CI","generatedAt":"<iso>",
 //    "entries":[{"ts","pair","venueA","venueB","edgeBps","direction","executableSize",
 //                "realness","paperPnlSbd","degraded","notes"}],
-//    "cumulative":{"paperPnlSbd":<sum>,"entries":<n>,"positiveEntries":<n>,"realized":false}}
+//    "cumulative":{"paperPnlSbd":<sum>,"entries":<n>,"positiveEntries":<n>,"realized":false,
+//                  "strategyPnlSbd":<sum>,"strategyEntries":<n>}}
 //   תקרת-קובץ: 200 רשומות-אחרונות + מצטבר-כל-הזמנים (המצטבר שורד את-התקרה).
+//   R25 · שני-מצטברים — לא לערבב אותם בכותרות:
+//   · paperPnlSbd    = מצטבר-כל-הרשומות (שני-הכיוונים כולל-שליליים) — מד-עלות-שוק
+//                      של חציית-שני-צידי-הספרים, לא PnL-אסטרטגיה;
+//   · strategyPnlSbd = מצטבר-אסטרטגיה (רק-קצוות-חיוביים-ברי-ביצוע: edge>0 ו-paperPnlSbd
+//                      מספרי — שני-הצדדים קיימים לפי חוק-Z88) — מה שאסטרטגיה
+//                      שלוקחת-רק-קצה-חיובי הייתה מרוויחה-על-נייר.
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -462,7 +469,7 @@ export function evaluateFeeds({ feeds, refs, nowIso }) {
 /* ══ הפנקס המצטבר — הסכימה המדויקת arb-ledger-v1 ═══════════════════════════ */
 
 export function emptyLedger() {
-  return { schema: LEDGER_SCHEMA, layer: LEDGER_LAYER, generatedAt: null, entries: [], cumulative: { paperPnlSbd: 0, entries: 0, positiveEntries: 0, realized: false } };
+  return { schema: LEDGER_SCHEMA, layer: LEDGER_LAYER, generatedAt: null, entries: [], cumulative: { paperPnlSbd: 0, entries: 0, positiveEntries: 0, realized: false, strategyPnlSbd: 0, strategyEntries: 0 } };
 }
 
 /** עדכון-פנקס טהור: מצטבר-כל-הזמנים שורד את-תקרת-ה-200-רשומות. */
@@ -472,6 +479,10 @@ export function updateLedger(prev, newEntries, { generatedAt, cap = LEDGER_CAP }
   const entries = [...(base.entries ?? []), ...added].slice(-cap);
   const sumPnl = added.reduce((s, e) => s + (typeof e?.paperPnlSbd === "number" ? e.paperPnlSbd : 0), 0);
   const sumPos = added.filter((e) => !e?.degraded && typeof e?.edgeBps === "number" && e.edgeBps > 0).length;
+  // R25 · מצטבר-האסטרטגיה: רק-קצוות-חיוביים ברי-ביצוע (edge>0 + paperPnlSbd מספרי —
+  // שני-הצדדים קיימים לפי חוק-Z88). רשומת-PAPER (pnl=null) לא נספרת — אין-כסף-מומצא.
+  const strat = added.filter((e) => !e?.degraded && typeof e?.edgeBps === "number" && e.edgeBps > 0 && typeof e?.paperPnlSbd === "number");
+  const sumStratPnl = strat.reduce((s, e) => s + e.paperPnlSbd, 0);
   return {
     schema: LEDGER_SCHEMA,
     layer: LEDGER_LAYER, // provenance stamped on every write — even when base prev lacked it
@@ -482,6 +493,8 @@ export function updateLedger(prev, newEntries, { generatedAt, cap = LEDGER_CAP }
       entries: (base.cumulative.entries ?? 0) + added.length,
       positiveEntries: (base.cumulative.positiveEntries ?? 0) + sumPos,
       realized: false, // נייר-בלבד — מתקבל-אמת רק-אחרי-חימוש-מסילה-ע"י-הבעלים
+      strategyPnlSbd: r6((base.cumulative.strategyPnlSbd ?? 0) + sumStratPnl),
+      strategyEntries: (base.cumulative.strategyEntries ?? 0) + strat.length,
     },
   };
 }
