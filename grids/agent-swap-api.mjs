@@ -19,6 +19,7 @@
 //   ברירת-מחדל ללא-(2)וגם-(3) → DISARMED: פלט-תוכנית בלבד. אפס-ברירת-מחדל-חמושה.
 
 import { ACCOUNT, RC_MIN, rpcAny, signAndBroadcast, privToPub, wifToPriv } from "./mover.mjs";
+import { stasisHalt } from "./brake.mjs"; // owner directive 2026-10-04: think-before-sign — the signer obeys the brake
 import { crossAudit } from "./book-law.mjs";
 import { controlFor } from "./agent-roster.mjs";
 import { FEE_BPS, r6, steemBookFeed, htxDepthFeed, binanceTopFeed, measureRefs } from "./arb-scan.mjs";
@@ -138,6 +139,13 @@ export async function executeAgentSwap({ plan, env = process.env, fetchImpl = fe
   if (typeof plan?.edgeBps === "number" && plan.edgeBps <= 0) reasons.push(`live edge ${plan.edgeBps}bps ≤ 0 — no execution on non-positive edge (honesty law)`);
   if (reasons.length > 0) {
     return { ok: false, status: "DISARMED", gate: "fail-closed", reasons, broadcast: null, law: "DISARMED by default: flag+env+clamp+edge+cap must ALL pass; verify-then-sign still follows before any broadcast" };
+  }
+
+  /* 0. בלם-ההון (owner 2026-10-04): קודם-לכל החתימה — השאלה "האם מותר?" (אותו-דפוס של mover/convert).
+   * חוסם את-נתיב-השידור-החי לפני-כל-קריאת-רשת ולפני-שתי-אתרי-בניית-הפקודות (limit_order_create bid/ask).
+   * החותם-המוזרק (signer) = סימולציית-בדיקה בלבד (אפס-שידור-אמת, אותו-חוק של arb-selftest) — הבלם לא חוסם אותו. */
+  if (!signer && stasisHalt("agent-swap-api")) {
+    return { ok: false, status: "HALTED", gate: "STASIS", reasons: ["STASIS active — swap-api signing halted (think-before-sign, owner directive 2026-10-04)"], broadcast: null, halted: "STASIS" };
   }
 
   // (רשת) verify-then-sign — אותו-דפוס מחייב של mover/convert:

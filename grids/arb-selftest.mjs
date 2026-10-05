@@ -5,6 +5,7 @@
  * counter-grid (שימור-הון/הפרדת-צדדים/מונוטוניות) · שער-סוכנים fail-closed ·
  * מתאם-בלרט BRIDGE. דטרמיניסטי לגמרי — אפס-רשת: הכל מ-fixtures שהוקלטו-חי
  * (grids/state/fixtures/, מוקלט 2026-10-04) ומוקטורים-סינתטיים מסומנים.
+ * measurement-only lane — capital gate N/A (STASIS scope)
  * אפס-תלות; רץ על node טהור.
  */
 
