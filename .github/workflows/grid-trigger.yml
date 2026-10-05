@@ -27,6 +27,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      # T-B (owner directive 2026-10-05, trace 1a10bfe1342b2391): השער-המודע-מסילות
+      # מפרסם את-מצב-הבלם ואת-המסילות-הפתוחות בגלוי. אין-כאן-שום-צעד-חתימה:
+      # run.mjs = טיק-סימולציה (µ-sim, אפס-מפתחות) ו-peg.mjs = תוכנית-בלבד —
+      # מסילות-מדידה שממשיכות-לרוץ גם-תחת STASIS (אותו-חוק של הסקופ ב-STASIS.json).
+      # המסילות-ההון (grid/claims/general) נפרסמות-כאן רק-כאמת-מצב; החתימה עצמה
+      # חיה ב-dex-grid.yml ונשלטת-שם על-ידי השער + הבלם-בזמן-חתימה (brake.mjs).
+      - name: STASIS state (lane-aware report — this workflow signs nothing, measurement continues)
+        id: brake
+        run: |
+          set -eu
+          S=$(node -e "const s=JSON.parse(require('fs').readFileSync('grids/state/STASIS.json','utf8'));const lanes=(Array.isArray(s.stagedLanes&&s.stagedLanes.allow)?s.stagedLanes.allow:[]).join(',');console.log([s.active===true?'true':'false',String(s.mode||'full'),lanes||'none'].join(' '))")
+          ACTIVE=$(echo "$S" | cut -d' ' -f1); MODE=$(echo "$S" | cut -d' ' -f2); LANES=$(echo "$S" | cut -d' ' -f3)
+          echo "active=$ACTIVE" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "staged_lanes=$LANES" >> "$GITHUB_OUTPUT"
+          echo "STASIS report · active=$ACTIVE · mode=$MODE · stagedLanes.allow=[$LANES] · grid lane: $([ "$MODE" = "staged" ] && echo ",$LANES," | grep -q ',grid,' && echo STAGED-ALLOW || echo halted) · claims lane: $([ "$MODE" = "staged" ] && echo ",$LANES," | grep -q ',claims,' && echo STAGED-ALLOW || echo halted) · this tick is measurement-only (no signing) — continues under STASIS"
+
       - name: tick
         run: node grids/run.mjs
         continue-on-error: false

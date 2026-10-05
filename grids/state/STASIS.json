@@ -1,17 +1,36 @@
 {
   "protocol": "SAOS-FATE-DEFENSE-STASIS/1",
   "active": true,
-  "reason": "OWNER DIRECTIVE 2026-10-04 (IM trace 1a108e28015b0451): 'חייב לעצור ולבחון מה הסוכנים עושים' — capital lanes halt for examination; the grid signer (mover/convert) obeys like every other signer in the fleet",
-  "requestedBy": "owner directive 2026-10-04 (IM trace 1a108e28015b0451), executed by the platform main agent",
+  "mode": "staged",
+  "reason": "OWNER DIRECTIVE 2026-10-04 (IM trace 1a108e28015b0451): 'חייב לעצור ולבחון מה הסוכנים עושים' — capital lanes halt for examination; the grid signer (mover/convert) obeys like every other signer in the fleet. STAGED RE-ENTRY 2026-10-05 (IM trace 1a10bfe1342b2391): the owner ordered 'Re-enable its autonomous capabilities intelligently. Let it operate.' — with a calibration mandate (staged re-entry, limited exposure, observation, increasing confidence). The brake stays armed; only the staged lanes below are open.",
+  "requestedBy": "owner directive 2026-10-04 (IM trace 1a108e28015b0451), executed by the platform main agent; staged-lanes opened on owner directive 2026-10-05 (IM trace 1a10bfe1342b2391), executed by the T-B agent",
   "since": "2026-10-04T22:12:00Z",
   "scope": "all signing lanes of the dex grids: limit orders, cancels, converts (measurement/simulation continue)",
-  "resumePolicy": "STASIS is a mechanical circuit breaker (FATE-DEFENSE law #1). Resume only after root-cause + judge-node green + explicit owner word. The file itself is the audit trail — never delete history, flip the flag.",
+  "stagedLanes": {
+    "allow": ["grid", "claims"],
+    "reason": "he-EN: פתיחה-מדורגת-ממוקדת בלבד — מסילת-הסולם/הספר (mover, grid-beat:steem, grid-beat:hive — limit_order_create/cancel על הספר-הפנימי) ומסילת-התביעות (claim_reward_balance). כל-יתר המסילות נשארות-עצורות: convert (convert_hd), agent-swap-api, transfers, delegations, votes. Targeted staged lift only — the ladder/book machines (limit_order_create/cancel) and reward claims (claim_reward_balance) open; everything else (convert, swap-api, transfers, delegations, votes) stays halted. Unknown tool = general = halted (fail-closed).",
+    "since": "2026-10-05T13:05:00Z"
+  },
+  "resumeLog": [
+    {
+      "at": "2026-10-05T13:05:00Z",
+      "what": "staged lanes grid+claims opened",
+      "authority": "owner directive 2026-10-05 IM trace 1a10bfe1342b2391: 'Re-enable its autonomous capabilities intelligently. Let it operate.' + calibration mandate; root-cause closed R24/R25; Wave-3 targeted resume; judge-green selftests R25-d; first-run observation required"
+    }
+  ],
+  "resumePolicy": "STASIS is a mechanical circuit breaker (FATE-DEFENSE law #1). Resume only after root-cause + judge-node green + explicit owner word. The file itself is the audit trail — never delete history, flip the flag. Staged lanes (mode=staged + stagedLanes.allow) are opened per-tool-lane by grids/brake.mjs; an allowed lane prints a STASIS-STAGED-ALLOW receipt; everything else halts exactly as before.",
   "history": [
     {
       "at": "2026-10-04T22:12:00Z",
       "action": "engaged",
       "by": "platform main agent on owner directive (trace 1a108e28015b0451)",
       "note": "mirrors Domain/agents/STASIS.json engagement — one brake law across both homes"
+    },
+    {
+      "at": "2026-10-05T13:05:00Z",
+      "action": "staged-lanes-opened",
+      "by": "T-B agent on owner directive 2026-10-05 (IM trace 1a10bfe1342b2391) — 'Re-enable its autonomous capabilities intelligently. Let it operate.' + calibration mandate",
+      "note": "resumePolicy conditions measured and satisfied: (1) root-cause CLOSED — R24 forensics (stale-signer class, orderid ledger, fires>64) + R25-a..d fixes pushed and API-verified (82e9de4: rules.mjs observation-vs-feedback fires, arb dual ledgers, BEST one-liner, grid-beat sign-time brake); (2) judge-node GREEN — selftests green (book-law 27, community 20, observe, peg, supremacy, arb 222/222, run.mjs --selftest, rules 11/11) + new brake staged-lane selftest; (3) owner word EXPLICIT — IM trace 1a10bfe1342b2391 2026-10-05. Wave-3 of MASTER-ORDER-DRAFT-2026-10-05 §7 = targeted lift for the grid. mode=staged, active stays true; lanes grid+claims only; every other lane halts; first-run observation is the calibration evidence"
     }
   ]
 }
