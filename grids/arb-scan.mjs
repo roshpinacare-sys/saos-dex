@@ -349,22 +349,32 @@ function worstRealness(tags) {
   return worst;
 }
 
-/** רשומה-אחת שלמה מזוג-רגליים (טהור). */
+/** רשומה-אחת שלמה מזוג-רגליים (טהור).
+ * Wave-2 סעיף 4 (חוק-ההשתקה): קצה עם executableSize<=0 (או realness PAPER) מסומן
+ * paperMuted=true + תווית 'PAPER-NO-EXECUTION:' ב-notes — קצה שאי-אפשר לבצע
+ * לא מכתר יותר (לא ב-BEST, לא במצטבר-האסטרטגיה); הוא נשמר בפנקס כראיית-מחיר בלבד. */
 export function makeEntry({ ts, pair, venueA, venueB, direction, buyLevels, sellLevels, size, feeBps = FEE_BPS, buyQuoteUsd = 1, sellQuoteUsd = 1, sbdUsd = 1, realnessTags, notes = "", refBuyPriceUsd = null, refSellPriceUsd = null }) {
   const rt = paperRoundTrip({ buyLevels, sellLevels, size, feeBps, buyQuoteUsd, sellQuoteUsd, sbdUsd, refBuyPriceUsd, refSellPriceUsd });
+  const paperMuted = !(rt.executableSize > 0);
   return {
     ts, pair, venueA, venueB, edgeBps: rt.edgeBps, direction,
     executableSize: rt.executableSize,
     realness: worstRealness(realnessTags ?? []),
     paperPnlSbd: rt.paperPnlSbd,
+    paperMuted,
     degraded: false,
-    notes,
+    notes: paperMuted ? `PAPER-NO-EXECUTION: ${notes}` : notes,
   };
 }
 
 /** רשומת-דילוג כנה — פיד שנכשל: הזוג מדולג, לא משוחזר (fail-closed). */
 export function degradedEntry({ ts, pair, venueA, venueB, direction, reason }) {
-  return { ts, pair, venueA, venueB, edgeBps: null, direction, executableSize: 0, realness: "DEGRADED", paperPnlSbd: 0, degraded: true, notes: `fail-closed skip: ${reason}` };
+  return { ts, pair, venueA, venueB, edgeBps: null, direction, executableSize: 0, realness: "DEGRADED", paperPnlSbd: 0, paperMuted: true, degraded: true, notes: `fail-closed skip: ${reason}` };
+}
+
+/** חוק-ההשתקה (Wave-2 סעיף 4): קצה בלי-ביצוע = נייר-מושתק — לא מכתר, לא באסטרטגיה. */
+export function isPaperMuted(e) {
+  return e?.paperMuted === true || (!(e?.executableSize > 0) && !e?.degraded);
 }
 
 /**
@@ -469,7 +479,7 @@ export function evaluateFeeds({ feeds, refs, nowIso }) {
 /* ══ הפנקס המצטבר — הסכימה המדויקת arb-ledger-v1 ═══════════════════════════ */
 
 export function emptyLedger() {
-  return { schema: LEDGER_SCHEMA, layer: LEDGER_LAYER, generatedAt: null, entries: [], cumulative: { paperPnlSbd: 0, entries: 0, positiveEntries: 0, realized: false, strategyPnlSbd: 0, strategyEntries: 0 } };
+  return { schema: LEDGER_SCHEMA, layer: LEDGER_LAYER, generatedAt: null, entries: [], cumulative: { paperPnlSbd: 0, entries: 0, positiveEntries: 0, realized: false, strategyPnlSbd: 0, strategyEntries: 0, mutedEntries: 0 } };
 }
 
 /** עדכון-פנקס טהור: מצטבר-כל-הזמנים שורד את-תקרת-ה-200-רשומות. */
@@ -481,8 +491,12 @@ export function updateLedger(prev, newEntries, { generatedAt, cap = LEDGER_CAP }
   const sumPos = added.filter((e) => !e?.degraded && typeof e?.edgeBps === "number" && e.edgeBps > 0).length;
   // R25 · מצטבר-האסטרטגיה: רק-קצוות-חיוביים ברי-ביצוע (edge>0 + paperPnlSbd מספרי —
   // שני-הצדדים קיימים לפי חוק-Z88). רשומת-PAPER (pnl=null) לא נספרת — אין-כסף-מומצא.
-  const strat = added.filter((e) => !e?.degraded && typeof e?.edgeBps === "number" && e.edgeBps > 0 && typeof e?.paperPnlSbd === "number");
+  // Wave-2 · חוק-ההשתקה: גם paperMuted (executableSize<=0) מוצא-מן-המניין בגלוי —
+  // הפרדה מפורשת (זהה-משמעותית לחוק-Z88; נאכפת-כאן במפורש ולא במקרה).
+  const strat = added.filter((e) => !e?.degraded && !e?.paperMuted && typeof e?.edgeBps === "number" && e.edgeBps > 0 && typeof e?.paperPnlSbd === "number");
   const sumStratPnl = strat.reduce((s, e) => s + e.paperPnlSbd, 0);
+  // Wave-2 · מונה-המושתקים: רשומות ברות-מדידה-אך-שאינן-ברות-ביצוע (כנות-כמותית)
+  const mutedCount = added.filter((e) => !e?.degraded && isPaperMuted(e)).length;
   return {
     schema: LEDGER_SCHEMA,
     layer: LEDGER_LAYER, // provenance stamped on every write — even when base prev lacked it
@@ -495,6 +509,7 @@ export function updateLedger(prev, newEntries, { generatedAt, cap = LEDGER_CAP }
       realized: false, // נייר-בלבד — מתקבל-אמת רק-אחרי-חימוש-מסילה-ע"י-הבעלים
       strategyPnlSbd: r6((base.cumulative.strategyPnlSbd ?? 0) + sumStratPnl),
       strategyEntries: (base.cumulative.strategyEntries ?? 0) + strat.length,
+      mutedEntries: (base.cumulative.mutedEntries ?? 0) + mutedCount,
     },
   };
 }
@@ -538,6 +553,15 @@ export async function runArbScan({ ledgerPath = LEDGER_PATH, fetchImpl = fetch, 
   const entries = evaluateFeeds({ feeds: f, refs: refs.refs, nowIso: at });
   const prev = loadLedger(ledgerPath);
   const ledger = updateLedger(prev, entries, { generatedAt: at, cap });
+  // Wave-2 סעיף 1: פסיקת-אמת על מילויים — מוטמעת בפנקס ומפורסמת באותו-נתיב-קבלות
+  // שה-CI מקומיט (arb-scan.yml → arb-ledger.json). שער-שנכשל → הפנקס יוצא בלי-truthGate
+  // עם-שדה-שגיאה כנה (לעולם לא פסיקה מזויפת).
+  try {
+    const { truthGateFromFiles } = await import("./truth-gate.mjs");
+    ledger.truthGate = truthGateFromFiles({ nowIso: at });
+  } catch (e) {
+    ledger.truthGateError = `truth-gate unavailable (honest): ${String(e?.message ?? e).slice(0, 100)}`;
+  }
   saveLedger(ledger, ledgerPath);
   return { at, entries, ledger, refs, sources: refs.sources };
 }
@@ -555,11 +579,17 @@ if (process.argv[1] && process.argv[1].endsWith("arb-scan.mjs")) {
   } else {
     try {
       const { at, entries, ledger, sources } = await runArbScan();
-      const best = entries.filter((e) => !e.degraded && typeof e.edgeBps === "number").sort((a, b) => b.edgeBps - a.edgeBps)[0];
+      // Wave-2 סעיף 4: ה-BEST מחושב רק על קצוות ברי-ביצוע — נייר-מושתק לא מכתר יותר
+      // (מדוד-חי 2026-10-05: ה-1584bps SWAP.BLURT שכתר היה רשומת-PAPER בגודל-0).
+      const best = entries.filter((e) => !e.degraded && !isPaperMuted(e) && typeof e.edgeBps === "number").sort((a, b) => b.edgeBps - a.edgeBps)[0];
       const degraded = entries.filter((e) => e.degraded).length;
-      console.log(`[arb-scan] ${at} · entries ${entries.length} (degraded ${degraded}) · cumulative ${ledger.cumulative.paperPnlSbd} SBD over ${ledger.cumulative.entries} entries`);
+      const muted = entries.filter((e) => !e.degraded && isPaperMuted(e)).length;
+      const tg = ledger.truthGate;
+      console.log(`[arb-scan] ${at} · entries ${entries.length} (degraded ${degraded} · paper-muted ${muted}) · cumulative ${ledger.cumulative.paperPnlSbd} SBD over ${ledger.cumulative.entries} entries · strategy ${ledger.cumulative.strategyPnlSbd} SBD/${ledger.cumulative.strategyEntries}e`);
+      console.log(`[truth-gate] ${tg?.verdict ?? "unavailable"} · realFills24h ${tg?.realFills24h ?? "unmeasured"} · realFillsEver ${tg?.realFillsEver ?? 0} · ${tg?.law ?? ""}`);
       console.log(`[arb-scan] refs: ${JSON.stringify(sources)}`);
-      if (best) console.log(`[arb-scan] best edge: ${best.edgeBps}bps · ${best.direction} · size ${best.executableSize} · realness ${best.realness}`);
+      if (best) console.log(`[arb-scan] best EXECUTABLE edge: ${best.edgeBps}bps · ${best.direction} · size ${best.executableSize} · realness ${best.realness}`);
+      else console.log("[arb-scan] best EXECUTABLE edge: none (paper edges muted — Wave-2 §4)");
       console.log("[arb-scan] law: scan-only receipts — execution stays owner-armed and gated");
     } catch (e) {
       // לעולם לא נופל: גם-כאן — רישום-כנה ויציאה-רכה (CI continue-on-error)

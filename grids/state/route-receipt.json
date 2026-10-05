@@ -1,0 +1,71 @@
+{
+ "schema": "saos-dex-route-receipt-v1",
+ "ok": true,
+ "route": "STEEM→SBD→HBD→HIVE",
+ "direction": "STEEM↔HIVE (Wave-2 first-route candidate)",
+ "legs": [
+  {
+   "n": 1,
+   "kind": "SELL-BOOK",
+   "venue": "steem-internal (ONCHAIN_REAL)",
+   "from": "STEEM",
+   "to": "SBD",
+   "sizeIn": 50,
+   "vwapRaw": 0.101882,
+   "feeBps": 30,
+   "out": 5.07885,
+   "unit": "SBD"
+  },
+  {
+   "n": 2,
+   "kind": "PARITY-BRIDGE",
+   "venue": "SBD→HBD via USD refs",
+   "from": "SBD",
+   "to": "HBD",
+   "sizeIn": 5.07885,
+   "rate": 0.5854,
+   "out": 2.973159,
+   "unit": "HBD",
+   "fee": "chain convert fee — unknown, not invented (measured at execution rung)"
+  },
+  {
+   "n": 3,
+   "kind": "BUY-BOOK",
+   "venue": "hive-internal (ONCHAIN_REAL)",
+   "from": "HBD",
+   "to": "HIVE",
+   "budgetHbd": 2.973159,
+   "vwapRaw": 0.057745,
+   "filledPreFee": 51.488064,
+   "feeBps": 30,
+   "out": 51.334062,
+   "unit": "HIVE"
+  }
+ ],
+ "expectedOut": {
+  "hive": 51.334062,
+  "perSteem": 1.026681
+ },
+ "inputSize": {
+  "steem": 50
+ },
+ "executableSize": 51.334062,
+ "slippageBps": -128.641155,
+ "refs": {
+  "sbdUsd": 0.5854,
+  "hbdUsd": 1,
+  "hbdPerSbd": 0.5854,
+  "note": "SBD ref = live measureRefs; HBD = $1.00 haircut regime (same honesty as arb-scan HIVE:HBD)"
+ },
+ "bookDepth": {
+  "steemBidDepthSteem": 44017.486,
+  "hiveAskDepthHbd": 3338.89
+ },
+ "armState": "ARMED-STAGED-AWAITING-LANE",
+ "execution": "NOT-EXECUTED — plan-only receipt, zero broadcast, zero keys",
+ "unlockCondition": "T-B staged grid lane observed green + explicit owner word — future rung",
+ "ownerNote": "מסלול-הראוטר הראשון STEEM→HIVE — מתוכנן-במלואו על ספרי-השוק-הפנימי, חמוש-בשלב (ARMED-STAGED) וממתין-למסילה. אין ביצוע ואין שידור בשלב-זה: הביצוע יינתן בראנג עתידי רק אחרי שמסילת-הגריד (T-B, stagedLanes) נצפית ירוקה ואחרי מילת-בעלים מפורשת. המספרים כאן נמדדו מהספרים-החיים בעת-ההנפקה — לא אומדן, לא המצאה.",
+ "computedAt": "2026-10-05T12:48:06.860Z",
+ "notes": "",
+ "law": "fake exchange = failure — a route without real books is not a route"
+}
