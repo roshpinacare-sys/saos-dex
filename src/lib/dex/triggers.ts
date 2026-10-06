@@ -125,12 +125,26 @@ export function trigTick(st: DexState, exec: (op: Op) => ReturnType<typeof impor
       addLock(st, trg.owner, lockAsset, -(trg.side === "sell" ? trg.amountMu : notional(effPx, trg.amountMu)));
       const map = { ...(st.trig ?? {}) }; delete map[trg.id]; st.trig = map;
       st.journal.push({ h, t: nowMs, soldier: "trig", action: "trig_expire", note: `${trg.id} פג-תוקף, ערבות שוחררה` });
+      // Task 83 · OCO: פקיעת-רגל = ביטול-האחות (הקישור הוא ההתחייבות)
+      if (trg.oco) {
+        const sib = Object.values(st.trig ?? {}).find((t) => t.oco === trg.oco && t.id !== trg.id && t.owner === trg.owner);
+        if (sib) {
+          const sLock = sib.side === "sell" ? sib.base : sib.quote;
+          const sEff = sib.limitPx > 0 ? sib.limitPx : sib.triggerPx;
+          addLock(st, sib.owner, sLock, -(sib.side === "sell" ? sib.amountMu : notional(sEff, sib.amountMu)));
+          const ocoMap = { ...(st.trig ?? {}) }; delete ocoMap[sib.id]; st.trig = ocoMap;
+          st.journal.push({ h, t: nowMs, soldier: "trig", action: "oco_sibling_cancel", note: `${sib.id} בוטלה (אחות-OCO של ${trg.id} שפגה) — ערבות שוחררה` });
+        }
+      }
       continue;
     }
     const pool = getPool(st, [trg.base, trg.quote].sort().join("/"));
     const mid = pool ? poolMidFor(pool, trg.base, trg.quote) : 0;
     if (!(mid > 0)) continue;
-    const fire = trg.side === "sell" ? mid <= trg.triggerPx : mid >= trg.triggerPx;
+    // Task 83 · כיוון-החצייה: down=מת-על-ירידה (mid ≤) · up=מת-על-עלייה (mid ≥) —
+    // ברירת-מחדל-נגזרת-מהצד (sell→down · buy→up) = התנהגות-היסטורית; רגלי-take של-OCO חוצות-הפוך.
+    const dir = trg.dir ?? (trg.side === "sell" ? "down" : "up");
+    const fire = dir === "down" ? mid <= trg.triggerPx : mid >= trg.triggerPx;
     if (!fire) continue;
     // ביצוע: שחרור-הערבות → פקודת-לימיט (חופפת-מיד-כ-taker, שארית-נחה)
     const lockAsset = trg.side === "sell" ? trg.base : trg.quote;
@@ -149,6 +163,22 @@ export function trigTick(st: DexState, exec: (op: Op) => ReturnType<typeof impor
     if (r.ok) {
       if (r.events) events.push(...r.events);
       st.journal.push({ h, t: nowMs, soldier: "trig", action: "trig_fire", note: `${trg.id} נורה @${mid} (trigger ${trg.triggerPx})` });
+      // Task 83 · OCO: ירי-רגל = ביטול-האחות (שחרור-ערבות + מחיקה) — סטנדרט-בורסות
+      if (trg.oco) {
+        const sib = Object.values(st.trig ?? {}).find((t) => t.oco === trg.oco && t.id !== trg.id && t.owner === trg.owner);
+        if (sib) {
+          const sLock = sib.side === "sell" ? sib.base : sib.quote;
+          const sEff = sib.limitPx > 0 ? sib.limitPx : sib.triggerPx;
+          addLock(st, sib.owner, sLock, -(sib.side === "sell" ? sib.amountMu : notional(sEff, sib.amountMu)));
+          const ocoMap = { ...(st.trig ?? {}) };
+          delete ocoMap[sib.id];
+          delete ocoMap[trg.id];
+          st.trig = ocoMap;
+          st.journal.push({ h, t: nowMs, soldier: "trig", action: "oco_sibling_cancel", note: `${sib.id} בוטלה (אחות-OCO של ${trg.id} שנורתה) — ערבות שוחררה` });
+          budget -= 1;
+          continue;
+        }
+      }
     } else {
       // נדחה — הערבה חוזרת, ניסיון-חוזר-בבלוק-הבא (כנות)
       addLock(st, trg.owner, lockAsset, lockMu);

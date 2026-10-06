@@ -25,7 +25,7 @@ import {
   RefreshCcw, Route as RouteIcon, ShieldCheck, Wallet, Zap, Waves, GaugeCircle, Droplets, Scale,
 } from "lucide-react";
 import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
-import { PriceChart } from "@/components/dex/chart";
+import { PriceChart, DepthChart, type KlineCandle } from "@/components/dex/chart";
 import { MobileNav, TopTabs, type ViewId } from "@/components/dex/nav";
 import { AgentView } from "@/components/dex/agent-view";
 
@@ -70,6 +70,7 @@ interface MarketView {
   bids: { price: number; total: number; orders: number }[];
   asks: { price: number; total: number; orders: number }[];
   chart: { t: number; p: number }[];
+  stats24?: { last: number; chg24Bps: number; high24: number; low24: number; vol24BaseMu: number; vol24QuoteMu: number; trades24: number; candles1m: number }; // Task 83
 }
 interface PoolView { key: string; a: string; b: string; ra: number; rb: number; lp: number; mid: number; swaps: number; feeAccruedTreasury: number; k: number; feeBps?: number }
 interface WalletView { name: string; credits: number; balances: Record<string, number>; locked: Record<string, number> }
@@ -378,6 +379,30 @@ function useRelayStream(version: number | undefined): RelayView | null {
   return relay;
 }
 
+/* ══ Task 83 · נרות-OHLCV — ריענון-כל-5ש׳ על פקודת-הנרות-החיה ═══════════════ */
+const KLINES_INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"] as const;
+function useKlines(pairKey: string | undefined, interval: string): KlineCandle[] {
+  const [candles, setCandles] = useState<KlineCandle[]>([]);
+  useEffect(() => {
+    if (!pairKey) { setCandles([]); return; }
+    let live = true;
+    let ctrl: AbortController | null = null;
+    const fetchOnce = async () => {
+      try {
+        ctrl?.abort();
+        ctrl = new AbortController();
+        const r = await fetch(api(`/api/dex/klines?pair=${encodeURIComponent(pairKey)}&interval=${interval}&limit=400`), { cache: "no-store", signal: ctrl.signal });
+        const j = (await r.json()) as { ok?: boolean; candles?: KlineCandle[] };
+        if (live && j?.ok) setCandles(j.candles ?? []);
+      } catch { /* כנות: כשל-רשת — המחזור-הבא */ }
+    };
+    void fetchOnce();
+    const t = setInterval(fetchOnce, 5000);
+    return () => { live = false; clearInterval(t); ctrl?.abort(); };
+  }, [pairKey, interval]);
+  return candles;
+}
+
 /* ══ הזמנות-operator (לניהול-פקודות וביטול) ═════════════════════════════════ */
 function useMyOrders(version: number | undefined): MyOrder[] {
   const [orders, setOrders] = useState<MyOrder[]>([]);
@@ -487,6 +512,15 @@ function Watchlist({ markets, selected, onSelect }: {
                 <span className={`font-mono text-[9px] ${Math.abs(m.twapDevBps) > 400 ? "text-amber-400" : "text-zinc-600"}`}>
                   {m.twapDevBps > 0 ? "+" : ""}{m.twapDevBps}bps vs scale
                 </span>
+              </div>
+            )}
+            {/* Task 83 · סטטיסטיקת-24ש' מנרות-מסחר-אמת (סטנדרט-בורסות) */}
+            {m.stats24 && m.stats24.vol24BaseMu > 0 && (
+              <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[10px]" dir="ltr" data-testid="watchlist-24h">
+                <span className={m.stats24.chg24Bps >= 0 ? "text-green-400" : "text-red-400"}>
+                  24h {m.stats24.chg24Bps >= 0 ? "+" : ""}{(m.stats24.chg24Bps / 100).toFixed(2)}%
+                </span>
+                <span className="text-zinc-500">vol {fmtInt(m.stats24.vol24QuoteMu)}µ · {m.stats24.trades24} trades</span>
               </div>
             )}
           </button>
@@ -1003,9 +1037,16 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
   onDone: () => void;
 }) {
   const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [marketOrder, setMarketOrder] = useState(false);
+  // Task 83 · סוגי-פקודות מוסדיים: LIMIT/MARKET/STOP/TAKE/OCO + postOnly/IOC
+  const [ordType, setOrdType] = useState<"limit" | "market" | "stop" | "take" | "oco">("limit");
   const [priceIn, setPriceIn] = useState("");
   const [amountIn, setAmountIn] = useState("");
+  const [stopPxIn, setStopPxIn] = useState("");
+  const [takePxIn, setTakePxIn] = useState("");
+  const [postOnly, setPostOnly] = useState(false);
+  const [ioc, setIoc] = useState(false);
+  const marketOrder = ordType === "market";
+  const isConditional = ordType === "stop" || ordType === "take" || ordType === "oco";
 
   // מחיר-אפקטיבי נגזר ברנדור (בלי-effect): אם-השדה-ריק → ברירת-מחדל-חכמה = מחיר-הצד-השני
   const defaultPx = side === "buy" ? market?.bestAsk ?? 0 : market?.bestBid ?? 0;
@@ -1018,13 +1059,23 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
 
   const payAsset = side === "buy" ? market?.quote ?? "USDS" : market?.base ?? "SAOS";
   const availMu = opWallet ? (opWallet.balances[payAsset] ?? 0) - (opWallet.locked[payAsset] ?? 0) : 0;
-  const obligationMu = side === "buy" ? notionalMu : amtMu;
+  // (obligationMu מחושב-מטה — Task 83: מתחשב-בסוג-הפקודה)
 
   // אימות-קלט (fail-closed ויזואלי — הכפתור ננעל עד-תקינות)
+  const stopPx = Math.floor(Number(stopPxIn) || 0);
+  const takePx = Math.floor(Number(takePxIn) || 0);
+  // עלות-אפקטיבית לצד-הקנייה: לימיט/מרקט → px · סטופ/טייק → טריגר · OCO → הגרוע-מבין-השניים
+  const worstPx = ordType === "oco" ? Math.max(stopPx, takePx) : isConditional ? stopPx : px;
+  const obligationMu = side === "buy" && isConditional ? Math.floor((worstPx * amtMu) / MU) : side === "buy" ? notionalMu : amtMu;
   const errors: string[] = [];
   if (!market) errors.push("no market selected");
   if (amtMu <= 0) errors.push("amount must be > 0");
-  if (!marketOrder && px <= 0) errors.push("price must be > 0");
+  if (ordType === "limit" && px <= 0) errors.push("price must be > 0");
+  if ((ordType === "stop" || ordType === "take") && stopPx <= 0) errors.push("trigger price must be > 0");
+  if (ordType === "oco") {
+    if (stopPx <= 0 || takePx <= 0) errors.push("stop & take prices required");
+    else if (side === "sell" ? stopPx >= takePx : takePx >= stopPx) errors.push(side === "sell" ? "sell OCO: stop < take" : "buy OCO: take < stop");
+  }
   if (marketOrder && side === "buy" && (market?.bestAsk ?? 0) <= 0 && (market?.bids.length ?? 0) === 0) errors.push("no liquidity to walk");
   if (obligationMu > availMu) errors.push(`insufficient ${payAsset}: need ${fmt(obligationMu, 0)}, avail ${fmt(availMu, 0)}`);
   const valid = errors.length === 0;
@@ -1032,6 +1083,7 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
   // Slippage Guard — הערכת-אמת מהליכה-על-הספר:
   const walk = useMemo(() => {
     if (!market) return null;
+    if (isConditional) return null; // פקודות-מותנות לא חוצות-עכשיו — אין-הליכה-רלוונטית
     if (marketOrder) {
       const levels = side === "buy" ? market.asks : market.bids;
       return walkSlippage(levels, amtMu, side);
@@ -1048,18 +1100,27 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
 
   const submit = async () => {
     if (!valid || !market) return;
-    await post(api("/api/dex/order"), {
-      action: marketOrder ? "fill" : "order",
-      base: market.base, quote: market.quote, side,
-      price: marketOrder ? undefined : px,
-      amount: amtMu,
-    });
+    // Task 83 · פקודות-מותנות דרך-מסילת-התוכניות (trig_create/oco_place) — הבונה-הוא-ה-keeper
+    if (ordType === "stop" || ordType === "take") {
+      await post(api("/api/dex/program"), { op: "trig_create", base: market.base, quote: market.quote, side, triggerPx: stopPx, amount: amtMu, kind: ordType });
+    } else if (ordType === "oco") {
+      await post(api("/api/dex/program"), { op: "oco_place", base: market.base, quote: market.quote, side, triggerPx: stopPx, limitPx: takePx, amount: amtMu });
+    } else {
+      await post(api("/api/dex/order"), {
+        action: marketOrder ? "fill" : "order",
+        base: market.base, quote: market.quote, side,
+        price: marketOrder ? undefined : px,
+        amount: amtMu,
+        postOnly: ordType === "limit" && postOnly ? true : undefined,
+        ioc: ordType === "limit" && ioc ? true : undefined,
+      });
+    }
     setAmountIn("");
     onDone();
   };
 
   return (
-    <div data-testid="trading-form" data-side={side} data-ordertype={marketOrder ? "market" : "limit"}>
+    <div data-testid="trading-form" data-side={side} data-ordertype={ordType}>
       {/* מתגי-side — ירוק/אדום מילוליים */}
       <div className="grid grid-cols-2 gap-2">
         <button
@@ -1076,27 +1137,56 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
         </button>
       </div>
 
-      {/* מתגי-סוג-פקודה */}
-      <div className="mt-2 grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => setMarketOrder(false)}
-          className={`rounded-md border px-2 py-1 text-[11px] font-bold ${!marketOrder ? "border-amber-500/50 bg-amber-500/10 text-amber-300" : "border-zinc-800 text-zinc-500"}`}>
-          LIMIT
-        </button>
-        <button type="button" onClick={() => setMarketOrder(true)}
-          className={`rounded-md border px-2 py-1 text-[11px] font-bold ${marketOrder ? "border-amber-500/50 bg-amber-500/10 text-amber-300" : "border-zinc-800 text-zinc-500"}`}>
-          MARKET
-        </button>
+      {/* מתגי-סוג-פקודה — Task 83: LIMIT/MARKET/STOP/TAKE/OCO (סטנדרט-dYdX/Binance) */}
+      <div className="mt-2 grid grid-cols-5 gap-1">
+        {(["limit", "market", "stop", "take", "oco"] as const).map((id) => (
+          <button key={id} type="button" onClick={() => setOrdType(id)}
+            className={`rounded-md border px-1 py-1 text-[10px] font-bold ${ordType === id ? "border-amber-500/50 bg-amber-500/10 text-amber-300" : "border-zinc-800 text-zinc-500 hover:border-zinc-600"}`}
+            data-testid={`ordtype-${id}`}>
+            {id.toUpperCase()}
+          </button>
+        ))}
       </div>
 
-      {/* שדות */}
+      {/* שדות — דינמיים לפי-סוג-הפקודה */}
       <div className="mt-3 space-y-2">
-        {!marketOrder && (
+        {ordType === "limit" && (
           <label className="block">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">מחיר ({market?.quote ?? "quote"}, µ)</span>
             <input
               value={priceIn} onChange={(e) => setPriceIn(e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" dir="ltr"
               className="mt-0.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-amber-500/60"
               placeholder={String(market?.bestAsk ?? "")}
+            />
+          </label>
+        )}
+        {(ordType === "take") && (
+          <label className="block">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">trigger — take (µ)</span>
+            <input
+              value={stopPxIn} onChange={(e) => setStopPxIn(e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" dir="ltr"
+              className="mt-0.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-amber-500/60"
+              placeholder={side === "sell" ? "sell take: fires when price ≥ trigger" : "buy take: fires when price ≤ trigger"}
+            />
+          </label>
+        )}
+        {(ordType === "stop") && (
+          <label className="block">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">trigger — stop (µ)</span>
+            <input
+              value={stopPxIn} onChange={(e) => setStopPxIn(e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" dir="ltr"
+              className="mt-0.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-amber-500/60"
+              placeholder={side === "buy" ? "buy stop: fires when price ≥ trigger" : "sell stop: fires when price ≤ trigger"}
+            />
+          </label>
+        )}
+        {ordType === "oco" && (
+          <label className="block">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">take (µ) — {side === "sell" ? "מעל-ה-stop" : "מתחת-ל-stop"}</span>
+            <input
+              value={takePxIn} onChange={(e) => setTakePxIn(e.target.value.replace(/[^\d]/g, ""))} inputMode="numeric" dir="ltr"
+              className="mt-0.5 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-amber-500/60"
+              placeholder={side === "sell" ? "take > stop" : "take < stop"}
             />
           </label>
         )}
@@ -1108,6 +1198,18 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
             placeholder="0.00"
           />
         </label>
+        {ordType === "limit" && (
+          <div className="flex gap-2" data-testid="tif-row">
+            <button type="button" onClick={() => setPostOnly((v) => !v)} data-testid="post-only-toggle"
+              className={`flex-1 rounded-md border px-2 py-1 text-[10px] font-bold ${postOnly ? "border-violet-500/50 bg-violet-500/10 text-violet-300" : "border-zinc-800 text-zinc-500"}`}>
+              POST-ONLY {postOnly ? "·ON" : ""}
+            </button>
+            <button type="button" onClick={() => setIoc((v) => !v)} data-testid="ioc-toggle"
+              className={`flex-1 rounded-md border px-2 py-1 text-[10px] font-bold ${ioc ? "border-violet-500/50 bg-violet-500/10 text-violet-300" : "border-zinc-800 text-zinc-500"}`}>
+              IOC {ioc ? "·ON" : ""}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* שורת-חשבון */}
@@ -1157,7 +1259,11 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
         className="mt-3 w-full py-3 text-base"
         testid="trade-submit"
       >
-        {side === "buy" ? "BUY" : "SELL"} {market ? `${market.base}` : ""} {marketOrder ? "· MARKET" : `· LIMIT ${fmtInt(px)}`}
+        {side === "buy" ? "BUY" : "SELL"} {market ? `${market.base}` : ""}{" "}
+        {ordType === "market" ? "· MARKET"
+          : ordType === "limit" ? `· LIMIT ${fmtInt(px)}`
+          : ordType === "oco" ? `· OCO ${fmtInt(stopPx)}/${fmtInt(takePx)}`
+          : `· ${ordType.toUpperCase()} ${fmtInt(stopPx)}`}
       </GoldButton>
     </div>
   );
@@ -2030,6 +2136,9 @@ function PortfolioBridgePanel() {
 export default function DexTerminal() {
   const { world, load, online } = useWorldStream();
   const [marketKey, setMarketKey] = useState<string>("");
+  // Task 83 · גרף-מוסדי: טווח-נרות + מבט (candles/depth) — ה-hook-עצמו מתחת (אחרי-market)
+  const [kInterval, setKInterval] = useState<string>("1m");
+  const [chartView, setChartView] = useState<"candles" | "depth">("candles");
   // Roast-73 · תצוגות-הטרמינל: טרמינל (הכל-כמו-שהיה) + סוכן (קונסולת-סוכן-הסוואפ)
   const [view, setView] = useState<ViewId>("terminal");
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
@@ -2111,6 +2220,8 @@ export default function DexTerminal() {
     // הזוג-הריבוני הוא ברירת-המחדל-הבלעדית — SAOS הוא המלך
     return world.markets.find((m) => m.key === "SAOS/USDS") ?? world.markets[0];
   }, [world, marketKey]);
+  // Task 83 · נרות-השוק-הנבחר (ריענון-5ש׳)
+  const klines = useKlines(market?.key, kInterval);
 
   const opWallet = world?.wallets.find((w) => w.name === "operator");
   const st = world?.state;
@@ -2154,6 +2265,12 @@ export default function DexTerminal() {
               <span className={`flex items-center gap-0.5 font-mono text-xs font-bold ${up ? "text-green-400" : "text-red-400"}`}>
                 {up ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowDownRight className="h-3.5 w-3.5" />}
                 {Math.abs(Math.floor(((px - refPx) / refPx) * 10_000))} bps
+              </span>
+            )}
+            {/* Task 83 · סטטיסטיקת-24ש' מנרות-מסחר-אמת (סטנדרט-בורסות) */}
+            {market?.stats24 && market.stats24.vol24BaseMu > 0 && (
+              <span className={`font-mono text-xs font-bold ${market.stats24.chg24Bps >= 0 ? "text-green-400" : "text-red-400"}`} data-testid="header-24h" title="שינוי-24ש' מנרות-מסחר-אמת">
+                24h {market.stats24.chg24Bps >= 0 ? "+" : ""}{(market.stats24.chg24Bps / 100).toFixed(2)}%
               </span>
             )}
           </div>
@@ -2295,10 +2412,38 @@ export default function DexTerminal() {
                 </div>
               }
             >
-              <PriceChart data={market?.chart ?? []} height={420} />
+              {/* Task 83 · סרגל-הגרף: טווחי-נרות (סטנדרט-בורסות) + מתג candles/depth */}
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1" dir="ltr">
+                  {KLINES_INTERVALS.map((iv) => (
+                    <button key={iv} type="button" onClick={() => setKInterval(iv)}
+                      className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-bold ${kInterval === iv ? "border-amber-500/50 bg-amber-500/10 text-amber-300" : "border-zinc-800 text-zinc-500 hover:border-zinc-600"}`}
+                      data-testid={`kline-interval-${iv}`}>
+                      {iv}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1" dir="ltr">
+                  <button type="button" onClick={() => setChartView("candles")}
+                    className={`rounded border px-2 py-0.5 font-mono text-[10px] font-bold ${chartView === "candles" ? "border-amber-500/50 bg-amber-500/10 text-amber-300" : "border-zinc-800 text-zinc-500 hover:border-zinc-600"}`}
+                    data-testid="chart-view-candles">
+                    CANDLES
+                  </button>
+                  <button type="button" onClick={() => setChartView("depth")}
+                    className={`rounded border px-2 py-0.5 font-mono text-[10px] font-bold ${chartView === "depth" ? "border-amber-500/50 bg-amber-500/10 text-amber-300" : "border-zinc-800 text-zinc-500 hover:border-zinc-600"}`}
+                    data-testid="chart-view-depth">
+                    DEPTH
+                  </button>
+                </div>
+              </div>
+              {chartView === "candles" ? (
+                <PriceChart candles={klines} height={420} intervalLabel={kInterval} />
+              ) : (
+                <DepthChart market={market} height={420} />
+              )}
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] text-zinc-600" dir="ltr">
-                <span>lightweight-charts (TradingView standard) · event-driven stream</span>
-                <span>{market?.chart.length ?? 0} live points</span>
+                <span>{chartView === "candles" ? `OHLCV ${kInterval} · מסחר-אמת בלבד · git-backed (db/klines.json)` : "depth מהספר-החי (12 רמות) · bids ירוק / asks אדום"}</span>
+                <span>{chartView === "candles" ? `${klines.length} candles` : `${(market?.bids.length ?? 0) + (market?.asks.length ?? 0)} levels`}</span>
               </div>
             </Panel>
 

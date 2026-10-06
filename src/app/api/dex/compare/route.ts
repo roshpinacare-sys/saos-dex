@@ -111,6 +111,52 @@ export async function GET() {
       olympus: "POL עצום אך חד-כיווני",
       verdict: "כנות: עומק-התחלתי קטן — ולכן ה-ALE קיים: כל-עמלה מעמיקה אותו, לנצח",
     },
+    /* ── Task 83 · CEX-grade market data — נמדד-חי אחרי-המימוש (2026-10-06) ── */
+    {
+      metric: "נרות-OHLCV + נפח (TradingView standard)",
+      us: "כן — 1m/5m/15m/1h/4h/1d + היסטוגרמת-נפח, מנסחר-אמת-בלבד (git-backed: db/klines.json)",
+      usLive: true, usValue: "6 טווחים חיים",
+      uniswap: "אין-גרף-ילידי בממשק-הפרוטוקול (GeckoTerminal/DEXScreener-חוץ)",
+      curve: "דרך-צד-שלישי",
+      olympus: "דשבורד-אנליטי (אין-נרות-מסחר-ילידיים)",
+      verdict: "נרות-ילידיים-מהמנוע-עצמו — אפס-תלות-בצד-שלישי, אפס-נרות-מזויפים",
+    },
+    {
+      metric: "גרף-עומק (Depth Chart)",
+      us: "כן — SVG-מצטבר bids/asks + מד-חוסר-איזון (imbalance), מהספר-החי",
+      usLive: true, usValue: "depth chart + imbalance",
+      uniswap: "לא-רלוונטי (AMM — אין-ספר)",
+      curve: "לא-רלוונטי (AMM)",
+      olympus: "לא-רלוונטי",
+      verdict: "היברידי: גם-ספר-עם-עומק-ויזואלי וגם-בריכות — אף-מוביל לא משלב-את-שניהם-ילידית",
+    },
+    {
+      metric: "סוגי-פקודות",
+      us: "LIMIT · MARKET · STOP · TAKE · OCO · POST-ONLY · IOC · DCA · batch-אטומי · CoW-מחיר-אחיד",
+      usLive: true, usValue: "10+ סוגים",
+      uniswap: "swap-בודד (אין-פקודות-מותנות-ילידיות)",
+      curve: "swap-בודד",
+      olympus: "bond buy/sell בלבד",
+      verdict: "סטנדרט-dYdX/Binance — וה-keeper הוא בונה-הבלוקים עצמו (אפס-תשתית-חוץ)",
+    },
+    {
+      metric: "סטרימינג בזמן-אמת",
+      us: "SSE (/api/dex/stream — פעימת-2ש׳: מחירים+24h+עסקאות) + long-poll-מבוסס-אירוע (state?v=)",
+      usLive: true, usValue: "SSE + event-driven",
+      uniswap: "ריענון-לפי-בלוק-אתריום (~12ש׳)",
+      curve: "ריענון-לפי-בלוק",
+      olympus: "ריענון-ידני",
+      verdict: "הזרם מתקדם-עם-כל-בלוק (3ש׳) — מהיר-מהשרשרת-שלהם, בלי-WS-תשתית",
+    },
+    {
+      metric: "היסטוריה-מנותבת (Pagination API)",
+      us: "כן — /klines + /trades עם cursor (before) · limit≤1000 · סטטיסטיקת-24ש' בכל-שוק",
+      usLive: true, usValue: "cursor pagination + 24h stats",
+      uniswap: "subgraph-חוץ (תלות-צד-שלישי)",
+      curve: "subgraph-חוץ",
+      olympus: "API-אנליטי-סגור",
+      verdict: "ההיסטוריה חיה-בתוך-המנוע — אפס-subgraph, אפס-ספק-אמת-חוץ",
+    },
   ];
 
   return NextResponse.json({
