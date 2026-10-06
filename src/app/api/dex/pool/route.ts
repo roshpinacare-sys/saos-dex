@@ -2,12 +2,18 @@ import { NextResponse } from "next/server";
 import { submitOp, nextNonce } from "@/lib/dex/chain";
 import { consoleGuard } from "@/lib/dex/guard";
 import { operatorAuth } from "@/lib/operator-auth";
+import { POOL_OPEN_MIN_SIDE_MU } from "@/lib/dex/kernel";
+import { isMakerIdentity } from "@/lib/dex/maker"; // EXEC-CD-9 · אותו-שער-זהויות
 
 export const dynamic = "force-dynamic";
 
 /** ניהול-בריכות:
- *  · open   — פתיחת-בריכה-חדשה (Roast-71): זריעה-דו-צדדית-מהאוצר, LP=√k לאוצר.
- *             מעשה-אוצר-ריבוני — issuer מוכתב-טריזור (treasury-only בגרעין).
+ *  · open   — פתיחת-בריכה-חדשה (Roast-71). EXEC-CD-9 · חצי-פתוח (אישור-מפעיל):
+ *             issuer=treasury (ברירת-מחדל) = הנתיב-הריבוני (זריעה-מהאוצר, LP=√k לאוצר,
+ *             בלי-שער) · issuer=<אזרח> = הנתיב-הפתוח — זריעה-דו-צדדית-מהיתרות-של-הפותח
+ *             עצמו, LP=√k כולו-לפותח, **שער-הערבות**: מינימום POOL_OPEN_MIN_SIDE_MU
+ *             (${POOL_OPEN_MIN_SIDE_MU}µ) פר-צד + תקרת-בריכות-פר-פותח (8 בגרעין).
+ *             אפס-כסף-אוצר-בסיכון; האוצר-רק-מרוויח (נתח-ה-30% מעמלי-הסוואפ).
  *  · add    — הוספת-נזילות (פרופורציונלי) — מנפיק operator (ברירת-מחדל) או treasury.
  *  · remove — פריקה pro-rata LP. */
 export async function POST(req: Request) {
@@ -33,11 +39,27 @@ export async function POST(req: Request) {
     if (!(amountA > 0) || !(amountB > 0)) {
       return NextResponse.json({ ok: false, error: "bad-open (נדרש pair קנוני + amountA>0 + amountB>0)" }, { status: 200 });
     }
+    // EXEC-CD-9 · נתיב-אזרחי חצי-פתוח: issuer רשות (ברירת-מחדל: treasury = ריבוני).
+    // הגרעין אוכף את שער-הערבות (מינימום-פר-צד) ואת תקרת-הבריכות — הכל fail-closed שם.
+    const opener = body.issuer ? String(body.issuer).toLowerCase() : "treasury";
+    if (opener !== "treasury" && !isMakerIdentity(opener)) {
+      return NextResponse.json({ ok: false, error: "bad-issuer (אזרח: a-z0-9- 3..24; או treasury)" }, { status: 200 });
+    }
+    const citizen = opener !== "treasury";
+    if (citizen && (amountA < POOL_OPEN_MIN_SIDE_MU || amountB < POOL_OPEN_MIN_SIDE_MU)) {
+      return NextResponse.json({
+        ok: false,
+        error: `below-margin-gate (שער-הערבות: מינימום ${POOL_OPEN_MIN_SIDE_MU}µ פר-צד — נתיב-אזרחי; האוצר פטור)`,
+      }, { status: 200 });
+    }
     const r = submitOp({
-      type: "pool_open", issuer: "treasury", nonce: nextNonce("po"),
+      type: "pool_open", issuer: opener, nonce: nextNonce("po"),
       pair, amount: amountA, amountB,
     });
-    return NextResponse.json({ ok: r.queued, error: r.reason });
+    return NextResponse.json({
+      ok: r.queued, error: r.reason,
+      path: citizen ? "citizen (LP=√k לפותח · owner=מנפיק)" : "sovereign (LP=√k לאוצר)",
+    });
   }
 
   if (body.action === "add") {

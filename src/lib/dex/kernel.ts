@@ -66,6 +66,14 @@ export const GAS_TABLE = {
   heartbeat: 10,
   refuel: 0, // THE-REFUEL: העברת-קרדיטים מהאוצר — אפס-גז (שירות-חיות כמו relay)
   mint_fuel: 0, // THE-FOUNTAIN: הטבעת-דלק מגובה-עמלות-מדודות — אפס-גז, אוצר-בלבד
+  // EXEC-CD-9 · THE-PRIMER: הצתה-ריבונית-חד-פעמית של-סולם-הדלק — אפס-גז (משפחת-הערוצים-הריבוניים).
+  // הממצא-החי: gasUsed=28.1Mµ-גז-ספר-נשרף-וברח-מהמחזור בעידן-שלפני-המד (treasuryProfit=0,
+  // כל-הממנים-על-הרצפה — אפילו-order_gc-של-האוצר-נדחה). המחזור-הקנוני-החדש (bookgas) מתקן-את-העתיד
+  // אבל-לא-מצית-הווה-קפוא: אף-op-לא-עובר → אף-גז-לא-נאסף → אין-מה-למחזר. הפריימר: מינוף-חד-פעמי-
+  // מוגבל-וגלוי (ספליט-קבוע-לסולם-הממנים), נגרע-מהאינווריאנטה-כמו-mint_fuel (feeMinted↑),
+  // חתום-לנצח-ביומן-ובדגל-מצב (primerH) — אידמפוטנטי-בדחייה. אישור-מפעיל מפורש: "תקן הכל
+  // ולייעל... לא אכפת לי שיהיה מה שצריך" (EXEC-CD-9).
+  primer: 0,
   relay: 0, // THE-DOOR: חוזה-חינם שכופה עבודה-אמת על רשת-מרוחקת
   relay_ack: 0,
   xfer_free: 0, // THE-SWEEP (SETTLE-12): העברה-חופשית על הרשת-הריבונית — אפס-גז, תקרה-מדודה (FREE_XFER_CAP), העברה-טהורה בין-יתרות (אפס-נגיעה בקרדיטים → האינווריאנטה נשמרת מעצמה)
@@ -123,6 +131,22 @@ export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter�
 export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
 export const FREE_XFER_CAP = 2_000_000; // THE-SWEEP (SETTLE-12): תקרת-העברה-חינם-פר-פקודה (2,000 יחידות) — החינם הוא המוצר, התקרה היא גבול-הנזק
 export const BATCH_MAX_OPS = 8; // דבר-גורר-דבר: תקרת-תתי-ops-פר-batch — אטומיות לא משלמת עליית-זיכרון בלתי-חסומה (structuredClone לכל-batch)
+// ── EXEC-CD-9 · POOL-OPEN-חצי-פתוח (אישור-מפעיל: "תקן הכל... לא אכפת לי שיהיה מה שצריך") ──
+// רישום-בריכות-פתוח לכל-אזרח-רשת. הספאם-גייט הוא **שער-הערבות** ולא מחיר:
+// זריעה-דו-צדדית-אמת מהיתרות-של-הפותח עצמו — מינימום פר-צד + תקרת-בריכות-פר-פותח.
+// אפס-כסף-אוצר-בסיכון (האוצר-רק-מרוויח: נתח-ה-30% מעמלי-הסוואפ זורם-אליו גם-מבריכות-אזרחיות).
+// קנה-מידה (עקביות-רשת): VAULT_DEBT_CAP_MU=100k · BOND_MIN_USDS=50k → שער-50k-µ-פר-צד
+// ($50-פר-צד, $100-מחויבות-אמת-מינימלית) חוסם-אבק-וספאם ונשאר פתוח-באמת.
+export const POOL_OPEN_MIN_SIDE_MU = 50_000; // שער-הערבות: מינימום-זריעה פר-צד (µ) — נתיב-אזרחי בלבד (נתיב-האוצר נשאר חופשי-משער)
+export const POOL_OPEN_MAX_PER_ISSUER = 8;   // תקרת-בריכות-פר-פותח-אזרחי — אותו-דפוס-גבול-נזק של LPAD_MAX_PER_OWNER
+// ── EXEC-CD-9 · THE-PRIMER — הצתת-הדלק-החד-פעמית (ראה-הערת-ה-GAS_TABLE) ──
+export const PRIMER_MU = 1_000_000; // תקרה-מוחלטת-חד-פעמית — ~6% מהגז-שברח-בעידן-שלפני-המד (28.1Mµ)
+/** ספליט-קבוע-דטרמיניסטי לסולם-הממנים (Σ=PRIMER_MU בדיוק) — הארנה-מממנת-חיילים,
+ * הבוטים-מחזיקים-עומק, האוצר-מפיץ, המפעיל-קו-הגנה. נגזרת-מגובהים-ההיסטוריים. */
+export const PRIMER_SPLIT: Record<string, number> = {
+  arena: 300_000, "bot-a": 150_000, "bot-b": 150_000, "bot-c": 150_000,
+  treasury: 150_000, operator: 100_000,
+};
 
 // ── Task 54 · קבועי-כלכלה (חיים-בגרעין כדי-למנוע-יבוא-מעגלי: kernel ← economy) ──
 export const BLOCKS_PER_WEEK = 201_600; // טיק 3s → 7 ימים מדויק
@@ -251,6 +275,9 @@ export interface Pool {
   lp: number; // היצע µlp
   feeAccruedTreasury: number; // מדידה
   swaps: number;
+  // EXEC-CD-9 · בעלות: הפותח-האזרחי (רשויות: undefined = ריבוני-אוצר — תמונות-מצב-ישנות
+  // בלעדיו; מגן-repeg: בריכת-אזרח אינה-ניתנת-לסימון-מחדש-אוצר — כסף-האוצר לא מסתכן בה)
+  owner?: string;
   // Task 54 · עמלים-דינמיים (V4-hooks/Bunni am-AMM): EWMA-תנודתיות-פר-בריכה
   // + עמלה-מסתגלת 4..1500bps — מגן-LP מ-LVR. רשויות: תמונות-מצב-ישנות-בלעדיהן.
   volBpsEwma?: number;
@@ -290,6 +317,18 @@ export interface DexState {
   // FIX(Roast-67 · ZFB-gas-tank): Σקרדיטים-שמומנו-לארנק-הדלק-מהעמלות-שנמדדו
   // (revenueCycle, 10%-מהמחזור, בסמנטיקות-mint_fuel-המלאות) — טלמטריית-ריצה.
   gasFundedMu?: number;
+  // EXEC-CD-9 · fuel-freeze-fix: Σגז-ספר-שמוחזר-לאוצר (רשויות: תמונות-ישנות = undefined→0).
+  // המטר-הכנוני-המלא חוץ-מצב (db/book-gas.json — נעקב-גיט); השדה-כאן הוא **רצפת-מצב**
+  // נגד-הטבעה-כפולה (bookGasFloor) וטלמטריה — אותו-דפוס של feeMinted/gasFundedMu.
+  bookGasRecycledMu?: number;
+  // EXEC-CD-9 · דגל-הפריימר-החד-פעמי (רשויות: תמונות-ישנות = undefined → הפריימר-טרם-נוצל).
+  // primerUsed = השער-הקנוני (בוליאני — חסין-גובה-0); primerH = פורנזי-בלבד (גובה-ההצתה).
+  primerUsed?: boolean;
+  primerH?: number;
+  // EXEC-CD-9 · סל-הנפקה-ריבונית-מוצהרת (תוך-feeMinted): חלק-ה-feeMinted שאינו-מגובה-
+  // עמלות-אלא-בהחלטת-הפריימר. הביקורת-מחסירה-אותו-מזהות-העמלות (settle (d)) —
+  // מוצהר-ולא-מוסתר; חסום-מעל-feeMinted. רשויות: undefined → נגזר מ-primerUsed.
+  primerMu?: number;
   // FIX(Roast-65-a · LOW-11): cooldown-הברזל-של-ה-faucet — במצב (לא-בזיכרון-מודול)
   // כדי-שריסטארט לא יאפס את התקרה. רשויות: תמונות-ישנות (undefined→0).
   faucetAt?: Record<string, number>;
@@ -490,6 +529,30 @@ function nonceSet(st: DexState): Set<string> {
   if (!s) { s = new Set(st.nonces); nonceSets.set(st, s); }
   return s;
 }
+/** EXEC-CD-9 · בדיקת-תפוסת-נונס O(1) (אותו-Set של-ה-dedupe — מקור-האמת):
+ * מאפשר-למגישים-הפנימיים (mm.submit) לדלג-אוטומטית-מעל-נונסים-תפוסים-לפני-הדחיפה
+ * לממפול — במקום-סערת-replay-rejected שמתתקנת-רק-אחרי-טיפוס-איטי על-כל-הטווח.
+ * המפתח-באותו-פורמט-של-applyOp: `${issuer}:${nonce}`. */
+export function nonceExists(st: DexState, dedupeKey: string): boolean {
+  return nonceSet(st).has(dedupeKey);
+}
+
+/** EXEC-CD-9 · סריקת-מלאי-נונסים-מלאה עבור-זריעת-סוכנים (mm.seedNonceSeq):
+ * ה-Set הוא זיכרון-dedupe-מלא-לכל-חיי-התהליך (עולה על החלון הקנוני) — הזרעה
+ * מול-החלון-בלבד נופלת-מאחורי-נונסים-שכבר-נשטפו-מהמערך-אך-חיים-ב-Set → replay-rejected
+ * בטור עד-שהמונה מחליף את כל הטווח. הסריקה-הזאת נותנת את המקסימום האמיתי של
+ * הסיומת-המספרית-אחרי-`prefix` על-פני **כל-ה-Set** — הזרעה-חסינה-מהתנגשות. */
+export function maxNonceSuffix(prefix: string, st: DexState): number {
+  let max = 0;
+  const set = nonceSet(st);
+  for (const n of set) {
+    if (n.length <= prefix.length || !n.startsWith(prefix)) continue;
+    const v = parseInt(n.slice(prefix.length), 10);
+    if (Number.isFinite(v) && v > max) max = v;
+  }
+  return max;
+}
+
 function pushNonce(st: DexState, key: string): void {
   st.nonces.push(key);
   nonceSet(st).add(key);
@@ -1275,6 +1338,24 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "mint_fuel", note: `+${fAmt}µ credits →${fTo} (fees-backed: profit ${fromProfit} + meter ${fromMeter})` });
       return { ok: true, gas: 0 };
     }
+    case "primer": {
+      // EXEC-CD-9 · THE-PRIMER — הצתה-חד-פעמית-מוגבלת-וגלויה (ראה-הערת-ה-GAS_TABLE).
+      // אוצר-בלבד · פעם-אחת-לנצח (דגל-primerH) · ספליט-קבוע-דטרמיניסטי · feeMinted↑
+      // באותן-סמנטיקות-mint_fuel → האינווריאנטה Σcredits+gasUsed−feeMinted===ג'נזיס
+      // נשמרת-בדיוק · הכל-מגולל-ביומן. ממשיך-מיד-לתדלוב-עצמי דרך-מד-גז-הספר (bookgas).
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      if (st.primerUsed) return { ok: false, err: "primer-already-used", gas: 0 };
+      const c = consume(); if (c) return c; // אפס-גז — אבל-דדופ-נונס-מלא
+      for (const [who, amt] of Object.entries(PRIMER_SPLIT)) {
+        st.credits[who] = (st.credits[who] ?? 0) + amt; // Σ(PRIMER_SPLIT)===PRIMER_MU
+      }
+      st.primerUsed = true;
+      st.primerH = st.height;
+      st.feeMinted = (st.feeMinted ?? 0) + PRIMER_MU; // אינווריאנטת-הקרדיטים (a) נשמרת
+      st.primerMu = (st.primerMu ?? 0) + PRIMER_MU; // ההצהרה — הביקורת מחסירה מזהות-העמלות (d)
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "primer", note: `THE-PRIMER: +${PRIMER_MU}µ credits re-primed →${Object.entries(PRIMER_SPLIT).map(([w, a]) => `${w}:${a}`).join(" · ")} (one-time, bounded; pre-meter era burned ${st.gasUsed}µ outside the cycle; invariant preserved via feeMinted)` });
+      return { ok: true, gas };
+    }
     case "order": {
       // פקודת-לימיט מוסדית (סטנדרט-בורסות): חפיפה-מיידית כ-taker במחיר-המייקר,
       // ושארית נחה בספר. אין-חפיפה כלל → מנוחה-מלאה. נעילה-מראש על מלוא-הכמות;
@@ -1437,9 +1518,15 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // עד-היום בריכות-נולדו-רק-בג'נזיס (seedPool-hardcoded) או-בחתימת-השקה
       // (launchpad-graduation) — מה-שהשאיר נכסים-רשומים-עם-מחזיקים-אמת
       // (WSBD/PHIVE/WBLURT) בלי-יציאה-כלל (tier-none בראוטר — בלי-המרה).
-      // פתיחת-בריכה = מעשה-ריבוני-של-האוצר: זריעה-דו-צדדית-מהיתרות-שלו,
-      // LP=√k כולו-לאוצר (כמו-ג'נזיס), fail-closed על-כל-שלב.
-      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas };
+      // EXEC-CD-9 · חצי-פתוח (אישור-מפעיל): שני-נתיבים —
+      //  · ריבוני (issuer=treasury): זריעה-דו-צדדית-מהיתרות-של-האוצר, LP=√k כולו-לאוצר
+      //    (כמו-ג'נזיס), owner=undefined — בלי-שער (המגן-המבני הוא אוצר-בלבד).
+      //  · אזרחי (כל-מנפיק-אחר): זריעה-דו-צדדית-מהיתרות-של-הפותח עצמו, LP=√k כולו-לפותח
+      //    (הוא-המממן-והוא-הבעלים), owner=מנפיק. הספאם-גייט = **שער-הערבות**:
+      //    מינימום-פר-צד (POOL_OPEN_MIN_SIDE_MU) + תקרת-בריכות-פר-פותח
+      //    (POOL_OPEN_MAX_PER_ISSUER). אפס-כסף-אוצר-בסיכון; האוצר-רק-מרוויח
+      //    (נתח-ה-30% מעמלי-הסוואפ של-בריכות-אזרחיות זורם-אליו כמו-מכול).
+      // fail-closed על-כל-שלב · pair-קנוני · נגד-בריכה-קיימת · נכסים-רשומים-בלבד.
       const oKey = String(op.pair ?? "");
       if (!oKey) return { ok: false, err: "pair-required", gas: 0 };
       const parts = oKey.split("/");
@@ -1450,15 +1537,30 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (!knownAsset(st, parts[0]) || !knownAsset(st, parts[1])) return { ok: false, err: "asset-not-listed", gas: 0 };
       const amtA = op.amount ?? 0, amtB = op.amountB ?? 0;
       if (!(amtA > 0) || !(amtB > 0)) return { ok: false, err: "dust-open", gas: 0 };
-      if (avail(st, "treasury", parts[0]) < amtA) return { ok: false, err: "insufficient-treasury", gas: 0 };
-      if (avail(st, "treasury", parts[1]) < amtB) return { ok: false, err: "insufficient-treasury", gas: 0 };
+      const citizen = issuer !== "treasury";
+      if (citizen) {
+        // שער-הערבות — המינימום פר-צד (אבק-נדחה-לפני-כל-נגיעה-במצב)
+        if (amtA < POOL_OPEN_MIN_SIDE_MU || amtB < POOL_OPEN_MIN_SIDE_MU)
+          return { ok: false, err: `below-margin-gate-${POOL_OPEN_MIN_SIDE_MU}`, gas: 0 };
+        // תקרת-בריכות-פר-פותח (גבול-נזק — אותו-דפוס LPAD_MAX_PER_OWNER)
+        let owned = 0;
+        for (const p of Object.values(st.pools)) if (p.owner === issuer) owned++;
+        if (owned >= POOL_OPEN_MAX_PER_ISSUER) return { ok: false, err: "pool-cap-reached", gas: 0 };
+        if (avail(st, issuer, parts[0]) < amtA) return { ok: false, err: "insufficient", gas: 0 };
+        if (avail(st, issuer, parts[1]) < amtB) return { ok: false, err: "insufficient", gas: 0 };
+      } else {
+        if (avail(st, "treasury", parts[0]) < amtA) return { ok: false, err: "insufficient-treasury", gas: 0 };
+        if (avail(st, "treasury", parts[1]) < amtB) return { ok: false, err: "insufficient-treasury", gas: 0 };
+      }
       const c = consume(); if (c) return c;
       const lpMint = sqrtLp(amtA, amtB); // FIX(R16-a·m8)
-      st.pools[canon] = { a: parts[0] as Asset, b: parts[1] as Asset, ra: amtA, rb: amtB, lp: lpMint, feeAccruedTreasury: 0, swaps: 0 };
-      addBal(st, "treasury", parts[0], -amtA);
-      addBal(st, "treasury", parts[1], -amtB);
-      addBal(st, "treasury", LP_ASSET_PREFIX + canon, lpMint);
-      st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "pool_open", note: `${canon} ${amtA}+${amtB}µ · LP ${lpMint}µ` });
+      st.pools[canon] = citizen
+        ? { a: parts[0] as Asset, b: parts[1] as Asset, ra: amtA, rb: amtB, lp: lpMint, feeAccruedTreasury: 0, swaps: 0, owner: issuer }
+        : { a: parts[0] as Asset, b: parts[1] as Asset, ra: amtA, rb: amtB, lp: lpMint, feeAccruedTreasury: 0, swaps: 0 };
+      addBal(st, issuer, parts[0], -amtA);
+      addBal(st, issuer, parts[1], -amtB);
+      addBal(st, issuer, LP_ASSET_PREFIX + canon, lpMint);
+      st.journal.push({ h: st.height, t: nowMs, soldier: citizen ? issuer : "treasury", action: "pool_open", note: `${canon} ${amtA}+${amtB}µ · LP ${lpMint}µ${citizen ? ` · owner=${issuer} (margin-gate ${POOL_OPEN_MIN_SIDE_MU}/side)` : ""}` });
       return { ok: true, gas };
     }
     case "pool_repeg": {
@@ -1483,6 +1585,9 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (rKey !== canon) return { ok: false, err: "non-canonical-pair", gas: 0 };
       const p = st.pools[canon];
       if (!p) return { ok: false, err: "pool-not-found", gas: 0 };
+      // EXEC-CD-9 · מגן-בעלות: סימון-מחדש מזיז רזרבות-אמת בכסף-אוצר — רק על בריכות-
+      // ריבוניות (owner=undefined). בריכת-אזרח היא כסף-האזרח: האוצר לא מסתכן בה ולא מזיז לו.
+      if (p.owner && p.owner !== "treasury") return { ok: false, err: "citizen-pool-no-repeg", gas: 0 };
       // עוגן-דו-צדדי: refPrice של-שני-הצדדים (µ-USDS ל-1-יחידה). היעד: מחיר-1-B
       // במונחי-A === refB/refA. עבור USDS/WSTEEM: 54/1000 → ra_new = 54×rb/1000.
       const refA = st.assets[p.a]?.refPrice ?? 0;

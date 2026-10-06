@@ -3,6 +3,7 @@ import { submitOp, nextNonce } from "@/lib/dex/chain";
 import { ASSETS } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
 import { operatorAuth } from "@/lib/operator-auth";
+import { isMakerIdentity } from "@/lib/dex/maker"; // EXEC-CD-9 · זהויות-מייקר-חוץ
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,12 @@ export async function POST(req: Request) {
   const g = consoleGuard(req);
   if (g) return g;
 
-  const body = (await req.json().catch(() => ({}))) as { base?: string; quote?: string };
+  const body = (await req.json().catch(() => ({}))) as { base?: string; quote?: string; issuer?: string };
+  // EXEC-CD-9 · זהויות-מייקר-חוץ: סוויפ-על-זהות-מצוטטת (ברירת-מחדל: operator)
+  const makerIssuer = body.issuer ? String(body.issuer).toLowerCase() : "operator";
+  if (!isMakerIdentity(makerIssuer)) {
+    return NextResponse.json({ ok: false, error: "bad-identity (a-z0-9- 3..24; שמות-מערכת-אסורים)" }, { status: 200 });
+  }
   const base = body.base ? String(body.base) : undefined;
   const quote = body.quote ? String(body.quote) : undefined;
   // היגיינה-קפדנית: סינון-נכסים-לא-מוכרים נדחה (אותו-חוזה של /api/dex/order)
@@ -29,7 +35,7 @@ export async function POST(req: Request) {
   }
   const r = submitOp({
     type: "cancel_all",
-    issuer: "operator",
+    issuer: makerIssuer,
     nonce: nextNonce("mca"),
     base: base as never, quote: quote as never,
   });

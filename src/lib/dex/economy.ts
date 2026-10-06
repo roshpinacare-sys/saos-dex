@@ -20,13 +20,15 @@
  * הטריגרים הם גובה-בלוקים טהורים → ריפליי דטרמיניסטי, השורש נשאר אמת.
  */
 import type { DexState } from "./kernel";
+import { MINT_FUEL_CAP } from "./kernel"; // EXEC-CD-9 · אותו-גבול-נזק למחזור-פר-טיק
 import { getPool } from "./amm";
 import { aleTick } from "./ale";
 import { launchpadTick } from "./launchpad";
+import { bookGasRecycleAvail, bookGasTake, BOOKGAS_RECYCLE_CAP } from "./bookgas"; // EXEC-CD-9 · מד-גז-הספר
 import {
   BLOCKS_PER_WEEK, VE_MAX_WEEKS, EPOCH_BLOCKS, ROUTER_EVERY, REV_FLOOR,
   REV_BURN_PCT, REV_VE_PCT, ROUTER_USDS_FLOOR, REV_MIN_CYCLE, VE_POT,
-  MINT_FUEL_CAP, LADDER_FUEL_FLOOR,
+  LADDER_FUEL_FLOOR,
 } from "./kernel";
 
 // FIX(Roast-67 · ZFB-gas-tank): מימון-דלק-דטרמיניסטי מהפונטיין — 10% מכל-מחזור-ראוטר
@@ -35,6 +37,14 @@ import {
 // כל-µ-נצרך-פעם-אחת; האינווריאנטות (a)+(d) נשמרות-בדיוק. האוצר-מפיץ-דרך-refuel
 // (העברה-טהורה) לסוכנים-שאזל-מסלולם — ריצת-המערכת-לא-תיגמר-בשקט.
 export const ZFB_GAS_PCT = 10;
+
+// EXEC-CD-9 · fuel-freeze-fix: קדנס-מחזור-גז-הספר — כל-100-בלוקים (אותו-סדר-גודל של ALE_EVERY).
+// ממצא-EXEC-CD-8: המזרקה ממחזרת רק-עמלות-בריכות; גז-הספר (order/fill/cancel/cancel_all/gc)
+// בורח-מהמחזור → מלכות-מוות-דלקית בכלכלה ספר-מרכזית. התיקון: המזרקה מחזירה את גז-הספר
+// שנגבה-בפועל לאוצר (אותן-סמנטיקות-mint_fuel: feeMinted↑ — האינווריאנטה נשמרת בדיוק),
+// והאוצר מפיץ-דרך-סולם-refuel. הגז נשאר **טול-אנטי-ספאם** (שולם-מראש; המחזור-חברתי
+// לכול — לא-החזר-ישיר-לשולח) — הפילוסופיה הריבונית: אפס-עלות-מבנית, המגנים מבניים.
+export const BOOKGAS_RECYCLE_EVERY = 100;
 
 // קבועים-מקומיים (לא-קונצנזוסיים — רק-לתצוגה/מדידה)
 export const REV_TREASURY_PCT = 20; // → נשאר באוצר (לא-מוזז)
@@ -60,8 +70,26 @@ export function economyTick(st: DexState, nowMs: number): void {
   if (h <= 0) return;
   if (h % ROUTER_EVERY === 0) revenueCycle(st, h, nowMs);
   if (h % EPOCH_BLOCKS === 0) epochFlip(st, h, nowMs);
+  if (h % BOOKGAS_RECYCLE_EVERY === 0) bookGasRecycle(st, h, nowMs); // EXEC-CD-9 · fuel-freeze-fix
   launchpadTick(st, nowMs); // Task 57/58 · הגירות-אוטומטיות של מסילת-ההשקות (גיוס-הסף → בריכה)
   aleTick(st, nowMs); // Task 55 · ALE: הזרעת-POL-אוטונומית כל-ALE_EVERY-בלוקים
+}
+
+/** EXEC-CD-9 · מחזור-גז-הספר (fuel-freeze-fix): גז-ספר-שנגבה-בפועל חוזר-לארנק-האוצר —
+ * מהמד-החוץ-מצב-הדטרמיניסטי (db/book-gas.json — נעקב-גיט, נבנה-מחדש-מהזנות-הבלוקים;
+ * רצפת-מצב bookGasFloor בטעינה קוטל-הטבעה-כפולה). סמנטיקות-mint_fuel-מלאות:
+ * feeMinted↑ יחד-עם-הקרדיטים → האינווריאנטה Σcredits+gasUsed−feeMinted===ג'נזיס
+ * נשמרת-בדיוק. אפס-נגיעה ב-treasuryProfit/feeMeter (אלו עמלות-בריכות — משטר-נפרד).
+ * כל-µ-נגרע-מהמד-פעם-אחת-בלבד; תקרה-פר-טיק (BOOKGAS_RECYCLE_CAP) — גבול-נזק. */
+export function bookGasRecycle(st: DexState, h: number, nowMs: number): void {
+  const amt = Math.min(bookGasRecycleAvail(), BOOKGAS_RECYCLE_CAP, MINT_FUEL_CAP);
+  if (amt <= 0) return;
+  const taken = bookGasTake(amt); // צריכה-פעם-אחת מהמד — לפני-כל-נגיעה-במצב
+  if (taken <= 0) return;
+  st.feeMinted = (st.feeMinted ?? 0) + taken;
+  st.credits["treasury"] = (st.credits["treasury"] ?? 0) + taken;
+  st.bookGasRecycledMu = (st.bookGasRecycledMu ?? 0) + taken; // רצפת-המצב — מיישרת-את-המד בטעינה
+  st.journal.push({ h, t: nowMs, soldier: "router", action: "bookgas_recycle", note: `+${taken}µ credits →treasury (book-gas recycled — burned work re-funded; every-µ-once, meter git-backed)` });
 }
 
 /** (2) REVENUE-ROUTER: רווח-אוצר מדוד → 40% burn (קנייה-מהבריכה + השמדה) ·

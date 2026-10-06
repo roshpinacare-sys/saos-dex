@@ -12,7 +12,7 @@
  * (שורד-תמונות-מצב; רשויות-ישנות = undefined → 0-כנה).
  */
 import type { DexState, Op, Asset } from "./kernel";
-import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDER, funderAfford, poolKey, avail, notional } from "./kernel";
+import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDER, funderAfford, poolKey, avail, notional, maxNonceSuffix, nonceExists } from "./kernel";
 import { sortBook } from "./book";
 import { poolMid, poolMidFor, getPool } from "./amm";
 import { railTick, RAIL_OWNED_POOLS } from "./rail";
@@ -153,23 +153,30 @@ type PushOp = (op: Op) => void;
 /** FIX(Task 56 replay-storm): אחרי-טעינת-תמונת-מצב, st.nonces מכיל אלפי-נונסים
  * `a<N>` של-החיילים-מהריצות-הקודמות; RT-רץ-חדש התחיל מ-seq=0 והתנגש-בכולם
  * (replay-rejected המוני עד-שה-seq עובר-את-החלון). הפתרון: בעת-יצירת-RT לחייל,
- * נזרע-seq מעל-המקסימום-הקיים-בחלון-הנונסים — התנגשות-אפסית מהטיק-הראשון. */
+ * נזרע-seq מעל-המקסימום-הקיים-בחלון-הנונסים — התנגשות-אפסית מהטיק-הראשון.
+ * FIX(EXEC-CD-9 · deep-window-seed): הסריקה-הייתה-על-2000-האחרונים-בלבד — שטף-ops
+ * (למשל-אחרי-הצתת-הדלק: ארנה+בוטים+חיילים-מציפים-את-החלון) דחק-את-הנונסים-של-חייל-
+ * נתון-מחוץ-לטווח-הסריקה → זריעה-נמוכה-מדי → התנגשות-עם-נונסים-חיים-בחלון-ה-6000.
+ * עתה: סריקה-מלאה-של-החלון-כולו (≤6000 — זול); בנוסף סף-ביטחון: הזריעה = max+200. */
 function seedNonceSeq(st: DexState, soldier: string): number {
-  let max = 0;
-  const prefix = `${soldier}:a`;
-  for (let i = st.nonces.length - 1; i >= 0 && i >= st.nonces.length - 2000; i--) {
-    const n = st.nonces[i];
-    if (n.startsWith(prefix)) {
-      const v = parseInt(n.slice(prefix.length), 10);
-      if (Number.isFinite(v) && v > max) max = v;
-    }
-  }
-  return max;
+  // FIX(EXEC-CD-9 · full-set-seed): הזריעה מול **כל-ה-Set** (maxNonceSuffix — הגרעין),
+  // לא-מהחלון: נונסים-שנשטפו-מהמערך-אך-חיים-ב-Set היו-מוחזרים-כבעלי-עימות.
+  const max = maxNonceSuffix(`${soldier}:a`, st);
+  return max + 200; // סף-ביטחון מפני-ops-בדרך-בממפול
 }
 
 function submit(rt: Map<string, SoldierRT>, st: DexState | null, soldier: string, op: Omit<Op, "issuer" | "nonce">, pushOp: PushOp): void {
   const r = rt.get(soldier) ?? { nonceSeq: st ? seedNonceSeq(st, soldier) : 0, fills: 0, takes: 0 };
-  r.nonceSeq++;
+  // FIX(EXEC-CD-9 · skip-occupied): בדיקת-תפוסה O(1) מול-ה-Set-האמת לפני-הדחיפה —
+  // הסקוו מדלג-מעל-כל-נונס-שכבר-חי (שרידי-ריצות/rewinds) במקום-סערת-replay-rejected.
+  // אותו-פורמט-מפתח כמו-applyOp: `${issuer}:${nonce}`.
+  if (st) {
+    let n = r.nonceSeq + 1;
+    while (nonceExists(st, `${soldier}:${soldier}:a${n}`)) n++;
+    r.nonceSeq = n;
+  } else {
+    r.nonceSeq++;
+  }
   rt.set(soldier, r);
   // FIX(R45 · nonce-owner): ה-nonce היה `a${seq}` חסר-בעלים — ה-seeding למעלה סרק
   // קידומת `${soldier}:a` שלעולם-לא-נכתבה (קוד-מת) ← כל-אתחול-תהליך מתחיל-seq-מ-1
