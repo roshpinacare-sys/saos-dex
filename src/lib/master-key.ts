@@ -13,13 +13,21 @@ import fs from 'fs';
 import path from 'path';
 
 // סדר-קדימויות: העתק-ההסכם הייעודי קודם, קובץ-ההצהרה המקורי אחריו.
-// הנתיב השלישי מכסה ריצה מ-cwd של תת-פרויקט (saos-dex/) אל הריפו-האם.
-const CANDIDATES = [
-  path.resolve(process.cwd(), '.secrets/master-key.txt'),
-  path.resolve(process.cwd(), 'upload/headcorner.txt'),
-  path.resolve(process.cwd(), '../.secrets/master-key.txt'),
-  path.resolve(process.cwd(), '../upload/headcorner.txt'),
-];
+// EXEC-CD-8 (שורש-חי): workerים-של-turbopack/next רצים-עם-cwd-שונה-מהריפו
+ // (למשל .next/dev/build/...) — הליכה-מעלה-עד-4-רמות מכסה-את-כל-צורות-הריצה.
+function agreementCandidates(): string[] {
+  const found: string[] = [];
+  let dir = process.cwd();
+  for (let i = 0; i < 5; i++) {
+    found.push(path.resolve(dir, '.secrets/master-key.txt'));
+    found.push(path.resolve(dir, 'upload/headcorner.txt'));
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return found;
+}
+const CANDIDATES = agreementCandidates();
 
 interface MasterInfo {
   label: string;
@@ -28,6 +36,8 @@ interface MasterInfo {
 }
 
 let cached: MasterInfo | null | undefined;
+let cachedNullAt = 0; // EXEC-CD-8: איסור-מימוג-שלילי-קבוע — ראה-masterInfo
+const NULL_RETRY_MS = 5_000;
 
 function sha256Hex(s: string): string {
   return crypto.createHash('sha256').update(s, 'utf8').digest('hex');
@@ -49,9 +59,14 @@ export function normalizeKeyForm(s: string): string {
   return k;
 }
 
-/** מידע-ההסכם (דיגסט בלבד!) או null אם אין הסכם. נטען-פעם-אחת ונשמר בזיכרון. */
+/** מידע-ההסכם (דיגסט בלבד!) או null אם אין הסכם. מוצלח = ממומג-לנצח.
+ * EXEC-CD-8 (שורש-חי): כשל-ראשון (קובץ-עוד-לא-שוחזר-מהסנדבוקס) מומג-לנצח
+ * והמנוע-נשאר-עיוור-להסכם-גם-אחרי-שהקובץ-חוזר — אותו-סוג-באג שתוקן-ב-RESTORE-CD-2
+ * (הפעלה-מחדש-בכפיה). עכשיו: כשל = רטרייה-כל-5ש׳ (בלי-הצקה); הצלחה = מימוג-מלא.
+ * הסכם-לא-פעיל עדיין fail-closed — isMasterKey=false עד-שההסכם-קיים באמת. */
 export function masterInfo(): MasterInfo | null {
   if (cached !== undefined) return cached;
+  if (Date.now() - cachedNullAt < NULL_RETRY_MS) return null;
   cached = null;
   for (const p of CANDIDATES) {
     try {
@@ -64,6 +79,7 @@ export function masterInfo(): MasterInfo | null {
       break;
     } catch { /* מועמד הבא */ }
   }
+  if (cached === null) cachedNullAt = Date.now();
   return cached;
 }
 

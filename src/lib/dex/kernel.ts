@@ -15,6 +15,7 @@
  * טכני-פתוח, לא-מוסתר.
  */
 import { canon, sha256, stateRootOf } from "./canonical";
+import { invariant } from "./invariant"; // EXEC-CD-8 · cancel_all — אותו-ברזל-אסקרו של-book.ts
 import { cancelOrder, matchBook, gcOrders, sortBook, type BookOrder } from "./book";
 import { poolAdd, poolSwap, poolRm, LP_ASSET_PREFIX } from "./amm";
 
@@ -29,6 +30,11 @@ export const GAS_TABLE = {
   pay: 120,
   order: 60,
   cancel: 15,
+  // EXEC-CD-8 · CANCEL-ALL: ביטול-סוויפ-אטומי של-כל-הפקודות-החיות של-המנפיק
+  // (אופציונלי: מסונן-זוג). סטנדרט-מייקרים-מקצועיים (Binance deleteAllOrders):
+  // רענון-גריד חייב טשאט-ריקון בפעולה-אחת — מול-מירוץ-קריאה/שליחה של ביטולים
+  // פר-מזהה. גז = כמו-ביטול-יחיד (15) — מעודד-שימוש-בסוויפ על-פני סדרת-ביטולים.
+  cancel_all: 15,
   fill: 60,
   order_gc: 30,
   pool_add: 180,
@@ -1395,6 +1401,31 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
     case "cancel": {
       const r = cancelOrder(st, op, consume, gas); // FIX(Roast-65-a · LOW-12): הגז-האמת עובר-לתוצאה
       return r;
+    }
+    case "cancel_all": {
+      // EXEC-CD-8 · CANCEL-ALL — סוויפ-אטומי דטרמיניסטי: כל-הפקודות-החיות של-המנפיק
+      // (רשות: סינון-בסיס/ציטוט). איטרציה-לפי-סדר-המערך (סדר-seq — דטרמיניסטי-לריפליי).
+      // שחרור-נעילה במדויק כמו-cancelOrder (מד-הנעילה-הפרטי, לא-נגזרת-מחודשת —
+      // נגד-אבק-אסקרו). אידמפוטנטי: אפס-פקודות-חיות = ok עם-ספירה-0 (סטנדרט-בורסות).
+      const fBase = op.base, fQuote = op.quote;
+      const targets = st.orders
+        .filter((o) => o.live && o.owner === issuer
+          && (!fBase || o.base === fBase) && (!fQuote || o.quote === fQuote))
+        .sort((a, b) => a.id - b.id); // דטרמיניזם-מפורש
+      const c = consume(); if (c) return c; // גז לפני-כל-מוטציה — כשל = דחייה-נקייה
+      let n = 0;
+      for (const o of targets) {
+        const rem = o.amount - o.filled;
+        const held = typeof o.lockMu === "number" && o.lockMu >= 0 ? o.lockMu : (o.side === "sell" ? rem : notional(o.price, rem));
+        o.lockMu = 0;
+        addLock(st, o.owner, o.side === "sell" ? o.base : o.quote, -held);
+        invariant(lockedOf(st, o.owner, o.side === "sell" ? o.base : o.quote) >= 0, "escrow-underflow:cancel_all");
+        o.live = false;
+        n++;
+      }
+      if (n > 0) st.orders = st.orders.filter((o) => o.live);
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "cancel_all", note: `${n} canceled${fBase ? ` base=${fBase}` : ""}${fQuote ? ` quote=${fQuote}` : ""}` });
+      return { ok: true, gas };
     }
     case "order_gc": {
       const c = consume(); if (c) return c;
