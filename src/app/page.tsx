@@ -2496,7 +2496,7 @@ export default function DexTerminal() {
         </div>
         {/* Roast-73 · ניווט-תצוגות (שולחני — טאבים דביקים מתחת לכותרת) */}
         <div className="mx-auto hidden w-full max-w-[1600px] px-4 pb-2.5 md:block">
-          <TopTabs view={view} onNavigate={setView} />
+          <TopTabs view={view} onNavigate={setView} quickJumps={[{ label: "הזרם-החי", icon: Globe, onClick: () => openSection("terminal", "chain-stream") }]} />
         </div>
       </header>
 
@@ -2713,7 +2713,11 @@ export default function DexTerminal() {
         <PortfolioBridgePanel />
 
         {/* ═════ EXEC-CD-11: THE-CHAIN-STREAM — הזרם-החי של הרשתות-האמיתיות ═════ */}
-        <ChainStreamPanel />
+        {/* EXEC-CD-12 · עוגן chain-stream: הפאנל יושב-עמוק-בעמוד (y≈5400/6100) — העוגן+scroll-mt
+         * מאפשרים קפיצה-ישירה מהטאבים-השולחניים ומהגיליון-הנייד (הדוקטרינה: אין-דבר-חי-שלא-נראה). */}
+        <div id="chain-stream" className="scroll-mt-24">
+          <ChainStreamPanel />
+        </div>
 
         {/* ═════ SETTLE-13: צי-העיגון-הריבוני ═════ */}
         <FleetPanel />
@@ -2740,6 +2744,7 @@ export default function DexTerminal() {
       <MobileNav
         view={view} onNavigate={setView}
         quickJumps={[
+          { label: "הזרם-החי", icon: Globe, onClick: () => openSection("terminal", "chain-stream") },
           { label: "צי-העיגון", icon: Anchor, onClick: () => openSection("terminal", "sovereign-fleet") },
           { label: "מסילת-HIVE", icon: Waves, onClick: () => openSection("agent", "agent-rail") },
           { label: "מטריצת-הצתה", icon: ShieldCheck, onClick: () => openSection("agent", "agent-ignition") },

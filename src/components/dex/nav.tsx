@@ -24,7 +24,9 @@ export const DEX_VIEWS: NavItem[] = [
 ];
 
 /* ── שולחני: טאבים מתחת לכותרת ─────────────────────────────────────────────── */
-export function TopTabs({ view, onNavigate }: { view: ViewId; onNavigate: (v: ViewId) => void }) {
+/* EXEC-CD-12 · quickJumps: קישורי-קפיצה לחלקי-עמוד (אחרי מפריד-דק) — זהה-בשפה לגיליון-הנייד,
+ * כדי שמה-שנבנה-למטה-בעמוד-הארוך יהיה נגיש-מיד-מהכותרת (הדוקטרינה: אין-דבר-חי-שלא-נראה). */
+export function TopTabs({ view, onNavigate, quickJumps }: { view: ViewId; onNavigate: (v: ViewId) => void; quickJumps?: QuickJump[] }) {
   return (
     <nav aria-label="ניווט-ראשי" className="hidden items-center gap-1.5 md:flex" data-testid="top-tabs">
       {DEX_VIEWS.map((v) => {
@@ -45,6 +47,23 @@ export function TopTabs({ view, onNavigate }: { view: ViewId; onNavigate: (v: Vi
           </button>
         );
       })}
+      {quickJumps && quickJumps.length > 0 && (
+        <>
+          <span className="mx-1 h-4 w-px bg-zinc-800" aria-hidden />
+          {quickJumps.map((q) => {
+            const Icon = q.icon;
+            return (
+              <button
+                key={q.label} type="button" onClick={q.onClick}
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900/60 px-3.5 font-mono text-[11px] font-bold text-zinc-400 transition-colors hover:border-amber-500/50 hover:bg-amber-500/[0.06] hover:text-amber-300"
+                data-testid={`jump-${q.label}`}
+              >
+                <Icon className="h-3.5 w-3.5" aria-hidden /> {q.label}
+              </button>
+            );
+          })}
+        </>
+      )}
     </nav>
   );
 }
