@@ -41,6 +41,7 @@ interface ChainDef {
   rpc?: string;               // evm/sol/tron
   expectedChainId?: number;   // evm
   condenser?: string;         // graphene
+  condensers?: string[];      // graphene — סולם-משלים-כנה (כל-פרובה-אמת; הראשון-שעונה מנצח, כשל-הכל = DOWN גלוי)
   depositAccount?: string;    // graphene — החשבון-הריבוני על הרשת
 }
 
@@ -51,7 +52,7 @@ const CHAINS: ChainDef[] = [
   { id: "sol", name: "Solana", kind: "sol", native: "SOL", feed: "sol", explorer: "https://solscan.io", rpc: "https://api.mainnet-beta.solana.com" },
   { id: "trx", name: "TRON", kind: "tron", native: "TRX", feed: "trx", explorer: "https://tronscan.org", rpc: "https://api.trongrid.io" },
   { id: "steem", name: "STEEM", kind: "graphene", native: "STEEM", feed: "steem", explorer: "https://steemscan.com", condenser: "https://api.steemit.com", depositAccount: "headcorner" },
-  { id: "hive", name: "Hive", kind: "graphene", native: "HIVE", feed: "hive", explorer: "https://hiveblocks.com", condenser: "https://api.hive.blog", depositAccount: "headcorner" },
+  { id: "hive", name: "Hive", kind: "graphene", native: "HIVE", feed: "hive", explorer: "https://hiveblocks.com", condenser: "https://api.hive.blog", condensers: ["https://api.hive.blog", "https://api.openhive.network"], depositAccount: "headcorner" },
   { id: "blurt", name: "Blurt", kind: "graphene", native: "BLURT", feed: "blurt", explorer: "https://blurtblockexplorer.com", condenser: "https://blurt-rpc.saboin.com", depositAccount: "headcorner" },
 ];
 
@@ -205,18 +206,23 @@ interface GrapheneDgp { head_block_number?: number; time?: string }
 
 async function probeGraphene(def: ChainDef): Promise<Probe> {
   const t0 = Date.now();
-  try {
-    const dgp = await jsonRpc<GrapheneDgp>(def.condenser!, "chain-stream.graphene-dgp", "condenser_api.get_dynamic_global_properties", []);
-    const ageSec = dgp.time ? Math.max(0, Math.round((Date.now() - new Date(dgp.time + "Z").getTime()) / 1000)) : null;
-    return {
-      connected: true, latencyMs: Date.now() - t0,
-      blockHeight: dgp.head_block_number ?? null,
-      blockAgeSec: ageSec,
-      chainId: null, chainIdOk: null, gasGwei: null, baseFeeGwei: null, epochProgressPct: null,
-    };
-  } catch (e) {
-    return { connected: false, latencyMs: Date.now() - t0, blockHeight: null, blockAgeSec: null, chainId: null, chainIdOk: null, gasGwei: null, baseFeeGwei: null, epochProgressPct: null, error: e instanceof Error ? e.message.slice(0, 120) : "graphene-probe-failed" };
+  // EXEC-CD-12: סולם-משלים-כנה — api.hive.blog מתנפק-לרגעים; כל-ניסיון-הוא-פרובה-אמת-מלאה,
+  // הראשון-שעונה מנצח; אם-הכל-נופלים → DOWN גלוי (אפס-ירוק-מזויף).
+  const endpoints = def.condensers?.length ? def.condensers : [def.condenser!];
+  let lastErr: unknown = null;
+  for (const rpc of endpoints) {
+    try {
+      const dgp = await jsonRpc<GrapheneDgp>(rpc, "chain-stream.graphene-dgp", "condenser_api.get_dynamic_global_properties", []);
+      const ageSec = dgp.time ? Math.max(0, Math.round((Date.now() - new Date(dgp.time + "Z").getTime()) / 1000)) : null;
+      return {
+        connected: true, latencyMs: Date.now() - t0,
+        blockHeight: dgp.head_block_number ?? null,
+        blockAgeSec: ageSec,
+        chainId: null, chainIdOk: null, gasGwei: null, baseFeeGwei: null, epochProgressPct: null,
+      };
+    } catch (e) { lastErr = e; }
   }
+  return { connected: false, latencyMs: Date.now() - t0, blockHeight: null, blockAgeSec: null, chainId: null, chainIdOk: null, gasGwei: null, baseFeeGwei: null, epochProgressPct: null, error: lastErr instanceof Error ? lastErr.message.slice(0, 120) : "graphene-probe-failed" };
 }
 
 /* ── אוצר-חי (משותף-עם-הדלת — custodySnapshot-TTL, אפס-קריאות-כפולות) ─────── */
