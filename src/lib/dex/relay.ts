@@ -44,7 +44,7 @@ import type { SealInfo } from "./chain";
 import { chaosPartitioned } from "./chaos";
 import { fleetConfigured, fleetSealNow, fleetStatusPublic } from "./fleet";
 
-import steemLib from "steem";
+import { fencedFetch } from "./fence"; // FIX(SETTLE-11)+FIX(Roast-65-b · H2): כל-ה-fetch-ים-דרך-הגדר (redirect:error מרוכז)
 import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor, ETH_RPCS,
   // Task 11-b · חוזה-החתימה שש-השלבים — אותם-פרימיטיבים בדיוק (שער-אחד, שרשרת-ביקורת-אחת):
   // SigningGateError = קודי-השער · appendAudit = הפרימיטיב-המבוקר (hash-chain על
@@ -52,7 +52,8 @@ import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor, ETH_RPCS
   SigningGateError, appendAudit, fingerprint, AUDIT_FILE,
   type PolicyCheck, type SigningAuditEvent } from "./relay-eth";
 import { solSealBroadcast, verifySolAnchor, solIdentity } from "./relay-sol";
-import { fencedFetch } from "./fence"; // FIX(SETTLE-11)+FIX(Roast-65-b · H2): כל-ה-fetch-ים-דרך-הגדר (redirect:error מרוכז)
+// M2 · הפרדת Signer–Executor: מודול-המפתחות-היחיד — קריאת-חומר-מפתח (envKey) + ליבות-חתימה (גרפנה/blurt/tron) עברו לשם
+import { KEY_ENV_NAMES, envKey, wifNormalized, pubOfWif, signGrapheneTx, signAndSendBlurt, signAndSendTron } from "./signer";
 // roast-78 · רצפת-הגנת-גיבוי: קריאת-התביעות-המוטבעות (st.backing) מהמצב-הקנוני-החי.
 // אין-מעגל: chain.ts אינו-מייבא את relay.ts (אומת).
 import { getLiveState } from "./chain";
@@ -65,12 +66,6 @@ type GrapheneTx = {
   extensions: unknown[];
 };
 
-type SteemLib = {
-  config: { get(k: string): string | null; set(k: string, v: string): void };
-  auth: { signTransaction(tx: GrapheneTx, keys: string[]): GrapheneTx & { signatures?: string[] }; wifToPublic(wif: string): string };
-};
-
-const steem = steemLib as unknown as SteemLib;
 const ZERO_CHAIN_ID = "0000000000000000000000000000000000000000000000000000000000000000";
 /* Roast-74: מזהה-השרשרת-של-Steem (ג'נזיס = אפסים) — מיוצא למבצע-המסילה-הרב-רשתי */
 export const STEEM_CHAIN_ID = ZERO_CHAIN_ID;
@@ -354,15 +349,15 @@ export type RelayAnchorRole = "active" | "posting";
 export function resolveRoleFor(chain: ChainName): RelayAnchorRole | null {
   switch (chain) {
     case "steem":
-      return (process.env.STEEM_POSTING_WIF ?? "").trim() ? "posting"
-        : (process.env.STEEM_ACTIVE_WIF ?? "").trim() ? "active" : null;
+      return envKey("STEEM_POSTING_WIF") ? "posting"
+        : envKey("STEEM_ACTIVE_WIF") ? "active" : null;
     case "hive":
-      return (process.env.HIVE_POSTING_WIF ?? "").trim() ? "posting"
-        : (process.env.HIVE_ACTIVE_WIF ?? "").trim() ? "active" : null;
+      return envKey("HIVE_POSTING_WIF") ? "posting"
+        : envKey("HIVE_ACTIVE_WIF") ? "active" : null;
     case "blurt":
-      return (process.env.BLURT_ACTIVE_WIF ?? "").trim() ? "active" : null;
+      return envKey("BLURT_ACTIVE_WIF") ? "active" : null;
     case "tron": // זהות-TRON נגזרת-מהסקלר-הגרפני — פעולת-ערך עצמית
-      return (process.env.STEEM_ACTIVE_WIF ?? "").trim() || (process.env.STEEM_POSTING_WIF ?? "").trim() ? "active" : null;
+      return envKey("STEEM_ACTIVE_WIF") || envKey("STEEM_POSTING_WIF") ? "active" : null;
     case "eth":
     case "sol":
       return "active"; // חתימה-חיה בתוך relay-eth/relay-sol — פעולות-ערך (גז/עמלה)
@@ -560,39 +555,8 @@ type RelayKeys = {
   steemWifNorm: string | null; hiveWifNorm: string | null; blurtWifNorm: string | null;
 };
 
-/* ── FIX(SETTLE-11) נרמול-WIF: דחוס (38 בייטים, סיומת 0x01) → לא-דחוס קנוני (37) ──
- * רוטציית SETTLE-10 כתבה ל-.env WIF-ים דחוסים (K/L, 52 תווים); steem.auth.signTransaction
- * דוחה אותם ("Expecting 32 bytes, instead got 33") → HIVE מת בעודו-חי, ו-STEEM היה
- * על-פצצת-זמן (רץ על עותק-זיכרון ישן — כל אתחול-מחדש היה הורג את העיגון).
- * הנרמול טהור-מקומי: base58check-decode → אימות-checksum → השלכת 0x01 → קידוד-מחדש.
- * fail-closed: פליטה-פסולה = null (relay מושהה בכנות — לא ניחושים, לא לולאת-שידורים). */
-async function normalizeWif(wif: string): Promise<string | null> {
-  try {
-    const b58 = await bs58lib();
-    const raw = Buffer.from(b58.decode(wif.trim()));
-    if (raw.length < 34 || raw[0] !== 0x80) return null;
-    const data = raw.subarray(0, raw.length - 4);
-    const chk = raw.subarray(raw.length - 4);
-    const calc = createHash("sha256").update(createHash("sha256").update(data).digest()).digest().subarray(0, 4);
-    if (!chk.equals(calc)) return null;
-    const body = data.subarray(1);
-    const scalar = body.length === 33 && body[32] === 0x01 ? body.subarray(0, 32) : body;
-    if (scalar.length !== 32) return null;
-    const payload = Buffer.concat([Buffer.from([0x80]), scalar]);
-    const chk2 = createHash("sha256").update(createHash("sha256").update(payload).digest()).digest().subarray(0, 4);
-    return b58.encode(Buffer.concat([payload, chk2]));
-  } catch { return null; }
-}
-
-/* WIF-מנורמל-בזיכרון (cache — המפתחות כבר בזיכרון דרך process.env) */
-const wifCache = new Map<string, string>();
-async function wifNormalized(wif: string): Promise<string | null> {
-  const hit = wifCache.get(wif);
-  if (hit !== undefined) return hit;
-  const n = await normalizeWif(wif);
-  if (n) wifCache.set(wif, n);
-  return n;
-}
+/* ── FIX(SETTLE-11) נרמול-WIF — עבר ל-signer.ts (M2 · Signer–Executor) ──
+ * wifNormalized מיובא ממודול-המפתחות-היחיד; סמנטיקה-זהה ביט-מול-ביט. */
 
 /* ── מפתחות: זיכרון-בלבד מ-.env (Next טוען אוטומטית; הקובץ gitignored-אומת) ──
  * FIX(SETTLE-11): WIF-ים מנורמלים בטעינה לפורמט-גרפני (לא-דחוס) — שני הפורמטים
@@ -609,9 +573,9 @@ async function loadKeys(): Promise<RelayKeys | null> {
   // לגמרי: loadKeys ממשיך להחזיר את המפתח-הישן עד-restart, וה-authChecked של השרשרת
   // (מפתח-לפי-chain בלבד) שומר על פסק-הדין-הישן. עתה: טביעת-אצבע של התוכן
   // (sha256 — אפס-ערכי-גלם בלוג/מחרוזת, 16-תווי-הקס) + ניקוי-מטמון-הסמכות בשינוי.
-  const envs = ["SAOS_RELAY_AGENT_ACCOUNT", "STEEM_POSTING_WIF", "STEEM_ACTIVE_WIF", "HIVE_POSTING_WIF", "HIVE_ACTIVE_WIF", "BLURT_ACTIVE_WIF", "ETH_PRIVATE_KEY", "SOL_PRIVATE_KEY", "ETH_EXPECTED_ADDRESS", "SOL_EXPECTED_ADDRESS", "HIVE_ANCHOR_ACCOUNT"];
+  const envs = KEY_ENV_NAMES;
   const h = createHash("sha256");
-  for (const k of envs) h.update(`${k}\x00${process.env[k] ?? ""}\x00`);
+  for (const k of envs) h.update(`${k}\x00${envKey(k)}\x00`);
   const sig = h.digest("hex").slice(0, 16);
   if (keysMemo && keysMemo.sig === sig) return keysMemo.keys;
   if (keysMemo) {
@@ -624,30 +588,25 @@ async function loadKeys(): Promise<RelayKeys | null> {
 }
 
 async function loadKeysUncached(): Promise<RelayKeys | null> {
-  const account = (process.env.SAOS_RELAY_AGENT_ACCOUNT || "").toLowerCase().trim();
+  // M2: כל-קריאות-חומר-המפתח דרך envKey — נקודת-האכיפה היחידה (signer.ts)
+  const account = envKey("SAOS_RELAY_AGENT_ACCOUNT").toLowerCase();
   // FIX(CROSS-F-01, saos-jummper מדוד): עדיפות-מפתח-פרסום (POSTING) על-פני-ACTIVE.
   // עיגון-custom_json אינו-צריך-סמכות-כספים: ACTIVE יכולה-להעביר-כל-נכס-בחשבון;
   // POSTING רק-מפרסמת. זהה-במשאבים-וב-RC, ומוריד-יכולת-העברה-מהשידור-האוטומטי.
   // בלי-מפתח-פרסום (STEEM_POSTING_WIF/HIVE_POSTING_WIF) — נשארים-על ACTIVE-ההיסטורי
   // (כנות, לא-שבירה; כל-21-העוגנים-החיים-הוגשו-על-ACTIVE).
-  const steemPost = (process.env.STEEM_POSTING_WIF || "").trim();
-  const hivePost = (process.env.HIVE_POSTING_WIF || "").trim();
-  const steemRaw = steemPost || (process.env.STEEM_ACTIVE_WIF || "").trim();
-  const hiveRaw = hivePost || (process.env.HIVE_ACTIVE_WIF || "").trim();
+  const steemPost = envKey("STEEM_POSTING_WIF");
+  const hivePost = envKey("HIVE_POSTING_WIF");
+  const steemRaw = steemPost || envKey("STEEM_ACTIVE_WIF");
+  const hiveRaw = hivePost || envKey("HIVE_ACTIVE_WIF");
   if (!account || !steemRaw || !hiveRaw) return null;
   // Roast-82: BLURT — אופציונלי-בטעינה (השרשרת-מושבתת-בשקט-בלעדו, אותו-דפוס-SETTLE-11)
   // FIX(prefix): steem-js מנרמל-פאב-עם-קידומת-STM-ברירת-מחדל; BLURT רושמת-BLT. אותו-גוף-מפתח
   // (נמדד-חי: STM5HhJD…≡BLT5HhJD…=ה-active-של-headcorner) — רק-הקידומת-שונה. מציבים-BLT-סביב-הגזירה.
-  const blurtRaw = (process.env.BLURT_ACTIVE_WIF || "").trim() || null;
-  let blurtPub: string | null = null;
-  if (blurtRaw) {
-    const prevPfx = steem.config.get("address_prefix");
-    try {
-      steem.config.set("address_prefix", "BLT");
-      blurtPub = steem.auth.wifToPublic(blurtRaw) || null;
-    } catch { blurtPub = null; }
-    finally { try { steem.config.set("address_prefix", prevPfx ?? "STM"); } catch { /* keep */ } }
-  }
+  const blurtRaw = envKey("BLURT_ACTIVE_WIF") || null;
+  // FIX(prefix): steem-js מנרמל-פאב-עם-קידומת-STM-ברירת-מחדל; BLURT רושמת-BLT. אותו-גוף-מפתח
+  // (נמדד-חי: STM5HhJD…≡BLT5HhJD…=ה-active-של-headcorner) — רק-הקידומת-שונה. pubOfWif מטפל-בקידומת-פנימית.
+  const blurtPub: string | null = blurtRaw ? pubOfWif(blurtRaw, "BLT") : null;
   // Task 54 · FIX(sign-wif): החתימה על ה-WIF-הגולמי (דחוס K/L) — נמדד-חי 2026-09-09:
   // הספרייה הנוכחית גוזרת פאב-שגוי מהפורמט-המנורמל 5K (גם ב-wifToPublic וגם בחתימה
   // → "Missing Active Authority" על-השרשרת). הגולמי: פאב-נכון + חתימה-מאומתת.
@@ -661,18 +620,16 @@ async function loadKeysUncached(): Promise<RelayKeys | null> {
   const steemAuth: "posting" | "active" = steemPost ? "posting" : "active";
   const hiveAuth: "posting" | "active" = hivePost ? "posting" : "active";
   // אפשרות-עוגן-Hive נפרד (חשבון-צבא עם RC גבוה) — ברירת-מחדל: אותה זהות
-  const hiveAccount = (process.env.HIVE_ANCHOR_ACCOUNT || account).toLowerCase().trim();
+  const hiveAccount = (envKey("HIVE_ANCHOR_ACCOUNT") || account).toLowerCase();
   // ETH/SOL: זהויות-צי (wallets-registry) — אופציונליות; כשקיימות, ה-Relay חמוש
   // (signing-חי מקומי) והשידור נעול-מימון עד-שהכתובות ימומנו (כנות)
-  const ethKey = (process.env.ETH_PRIVATE_KEY || "").trim() || null;
-  const solKey = (process.env.SOL_PRIVATE_KEY || "").trim() || null;
-  const ethExpected = (process.env.ETH_EXPECTED_ADDRESS || "").trim() || null;
-  const solExpected = (process.env.SOL_EXPECTED_ADDRESS || "").trim() || null;
+  const ethKey = envKey("ETH_PRIVATE_KEY") || null;
+  const solKey = envKey("SOL_PRIVATE_KEY") || null;
+  const ethExpected = envKey("ETH_EXPECTED_ADDRESS") || null;
+  const solExpected = envKey("SOL_EXPECTED_ADDRESS") || null;
   // Task 54 · פאב-אימות מהגולמי (ראה FIX(authority-pub) למעלה); כישלון = null → authorityOk ידווח כנה
-  let steemPub: string | null = null;
-  let hivePub: string | null = null;
-  try { steemPub = steem.auth.wifToPublic(steemRaw) || null; } catch { steemPub = null; }
-  try { hivePub = steem.auth.wifToPublic(hiveRaw) || null; } catch { hivePub = null; }
+  const steemPub: string | null = pubOfWif(steemRaw);
+  const hivePub: string | null = pubOfWif(hiveRaw);
   // FIX(R13 · wif-forms): צורות-מנורמלות — fail-soft: פליטה-פסולה = null (ה-preflight ידווח כנה)
   const steemWifNorm = await wifNormalized(steemRaw);
   const hiveWifNorm = await wifNormalized(hiveRaw);
@@ -682,14 +639,15 @@ async function loadKeysUncached(): Promise<RelayKeys | null> {
 
 /* בדיקת-נוכחות-סינכרונית (ל-rtInit — בלי-פענוח) */
 function keysConfigured(): { main: boolean; blurt: boolean; eth: boolean; sol: boolean; account: string | null } {
-  const account = (process.env.SAOS_RELAY_AGENT_ACCOUNT || "").toLowerCase().trim() || null;
-  const steemWif = (process.env.STEEM_POSTING_WIF || process.env.STEEM_ACTIVE_WIF || "").trim();
-  const hiveWif = (process.env.HIVE_POSTING_WIF || process.env.HIVE_ACTIVE_WIF || "").trim();
+  // M2: קריאות-נוכחות-סודות דרך envKey בלבד (signer.ts)
+  const account = envKey("SAOS_RELAY_AGENT_ACCOUNT").toLowerCase() || null;
+  const steemWif = envKey("STEEM_POSTING_WIF") || envKey("STEEM_ACTIVE_WIF");
+  const hiveWif = envKey("HIVE_POSTING_WIF") || envKey("HIVE_ACTIVE_WIF");
   return {
     main: !!(account && steemWif && hiveWif),
-    blurt: !!(process.env.BLURT_ACTIVE_WIF || "").trim(),
-    eth: !!(process.env.ETH_PRIVATE_KEY || "").trim(),
-    sol: !!(process.env.SOL_PRIVATE_KEY || "").trim(),
+    blurt: !!envKey("BLURT_ACTIVE_WIF"),
+    eth: !!envKey("ETH_PRIVATE_KEY"),
+    sol: !!envKey("SOL_PRIVATE_KEY"),
     account,
   };
 }
@@ -721,12 +679,7 @@ async function tronIdentity(wif: string): Promise<string | null> {
   }
 }
 
-async function scalarOf(wif: string): Promise<Uint8Array> {
-  const b58 = await bs58lib();
-  const raw = Buffer.from(b58.decode(wif));
-  const data = raw.subarray(0, raw.length - 4);
-  return data.subarray(1, 33);
-}
+/* scalarOf — עבר ל-signer.ts (M2) כ-deriveScalar */
 
 /* ── JSON-RPC ── */
 async function rpc<T>(endpoint: string, body: unknown, timeoutMs = 20000): Promise<T> {
@@ -804,14 +757,8 @@ export async function grapheneOpsBroadcast(
     operations: ops,
     extensions: [],
   };
-  const prev = steem.config.get("chain_id");
-  steem.config.set("chain_id", chainId);
-  let signed: GrapheneTx & { signatures?: string[] };
-  try {
-    signed = steem.auth.signTransaction(tx, [wif]);
-  } finally {
-    try { steem.config.set("chain_id", prev ?? ZERO_CHAIN_ID); } catch { /* keep */ }
-  }
+  // M2: החתימה בתוך מודול-ה-Signer — ה-executor בונה tx ומשדר את-החתום (אפס-שינוי סמנטיקה)
+  const signed = signGrapheneTx(tx, chainId, wif);
   const res = await rpc<{ id?: string; block_num?: number }>(node, {
     jsonrpc: "2.0", method: "condenser_api.broadcast_transaction_synchronous", params: [{ ...signed }], id: 1,
   });
@@ -827,59 +774,16 @@ export async function grapheneSealBroadcast(node: string, chainId: string, accou
  * נמדד-חי: steem-js חותם-טקס-תקני-לכאורה (פאב-נגזר-תואם-BLT5HhJD…, חתימה-65B,
  * chain_id-מאומת-מול-get_config) והשרשרת דוחה "tx_missing_active_auth" — בעוד
  * ה-SDK-הרשמי משדר-מיד-ומאומת. פער-סריאליזציה/חתימה-שקט-בין-הספריות — הנתיב-הקנוני-של-BLURT-הוא-הפתרון.
- * client-singleton על-הצומת-הקנוני (BLURT_NODES[0]); ה-op-נבנה-דרך-buildOp (אותו-ANCHOR_ID-קנוני). */
-let blurtSdkMemo: { client: import("@beblurt/dblurt").Client; PrivateKey: typeof import("@beblurt/dblurt").PrivateKey } | null = null;
-async function blurtSdk() {
-  if (!blurtSdkMemo) {
-    const m = await import("@beblurt/dblurt");
-    blurtSdkMemo = { client: new m.Client(BLURT_NODES[0]), PrivateKey: m.PrivateKey };
-  }
-  return blurtSdkMemo;
-}
+ * client-singleton על-הצומת-הקנוני (BLURT_NODES[0]) — עבר ל-signer.ts (M2). ה-op-נבנה-דרך-buildOp (אותו-ANCHOR_ID-קנוני). */
 async function blurtSealBroadcast(account: string, payload: unknown, wif: string): Promise<{ txid: string }> {
-  const sdk = await blurtSdk();
-  const key = sdk.PrivateKey.fromString(wif);
-  const op = buildOp(account, payload, "active");
-  const res = await sdk.client.broadcast.sendOperations([op] as unknown as Parameters<typeof sdk.client.broadcast.sendOperations>[0], key);
-  if (res && typeof res.id === "string" && res.id.length >= 40) return { txid: res.id };
-  throw new Error("blurt broadcast answered without id (honest)");
+  // M2: חתימה+שידור-BLURT בתוך ה-Signer (SDK-הרשמי — Roast-82 · client-singleton שם)
+  return signAndSendBlurt(BLURT_NODES[0], account, [buildOp(account, payload, "active")], wif);
 }
 
 /* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = stateRoot) ── */
 async function tronSealBroadcast(tronAddress: string, stateRoot: string, wif: string): Promise<{ txid: string }> {
-  // FIX(SETTLE-11): גדר-ריבונית · FIX(Roast-65-b · H2): ה-GET-יתרה עובר-גם-הוא-דרך-fencedFetch (redirect:error)
-  // FIX(R14-a · unknown≠unfunded): גוף-שגיאה/429 (בלי data) היה נקרא "0 sun" ומדווח
-  // "unfunded" — כשהאמת היא "לא-נודע". עתה: כשל-קריאה = דחייה-כנה עם-הסבר-אמת (fail-closed נשמר).
-  const balRes = await fencedFetch(`${TRON_RPC}/v1/accounts/${tronAddress}`, "relay.tron.accounts", { signal: AbortSignal.timeout(12000) });
-  if (!balRes.ok) throw new Error(`trongrid read failed: HTTP ${balRes.status} — anchor deferred (unknown ≠ unfunded)`);
-  const acc = await balRes.json() as { data: { balance?: number }[]; success?: boolean };
-  if (acc?.success === false) throw new Error("trongrid success:false — anchor deferred (unknown ≠ unfunded)");
-  const balance = acc?.data?.[0]?.balance ?? 0;
-  if (balance < 300_000) throw new Error(`unfunded: ${balance} sun (<0.3 TRX bandwidth floor) — queued honestly`);
-
-  const [{ secp256k1 }, b58] = await Promise.all([import("@noble/curves/secp256k1"), bs58lib()]);
-  const raw58 = Buffer.from(b58.decode(tronAddress));
-  const hex20 = raw58.subarray(1, 21).toString("hex");
-  const built = await rpc<{ txID?: string; raw_data_hex?: string }>(`${TRON_RPC}/wallet/createtransaction`, {
-    // FIX(SETTLE-7 self-verify): אנחנו משדרים את מה-ש-verifyOnChain קורא-חזרה.
-    // ההיסטורי: שידור-דייג'סט ב-extra_data אך המאמת בודק stateRoot → כל-עוגן
-    // TRON ממומן היה-מאומת כ-"mismatch" לנצח (סתירה-עצמית → allSettled=false).
-    to_address: hex20, owner_address: hex20, amount: 1, extra_data: Buffer.from(stateRoot, "utf8").toString("hex"),
-  }, 15000);
-  if (!built?.txID || !built?.raw_data_hex) throw new Error("createtransaction answered without txID/raw_data_hex");
-
-  const priv = await scalarOf(wif);
-  const msg = Buffer.from(built.txID, "hex");
-  const sig = secp256k1.sign(msg, priv, { prehash: false });
-  const compact = sig.toCompactRawBytes();
-  const sigBytes = new Uint8Array(65);
-  sigBytes[0] = sig.recovery ?? 0;
-  sigBytes.set(compact, 1);
-  const res = await rpc<{ result?: boolean; txid?: string; message?: string }>(`${TRON_RPC}/wallet/broadcasttransaction`, {
-    txID: built.txID, raw_data_hex: built.raw_data_hex, signature: [Buffer.from(sigBytes).toString("hex")],
-  }, 15000);
-  if (res?.result && res?.txid) return { txid: res.txid };
-  throw new Error("tron broadcast rejected: " + (res?.message ? Buffer.from(res.message, "hex").toString("utf8").slice(0, 120) : "unknown"));
+  // M2: חתימת-TRON בתוך ה-Signer — הודעות-השגיאה-הכנות נשמרו מילה-במילה (classifier תלוי-בהן)
+  return signAndSendTron(TRON_RPC, tronAddress, stateRoot, wif);
 }
 
 /* ══ verifyOnChain — קריאה-חוזרת מה-RPC הציבורי והשוואת stateRoot ════════════
@@ -1247,10 +1151,9 @@ async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"
     // Roast-82: BLURT — אין-מפתח-פרסום-בכספת (רק-active), לכן postWif=ריק ו-actWif=BLURT_ACTIVE_WIF
     // FIX(prefix): גזירת-פאב-עם-קידומת-BLT-כשמדובר-ב-BLURT (ההשוואה-מול-key_auths-על-השרשרת)
     const blurtPfx = chain === "blurt";
-    const prevPfx = steem.config.get("address_prefix");
-    if (blurtPfx) steem.config.set("address_prefix", "BLT");
-    const postWif = chain === "steem" ? (process.env.STEEM_POSTING_WIF ?? "").trim() : chain === "hive" ? (process.env.HIVE_POSTING_WIF ?? "").trim() : "";
-    const actWif = chain === "steem" ? (process.env.STEEM_ACTIVE_WIF ?? "").trim() : chain === "hive" ? (process.env.HIVE_ACTIVE_WIF ?? "").trim() : (process.env.BLURT_ACTIVE_WIF ?? "").trim();
+    const chainPrefix: "STM" | "BLT" = blurtPfx ? "BLT" : "STM";
+    const postWif = chain === "steem" ? envKey("STEEM_POSTING_WIF") : chain === "hive" ? envKey("HIVE_POSTING_WIF") : "";
+    const actWif = chain === "steem" ? envKey("STEEM_ACTIVE_WIF") : chain === "hive" ? envKey("HIVE_ACTIVE_WIF") : envKey("BLURT_ACTIVE_WIF");
     // FIX(R13 · wif-forms): כל-מקור-מפתח נבדק בשתי-הצורות — המנורמלת 5K קודם
     // (המתמטיקה-הנכונה, מול-רישום-תקין) ואחר-כך הגולמית (הספרייה מזיזה K/L-דחוס
     // לסקלר-שגוי-שקט: k·256+1 — תקין-מול-שרשרת-שנרשמה בדור-הפגום).
@@ -1277,9 +1180,8 @@ async function authorityOk(rt: RelayRT, keys: RelayKeys, chain: "steem" | "hive"
     if (postWif) pushPair(postWif, "posting");
     if (actWif) pushPair(actWif, "active");
     for (const [wif, auth] of pairs) {
-      try { candidates.push({ wif, auth, pub: steem.auth.wifToPublic(wif) }); } catch { /* skip */ }
+      try { candidates.push({ wif, auth, pub: pubOfWif(wif, chainPrefix) }); } catch { /* skip */ }
     }
-    if (blurtPfx) { try { steem.config.set("address_prefix", prevPfx ?? "STM"); } catch { /* keep */ } }
     let chosen: { wif: string; auth: "posting" | "active"; pub: string | null } | null = null;
     for (const c of candidates) {
       if (!c.pub) continue;

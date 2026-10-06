@@ -26,8 +26,10 @@
  *   G4 כל-מוטציה-דרך-שער-המפעיל (x-saos-operator) + consoleGuard.
  *   G5 הכל-דרך-fencedFetch · אפס-סודות בפלט (txid/שמות/כמויות בלבד).
  */
-import steemLibRaw from "steem";
+/* M2: steem-lib-מקומי הוסר — החתימה ב-signer.ts; rail-exec משדר דרך grapheneOpsBroadcast */
 import { fencedFetch } from "./fence";
+// M2 · Signer–Executor: קריאות-חומר-מפתח דרך מודול-ה-Signer-היחיד (envKey · pubOfWif)
+import { envKey, pubOfWif } from "./signer";
 import {
   rcMana, grapheneOpsBroadcast,
   HIVE_CHAIN_ID, HIVE_NODES,
@@ -39,11 +41,6 @@ import {
 function operatorEnvConfigured(): boolean {
   return Boolean((process.env.DEX_OPERATOR_TOKEN || "").trim());
 }
-
-interface SteemAuth {
-  auth: { wifToPublic(wif: string): string };
-}
-const steemLib = steemLibRaw as unknown as SteemAuth;
 
 /* ── קבועי-בטיחות (נמדדו-חי) ──────────────────────────────────────────────── */
 const AUTH_TTL_MS = 10 * 60_000;      // תוקף-אימות-סמכות (כמו-הצי)
@@ -189,7 +186,7 @@ export async function railAuthority(net: RailNetwork = "hive", force = false): P
   const cfg = RAIL_NETWORKS[net];
   const { account } = railAccount();
   if (!account) return { ok: false, pub: null, error: "rail-account-unresolved" };
-  const wif = (process.env[cfg.wifEnv] || "").trim();
+  const wif = envKey(cfg.wifEnv);
   if (!wif) return { ok: false, pub: null, error: `wif-missing (${cfg.wifEnv} חסר-בסביבה-של-הדמון)` };
   const rt = railRT();
   const key = `${net}:${account}`;
@@ -203,7 +200,10 @@ export async function railAuthority(net: RailNetwork = "hive", force = false): P
   }
   let stmPub = "";
   try {
-    stmPub = steemLib.auth.wifToPublic(wif);
+    // M2: גזירת-פומבי דרך ה-Signer (pubOfWif — פליטה-פסולה = null = זריקה)
+    const derived = pubOfWif(wif);
+    if (!derived) throw new Error("derive-null");
+    stmPub = derived;
   } catch {
     rt.auths.set(key, { ok: false, checkedAt: Date.now(), pub: null, error: "wif-derive-failed" });
     return { ok: false, pub: null, error: "wif-derive-failed" };
@@ -415,7 +415,7 @@ export async function railExecute(req: RailRequest): Promise<RailResult> {
   const plan = await railPlan(req);
   if (!plan.ok || !plan.account) return { ok: false, network: net, error: plan.error ?? "plan-failed", detail: plan.bound ?? undefined };
   const account = plan.account;
-  const wif = (process.env[cfg.wifEnv] || "").trim();
+  const wif = envKey(cfg.wifEnv);
 
   try {
     if (req.action === "sell" && cfg.sscId) {
