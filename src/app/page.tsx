@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Crosshair, Crown, Layers, Landmark, List, Lock,
+  Activity, Anchor, ArrowDownRight, ArrowUpRight, Ban, Bot, Coins, Crosshair, Crown, Globe, Layers, Landmark, List, Lock,
   RefreshCcw, Route as RouteIcon, ShieldCheck, Wallet, Zap, Waves, GaugeCircle, Droplets, Scale,
 } from "lucide-react";
 import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from "@/components/dex/kit";
@@ -47,6 +47,8 @@ const api = (p: string): string => {
     "/api/dex/bridge": "/Console/dex/bridge.json",
     "/api/dex/onramp": "/Console/dex/onramp.json",
     "/api/dex/showcase": "/Console/dex/showcase.json",
+    "/api/dex/chains": "/Console/dex/chains.json",
+    "/api/dex/door": "/Console/dex/door.json",
     "/api/dex/settle": "/Console/dex/mirror-stub.json",
   };
   const mapped = staticMap[path];
@@ -2133,6 +2135,194 @@ function PortfolioBridgePanel() {
   );
 }
 
+// ─── EXEC-CD-11 · THE-CHAIN-STREAM — הזרם-החי של הרשתות-האמיתיות ──────────
+interface ChainRowView {
+  id: string; name: string; kind: string; native: string; explorer: string;
+  connected: boolean; latencyMs: number | null;
+  blockHeight: number | null; blockAgeSec: number | null;
+  chainId: number | null; chainIdOk: boolean | null;
+  gasGwei: number | null; baseFeeGwei: number | null; epochProgressPct: number | null;
+  priceUsd: number | null; priceSrc: string | null;
+  treasury: { address: string | null; addressKind: string | null; balanceNative: number | null; balanceRaw: number | null; usd: number | null } | null;
+  error?: string;
+}
+interface ChainStreamView {
+  ok: true; at: string; ttlMs: number;
+  chains: ChainRowView[];
+  summary: { connected: number; total: number; treasuryUsdKnown: number | null; priceStale: boolean; priceSrc: string | null };
+}
+interface PegRowView {
+  asset: string; oracleMu: number | null; oracleAtH: number | null; oracleSrc: string | null;
+  backingMu: number; extClaimMu: number;
+  pool: { key: string; ra: number; rb: number; midMu: number | null } | null;
+  spreadBps: number | null; verdict: string | null;
+  custodyLamports: number | null; claimsLamports: number | null; headroomLamports: number | null; runwayAnchors: number | null;
+}
+interface DoorView {
+  ok: true; at: string;
+  identities: { tron: string | null; sol: string | null; evm: string | null; note: string };
+  peg: PegRowView[];
+}
+
+const PEG_CHAIN_LABEL: Record<string, string> = { WTRX: "TRON", WSOL: "Solana", WETH: "Ethereum", WBNB: "BNB Chain", WBASE: "Base" };
+const PEG_DEPOSIT_ADDR = (asset: string, ids: DoorView["identities"]): string | null =>
+  asset === "WTRX" ? ids.tron : asset === "WSOL" ? ids.sol : ids.evm; // זהות-אחת משרתת את שלושת ה-EVM
+
+function ChainStreamPanel() {
+  const [cs, setCs] = useState<ChainStreamView | null>(null);
+  const [door, setDoor] = useState<DoorView | null>(null);
+
+  const load = useCallback(() => {
+    fetch(api("/api/dex/chains"), { cache: "no-store" })
+      .then((r) => r.json()).then((j) => { if (j?.ok) setCs(j as ChainStreamView); }).catch(() => { /* כנות: הזרם-הקודם נשאר */ });
+    fetch(api("/api/dex/door"), { cache: "no-store" })
+      .then((r) => r.json()).then((j) => { if (j?.ok) setDoor(j as DoorView); }).catch(() => { /* כנות */ });
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 15_000); // שרת-קאש 30ש׳ — הצגה מתרעננת כל 15ש׳
+    return () => clearInterval(t);
+  }, [load]);
+
+  const statusTone = (c: ChainRowView): "green" | "amber" | "red" => {
+    if (!c.connected) return "red";
+    if (c.blockAgeSec !== null && c.blockAgeSec > 300) return "amber"; // חי אבל ראש-ישן
+    return "green";
+  };
+  const ageLabel = (c: ChainRowView): string => {
+    if (c.epochProgressPct !== null) return `epoch ${c.epochProgressPct}%`;
+    if (c.blockAgeSec === null) return "—";
+    return c.blockAgeSec < 120 ? `${c.blockAgeSec}s` : `${Math.floor(c.blockAgeSec / 60)}m`;
+  };
+
+  return (
+    <Panel
+      title="CHAIN STREAM · הרשתות-האמיתיות חיות"
+      icon={<Globe className="h-4 w-4 text-amber-400" />}
+      action={
+        <div className="flex items-center gap-2" dir="ltr">
+          {cs && (
+            <>
+              <Pill tone={cs.summary.connected === cs.summary.total ? "green" : cs.summary.connected > 0 ? "amber" : "red"} testid="chains-connected-pill">
+                {cs.summary.connected}/{cs.summary.total} LIVE
+              </Pill>
+              {cs.summary.treasuryUsdKnown !== null && (
+                <span className="font-mono text-[10px] text-zinc-400" data-testid="chains-treasury-usd">
+                  custody ${cs.summary.treasuryUsdKnown < 1 ? cs.summary.treasuryUsdKnown.toPrecision(3) : cs.summary.treasuryUsdKnown.toFixed(2)}
+                </span>
+              )}
+              {cs.summary.priceStale && <Pill tone="amber">FEED-STALE</Pill>}
+            </>
+          )}
+        </div>
+      }
+      className="mt-4"
+    >
+      {!cs ? (
+        <p className="py-3 text-center font-mono text-[11px] text-zinc-600" data-testid="chains-loading">מקשיב לצמתים-הציבוריים… (RPC keyless · אפס-מפתחות)</p>
+      ) : (
+        <>
+          <div className="overflow-x-auto" dir="ltr" data-testid="chains-table">
+            <table className="w-full min-w-[720px] border-separate border-spacing-0 font-mono text-[11px]">
+              <thead>
+                <tr className="text-[9px] uppercase tracking-wider text-zinc-500">
+                  <th className="border-b border-zinc-800 px-2 py-1.5 text-left">Chain</th>
+                  <th className="border-b border-zinc-800 px-2 py-1.5 text-left">Status</th>
+                  <th className="border-b border-zinc-800 px-2 py-1.5 text-right">Block</th>
+                  <th className="border-b border-zinc-800 px-2 py-1.5 text-right">Head age</th>
+                  <th className="border-b border-zinc-800 px-2 py-1.5 text-right">Gas</th>
+                  <th className="border-b border-zinc-800 px-2 py-1.5 text-right">Real price</th>
+                  <th className="border-b border-zinc-800 px-2 py-1.5 text-right">Sovereign custody</th>
+                  <th className="border-b border-zinc-800 px-2 py-1.5 text-right">Explorer</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cs.chains.map((c) => (
+                  <tr key={c.id} className="text-zinc-300" data-testid={`chain-row-${c.id}`}>
+                    <td className="border-b border-zinc-800/60 px-2 py-1.5">
+                      <span className="font-bold text-zinc-100">{c.name}</span>
+                      <span className="ml-1.5 text-[9px] text-zinc-600">{c.native}</span>
+                    </td>
+                    <td className="border-b border-zinc-800/60 px-2 py-1.5">
+                      <span className="flex items-center gap-1.5">
+                        <StatusDot tone={statusTone(c)} pulse={c.connected} />
+                        <span className={c.connected ? "text-green-400" : "text-red-400"}>{c.connected ? "live" : "down"}</span>
+                        {c.latencyMs !== null && <span className="text-[9px] text-zinc-600">{c.latencyMs}ms</span>}
+                      </span>
+                    </td>
+                    <td className="border-b border-zinc-800/60 px-2 py-1.5 text-right text-zinc-200">
+                      {c.blockHeight !== null ? fmtInt(c.blockHeight) : "—"}
+                      {c.chainIdOk === false && <span className="ml-1 text-[9px] text-amber-400" title={`node declares chainId ${c.chainId}`}>CID!</span>}
+                    </td>
+                    <td className="border-b border-zinc-800/60 px-2 py-1.5 text-right text-zinc-400">{ageLabel(c)}</td>
+                    <td className="border-b border-zinc-800/60 px-2 py-1.5 text-right text-zinc-400">
+                      {c.gasGwei !== null ? `${c.gasGwei < 1 ? c.gasGwei.toPrecision(3) : c.gasGwei.toFixed(2)} gwei` : "—"}
+                    </td>
+                    <td className="border-b border-zinc-800/60 px-2 py-1.5 text-right">
+                      {c.priceUsd !== null ? <span className="text-amber-300">${c.priceUsd < 1 ? c.priceUsd.toPrecision(3) : c.priceUsd.toFixed(2)}</span> : <span className="text-zinc-600">NO-FEED</span>}
+                    </td>
+                    <td className="border-b border-zinc-800/60 px-2 py-1.5 text-right">
+                      {c.treasury?.balanceNative !== null && c.treasury?.balanceNative !== undefined ? (
+                        <span title={`${c.treasury.address ?? ""} = ${c.treasury.balanceRaw ?? ""} raw`}>
+                          <span className="text-zinc-200">{c.treasury.balanceNative < 0.01 ? c.treasury.balanceNative.toPrecision(3) : c.treasury.balanceNative.toFixed(4)} {c.native}</span>
+                          {c.treasury.usd !== null && <span className="ml-1 text-[9px] text-zinc-500">(${c.treasury.usd < 1 ? c.treasury.usd.toPrecision(3) : c.treasury.usd.toFixed(2)})</span>}
+                        </span>
+                      ) : c.treasury?.addressKind === "account" ? (
+                        <span className="text-zinc-500" title="יתרות-הגרפניים-חיות-בפאנל-ה-Truth">{c.treasury.address} → Truth</span>
+                      ) : (
+                        <span className="text-zinc-600">—</span>
+                      )}
+                    </td>
+                    <td className="border-b border-zinc-800/60 px-2 py-1.5 text-right">
+                      <a href={c.explorer} target="_blank" rel="noreferrer" className="text-[10px] text-amber-400/80 underline-offset-2 hover:text-amber-300 hover:underline">open ↗</a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* ─── דלת-המטבעות · 5 עוגנים — האיך-מתחברים: כתובות-הפקדה + מצב-הכיסוי ─── */}
+          <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3" data-testid="peg-doors-strip">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">דלת-המטבעות · 5 עוגנים על 5 רשתות-אמת</h3>
+              <span className="font-mono text-[9px] text-zinc-600" dir="ltr">send real coins → public-RPC verification → backed mint (single-use claim)</span>
+            </div>
+            {!door ? (
+              <p className="mt-2 text-center font-mono text-[10px] text-zinc-600">טוען-דוח-דלת…</p>
+            ) : (
+              <div className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2 xl:grid-cols-3" dir="ltr">
+                {door.peg.map((p) => (
+                  <div key={p.asset} className="rounded-md border border-zinc-800 bg-zinc-950/60 px-2.5 py-1.5" data-testid={`peg-door-${p.asset}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-[11px] font-bold text-zinc-100">{p.asset}</span>
+                      <span className="font-mono text-[9px] text-zinc-500">{PEG_CHAIN_LABEL[p.asset] ?? p.asset}</span>
+                      <Pill tone={p.verdict === "CONVERGED" ? "green" : p.verdict === "DRIFT" ? "amber" : p.verdict === null ? "zinc" : "red"}>{p.verdict ?? "NO-POOL"}</Pill>
+                    </div>
+                    <div className="mt-1 flex items-center justify-between gap-2 font-mono text-[9px] text-zinc-500">
+                      <span>oracle {p.oracleMu !== null ? `$${(p.oracleMu / 1e6).toPrecision(4)}` : "—"}</span>
+                      <span>backing {fmtInt(p.backingMu)}µ</span>
+                    </div>
+                    <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[9px]">
+                      <span className="text-zinc-600">deposit:</span>
+                      <span className="text-amber-400/90" title={PEG_DEPOSIT_ADDR(p.asset, door.identities) ?? ""}>
+                        {PEG_DEPOSIT_ADDR(p.asset, door.identities) ? shortHash(PEG_DEPOSIT_ADDR(p.asset, door.identities)!, 14) : "לא-נגזר"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                <p className="col-span-full text-[9px] leading-snug text-zinc-600" dir="rtl">
+                  זהות-ה-EVM אחת משרתת שלוש-רשתות (ETH · Base · BSC) — האימות מצליב chainId מהטרנזקציה-עצמה, פקדה-על-רשת-שגויה נדחית. אפס-מפתחות-בפלט · אימות-מול-RPC-ציבורי-בלבד.
+                </p>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
 export default function DexTerminal() {
   const { world, load, online } = useWorldStream();
   const [marketKey, setMarketKey] = useState<string>("");
@@ -2521,6 +2711,9 @@ export default function DexTerminal() {
 
         {/* ═════ SETTLE-12: תיקיית-המטבעות + הגשר-הריבוני ═════ */}
         <PortfolioBridgePanel />
+
+        {/* ═════ EXEC-CD-11: THE-CHAIN-STREAM — הזרם-החי של הרשתות-האמיתיות ═════ */}
+        <ChainStreamPanel />
 
         {/* ═════ SETTLE-13: צי-העיגון-הריבוני ═════ */}
         <FleetPanel />

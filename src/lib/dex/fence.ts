@@ -63,6 +63,9 @@ const PINNED_HOSTS = new Set<string>([
   "steem-rpc.publicnode.com",
   /* FIX(Roast-63): bridge.ts — אימות-הוכחות-חוץ (eth_getTransactionReceipt על-BSC) */
   "bsc-rpc.publicnode.com",
+  /* EXEC-CD-11 · THE-CHAIN-STREAM + peg-door.EVM_DOORS — דלת-Base (chainId 8453):
+   * RPC-ציבורי-keyless לטלמטריה-חיה (chain-stream) ולאימות-פקדות-WBASE (peg-door) */
+  "mainnet.base.org",
   /* R42 · truth.gridArmedLive — המו״פ הציבורי-שלנו (Console/Pages): קריאת-מצב-הגריד
    * החמוש = ההוכחה-החיה-של-כספת-המפתח (הגריד מתחמש-רק-לאחר-אימות-ואטימה, R38) */
   "roshpinacare-sys.github.io",
