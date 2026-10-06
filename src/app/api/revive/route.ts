@@ -54,5 +54,24 @@ export async function GET(req: Request) {
     report.relay3003 = pid ? `spawning pid=${pid}` : 'spawn-failed';
   }
 
+  // 3) zip console (WEAVE) :3050 — הקונסולה-האמהית (publish/כספת/gate/charter).
+  //    דרך-הסופרוויזר (בון-טהור-שורד) — next-dev-לבד-נשחט (נמדד 23005), הבון
+  //    מחייה-אותו-בלולאה. :3000 נשאר של גשר-התצוגה שמנתב אליו (preview-bridge).
+  if (await portBusy(3050)) {
+    report.zipConsole3050 = 'alive';
+  } else {
+    const pid = spawnDetached('bun', ['mini-services/web/index.ts'], '/home/z/my-project/zip');
+    report.zipConsole3050 = pid ? `spawning supervisor pid=${pid}` : 'spawn-failed';
+  }
+
+  // 4) pulse :3033 — הדופק (השידור-היומי לשרשרת · חותם-כ-headcorner בלבד —
+  //    דוקטרינת-המפעיל: מקור-המפתח = upload/headcorner.txt מצב-אב, 4/4-מאומת).
+  if (await portBusy(3033)) {
+    report.pulse3033 = 'alive';
+  } else {
+    const pid = spawnDetached('bun', ['mini-services/pulse/index.ts'], '/home/z/my-project/zip');
+    report.pulse3033 = pid ? `spawning pid=${pid}` : 'spawn-failed';
+  }
+
   return NextResponse.json({ ok: true, at: new Date().toISOString(), ...report });
 }

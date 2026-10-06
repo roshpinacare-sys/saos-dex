@@ -108,14 +108,18 @@ function startBridge(): void {
       res.end();
       return;
     }
-    // proxy תמים אל ה-DEX החי (אותו תהליך — 127.0.0.1:3010) — בלי hop-by-hop
+    // ═══ נתב-קצה: /saos-dex* → ה-DEX החי (3010, אותו תהליך) · כל-השאר →
+    // קונסולת-ה-WEAVE (3050, ילדת-ה-DEX). מנועי-הבית (publish/charter/health/
+    // gate/כספת) חיים-מאחורי-אותו-origin — הצי מדבר-אל-3000 ומגיע-הביתה.
+    const isDex = url === "/saos-dex" || url.startsWith("/saos-dex/");
+    const edgePort = isDex ? 3010 : 3050;
     const upstream = http.request(
       {
         host: "127.0.0.1",
-        port: 3010,
+        port: edgePort,
         path: url,
         method: req.method,
-        headers: { ...strip(req.headers), host: "127.0.0.1:3010" },
+        headers: { ...strip(req.headers), host: `127.0.0.1:${edgePort}` },
       },
       (up) => {
         const headers = strip(up.headers);
@@ -125,7 +129,7 @@ function startBridge(): void {
     );
     upstream.on("error", (e) => {
       if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
-      res.end(`preview-bridge: dex unreachable (${(e as NodeJS.ErrnoException)?.code ?? String(e)})`);
+      res.end(`preview-bridge: edge unreachable (${(e as NodeJS.ErrnoException)?.code ?? String(e)})`);
     });
     // FIX(lifecycle): נטישת-לקוח (abort של long-poll) = destroy ל-upstream.
     // לא על req 'close' (נורה מיד אחרי-הכותרות ב-GET — ECONNRESET נמדד) אלא
@@ -140,12 +144,15 @@ function startBridge(): void {
   // FIX(hmr-ws): HMR של dev דורש WebSocket — tunnel גולמי ל-3010 (ה-gateway
   // מקדימה את ה-upgrade; בלי-זה ההידרציה של dev נשארת מושהית — נמדד).
   server.on("upgrade", (req, clientSocket, head) => {
-    const upstreamSocket = net.connect(3010, "127.0.0.1", () => {
+    // מנהרה-לפי-נתיב: HMR של ה-DEX (/saos-dex) → 3010 · HMR של הקונסולה → 3050
+    const wsUrl = req.url ?? "/";
+    const wsPort = (wsUrl === "/saos-dex" || wsUrl.startsWith("/saos-dex/")) ? 3010 : 3050;
+    const upstreamSocket = net.connect(wsPort, "127.0.0.1", () => {
       const lines: string[] = [`${req.method} ${req.url} HTTP/1.1`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
         const k = req.rawHeaders[i];
         const v = req.rawHeaders[i + 1];
-        lines.push(k.toLowerCase() === "host" ? "Host: 127.0.0.1:3010" : `${k}: ${v}`);
+        lines.push(k.toLowerCase() === "host" ? `Host: 127.0.0.1:${wsPort}` : `${k}: ${v}`);
       }
       upstreamSocket.write(lines.join("\r\n") + "\r\n\r\n");
       if (head.length) upstreamSocket.write(head);
