@@ -4,6 +4,7 @@ import { aleState } from "@/lib/dex/ale";
 import { routableMap } from "@/lib/dex/router";
 import { EPOCH_BLOCKS } from "@/lib/dex/kernel";
 import { getPool, effectiveFeeBps } from "@/lib/dex/amm";
+import { makerStatsFor } from "@/lib/dex/maker"; // EXEC-CD-8 · Maker-API — ייחוס-חי
 
 export const dynamic = "force-dynamic";
 
@@ -138,6 +139,16 @@ export async function GET() {
       curve: "swap-בודד",
       olympus: "bond buy/sell בלבד",
       verdict: "סטנדרט-dYdX/Binance — וה-keeper הוא בונה-הבלוקים עצמו (אפס-תשתית-חוץ)",
+    },
+    {
+      /* ── EXEC-CD-8 · Maker-API — המאפשר-הקודי לנזילות-חוץ (2026-10-06) ── */
+      metric: "Maker-API מקצועי (batch/cancel-all/rebates)",
+      us: `batch-quotes אטומי (≤8, הכל-או-כלום) · cancel-all-סוויפ (אפס-מירוץ, בזמן-בלוק) · ייחוס-מייקר-ממסחר-אמת: ${makerStatsFor("operator").fills} פילים מיוחסים · מסגרת-ריבייט-חיה (תעריף-0 עד-החלטת-מימון)`,
+      usLive: true, usValue: "batch+cancelAll+rebate-rail",
+      uniswap: "אין-API-מייקרים (AMM — אין-ספר-לצטט-אליו)",
+      curve: "אין-API-מייקרים",
+      olympus: "אין",
+      verdict: "מה-שמושך-מייקרים-מקצועיים-אצל-dYdX/Hyperliquid — עכשיו גם אצלנו, על-ספר-דטרמיניסטי בגז-0",
     },
     {
       metric: "סטרימינג בזמן-אמת",

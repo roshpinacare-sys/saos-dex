@@ -41,6 +41,7 @@ import { lendTick } from "./lend"; // R44 · THE-MARKET — שוק-הכספים:
 import { extFeeds } from "./price-proof";
 // CEX-grade market data (Task 83): נרות-OHLCV + עסקאות + סטטיסטיקת-24ש' — חוץ-מצב מוצמד-גיט
 import { klinesFeed, klinesFlush, klinesLoad, stats24For } from "./klines";
+import { makerFeed, makerFlush } from "./maker"; // EXEC-CD-8 · ייחוס-מייקרים (חוץ-מצב — אותו-משטר-נרות)
 
 export const TICK_MS = 3_000;
 const SEAL_EVERY = 12;   // checkpoint כל-12 בלוקים (CHAIN_SPEC)
@@ -435,6 +436,8 @@ function flushSnapshot(rt: ChainRT): void {
     fs.writeFileSync(TAPE_FILE, rt.tape.slice(0, 300).map((e) => JSON.stringify(e)).join("\n"));
     // Task 83 · הנרות-נצמדים-לגיט באותה-קדנס (db/klines.json — נעקב ב-.gitignore-חריג)
     klinesFlush();
+    // EXEC-CD-8 · ייחוס-המייקרים-נצמד-לגיט באותו-קדנס (db/maker-stats.json — חריג-גיט)
+    makerFlush();
   } catch { /* כשל-כתיבה לא מפיל את השרשרת */ }
 }
 
@@ -743,6 +746,8 @@ async function buildBlock(rt: ChainRT): Promise<void> {
 
   // Task 83 · הזנת-הנרות ממסחר-אמת של-הבלוק (לפני-ה++ — אותו-h שה-tape מסמן)
   if (blockTrades.length > 0) klinesFeed(blockTrades, st.height, t0);
+  // EXEC-CD-8 · הזנת-ייחוס-המייקרים מאותם-מסחר-אמת (fills-בלבד-עם-maker)
+  if (blockTrades.length > 0) makerFeed(blockTrades, st.height);
 
   st.height++;
   // FIX(SETTLE-9 perf): stateRoot חושב-פעמיים-פר-בלוק (hash בלוק + כתיבת-DB) —
