@@ -45,7 +45,7 @@ export async function POST(req: Request) {
     perSlice?: number; slicesMax?: number; everyK?: number; minOutBps?: number;
     // trig_create
     base?: string; quote?: string; side?: "buy" | "sell";
-    triggerPx?: number; limitPx?: number; amount?: number; expiresH?: number;
+    triggerPx?: number; limitPx?: number; amount?: number; expiresH?: number; kind?: "stop" | "take";
     // cancel
     progId?: string;
   };
@@ -79,13 +79,31 @@ export async function POST(req: Request) {
       base: body.base as never, quote: body.quote as never, side: body.side,
       triggerPx, limitPx: body.limitPx === undefined ? 0 : num(body.limitPx),
       amount, expiresH: body.expiresH === undefined ? 0 : num(body.expiresH),
+      // Task 83 · כיוון-חצייה: take = הפוך-מהצד (sell→up · buy→down); stop = ברירת-מחדל
+      trigDir: body.kind === "take" ? (body.side === "sell" ? "up" : "down") : undefined,
     });
     return NextResponse.json({ ok: r.queued, error: r.reason, note: r.queued ? "טריגר הוצב — ייסרק כל-בלוק מול המחיר הקנוני" : undefined });
+  }
+  if (op === "oco_place") {
+    // Task 83 · OCO — שני-טריגרים מקושרים (stop-loss + take-profit) בפקודה-אחת;
+    // נורה/ביטול-אחת מבטלת-את-האחות. סמנטיקה: sell → stop < take; buy → take < stop.
+    const triggerPx = num(body.triggerPx), limitPx = num(body.limitPx), amount = num(body.amount);
+    if (!body.base || !body.quote || (body.side !== "buy" && body.side !== "sell") || !(triggerPx > 0) || !(limitPx > 0) || !(amount > 0))
+      return NextResponse.json({ ok: false, error: "bad-request", note: "נדרש: base, quote, side, triggerPx (stop), limitPx (take), amount" }, { status: 200 });
+    if (body.side === "sell" ? triggerPx >= limitPx : limitPx >= triggerPx)
+      return NextResponse.json({ ok: false, error: "bad-oco-direction", note: body.side === "sell" ? "sell: חייב stop < take" : "buy: חייב take < stop" }, { status: 200 });
+    const r = submitOp({
+      type: "oco_place", issuer: "operator", nonce: nextNonce("oco"),
+      base: body.base as never, quote: body.quote as never, side: body.side,
+      triggerPx, limitPx, amount,
+      expiresH: body.expiresH === undefined ? 0 : num(body.expiresH),
+    });
+    return NextResponse.json({ ok: r.queued, error: r.reason, note: r.queued ? "OCO הוצב (stop+take מקושרים) — ייסרק כל-בלוק" : undefined });
   }
   if (op === "trig_cancel") {
     if (!body.progId) return NextResponse.json({ ok: false, error: "bad-request" }, { status: 200 });
     const r = submitOp({ type: "trig_cancel", issuer: "operator", nonce: nextNonce("trgx"), progId: body.progId });
     return NextResponse.json({ ok: r.queued, error: r.reason });
   }
-  return NextResponse.json({ ok: false, error: "unknown-op", note: "פעולות: dca_create · dca_cancel · trig_create · trig_cancel" }, { status: 200 });
+  return NextResponse.json({ ok: false, error: "unknown-op", note: "פעולות: dca_create · dca_cancel · trig_create · oco_place · trig_cancel" }, { status: 200 });
 }

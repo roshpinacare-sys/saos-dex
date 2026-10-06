@@ -21,6 +21,7 @@ export async function POST(req: Request) {
       action?: "order" | "fill";
       base?: string; quote?: string; side?: "buy" | "sell";
       price?: number; amount?: number; market?: boolean;
+      postOnly?: boolean; ioc?: boolean; // Task 83 · סוגי-פקודות מוסדיים
     };
     const action = body.action === "fill" ? "fill" : "order";
     const amount = Math.floor(Number(body.amount));
@@ -42,6 +43,9 @@ export async function POST(req: Request) {
       base: body.base as never, quote: body.quote as never,
       side: body.side, price, amount,
       market: isMarket ? true : undefined,
+      // Task 83 · סוגי-פקודות: postOnly (maker-only) · ioc (Immediate-Or-Cancel)
+      postOnly: body.postOnly === true ? true : undefined,
+      ioc: body.ioc === true && !isMarket ? true : undefined, // market הוא IOC-מטבעו
     });
     return NextResponse.json({ ok: r.queued, error: r.reason, note: r.queued ? "queued — ייכלל בבלוק הבא (≤3 שנ׳)" : undefined });
   } catch {

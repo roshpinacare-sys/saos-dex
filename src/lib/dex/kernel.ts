@@ -15,7 +15,7 @@
  * טכני-פתוח, לא-מוסתר.
  */
 import { canon, sha256, stateRootOf } from "./canonical";
-import { cancelOrder, matchBook, gcOrders, type BookOrder } from "./book";
+import { cancelOrder, matchBook, gcOrders, sortBook, type BookOrder } from "./book";
 import { poolAdd, poolSwap, poolRm, LP_ASSET_PREFIX } from "./amm";
 
 // ─── טבלת-GAS (מפרט-הברזל + הרחבות 96–113 של kernel.cjs) ────────────────────
@@ -74,6 +74,7 @@ export const GAS_TABLE = {
   dca_cancel: 15,  // ביטול-תוכנית + שחרור-יתרה-נעולה
   trig_order: 60,  // פקודת-טריגר (stop/take): נחתמת-עצמאית-מול-המחיר-הקנוני
   trig_cancel: 15, // ביטול-טריגר + שחרור-ערבות
+  oco_place: 75,   // Task 83 · OCO: שתי-רגלי-טריגר מקושרות בפקודה-אחת (stop+take)
   // ── Task 57/58 · מסילת-ההשקות (עקומת-pump.fun + LBP) — פתוחה-לכל-אזרח-רשת ──
   launch_create: 60, // השקת-טוקן-חדש על-העקומה (אזרחי-הרשת — לא-רק-המפעיל)
   launch_buy: 80,    // קנייה-מהעקומה — כסף-אמת-בלבד (הגיוס נעול-בחשבון-ההשקה)
@@ -416,6 +417,10 @@ export interface TrigOrder {
   amountMu: number;        // כמות-בסיס (µ)
   expiresH: number;        // 0=ללא-תפוגה
   atH: number;
+  oco?: string;            // Task 83 · מזהה-קישור-OCO — נורה/ביטול-אחת מבטלת-את-אחותה (רשות; תמונות-ישנות-בלעדיו)
+  dir?: "down" | "up";     // Task 83 · כיוון-החצייה: down=מת-כשהמחיר ≤ · up=מת-כשהמחיר ≥.
+                           // ברירת-מחדל-נגזרת-מהצד (sell→down · buy→up) = ההתנהגות-ההיסטורית;
+                           // רגל-ה-take של-OCO חוצה-הפוך (sell→up = רווח-מעל-השוק · buy→down).
 }
 
 // ─── עזרי-מצב (שלמים-בלבד) ──────────────────────────────────────────────────
@@ -611,6 +616,9 @@ export interface Op {
   progId?: string;      // dca_cancel
   everyK?: number; perSlice?: number; slicesMax?: number; minOutBps?: number; // dca_create
   triggerPx?: number; limitPx?: number; expiresH?: number;                    // trig_order
+  postOnly?: boolean;   // Task 83 · פקודת-לימיט שמסרבת-לחצות (maker-only — סטנדרט-בורסות)
+  ioc?: boolean;        // Task 83 · Immediate-Or-Cancel: מה-שלא-מולא מיד — מתבטל (לא-נח-בספר)
+  trigDir?: "down" | "up"; // Task 83 · כיוון-חציית-טריגר (רשות; ברירת-מחדל-נגזרת-מהצד)
   // Task 57/58 · מסילת-ההשקות
   ticker?: string; lmode?: "curve" | "lbp"; supply?: number;
   // Task 72 · oracle_set — מפת-מחירים (נכס → µ-USDS ל-1-יחידה, שלמים בלבד)
@@ -925,21 +933,73 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       addLock(st, issuer, lockAsset, lockMu);
       const id = `trg-${st.trigSeq ?? 1}`;
       st.trigSeq = (st.trigSeq ?? 1) + 1;
-      st.trig = { ...(st.trig ?? {}), [id]: { id, owner: issuer, base: base as string, quote: quote as string, side, triggerPx, limitPx, amountMu: amt, expiresH, atH: st.height } };
+      const dir = op.trigDir === "up" || op.trigDir === "down" ? op.trigDir : (side === "sell" ? "down" : "up"); // Task 83 · ברירת-מחדל-היסטורית
+      st.trig = { ...(st.trig ?? {}), [id]: { id, owner: issuer, base: base as string, quote: quote as string, side, triggerPx, limitPx, amountMu: amt, expiresH, atH: st.height, dir } };
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "trig_order", note: `${id}: ${side} ${amt}µ ${base} @${triggerPx}${limitPx > 0 ? ` lim ${limitPx}` : ""}` });
       return { ok: true, gas };
     }
     case "trig_cancel": {
       const tid = String(op.progId ?? "");
-      const trg = st.trig?.[tid];
-      if (!trg) return { ok: false, err: "trigger-not-found", gas: 0 };
-      if (trg.owner !== issuer) return { ok: false, err: "not-owner", gas: 0 };
+      // Task 83 · OCO: progId יכול להיות מזהה-רגל (trg-*) או מזהה-קישור (oco-*) —
+      // ביטול-אחד מבטל-את-הקבוצה-כולה (כל-רגל משחררת-את-ערבותה-שלה-בעצמה).
+      const leg = st.trig?.[tid];
+      const group = leg?.oco
+        ? Object.values(st.trig ?? {}).filter((t) => t.oco === leg.oco && t.owner === issuer)
+        : leg
+          ? [leg]
+          : Object.values(st.trig ?? {}).filter((t) => t.oco === tid && t.owner === issuer);
+      if (group.length === 0) return { ok: false, err: "trigger-not-found", gas: 0 };
       const c = consume(); if (c) return c;
-      const lockAsset = trg.side === "sell" ? trg.base : trg.quote;
-      const effPx = trg.limitPx > 0 ? trg.limitPx : trg.triggerPx;
-      addLock(st, issuer, lockAsset, -(trg.side === "sell" ? trg.amountMu : notional(effPx, trg.amountMu)));
-      const trigMap = { ...(st.trig ?? {}) }; delete trigMap[tid]; st.trig = trigMap;
-      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "trig_cancel", note: `${tid} בוטל, ערבה שוחררה` });
+      for (const trg of group) {
+        const lockAsset = trg.side === "sell" ? trg.base : trg.quote;
+        const effPx = trg.limitPx > 0 ? trg.limitPx : trg.triggerPx;
+        addLock(st, issuer, lockAsset, -(trg.side === "sell" ? trg.amountMu : notional(effPx, trg.amountMu)));
+        const trigMap = { ...(st.trig ?? {}) }; delete trigMap[trg.id]; st.trig = trigMap;
+        st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "trig_cancel", note: `${trg.id}${trg.oco ? ` (OCO ${trg.oco})` : ""} בוטל, ערבה שוחררה` });
+      }
+      return { ok: true, gas };
+    }
+    case "oco_place": {
+      // Task 83 · OCO (One-Cancels-the-Other) — סטנדרט-בורסות (Binance/Bybit TP-SL):
+      // שני-טריגרים מקושרים על אותו-צד/כמות; נורה/ביטול-אחת מבטלת-את-אחותה
+      // (trigTick/trig_cancel). כנות-ערבות: כל-רגל נועלת-בעצמה (אותו-חוזה של
+      // trig_order — שחרור-הביצוע-מדויק-לכל-רגל) → OCO צורך 2× ערבות ו-2 מקומות
+      // בתקרת-24-הטריגרים. סמנטיקה קנונית: sell → stop מתחת-ל-take; buy → הפוך.
+      const side = op.side;
+      const base = op.base, quote = op.quote;
+      const stopPx = Math.floor(op.triggerPx ?? 0);   // רגל-ה-stop-loss
+      const takePx = Math.floor(op.limitPx ?? 0);     // רגל-ה-take-profit
+      const amt = Math.floor(op.amount ?? 0);
+      const expiresH = Math.floor(op.expiresH ?? 0);
+      if ((side !== "buy" && side !== "sell") || !ASSETS.includes(base as Asset) || !ASSETS.includes(quote as Asset) || base === quote)
+        return { ok: false, err: "bad-order-params", gas: 0 };
+      if (!(stopPx > 0) || !(takePx > 0) || !(amt > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
+      if (side === "sell" ? stopPx >= takePx : takePx >= stopPx)
+        return { ok: false, err: "bad-oco-direction", gas: 0 };
+      if (expiresH < 0) return { ok: false, err: "bad-expiry", gas: 0 };
+      const mine = Object.values(st.trig ?? {}).filter((t) => t.owner === issuer).length;
+      if (mine + 2 > 24) return { ok: false, err: "trig-cap", gas: 0 };
+      const lockAsset = (side === "sell" ? base : quote) as string;
+      const stopLock = side === "sell" ? amt : notional(stopPx, amt);
+      const takeLock = side === "sell" ? amt : notional(takePx, amt);
+      if (!Number.isSafeInteger(stopLock) || !Number.isSafeInteger(takeLock)) return { ok: false, err: "lock-overflow", gas: 0 };
+      if (avail(st, issuer, lockAsset) < stopLock + takeLock) return { ok: false, err: "insufficient-escrow", gas: 0 };
+      const c = consume(); if (c) return c;
+      const seq1 = st.trigSeq ?? 1;
+      const ocoId = `oco-${seq1}`;
+      addLock(st, issuer, lockAsset, stopLock);
+      addLock(st, issuer, lockAsset, takeLock);
+      // כיווני-החצייה (Task 83): רגל-ה-stop = הגנתי (sell→down · buy→up — ברירת-המחדל);
+      // רגל-ה-take = הפוך-ממנה (sell→up = מכירה-ברווח-כשהמחיר מטפס · buy→down = קנייה-ברווח-כשהמחיר צונח).
+      const stopDir: "down" | "up" = side === "sell" ? "down" : "up";
+      const takeDir: "down" | "up" = side === "sell" ? "up" : "down";
+      st.trig = {
+        ...(st.trig ?? {}),
+        [`trg-${seq1}`]: { id: `trg-${seq1}`, owner: issuer, base: base as string, quote: quote as string, side, triggerPx: stopPx, limitPx: 0, amountMu: amt, expiresH, atH: st.height, oco: ocoId, dir: stopDir },
+        [`trg-${seq1 + 1}`]: { id: `trg-${seq1 + 1}`, owner: issuer, base: base as string, quote: quote as string, side, triggerPx: takePx, limitPx: 0, amountMu: amt, expiresH, atH: st.height, oco: ocoId, dir: takeDir },
+      };
+      st.trigSeq = seq1 + 2;
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "oco_place", note: `${ocoId}: ${side} ${amt}µ ${base} — stop @${stopPx} / take @${takePx}` });
       return { ok: true, gas };
     }
     case "launch_create": {
@@ -1232,6 +1292,23 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // בכל-חישוב. "אין-float במצב" היה-הצהרה, לא-שער. נדחה-לפני-כל-נגיעה-במצב.
       if (!Number.isSafeInteger(px) || !Number.isSafeInteger(amt))
         return { ok: false, err: "non-integer-price-amount", gas: 0 };
+      // Task 83 · סוגי-פקודות מוסדיים (סטנדרט-dYdX/Binance):
+      //  · postOnly — maker-only: אם-הפקודה הייתה-חוצה-ספר-של-אחרים עכשיו → דחייה-נקייה
+      //    (לפני-שום-נגיעה-במצב; סריקת-שלמים דטרמיניסטית, מקבילה-מדויקת לשער-ה-firstCross של matchBook)
+      //  · ioc — Immediate-Or-Cancel: מה-שלא-חצה-מיד לא-נח-בספר — שארית מתבטלת-וערבותה משוחררת
+      //  · השילוב postOnly+ioc מיותר-לוגית (maker שמבטל-עצמו) — נדחה מפורשות
+      const postOnly = op.postOnly === true;
+      const ioc = op.ioc === true;
+      if (postOnly && ioc) return { ok: false, err: "ioc-post-only-conflict", gas: 0 };
+      if (postOnly && op.market) return { ok: false, err: "post-only-market-nonsensical", gas: 0 };
+      if (postOnly) {
+        const opp = sortBook(st, op.base as string, op.quote as string, op.side === "buy" ? "sell" : "buy");
+        const wouldTake = opp.some((m) =>
+          (op.side === "buy" ? m.price <= px : m.price >= px) &&
+          m.owner !== op.issuer && (m.amount - m.filled) > 0 &&
+          notional(m.price, Math.min(amt, m.amount - m.filled)) > 0);
+        if (wouldTake) return { ok: false, err: "post-only-would-cross", gas: 0 };
+      }
       if (st.orders.filter((o) => o.live && o.owner === op.issuer).length >= 24)
         return { ok: false, err: "order-cap", gas: 0 };
       if (avail(st, op.issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
@@ -1252,8 +1329,21 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         // הבאג-ההיסטורי: notional(px,filledMu) על-sell במחיר-px<1000 (WSTEEM) שחרר
         // 1−px/1000 מהנעילה של-השארית → cancel מאוחר = escrow-underflow:cancel → HALT
         // (נתפס-ע"י-ה-invariant — fail-fast עבד; השורש תוקן כאן).
-        const filledMu = amt - (cross.events ? cross.events.reduce((a, e) => a + e.amountMu, 0) : 0);
-        const expectedLock = filledMu > 0 ? (op.side === "sell" ? filledMu : notional(px, filledMu)) : 0;
+        const restMu = amt - (cross.events ? cross.events.reduce((a, e) => a + e.amountMu, 0) : 0);
+        // Task 83 · IOC: שארית-שלא-חצתה-מיד מתבטלת — matchBook השאיר-אותה כפקודה-נחה
+        // (nonce+":r") — מבטלים-אותה כאן עם-שחרור-המד-הפרטי שלה (אותו-חוזה של-cancel).
+        if (ioc && restMu > 0) {
+          const rested = st.orders.find((o) => o.live && o.owner === op.issuer && o.nonce === `${op.nonce}:r`);
+          if (rested) {
+            const held = typeof rested.lockMu === "number" && rested.lockMu >= 0 ? rested.lockMu : 0;
+            rested.lockMu = 0;
+            addLock(st, rested.owner, rested.side === "sell" ? rested.base : rested.quote, -held);
+            rested.live = false;
+            st.orders = st.orders.filter((o) => o.live);
+            st.journal.push({ h: st.height, t: nowMs, soldier: op.issuer, action: "order_ioc_rest_cancel", note: `IOC: שארית ${restMu}µ מתבטלת (מולאו ${amt - restMu}µ מתוך ${amt}µ)` });
+          }
+        }
+        const expectedLock = ioc ? 0 : (restMu > 0 ? (op.side === "sell" ? restMu : notional(px, restMu)) : 0);
         const released = lockBefore - lockedOf(st, op.issuer, lockAsset);
         const dust = lockMu - released - expectedLock;
         if (dust > 0) addLock(st, op.issuer, lockAsset, -dust);
@@ -1268,6 +1358,14 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         return cross;
       }
       // אין-חפיפה: הפקודה נחה בספר — עם-הנעילה-המלאה שלה (מגובה-מלא, לעולם לא משוחררת כאן)
+      // Task 83 · IOC ואין-חפיפה: הפקודה מתבטלת-בכנות (מולאו-אפס) — שחרור-מלא + שריפת-נונס.
+      if (ioc) {
+        const c3 = consume();
+        addLock(st, op.issuer, lockAsset, -lockMu);
+        if (c3) return c3;
+        st.journal.push({ h: st.height, t: nowMs, soldier: op.issuer, action: "order_ioc_cancel", note: `IOC ${op.side} ${amt}µ ${op.base} @${px} — אין-חפיפה, מתבטלת (0 מולאו)` });
+        return { ok: true, gas, events: [] };
+      }
       const c2 = consume();
       if (c2) {
         // כשל-gas/דדופ אחרי-הנעילה — משחררים-הכול (fail-closed)

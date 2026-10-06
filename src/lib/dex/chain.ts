@@ -39,6 +39,8 @@ import { veDemoTick, bondDemoTick } from "./ve"; // R41 · THE-VE — נעילה
 import { lendTick } from "./lend"; // R44 · THE-MARKET — שוק-הכספים: סוכני-האוצר-והלווים
 // Task 72 · דלת-המטבעות: פיד-האורקל — extFeeds (median חוצה-מקורות, TTL-משותף עם price-proof)
 import { extFeeds } from "./price-proof";
+// CEX-grade market data (Task 83): נרות-OHLCV + עסקאות + סטטיסטיקת-24ש' — חוץ-מצב מוצמד-גיט
+import { klinesFeed, klinesFlush, klinesLoad, stats24For } from "./klines";
 
 export const TICK_MS = 3_000;
 const SEAL_EVERY = 12;   // checkpoint כל-12 בלוקים (CHAIN_SPEC)
@@ -52,7 +54,7 @@ const CHART_CAP = 240;
 /** טביעת-קוד (SETTLE-5): נחשפת ב-/api/dex/settle — גילוי-דעיכת-תהליך.
  * תהליך-ישן (דמון ששרד עריכת-קוד בלי-התחלה-מחדש) מריץ קוד-ישן ומדווח גרסה-ישנה —
  * הסתרת-תקלה כזו בדיוק שהטעתה את סבב 2026-09 (POST לא-הטביע למרות-סף-שעבר). */
-export const CODE_VERSION = "saos-dex/1.18.0+task72-coin-door";
+export const CODE_VERSION = "saos-dex/1.19.0+cex-grade-marketdata";
 
 // THE-MICRORAIL: קישור-מצב-חי-למסילה (מניעת-ייבוא-מעגלי chain⇄rail — הזרקה)
 bindLiveState(() => ensureChain().st);
@@ -431,6 +433,8 @@ function flushSnapshot(rt: ChainRT): void {
     fs.renameSync(tmp, SNAPSHOT_FILE);
     // טייפ: שמירת-זנב-סליל (מורשת WINDOW_FLUSH של grid98)
     fs.writeFileSync(TAPE_FILE, rt.tape.slice(0, 300).map((e) => JSON.stringify(e)).join("\n"));
+    // Task 83 · הנרות-נצמדים-לגיט באותה-קדנס (db/klines.json — נעקב ב-.gitignore-חריג)
+    klinesFlush();
   } catch { /* כשל-כתיבה לא מפיל את השרשרת */ }
 }
 
@@ -594,6 +598,8 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   let applied = 0;
   let rejected = 0;
   const rejSample: string[] = [];
+  // Task 83 · איסוף-אירועי-המסחר-של-הבלוק להזנת-הנרות (חוץ-מצב — אין-השפעה על-השורש)
+  const blockTrades: TradeEvent[] = [];
   // FIX(Roast-65-a · MED-6): מעקב-אישור-ה-ops-של-הרמה-הממתינה (harvest + asset_price)
   let keelHarvest: boolean | null = null;
   let keelPrice: boolean | null = null;
@@ -637,6 +643,7 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     if (r.ok) {
       applied++;
       for (const ev of r.events ?? []) rt.tape.unshift({ ...ev, h: st.height });
+      if (r.events && r.events.length > 0) blockTrades.push(...r.events);
       feedPriceOracle(rt, r.events, st.height); // SETTLE-14: עדות-מחיר-אמת מכל-מסחר
     } else {
       // FIX(SETTLE-15 silent-drop): דחייה-שקטה הייתה-חור-תפעולי-ישן ("queued" אך-
@@ -714,6 +721,7 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     lendTick(st, rt.tickCount, exec, t0);
     const tickEvents = [...dcaTick(st, exec, t0), ...trigTick(st, exec, t0), ...protoRevTick(st, exec, t0), ...cowSettle(st, exec, t0)];
     for (const ev of tickEvents) rt.tape.unshift({ ...ev, h: st.height });
+    if (tickEvents.length > 0) blockTrades.push(...tickEvents);
     feedPriceOracle(rt, tickEvents.length > 0 ? tickEvents : undefined, st.height);
     if (tickEvents.length > 0) rt.tape = rt.tape.slice(0, TAPE_CAP);
   }
@@ -732,6 +740,9 @@ async function buildBlock(rt: ChainRT): Promise<void> {
       note: "price-credibility-seal",
     });
   }
+
+  // Task 83 · הזנת-הנרות ממסחר-אמת של-הבלוק (לפני-ה++ — אותו-h שה-tape מסמן)
+  if (blockTrades.length > 0) klinesFeed(blockTrades, st.height, t0);
 
   st.height++;
   // FIX(SETTLE-9 perf): stateRoot חושב-פעמיים-פר-בלוק (hash בלוק + כתיבת-DB) —
@@ -883,6 +894,9 @@ export function ensureChain(): ChainRT {
   // אתחול-אסינכרוני: תמונת-מצב (מאומתת) → אחרת ג'נזיס-מוצדק; אחר-כך טיימר
   void (async () => {
     const loaded = await loadSnapshot(rt);
+    // Task 83 · טעינת-נרות-מהגיט (שורד-מחיקת-סנדבוקס — אותו-משטר-ריבונות של-תמונת-המצב)
+    const kl = klinesLoad();
+    if (kl.candles > 0) console.log(`[saos-dex] klines restored from git-backed db/klines.json: ${kl.pairs} pairs, ${kl.candles} candles`);
     if (loaded === "corrupt") {
       // FIX(Roast-65-a · HIGH-4): תמונה-קיימת-ופגומה = דחיית-אתחול fail-closed.
       // הישן: !loaded → deleteMany על blockHeader+sealRecord+evidenceReceipt+arenaJournal
@@ -1005,6 +1019,8 @@ export interface MarketView {
   bids: { price: number; total: number; orders: number }[];
   asks: { price: number; total: number; orders: number }[];
   chart: { t: number; p: number }[];
+  // Task 83 · סטטיסטיקת-24ש' מנרות-מסחר-אמת (סטנדרט-בורסות — נגזרת-כנה)
+  stats24: ReturnType<typeof stats24For>;
 }
 
 function ladderAgg(st: DexState, base: string, quote: string, side: "buy" | "sell", levels = 12) {
@@ -1049,6 +1065,7 @@ export function getMarkets(): MarketView[] {
       twapSamples: truth?.samples ?? 0,
       twapDevBps: truth ? truth.devBpsVsRef : 0,
       bids, asks, chart,
+      stats24: stats24For(key, Date.now()),
     };
   });
 }
