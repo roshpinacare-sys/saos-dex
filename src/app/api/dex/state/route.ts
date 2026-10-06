@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureChain, chainVersion, getState, getMarkets, getPools, getWallets, getArena, getProofs, getTape } from "@/lib/dex/chain";
-import "@/lib/dex/preview-bridge"; // גשר-התצוגה של הסנדבוקס (side-effect, fail-closed)
+import { ensurePreviewBridge } from "@/lib/dex/preview-bridge"; // גשר-התצוגה (הפעלה-דטרמיניסטית, fail-closed)
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -14,6 +14,7 @@ const WAIT_STEP_MS = 250;
  * מעבר לגרסה-המבוקשת (או keepalive כל-12ש׳). אפס-השהיה מלאכותית בצד-הלקוח.
  */
 export async function GET(req: Request) {
+  ensurePreviewBridge(); // גשר-התצוגה + fleet-guard — הקשרה-יחידה, אפס-עלות אחרי-הראשונה
   const rt = ensureChain();
   const since = Number(new URL(req.url).searchParams.get("v") || 0);
   // FIX(3-a · D2): שרשרת-מושהית (rt.halted — fail-fast, הגרסה-קפואה) לא נכנסת

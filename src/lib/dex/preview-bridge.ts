@@ -17,12 +17,14 @@
  *     האם האמיתית מנצחת, הגשר מוותר. אין-תחרות.
  *   · מתג-כיבוי: הקובץ db/preview-bridge.off גורם לשחרור הפורט בבקשה-הבאה.
  *   · קשירה ל-127.0.0.1 בלבד — רק ה-gateway המקומי מדבר איתו.
+ *   · v2: hop-by-hop headers מוסרים בשני-הכיוונים (framing-שבור נמדד ותוקן).
  * ═══════════════════════════════════════════════════════════════════════ */
 
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import net from "node:net";
 
 const OFF_FILE = path.join(process.cwd(), "db", "preview-bridge.off");
 const FLEET_OFF_FILE = path.join(process.cwd(), "db", "fleet-guard.off");
@@ -77,10 +79,21 @@ function startFleetGuard(): void {
 }
 
 function startBridge(): void {
+  // FIX(hop-by-hop): כותרות-קפיצה-אחת אסור שיעברו בין-פרוקסי — העברה שלהן
+  // משבשת את ה-framing של node (ה-body "לא-נגמר" מנקודת-מבט הלקוח — נמדד).
+  const HOP = new Set(["transfer-encoding", "connection", "keep-alive", "upgrade", "proxy-authenticate", "proxy-authorization", "te", "trailer"]);
+  const strip = (h: http.IncomingHttpHeaders | Record<string, unknown>): Record<string, string | string[]> => {
+    const out: Record<string, string | string[]> = {};
+    for (const [k, v] of Object.entries(h)) if (!HOP.has(k.toLowerCase()) && v != null) out[k] = Array.isArray(v) ? v.map(String) : String(v);
+    return out;
+  };
   const server = http.createServer((req, res) => {
     // מתג-כיבוי — נבדק פר-בקשה, אפס-מצב-ריצה
     try {
       if (fs.existsSync(OFF_FILE)) {
+        // FIX(restart): close() ממתין לחיבורים-פתוחים (long-poll לעולם לא-נסגר לבד)
+        // — closeAllConnections משחרר את הפורט מיד לשרת-הבא בתור
+        try { g.__saosDexPreviewBridge?.closeAllConnections(); } catch { /* ישן מדי */ }
         g.__saosDexPreviewBridge?.close();
         g.__saosDexPreviewBridge = undefined;
         res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
@@ -95,48 +108,73 @@ function startBridge(): void {
       res.end();
       return;
     }
-    // proxy תמים אל ה-DEX החי (אותו תהליך — 127.0.0.1:3010)
+    // proxy תמים אל ה-DEX החי (אותו תהליך — 127.0.0.1:3010) — בלי hop-by-hop
     const upstream = http.request(
       {
         host: "127.0.0.1",
         port: 3010,
         path: url,
         method: req.method,
-        headers: { ...req.headers, host: "127.0.0.1:3010" },
+        headers: { ...strip(req.headers), host: "127.0.0.1:3010" },
       },
       (up) => {
-        res.writeHead(up.statusCode ?? 502, up.headers);
+        const headers = strip(up.headers);
+        res.writeHead(up.statusCode ?? 502, headers);
         up.pipe(res);
       },
     );
-    upstream.on("error", () => {
+    upstream.on("error", (e) => {
       if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
-      res.end("preview-bridge: dex unreachable");
+      res.end(`preview-bridge: dex unreachable (${(e as NodeJS.ErrnoException)?.code ?? String(e)})`);
     });
+    // FIX(lifecycle): נטישת-לקוח (abort של long-poll) = destroy ל-upstream.
+    // לא על req 'close' (נורה מיד אחרי-הכותרות ב-GET — ECONNRESET נמדד) אלא
+    // על res 'close' עם writableEnded=false — רק-נטישה אמת, לא סיום-בקשה.
+    res.on("close", () => { if (!res.writableEnded) upstream.destroy(); });
     req.pipe(upstream);
   });
   server.on("error", () => {
     // פורט תפוס (האם האמיתית חיה) או כשל-הקשרה — הגשר מוותר בכנות, אפס-רעש
     g.__saosDexPreviewBridge = undefined;
   });
+  // FIX(hmr-ws): HMR של dev דורש WebSocket — tunnel גולמי ל-3010 (ה-gateway
+  // מקדימה את ה-upgrade; בלי-זה ההידרציה של dev נשארת מושהית — נמדד).
+  server.on("upgrade", (req, clientSocket, head) => {
+    const upstreamSocket = net.connect(3010, "127.0.0.1", () => {
+      const lines: string[] = [`${req.method} ${req.url} HTTP/1.1`];
+      for (let i = 0; i < req.rawHeaders.length; i += 2) {
+        const k = req.rawHeaders[i];
+        const v = req.rawHeaders[i + 1];
+        lines.push(k.toLowerCase() === "host" ? "Host: 127.0.0.1:3010" : `${k}: ${v}`);
+      }
+      upstreamSocket.write(lines.join("\r\n") + "\r\n\r\n");
+      if (head.length) upstreamSocket.write(head);
+    });
+    clientSocket.on("error", () => upstreamSocket.destroy());
+    upstreamSocket.on("error", () => clientSocket.destroy());
+    clientSocket.pipe(upstreamSocket);
+    upstreamSocket.pipe(clientSocket);
+  });
   server.listen(3000, "127.0.0.1");
   g.__saosDexPreviewBridge = server;
 }
 
-if (!g.__saosDexPreviewBridge) {
-  try {
-    startBridge();
-  } catch {
-    // אפס-השפעה על ה-DEX — הגשר הוא ניחומים, לא שער
+/* נקודת-הפעלה דטרמיניסטית — נקראת מתוך ה-handler (רץ פר-בקשה) כי Turbopack
+ * אינו מריץ side-effects של מודולי-שרת מחדש (נמדד). המתגיים ב-globalThis
+ * מבטיחים הקשרה-יחידה; כל-כשל = דילוג-כנה, אפס-השפעה על השרשרת. */
+export function ensurePreviewBridge(): void {
+  if (!g.__saosDexPreviewBridge) {
+    try {
+      startBridge();
+    } catch {
+      // אפס-השפעה על ה-DEX — הגשר הוא ניחומים, לא שער
+    }
+  }
+  if (!g.__saosDexFleetGuard) {
+    try {
+      startFleetGuard();
+    } catch {
+      // אפס-השפעה על ה-DEX — השומר הוא ניחומים, לא שער
+    }
   }
 }
-
-if (!g.__saosDexFleetGuard) {
-  try {
-    startFleetGuard();
-  } catch {
-    // אפס-השפעה על ה-DEX — השומר הוא ניחומים, לא שער
-  }
-}
-
-export {};
