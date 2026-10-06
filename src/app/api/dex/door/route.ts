@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { operatorAuth } from "@/lib/operator-auth";
 import { consoleGuard } from "@/lib/dex/guard";
 import { getLiveState, submitOp, nextNonce, requestOracleRefresh } from "@/lib/dex/chain";
-import { doorReport, verifyTrxDeposit, verifySolDeposit, depositIdentities } from "@/lib/dex/peg-door";
+import { doorReport, verifyPegDeposit, depositIdentities, PEG_ASSETS, type PegAsset, type PegChain } from "@/lib/dex/peg-door";
 // שער-זהות-אסורות קיים-בגרעין עצמו (FORBIDDEN_KEYS — fail-closed ב-applyOp)
 
 export const dynamic = "force-dynamic";
@@ -21,8 +21,8 @@ export const dynamic = "force-dynamic";
 
 const TXID_RE = /^[a-zA-Z0-9]{55,95}$/;
 const ACCOUNT_RE = /^[a-z0-9][a-z0-9_-]{1,23}$/;
-const PEG_ASSETS = { WTRX: "trx", WSOL: "sol" } as const;
-type PegAsset = keyof typeof PEG_ASSETS;
+// EXEC-CD-11 · THE-CHAIN-STREAM: מקור-האמת היחיד למיפוי עוגן→רשת — מיובא מ-peg-door
+// (היה-משוכפל-כאן ועלול-היה-לסטות מהדוח). 5 עוגנים על 5 רשתות-אמת.
 
 export async function GET() {
   try {
@@ -50,15 +50,17 @@ export async function POST(req: Request) {
     switch (action) {
       case "peg-in": {
         const chain = String(body.chain ?? "").toLowerCase();
-        if (chain !== "trx" && chain !== "sol") {
-          return NextResponse.json({ ok: false, error: "bad-chain", note: "chain חייב להיות trx או sol" });
+        const knownChains = Object.values(PEG_ASSETS);
+        if (!knownChains.includes(chain as PegChain)) {
+          return NextResponse.json({ ok: false, error: "bad-chain", note: `chain חייב להיות אחד מ: ${knownChains.join(" · ")} (5 רשתות-אמת)` });
         }
         // FIX(R16-a·M3): txid מנורמל-לפי-השרשרת — TRX txid הוא hex (רישיות-חסרת-משמעות,
         // הרינג-חד-פעמי משווה-מחרוזות-בדיוק → "abc…" ו-"ABC…" היו שתי-תביעות על-אותה-הפקדה)
         // → lowercase. SOL txid הוא base58 (**רישיות-משמעותית** — lowercase היה משחית
-        // את-החתימה ומונע-אימות-לגיטימי) → נשמר-כפי-שנמסר. bridge.ts:473 כבר-נרמל.
+        // את-החתימה ומונע-אימות-לגיטימי) → נשמר-כפי-שנמסר. EVM (EXEC-CD-11) txid הוא hex
+        // עם 0x — רישיות-חסרת-משמעות כמו-TRX → lowercase (אותה-הצדקה, אותו-הרינג).
         const txidRaw = String(body.txid ?? "").trim();
-        const txid = chain === "trx" ? txidRaw.toLowerCase() : txidRaw;
+        const txid = chain === "trx" || chain === "eth" || chain === "base" || chain === "bsc" ? txidRaw.toLowerCase() : txidRaw;
         if (!TXID_RE.test(txid)) {
           return NextResponse.json({ ok: false, error: "bad-txid", note: "txid נראה שגוי (אורך/תווים)" });
         }
@@ -67,16 +69,14 @@ export async function POST(req: Request) {
           return NextResponse.json({ ok: false, error: "bad-account", note: "שם-חשבון-יעד לא חוקי" });
         }
         const ids = depositIdentities();
-        const addr = chain === "trx" ? ids.tron : ids.sol;
-        if (!addr) {
-          return NextResponse.json({ ok: false, error: "identity-unavailable", note: `זהות-הפקדה-${chain} אינה מוגדרת בסביבה (fail-closed)` });
-        }
-        const proof = chain === "trx" ? await verifyTrxDeposit(txid, addr) : await verifySolDeposit(txid, addr);
+        // EXEC-CD-11: נתיב-אימות-אחיד — verifyPegDeposit מנתב לפי-רשת (TRX/SOL/EVM×3)
+        // עם אימות-chainId מהטרנזקציה-עצמה ל-EVM — פקדה-על-רשת-שגויה נדחית כנה.
+        const proof = await verifyPegDeposit(chain as PegChain, txid, ids);
         if (!proof.ok || !(proof.amountMu > 0)) {
           // כנות: אימות-כישלון = נתון, לא 500 — המפעיל רואה בדיוק מה נכשל
           return NextResponse.json({ ok: false, error: proof.detail, note: proof.error, chain, txid, amountMu: 0 });
         }
-        const wrapAsset = (chain === "trx" ? "WTRX" : "WSOL") as PegAsset;
+        const wrapAsset = (Object.keys(PEG_ASSETS) as PegAsset[]).find((a) => PEG_ASSETS[a] === chain) as PegAsset;
         const claim = `${chain}:${txid}`;
         // הטבעה-מגובה-אטומית: wrap_mint external (תביעה-חד-פעמית בגרעין) + העברה-חופשית
         // למפקיד. batch = דבר-גורר-דבר — אין-נכס-תלוש-באמצע-שרשרת.
@@ -98,7 +98,7 @@ export async function POST(req: Request) {
       case "peg-out": {
         const asset = String(body.asset ?? "") as PegAsset;
         if (!(asset in PEG_ASSETS)) {
-          return NextResponse.json({ ok: false, error: "bad-asset", note: "asset חייב להיות WTRX או WSOL" });
+          return NextResponse.json({ ok: false, error: "bad-asset", note: `asset חייב להיות אחד מ: ${Object.keys(PEG_ASSETS).join(" · ")}` });
         }
         const amount = Math.floor(Number(body.amount));
         if (!(amount > 0)) {
@@ -130,7 +130,7 @@ export async function POST(req: Request) {
       case "open-pool": {
         const peg = String(body.peg ?? "") as PegAsset;
         if (!(peg in PEG_ASSETS)) {
-          return NextResponse.json({ ok: false, error: "bad-peg", note: "peg חייב להיות WTRX או WSOL" });
+          return NextResponse.json({ ok: false, error: "bad-peg", note: `peg חייב להיות אחד מ: ${Object.keys(PEG_ASSETS).join(" · ")}` });
         }
         const st = getLiveState();
         const pair = `USDS/${peg}`;

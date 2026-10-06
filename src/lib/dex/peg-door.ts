@@ -10,11 +10,17 @@
  *  1. זהויות-פקדה נגזרות מהזרע-הריבוני (אותו-דפוס שהוכח-חי ב-relay-sol):
  *     · TRX: secp256k1 מה-WIF-הריבוני → keccak → base58check (0x41) — כמו tronIdentity
  *     · SOL: ed25519 מ-SOL_PRIVATE_KEY — solIdentity (wallets-registry idx=2)
+ *     · EVM: ethIdentity — וזהות-אחת משרתת שלוש-רשתות (ETH · Base · BSC) —
+ *       כתובת-EVM היא עקומה-בלבד, לא רשת; ה-chainId מאומת-מהטרנזקציה-עצמה.
  *  2. אימות-פקדה מול-RPC-ציבורי (keyless): trongrid gettransactionbyid ל-TRX,
- *     getTransaction ל-SOL — העברה-אמת אל-כתובת-הפקדה שלנו = ראיה.
+ *     getTransaction ל-SOL, eth_getTransactionReceipt+chainId ל-EVM —
+ *     העברה-אמת אל-כתובת-הפקדה שלנו = ראיה.
  *  3. הטבעה מגובה (kernel · wrap_mint external+claim — אותה-מסילה של WBLURT):
- *     1 TRX = 1000µ-WTRX · 1 SOL = 1000µ-WSOL (1 sun = 0.001µ · 1 lamport = 1e-6µ)
+ *     1 TRX = 1000µ-WTRX · 1 SOL = 1000µ-WSOL · 1 ETH = 1000µ-WETH ·
+ *     1 BNB = 1000µ-WBNB · 1 ETH(Base) = 1000µ-WBASE (1 wei = 1e-15µ)
  *     — claim = `chain:txid` בטבעת-הדדופ-של-הגרעין (extClaims) = תביעה-חד-פעמית.
+ *     EXEC-CD-11 · THE-CHAIN-STREAM: הדלת-מורחבת מ-TRX/SOL ל-5 עוגנים על-גבי
+ *     5 רשתות-אמת (TRON · Solana · Ethereum · Base · BSC) — אותו-דפוס-כוכב, אפס-חריגות.
  *  4. נתון-שוק-אמת-חי: אורקל-קנוני בגרעין (oracle_set — chain.ts) + הצלבת
  *     בריכה-מול-אורקל (spreadBps + verdict) בדוח-הדלת.
  *  5. פדיון: xfer_free ל"peg-outbox" (הפרדה-גלויה מהמחזור) + attest יעד —
@@ -34,6 +40,21 @@ import { poolMidFor } from "./amm";
 const TRON_RPC = "https://api.trongrid.io";
 const SOL_RPC = "https://api.mainnet-beta.solana.com";
 const ETH_RPC = "https://ethereum-rpc.publicnode.com";
+
+/* ── EXEC-CD-11 · רשימת-הדלתות — מקור-האמת היחיד (משותף ל-route ולדוח) ────────
+ * עוגן→רשת: אפס-שכפול-מיפוי. זהות-הפקדה לכל-הרשתות היא-זהות-הזרע-הריבוני —
+ * המיפוי ל-EVM הוא-הכתובת-האחת (עקומה-זהה), ל-TRX/SOL הנגזרות-היעודיות. */
+export const PEG_ASSETS = { WTRX: "trx", WSOL: "sol", WETH: "eth", WBNB: "bnb", WBASE: "base" } as const;
+export type PegAsset = keyof typeof PEG_ASSETS;
+export type PegChain = (typeof PEG_ASSETS)[PegAsset];
+
+export type EvmDoor = "eth" | "base" | "bsc";
+export const EVM_DOORS: Record<EvmDoor, { rpc: string; chainId: number; name: string; explorer: string }> = {
+  eth: { rpc: ETH_RPC, chainId: 1, name: "Ethereum", explorer: "https://etherscan.io" },
+  base: { rpc: "https://mainnet.base.org", chainId: 8453, name: "Base", explorer: "https://basescan.org" },
+  bsc: { rpc: "https://bsc-rpc.publicnode.com", chainId: 56, name: "BNB Smart Chain", explorer: "https://bscscan.com" },
+};
+export const isEvmDoor = (c: string): c is EvmDoor => c === "eth" || c === "base" || c === "bsc";
 
 /** דלק-עיגון: TRON חוסם-מתחת-0.3 TRX (relay.tronSealBroadcast) · SOL חוסם-מתחת
  * לפטור-משכרות+עמלה+מרווח (roast-67 · sol-rent-floor). */
@@ -102,7 +123,7 @@ export function depositIdentities(): DoorIdentities {
   }
   return {
     tron, sol, evm,
-    note: "זהויות-פקדה ריבוניות — נגזרות מהזרע-הריבוני (אותו-דפוס wallets-registry); המפתח-הפרטי אף-פעם לא עוזב את הסביבה",
+    note: "זהויות-פקדה ריבוניות — נגזרות מהזרע-הריבוני (אותו-דפוס wallets-registry); המפתח-הפרטי אף-פעם לא עוזב את הסביבה · EXEC-CD-11: כתובת-ה-EVM משרתת שלוש-רשתות (eth/base/bsc) — אותו-math, אותה-זהות",
   };
 }
 
@@ -182,8 +203,66 @@ export async function verifySolDeposit(txid: string, expectedAddr: string): Prom
   return { ok: true, detail: `+${lamports} lamports → sovereign deposit identity (finalized)`, amountMu: Math.floor(lamports / 1_000_000) };
 }
 
+/* ── EVM (eth/base/bsc) — אותו-דפוס-אמת, שלוש-רשתות ── */
+
+interface EvmReceipt { status?: string | null; to?: string | null; blockNumber?: string | null }
+interface EvmTx { to?: string | null; value?: string | null; chainId?: string | null }
+
+/** EVM: receipt-status=1 + יעד=זהות-הפקדה + chainId מהטרנזקציה-עצמה (פקדה-על
+ * רשת-שגויה נדחית כנה) + value→µ. סקאלה: 1 מטבע = 1000µ (1 wei = 1e-15µ) —
+ * אותה-סקאלה של WTRX/WSOL. ERC-20 לא-נתמך בדלת (כנות — native בלבד). */
+export async function verifyEvmDeposit(chain: EvmDoor, txid: string, expectedAddr: string): Promise<DepositProof> {
+  const door = EVM_DOORS[chain];
+  try {
+    const r = await fencedFetch(door.rpc, `peg-door.evm-receipt-${chain}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionReceipt", params: [txid] }),
+      signal: AbortSignal.timeout(15_000), cache: "no-store",
+    });
+    if (!r.ok) return { ok: false, detail: "rpc-error", amountMu: 0, error: `${chain} rpc ${r.status}` };
+    const j = (await r.json()) as { result?: EvmReceipt | null };
+    const rec = j.result;
+    if (!rec) return { ok: false, detail: "not-found-or-pending", amountMu: 0, error: `receipt unknown to the ${door.name} public node yet (pending? wrong network? retry in a minute)` };
+    if (rec.status !== "0x1") return { ok: false, detail: "failed-on-chain", amountMu: 0, error: `receipt status=${rec.status ?? "?"} (reverted or failed)` };
+    if (String(rec.to ?? "").toLowerCase() !== expectedAddr.toLowerCase()) return { ok: false, detail: "wrong-destination", amountMu: 0, error: "transfer is not addressed to the sovereign deposit identity (contract-creation or ERC-20 transfer are not the door)" };
+    const t = await fencedFetch(door.rpc, `peg-door.evm-tx-${chain}`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getTransactionByHash", params: [txid] }),
+      signal: AbortSignal.timeout(15_000), cache: "no-store",
+    });
+    const tj = t.ok ? ((await t.json()) as { result?: EvmTx | null }) : null;
+    const tx = tj?.result;
+    if (tx?.chainId) {
+      const cid = Number(BigInt(tx.chainId));
+      if (cid !== door.chainId) return { ok: false, detail: "wrong-network", amountMu: 0, error: `tx chainId=${cid} but the ${door.name} door verifies chainId=${door.chainId} — the coin lives on another network` };
+    }
+    const wei = BigInt(tx?.value ?? "0x0");
+    if (!(wei > 0n)) return { ok: false, detail: "zero-amount", amountMu: 0, error: "no native value transferred (plain contract call?)" };
+    const amountMu = Math.floor(Number(wei / 1_000_000_000_000_000n));
+    if (!(amountMu > 0)) return { ok: false, detail: "dust-below-unit", amountMu: 0, error: `value=${wei} wei is below the smallest mintable unit (1µ = 1e15 wei)` };
+    return { ok: true, detail: `+${wei} wei → sovereign deposit identity on ${door.name} (receipt ok${rec.blockNumber ? ` · block ${parseInt(rec.blockNumber, 16)}` : ""})`, amountMu };
+  } catch (e) {
+    return { ok: false, detail: "rpc-error", amountMu: 0, error: e instanceof Error ? e.message.slice(0, 140) : `${chain}-verify-failed` };
+  }
+}
+
+/** נתיב-אימות-אחיד לפי-רשת — הדלת-האחת, חמשת-הסורגים.
+ * מיפוי-chain→EvmDoor: WBNB-חי-על-BNB-Smart-Chain (door=bsc) — ה-chain-בדלת
+ * קרוי-על-שם-המטבע, ה-door-על-שם-הרשת. */
+const EVM_CHAIN_TO_DOOR: Record<"eth" | "bnb" | "base", EvmDoor> = { eth: "eth", bnb: "bsc", base: "base" };
+export async function verifyPegDeposit(chain: PegChain, txid: string, ids: DoorIdentities): Promise<DepositProof> {
+  if (chain === "trx") { if (!ids.tron) return { ok: false, detail: "no-identity", amountMu: 0, error: "TRON deposit identity not derivable" }; return verifyTrxDeposit(txid, ids.tron); }
+  if (chain === "sol") { if (!ids.sol) return { ok: false, detail: "no-identity", amountMu: 0, error: "SOL deposit identity not derivable" }; return verifySolDeposit(txid, ids.sol); }
+  if (!ids.evm) return { ok: false, detail: "no-identity", amountMu: 0, error: "EVM deposit identity not derivable" };
+  return verifyEvmDeposit(EVM_CHAIN_TO_DOOR[chain], txid, ids.evm);
+}
+
 /* ── יתרות-משמורת-חי (TTL-60ש׳ · fail-soft) ── */
-export interface Custody { tronSun: number | null; solLamports: number | null; evmWei: number | null; at: number; note: string }
+export interface Custody {
+  tronSun: number | null; solLamports: number | null; evmWei: number | null; // evmWei = ETH (מורשת-תאימות)
+  evmWeiByChain: { eth: number | null; base: number | null; bsc: number | null }; // EXEC-CD-11: מדידה-לכל-רשת-EVM
+  at: number; note: string;
+}
 interface CustodyRT { at: number; data: Custody | null; inflight: Promise<Custody> | null }
 const gC = globalThis as unknown as { __saosDoorCustody?: CustodyRT };
 function custodyRt(): CustodyRT {
@@ -192,7 +271,20 @@ function custodyRt(): CustodyRT {
 }
 
 async function fetchCustody(ids: DoorIdentities): Promise<Custody> {
-  const [tronSun, solLamports, evmWei] = await Promise.all([
+  const evmBalance = async (door: EvmDoor): Promise<number | null> => {
+    if (!ids.evm) return null;
+    try {
+      const r = await fencedFetch(EVM_DOORS[door].rpc, `peg-door.evm-bal-${door}`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [ids.evm, "latest"] }),
+        signal: AbortSignal.timeout(12_000), cache: "no-store",
+      });
+      if (!r.ok) return null; // FIX(R14-a · false-zero) — אותו-דוקטרינה: HTTP-שגיאה = לא-נודע, לא-אפס
+      const j = (await r.json()) as { result?: string };
+      return j?.result ? Number(BigInt(j.result)) : null;
+    } catch { return null; }
+  };
+  const [tronSun, solLamports, ethWei, baseWei, bscWei] = await Promise.all([
     (async (): Promise<number | null> => {
       if (!ids.tron) return null;
       try {
@@ -219,22 +311,13 @@ async function fetchCustody(ids: DoorIdentities): Promise<Custody> {
         return j?.result?.value ?? null;
       } catch { return null; }
     })(),
-    (async (): Promise<number | null> => {
-      if (!ids.evm) return null;
-      try {
-        const r = await fencedFetch(ETH_RPC, "peg-door.evm-bal", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: [ids.evm, "latest"] }),
-          signal: AbortSignal.timeout(12_000), cache: "no-store",
-        });
-        const j = (await r.json()) as { result?: string };
-        return j?.result ? Number(BigInt(j.result)) : null;
-      } catch { return null; }
-    })(),
+    (async (): Promise<number | null> => evmBalance("eth"))(),
+    (async (): Promise<number | null> => evmBalance("base"))(),
+    (async (): Promise<number | null> => evmBalance("bsc"))(),
   ]);
   return {
-    tronSun, solLamports, evmWei, at: Date.now(),
-    note: "יתרות-המשמורת-האמת על-כתובות-הפקדה — הגיבוי-הפיזי של העוגנים (WTRX/WSOL/WETH) — אצל-EVM המשמורת היא גם דלק-העיגון-עצמו (אותה-זהות-כמו-ה-relay)",
+    tronSun, solLamports, evmWei: ethWei, evmWeiByChain: { eth: ethWei, base: baseWei, bsc: bscWei }, at: Date.now(),
+    note: "יתרות-המשמורת-האמת על-כתובות-הפקדה — הגיבוי-הפיזי של העוגנים (WTRX/WSOL/WETH/WBNB/WBASE) — אצל-EVM המשמורת היא גם דלק-העיגון-עצמו (אותה-זהות-כמו-ה-relay)",
   };
 }
 
@@ -248,7 +331,7 @@ export async function custodySnapshot(ids: DoorIdentities, maxAgeMs = 60_000): P
 
 /* ── דוח-הדלת ── */
 export interface PegRow {
-  asset: "WTRX" | "WSOL";
+  asset: PegAsset;
   oracleMu: number | null;   // µ-USDS ל-1-יחידה (קנוני מ-stateRoot)
   oracleAtH: number | null;
   oracleSrc: string | null;
@@ -273,6 +356,9 @@ export interface DoorReport {
   anchors: {
     tron: { haveSun: number | null; needSun: number; gapSun: number | null; note: string };
     sol: { haveLamports: number | null; needLamports: number; gapLamports: number | null; note: string };
+    /* EXEC-CD-11: עיגון-EVM — relay-eth חמוש-EIP-1559 ונעול-עד-מימון (כנות);
+     * המשמורת-על-כתובת-הפקדה היא גם דלק-העיגון-העתידי. */
+    evm: { haveWei: { eth: number | null; base: number | null; bsc: number | null }; note: string };
   };
   peg: PegRow[];
   outboundNote: string;
@@ -283,11 +369,11 @@ export interface DoorReport {
 export async function doorReport(st: DexState): Promise<DoorReport> {
   const ids = depositIdentities();
   const custody = await custodySnapshot(ids).catch(() => ({
-    tronSun: null, solLamports: null, evmWei: null, at: Date.now(), note: "מדידת-משמורת נכשלה — fail-כנה",
+    tronSun: null, solLamports: null, evmWei: null, evmWeiByChain: { eth: null, base: null, bsc: null } as Custody["evmWeiByChain"], at: Date.now(), note: "מדידת-משמורת נכשלה — fail-כנה",
   }));
 
   const SOL_ANCHOR_FEE = 5_000; // lamports לעיגון-ממו-עצמי (roast-67/78 — נמדד-חי)
-  const pegRow = (asset: "WTRX" | "WSOL", pair: string, feedAsset?: string): PegRow => {
+  const pegRow = (asset: PegAsset, pair: string, feedAsset?: string): PegRow => {
     const o = st.oracle?.[feedAsset ?? asset] ?? null;
     const pool = st.pools[pair] ?? null;
     const midMu = pool ? poolMidFor(pool, asset, "USDS") : null;
@@ -325,7 +411,7 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
 
   const journal = st.journal
     .filter((j) => ["wrap_mint_ext", "oracle_set", "pool_open", "attest", "peg_out"].includes(j.action))
-    .filter((j) => /WTRX|WSOL|oracle|peg-out|median|TRX|SOL|peg/i.test(j.note ?? ""))
+    .filter((j) => /WTRX|WSOL|WETH|WBNB|WBASE|oracle|peg-out|median|TRX|SOL|ETH|BNB|BASE|peg/i.test(j.note ?? ""))
     .slice(-12)
     .reverse()
     .map((j) => ({ h: j.h, action: j.action, note: j.note ?? "" }));
@@ -346,8 +432,16 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
         gapLamports: custody.solLamports === null ? null : Math.max(0, SOL_RENT_FLOOR_LAMPORTS - custody.solLamports),
         note: "עיגון-SOL דורש פטור-משכרות+עמלה (896,880 lamports) — נמדד-חי ב-roast-67 · roast-78: רצפת-הגנת-גיבוי-פעילה — השריפה-נעצרת-כנה ברצף-התביעות-המוטבעות (ראה peg[WSOL].runwayAnchors)",
       },
+      evm: {
+        haveWei: custody.evmWeiByChain,
+        note: "עיגון-EVM (relay-eth) חמוש-EIP-1559 ונעול-עד-מימון — כנות מלאה; המשמורת-על-כתובת-הפקדה היא-גם-דלק-העיגון-העתידי (זהות-אחת, שלוש-רשתות)",
+      },
     },
-    peg: [pegRow("WTRX", "USDS/WTRX"), pegRow("WSOL", "USDS/WSOL")],
+    peg: [
+      pegRow("WTRX", "USDS/WTRX"), pegRow("WSOL", "USDS/WSOL"),
+      // EXEC-CD-11 · THE-CHAIN-STREAM: שלושת-העוגנים ה-EVM — אותו-דוקטרינה, רשתות-אמת
+      pegRow("WETH", "USDS/WETH"), pegRow("WBNB", "USDS/WBNB"), pegRow("WBASE", "USDS/WBASE"),
+    ],
     outboundNote: "פדיון = הפרדה-ל-outbox על-הרשת + שליחה-פיזית-מכתובת-הפקדה בידי-המפעיל (מתועד-כנה — המטבע-האמיתי עוזב את-המשמורת רק-בשידור-אמת)",
     journal,
   };

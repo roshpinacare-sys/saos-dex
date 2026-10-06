@@ -828,7 +828,7 @@ async function tick(rt: ChainRT): Promise<void> {
 // extFeeds מחזיר median חוצה-מקורות ($ ליחידה) → ממפה ל-µ-USDS-ל-יחידה (×1e6,
 // עיגול-שלמים) על נכסי-הרשת הרלוונטיים. דחיפה רק-כשערך-שונה מהאורקל-הקנוני —
 // אין-רעש-מצב. ה-op עצמו אוצר-חתום + nonce-מערכת → ריפליי דטרמיניסטי.
-const ORACLE_MAP: Array<{ asset: string; feed: "steem" | "hive" | "sbd" | "blurt" | "eth" | "sol" | "trx" | "btc" }> = [
+const ORACLE_MAP: Array<{ asset: string; feed: "steem" | "hive" | "sbd" | "blurt" | "eth" | "sol" | "bnb" | "trx" | "btc" }> = [
   { asset: "WTRX", feed: "trx" },
   { asset: "WSOL", feed: "sol" },
   { asset: "WSTEEM", feed: "steem" },
@@ -838,6 +838,10 @@ const ORACLE_MAP: Array<{ asset: string; feed: "steem" | "hive" | "sbd" | "blurt
   { asset: "WBLURT", feed: "blurt" },
   { asset: "ETH", feed: "eth" },
   { asset: "BTC", feed: "btc" },
+  // EXEC-CD-11 · THE-CHAIN-STREAM: דלת-EVM המורחבת — אותו-פיד-אמת, רשתות-אמת
+  { asset: "WETH", feed: "eth" },     // Ethereum mainnet
+  { asset: "WBNB", feed: "bnb" },     // BNB Smart Chain
+  { asset: "WBASE", feed: "eth" },    // Base — gas-token הוא ETH אמת (אותו-פיד, רשת-אחרת)
 ];
 
 async function oracleTick(rt: ChainRT, force = false): Promise<void> {
