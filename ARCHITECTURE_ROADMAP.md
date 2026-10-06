@@ -57,6 +57,8 @@
 
 ### M4 — קול-קוח-עצמאי לאימות
 - CLI ציבורי (`verify-anchor <txid>`): מוריד את ה-custom_json מה-RPC, משווה ל-stateRoot מקומי — אימות-צד-שלישי בלי לסמוך עלינו.
+- ✅ **נסגר (2026-10-06) — `scripts/verify-anchor.ts` (`bun run verify:anchor`)**: כלי-עצמאי לגמרי (אפס יבוא מ-src/, אפס תלות מעבר ל-bun) — נייד לכל צד-שלישי. מקורות-אמת: `--height/--root` ידני · `--anchors state/anchors.json` · `--db db/dex.db` (SealRecord). פסקי-דין: VERIFIED / MISMATCH / SELF-REPORT (בלי מקור-השוואה — כנות: קריאה איננה אימות) / NOT-INDEXED. קודי-יציאה 0/1/2/3 לאוטומציה.
+- **מדידה-חי מעל ה-RPC הציבורי (api.steemit.com / api.hive.blog):** 4 עיגונים היסטוריים מתועדי-STATUS נקראו-חזרה ופורקו בהצלחה (headcorner, chain-seal) · **עקביות-בין-שרשראות הוכחה בפקודה אחת**: stateRoot `a54a51c7…` זהה ביט-מול-ביט בין Steem h1416 (בלוק 10,937,411) ל-Hive h1416 (בלוק 10,970,856) · נתיב-VERIFIED נמדד (exit 0) מול ציפייה-ידנית.
 
 ## 4. כנות
 
