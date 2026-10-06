@@ -10,11 +10,10 @@
  *  · הייחוס מוזן **ממסחר-אמת בלבד** — אותם TradeEvent של-הגרעין (kind:"fill" עם
  *    attribution maker) שמזינים את-הנרות (klines.ts). אין-הנחות, אין-אומדנים.
  *  · volMu = נומינל-ציטוט (price × amountMu) בשלמים — מדד-הריבייט הסטנדרטי.
- *  · MAKER_REBATE_BPS = 0 בברירת-מחדל: הספר-הריבוני **לא גובה עמלת-taker**
- *    (Roast-64 honesty — עלות-אמת אפס), ולכן אין-מקור-מימון-עצמי לריבייט.
- *    מקור-מימון (מנת-עמלות-בריכות / מענק-אוצר-מדוד) = החלטת-מפעיל — המסילה
- *    מוכנה: rebateDueMu = floor(volMu × rateBps / 10_000), טהורה-ודטרמיניסטית.
- *    עד-אז המדידה חיה והתשלום כנה-אפס.
+ *  · EXEC-CD-9: התשלום ב-**קרדיטי-דלק** (מטבע-הגז) ממחזור-גז-הספר — הזרם-הסגור
+ *    (מייקרים → גז → מד → אוצר → סליקה → מייקרים); אפס-אוצר-אמת-מסתכן.
+ *    הסליקה: /api/dex/maker/rebate-settle — refuel-גרעיני-אמת (העברה-טהורה
+ *    אפס-הטבעה) + rebateMarkPaid מונוטוני. המזרקה-יבשה = דיווח-כן, אף-שקר.
  *
  * חוץ-מצב בכוונה (אותו-משטר של klines.ts): ה-DexState/שורש-המצב נשארים
  * דטרמיניסטיים-לריפליי; הייחוס הוא נגזרת-תצפית. ריבונות: db/maker-stats.json
@@ -24,7 +23,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TradeEvent } from "./kernel";
 
-export const MAKER_REBATE_BPS = 0; // תעריף-הריבייט (bps מנומינל-ציטוט) — 0 עד-החלטת-מימון-מפעיל
+/** EXEC-CD-9 · תעריף-הריבייט (bps מנומינל-ציטוט) — 10bps על-ספר-אפס-עמלות,
+ * ממומן-ממחזור-גז-הספר (הזרם-הסגור: מייקרים → גז → מד → אוצר → ריבייט → מייקרים).
+ * אישור-מפעיל: "מצא פתרון גם ל-2 — לא אכפת לי שיהיה מה-שצריך". */
+export const MAKER_REBATE_BPS = 10;
 
 export interface MakerRec {
   fills: number;    // מספר-מילויים שבהם סיפק-נזילות (maker)
@@ -96,6 +98,29 @@ export function rebateDueMu(issuer: string, rateBps: number = MAKER_REBATE_BPS):
   const rec = rt().recs[issuer];
   if (!rec || rateBps <= 0) return 0;
   return Math.floor((rec.volMu * rateBps) / 10_000);
+}
+
+/** EXEC-CD-9 · יתרת-ריבייט-שצברה-וטרם-שולמה (הסכום-שהסליקה חייבת עכשיו) —
+ * due − paid, לעולם לא שלילי (paid מסומן-רק-על-תשלום-בפועל — מונוטוני). */
+export function rebateUnpaidMu(issuer: string, rateBps: number = MAKER_REBATE_BPS): number {
+  return Math.max(0, rebateDueMu(issuer, rateBps) - (rt().paidMu[issuer] ?? 0));
+}
+
+/** EXEC-CD-9 · זהויות-מייקר-חוץ (אישור-מפעיל — פריט-3 של EXEC-CD-8):
+ * חשבון-אזרח-רגיל שהמפעיל מצטט-מטעמו (המפתח-האחד-חתום; הזהות היא חשבון — לא סיסמה-חדשה).
+ * היגיינה fail-closed: שמות-מערכת-אסורים + אותיות-קטנות/ספרות/מקף-בלבד (3..24). */
+export const SYSTEM_ACCOUNTS: ReadonlySet<string> = new Set([
+  "treasury", "operator", "arena", "bot-a", "bot-b", "bot-c", "router",
+  "ve-vault", "ve-pot", "vault-pot", "save-pot", "lend-pot",
+]);
+const IDENTITY_RE = /^[a-z0-9][a-z0-9-]{2,23}$/;
+export function isMakerIdentity(name: string): boolean {
+  return IDENTITY_RE.test(name) && !SYSTEM_ACCOUNTS.has(name);
+}
+
+/** EXEC-CD-9 · רשימת-המייקרים-המיוחסים (לסליקה — המייקרים-האמת-בלבד). */
+export function makerIdentities(): string[] {
+  return Object.keys(rt().recs);
 }
 
 /** סימון-ריבייט-כשולם (מונוטוני — לתשלום-עתידי דרך-op-אוצר כשהמימון ייפתח). */

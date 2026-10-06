@@ -9,8 +9,8 @@ export const dynamic = "force-dynamic";
  * השקיפות היא-המוצר: הספר-והייחוס הם עובדות-ציבוריות).
  *
  * תוכן: הפקודות-החיות של-המנפיק · ייחוס-מילויים-ממסחר-אמת (fills/volMu) ·
- * מסגרת-הריבייט (תעריף-כנה-0 עד-החלטת-מימון) · מילויי-maker-אחרונים מהטייפ.
- * עתיד: ?issuer=<אחר> כשהמפעיל יפתח-זהויות-מייקר-חוץ — הנתיב-כבר-מוכן-לזה.
+ * מסגרת-הריבייט (EXEC-CD-9: תעריף-10bps, ממומן-ממחזור-גז-הספר) · מילויי-maker-אחרונים מהטייפ.
+ * EXEC-CD-9 · ?issuer=<אחר> חי — זהויות-מייקר-חוץ פתוחות (חשבונות-אזרח; המפתח-האחד חתום).
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -39,6 +39,6 @@ export async function GET(req: Request) {
     orders,
     stats: makerStatsFor(issuer),
     recentFillsAsMaker: myFills,
-    note: "rebateRateBps=0 — מסילה-חיה; מימון-הריבייט = החלטת-מפעיל (docs/MAKER-API.md)",
+    note: "ריבייט 10bps בקרדיטי-דלק ממחזור-גז-הספר — סליקה: POST /api/dex/maker/rebate-settle",
   });
 }

@@ -42,6 +42,7 @@ import { extFeeds } from "./price-proof";
 // CEX-grade market data (Task 83): נרות-OHLCV + עסקאות + סטטיסטיקת-24ש' — חוץ-מצב מוצמד-גיט
 import { klinesFeed, klinesFlush, klinesLoad, stats24For } from "./klines";
 import { makerFeed, makerFlush } from "./maker"; // EXEC-CD-8 · ייחוס-מייקרים (חוץ-מצב — אותו-משטר-נרות)
+import { bookGasFeed, bookGasFlush, bookGasFloor } from "./bookgas"; // EXEC-CD-9 · מד-גז-ספר (חוץ-מצב — fuel-freeze-fix)
 
 export const TICK_MS = 3_000;
 const SEAL_EVERY = 12;   // checkpoint כל-12 בלוקים (CHAIN_SPEC)
@@ -438,6 +439,8 @@ function flushSnapshot(rt: ChainRT): void {
     klinesFlush();
     // EXEC-CD-8 · ייחוס-המייקרים-נצמד-לגיט באותו-קדנס (db/maker-stats.json — חריג-גיט)
     makerFlush();
+    // EXEC-CD-9 · מד-גז-הספר-נצמד-לגיט באותו-קדנס (db/book-gas.json — חריג-גיט)
+    bookGasFlush();
   } catch { /* כשל-כתיבה לא מפיל את השרשרת */ }
 }
 
@@ -603,6 +606,8 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   const rejSample: string[] = [];
   // Task 83 · איסוף-אירועי-המסחר-של-הבלוק להזנת-הנרות (חוץ-מצב — אין-השפעה על-השורש)
   const blockTrades: TradeEvent[] = [];
+  // EXEC-CD-9 · איסוף-שריפות-הגז-המאושרות של-הבלוק למד-המחזור (חוץ-מצב — fuel-freeze-fix)
+  const appliedGas: { type: string; gas: number }[] = [];
   // FIX(Roast-65-a · MED-6): מעקב-אישור-ה-ops-של-הרמה-הממתינה (harvest + asset_price)
   let keelHarvest: boolean | null = null;
   let keelPrice: boolean | null = null;
@@ -645,6 +650,7 @@ async function buildBlock(rt: ChainRT): Promise<void> {
     trackBridge(op, r.ok);
     if (r.ok) {
       applied++;
+      if (r.gas > 0) appliedGas.push({ type: op.type, gas: r.gas }); // EXEC-CD-9 · שריפות-מאושרות בלבד — מד-המחזור-הכנה
       for (const ev of r.events ?? []) rt.tape.unshift({ ...ev, h: st.height });
       if (r.events && r.events.length > 0) blockTrades.push(...r.events);
       feedPriceOracle(rt, r.events, st.height); // SETTLE-14: עדות-מחיר-אמת מכל-מסחר
@@ -653,7 +659,8 @@ async function buildBlock(rt: ChainRT): Promise<void> {
       // נופלת-בבלוק-בלי-עדה). עכשיו: לוג-מדוד (דגימה-עד-5-פר-בלוק) — כל-דחייה
       // נראית ב-dev.log עם-הסיבה, והמונה-החי-חשוף ב-getState.rejectedLast.
       rejected++;
-      if (rejSample.length < 5) rejSample.push(`${op.type}(${(op as { issuer?: string }).issuer ?? "?"}):${r.err}`);
+      // EXEC-CD-9 · פורנזי: הנונס-בדגימה — התנגשויות-replay נמדדות-ישירות מהלוג
+      if (rejSample.length < 5) rejSample.push(`${op.type}(${(op as { issuer?: string }).issuer ?? "?"}):${r.err}:${String(op.nonce).slice(-24)}`);
     }
   }
   // FIX(Roast-66 · dose-truth): פיוס-המנות-של-המסילה אחרי-הבלוק (ספירה-בהצלחה-בלבד)
@@ -748,6 +755,9 @@ async function buildBlock(rt: ChainRT): Promise<void> {
   if (blockTrades.length > 0) klinesFeed(blockTrades, st.height, t0);
   // EXEC-CD-8 · הזנת-ייחוס-המייקרים מאותם-מסחר-אמת (fills-בלבד-עם-maker)
   if (blockTrades.length > 0) makerFeed(blockTrades, st.height);
+  // EXEC-CD-9 · הזנת-מד-גז-הספר מהשריפות-המאושרות של-הבלוק (fuel-freeze-fix —
+  // המזרקה תמחזר את-המד-הזה-חזרה-לאוצר; כל-µ-פעם-אחת — ראה economy.bookGasRecycle)
+  if (appliedGas.length > 0) bookGasFeed(appliedGas);
 
   st.height++;
   // FIX(SETTLE-9 perf): stateRoot חושב-פעמיים-פר-בלוק (hash בלוק + כתיבת-DB) —
@@ -899,6 +909,9 @@ export function ensureChain(): ChainRT {
   // אתחול-אסינכרוני: תמונת-מצב (מאומתת) → אחרת ג'נזיס-מוצדק; אחר-כך טיימר
   void (async () => {
     const loaded = await loadSnapshot(rt);
+    // EXEC-CD-9 · רצפת-מצב למד-המחזור — קוטל-הטבעה-כפולה: אם-קובץ-המד איחר-להישטף
+    // בעוד-המצב-הוטבע — המד מתיישר מול st.bookGasRecycledMu הקנוני (לעולם לא מחזיר פעמיים)
+    if (loaded === "loaded") bookGasFloor(rt.st.bookGasRecycledMu ?? 0);
     // Task 83 · טעינת-נרות-מהגיט (שורד-מחיקת-סנדבוקס — אותו-משטר-ריבונות של-תמונת-המצב)
     const kl = klinesLoad();
     if (kl.candles > 0) console.log(`[saos-dex] klines restored from git-backed db/klines.json: ${kl.pairs} pairs, ${kl.candles} candles`);
@@ -1087,6 +1100,7 @@ export function getPools() {
     return {
       key, a: p.a, b: p.b, ra: p.ra, rb: p.rb, lp: p.lp,
       mid: poolMid(p), swaps: p.swaps, feeAccruedTreasury: p.feeAccruedTreasury,
+      owner: p.owner ?? "treasury", // EXEC-CD-9 · בעלות-גלויה (undefined = ריבוני)
       k: p.ra * p.rb,
       feeBps: effectiveFeeBps(p), // FIX(Roast-65-c · F4): העמלה-הדינמית-האפקטיבית חשופה-ל-UI (היה-חייב-ניחוש-של-30bps-קבוע)
       lpFeesMu,                                                       // FIX(Roast-66): עמלי-ה-LP-המוטמעים (נגזרת-כנה)

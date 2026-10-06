@@ -23,8 +23,7 @@
  */
 import {
   genesisState, stateRoot, applyOp, notional, poolKey,
-  type DexState, type Asset,
-} from "./kernel";
+  type DexState, type Asset, PRIMER_MU } from "./kernel";
 import { fairPrice, MARKETS } from "./mm";
 import { poolMid, getPool } from "./amm";
 import { sortBook } from "./book";
@@ -218,9 +217,19 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
   // לטובת-Σpools, לא-מנוכה ממנה. הסימן-ההפוך ייצר סטייה-פנטום של 2×take בכל
   // מחזור-ראוטר-רווחי ראשון → InvariantViolation → HALT כוזב (שרשרת-חיה עצרה ב-h8412).
   const feesSpentMu = (st.feesSpentMu ?? 0) + (st.auditAdjustments?.feesSpentMu ?? 0); // FIX(Roast-65 · drift-declaration): כולל-ההיסטוריה-המוצהרת
-  const feesRhs = st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0) + feesSpentMu;
+  // EXEC-CD-9 · מקורות-ההטבעה-המוצהרים: feeMinted = כל-הקרדיטים-שהוטבעו-מעל-ג'נזיס.
+  // הזהות-העמלות מגבה-רק-את-החלק-מעמלות-מדודות; שני-מקורות-מוצהרים-מוחסרים —
+  // מוצהר-ולא-מוסתר (אותו-דפוס auditAdjustments):
+  //  · primerPortion — ההצתה-הריבונית-החד-פעמית (primerMu מפורש, או נגזר-מהדגל);
+  //  · bookGasPortion — מיחזור-גז-הספר (bookGasRecycledMu — גז-שנשרף-וחוזר; הגיבוי
+  //    הוא-העבודה-ששולמה-בפועל, לא-עמלות-בריכות).
+  const primerPortion = st.primerMu ?? (st.primerUsed ? PRIMER_MU : 0);
+  const bookGasPortion = st.bookGasRecycledMu ?? 0;
+  const declared = primerPortion + bookGasPortion;
+  if (declared > (st.feeMinted ?? 0)) errors.push(`minted-declared: primer${primerPortion}+bookgas${bookGasPortion} > minted ${st.feeMinted ?? 0}`);
+  const feesRhs = st.feeMeter + st.treasuryProfit + ((st.feeMinted ?? 0) - declared) + feesSpentMu;
   const feesOk = poolsTreasury === feesRhs;
-  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted+spent ${feesRhs}`);
+  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted−primer${primerPortion}−bookgas${bookGasPortion}+spent ${feesRhs}`);
 
   return {
     ok: errors.length === 0 && negatives.length === 0,

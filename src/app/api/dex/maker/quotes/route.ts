@@ -3,6 +3,7 @@ import { submitOp, nextNonce } from "@/lib/dex/chain";
 import { ASSETS, BATCH_MAX_OPS } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
 import { operatorAuth } from "@/lib/operator-auth";
+import { isMakerIdentity } from "@/lib/dex/maker"; // EXEC-CD-9 · זהויות-מייקר-חוץ
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,7 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
       mode?: "atomic" | "best-effort";
+      issuer?: string; // EXEC-CD-9 · זהות-מייקר (ברירת-מחדל: operator — אותו-מפתח-אחד חתום)
       orders?: {
         base?: string; quote?: string; side?: "buy" | "sell";
         price?: number; amount?: number;
@@ -37,6 +39,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: `orders-1..${BATCH_MAX_OPS}` }, { status: 200 });
     }
     const mode = body.mode === "best-effort" ? "best-effort" : "atomic";
+    // EXEC-CD-9 · זהויות-מייקר-חוץ: המפעיל מצטט-מטעם-חשבון-אזרח (המפתח-האחד-חתום;
+    // הזהות היא חשבון-רשת — לא סיסמה-חדשה). היגיינה fail-closed: אותו-שער של-סליקת-הריבייט.
+    const makerIssuer = body.issuer ? String(body.issuer).toLowerCase() : "operator";
+    if (!isMakerIdentity(makerIssuer)) {
+      return NextResponse.json({ ok: false, error: "bad-identity (a-z0-9- 3..24; שמות-מערכת-אסורים)" }, { status: 200 });
+    }
 
     // אימות-מפורש-פר-ציטוט (fail-closed לפני-כל-שליחה — אותו-חוזה של /api/dex/order)
     interface Sub {
@@ -70,9 +78,9 @@ export async function POST(req: Request) {
       // דחיית-תת-אחד = דחיית-הכול = אפס-מיקום-חלקי)
       const r = submitOp({
         type: "batch",
-        issuer: "operator",
+        issuer: makerIssuer,
         nonce: nextNonce("mmq"),
-        ops: subs.map((s, i) => ({ ...s, issuer: "operator", nonce: nextNonce(`mmq${i}`) })) as never,
+        ops: subs.map((s, i) => ({ ...s, issuer: makerIssuer, nonce: nextNonce(`mmq${i}`) })) as never,
       });
       return NextResponse.json({
         ok: r.queued, mode, count: subs.length, error: r.reason,
@@ -84,7 +92,7 @@ export async function POST(req: Request) {
 
     // best-effort — שליחות-נפרדות, תוצאה-פר-ציטוט
     const results = subs.map((s, i) => {
-      const r = submitOp({ ...s, issuer: "operator", nonce: nextNonce(`mmb${i}`) } as never);
+      const r = submitOp({ ...s, issuer: makerIssuer, nonce: nextNonce(`mmb${i}`) } as never);
       return { i, queued: r.queued, error: r.reason };
     });
     return NextResponse.json({ ok: results.every((r) => r.queued), mode, count: subs.length, results });
