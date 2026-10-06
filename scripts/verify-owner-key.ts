@@ -21,10 +21,12 @@ const toWif = (role: string) => {
   const chk = createHash('sha256').update(createHash('sha256').update(body).digest()).digest().subarray(0, 4);
   return bs58.encode(Buffer.concat([body, chk]));
 };
+// r210-fix: קידום-Steem האמיתי — checksum = ripemd160(body)[0:4] (נמדד-EXACT מול-השרשרת),
+// הישן (0x41+sha256 כפול) היה קידום-Bitcoin — הצמיד פסק-0/4 מדומה.
 const pubOf = (wif: string) => {
   const dec = bs58.decode(wif); const priv = dec.subarray(1, 33);
-  const body = Buffer.concat([Buffer.from([0x41]), Buffer.from(secp256k1.getPublicKey(priv, true))]);
-  return bs58.encode(Buffer.concat([body, Buffer.from(ripemd160(sha256(body)).subarray(0, 4))]));
+  const body = Buffer.from(secp256k1.getPublicKey(priv, true));
+  return 'STM' + bs58.encode(Buffer.concat([body, Buffer.from(ripemd160(body).subarray(0, 4))]));
 };
 async function auth(url: string, name: string) {
   const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', method: 'condenser_api.get_accounts', params: [[name]], id: 1 }) });
