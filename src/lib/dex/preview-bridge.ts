@@ -144,9 +144,11 @@ function startBridge(): void {
   // FIX(hmr-ws): HMR של dev דורש WebSocket — tunnel גולמי ל-3010 (ה-gateway
   // מקדימה את ה-upgrade; בלי-זה ההידרציה של dev נשארת מושהית — נמדד).
   server.on("upgrade", (req, clientSocket, head) => {
-    // מנהרה-לפי-נתיב: HMR של ה-DEX (/saos-dex) → 3010 · HMR של הקונסולה → 3050
+    // מנהרה-לפי-נתיב: HMR של ה-DEX — כולל נתיב-השורש /_next/* (Next-dev משרת
+    // את socket-ה-HMR בשורש גם עם basePath — נמדד: ניתוב-שורש→3050 עצר הידרציה)
+    // → 3010 · רק-WS-זר-אמת → 3050.
     const wsUrl = req.url ?? "/";
-    const wsPort = (wsUrl === "/saos-dex" || wsUrl.startsWith("/saos-dex/")) ? 3010 : 3050;
+    const wsPort = (wsUrl === "/saos-dex" || wsUrl.startsWith("/saos-dex/") || wsUrl.startsWith("/_next/")) ? 3010 : 3050;
     const upstreamSocket = net.connect(wsPort, "127.0.0.1", () => {
       const lines: string[] = [`${req.method} ${req.url} HTTP/1.1`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
