@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureChain, chainVersion, getState, getMarkets, getPools, getWallets, getArena, getProofs, getTape } from "@/lib/dex/chain";
+import "@/lib/dex/preview-bridge"; // גשר-התצוגה של הסנדבוקס (side-effect, fail-closed)
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
