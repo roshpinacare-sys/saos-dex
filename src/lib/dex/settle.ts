@@ -136,8 +136,15 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
     const nativeBacking = backing[`W${a}`] ?? 0;
     const live = (liveAssets[a] ?? 0) + nativeBacking;
     const adjNative = st.auditAdjustments?.native?.[a] ?? 0;
+    // EXEC-CD-30 · הצהרות-חוץ-בצפוי: טבעה-חיצונית (wrap_mint external — Task 61/72,
+    // אימות-RPC + תביעה-חד-פעמית) מוסיפה backing בלי-נכס-ילידי-בשרשרת. הביקורת-הישנה
+    // ספרה-אותה-כ"חי" בלי-לספור-אותה-ב"צפוי" — נכס-ילידי-שמסתובב-במקביל-לטבעה-חיצונית
+    // של-העטוף-שלו היה-מפיל-את-הספרים (נמדד-חי: native SOL live 61 ≠ 0 בחותם-הגשר).
+    // התיקון: הצפוי כולל גם את ההצהרות-החוץ (st.extBack — מצב-קנוני, טבעת-תביעות-חד-פעמית).
+    // כנות: extBack הוא הצהרת-הפקדות-שאומתו — לא זיוף; הדלת ממשיכה לבקר 1:1 מול-משמורת.
+    const extDeclared = st.extBack?.[`W${a}`]?.mu ?? 0;
     const vaultSupply = a === "USDS" ? ((st.vaultTot?.issuedMu ?? 0) - (st.vaultTot?.burnedMu ?? 0)) : 0;
-    const expected = (totals.assets[a] ?? 0) - (a === "SAOS" ? (st.burnedSaos ?? 0) : 0) + adjNative + vaultSupply;
+    const expected = (totals.assets[a] ?? 0) - (a === "SAOS" ? (st.burnedSaos ?? 0) : 0) + adjNative + vaultSupply + extDeclared;
     const ok = live === expected;
     assetRows.push({ asset: a, live, expected, ok, kind: "native" });
     if (!ok) errors.push(`native ${a}: live ${live} ≠ genesis+declared ${expected}`);

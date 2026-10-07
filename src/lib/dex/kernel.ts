@@ -226,7 +226,7 @@ export const RESERVE_REAL_PCT = 35;                // % מהסחיבה → המ�
 export const RESERVE_REAL_CAP = 25_000;            // תקרת-המרה-פר-טיק
 export const RESERVE_REAL_DEPTH_BPS = 1_000;       // מקסימום 10% מעומק-הבריכה-לטיק (המרה-מכבדת-שוק)
 export const RESERVE_REDEEM_WINDOW_CAP_BPS = 500;  // פדיון: מקסימום 5% מהכספת-לאפוק (EPOCH_BLOCKS)
-export const REAL_DOOR_ASSETS = ["WTRX", "WSOL", "WETH", "WBNB", "WBASE"] as const; // גיבוי-אמת: 1:1 דלת
+export const REAL_DOOR_ASSETS = ["WTRX", "WSOL", "WETH", "WBNB", "WBASE", "WUSDC"] as const; // גיבוי-אמת: 1:1 דלת · EXEC-CD-30: WUSDC = USDC-אמת-על-Solana (מאומת-RPC)
 export const UNIT_FLOOR_ASSETS = ["USDS", "WSTEEM", "WSBD", "WBLURT"] as const;      // רצפת-יחידה
 /** מדרגות-הסולם: unitBps = רצפת-יחידה (כל-הערך-המדוד בכספת) · realBps = גיבוי-דלת-אמת.
  * המדרגה-נמדדת-חי מהמצב-הקנוני (reserveMeasure) — אין-משתני-תצורה-חיצוניים. */
