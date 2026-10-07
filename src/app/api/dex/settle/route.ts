@@ -108,6 +108,24 @@ export async function POST(req: Request) {
     }
   }
 
+  // EXEC-CD-28 · SOVEREIGN-TRADER FUEL: המפעיל-הריבוני הוא-ראשון-בתור-הדלק —
+  // בלעדיו-אין-סוואף-מפעיל (הדלק-יבש הקפיא את סוואף-הבית — נמדד-חי h153128:
+  // batch(operator):insufficient-credits). אותו-funderFor מדורג, אותן-תקרות,
+  // אותו-op-גרעיני (refuel = העברה-טהורה-אפס-הטבעה — האינווריאנטה עומדת).
+  // הרצפה נמוכה-בכוונה (5k) כדי-שהמפעיל-יסחור-ברציפות; המזרקה האוטומטית
+  // (mm.ts) מטעינה-את-הסולם כשהמד-חוצה-את-רצפת-הגרעין (8k).
+  for (const ag of ["operator", "treasury"] as const) {
+    const c = st.credits[ag] ?? 0;
+    if (c < 5_000) {
+      const amt = Math.min(20_000 - c, REFUEL_CAP);
+      if (amt > 0) {
+        const funder = funderFor(st, amt, ag);
+        const r = submitOp({ type: "refuel", issuer: funder, nonce: `settle-refuel-${ag}-${Date.now().toString(36)}`, to: ag, amount: amt });
+        pushed.push({ kind: "refuel-sovereign", detail: r.queued ? `${ag} +${amt}µ credits ← ${funder} (had ${c})` : `rejected: ${r.reason}` });
+      }
+    }
+  }
+
   const m = { base: "SAOS", quote: "USDS" } as const;
   const p = getPool(st, poolKey(m.base, m.quote));
   const fair = stabilityCheck(st).fair;
