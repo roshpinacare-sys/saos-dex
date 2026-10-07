@@ -7,7 +7,7 @@ import { effectiveFeeBps } from "@/lib/dex/amm";
 import {
   EPOCH_BLOCKS, ROUTER_EVERY, VE_MAX_WEEKS, VE_MIN_WEEKS, VE_VAULT, VE_POT,
   BOND_DISC_BPS, BOND_VE_WEEKS, BOND_MIN_USDS, BOND_MAX_USDS,
-  REV_BURN_PCT, REV_VE_PCT,
+  REV_BURN_PCT, REV_VE_PCT, RESERVE_PHASES, reserveMeasure,
 } from "@/lib/dex/kernel";
 import { REV_TREASURY_PCT } from "@/lib/dex/economy";
 
@@ -34,6 +34,10 @@ export async function GET() {
   }));
   const price = st.pools["SAOS/USDS"] ? Math.floor((st.pools["SAOS/USDS"].rb * 1000) / st.pools["SAOS/USDS"].ra) : 0;
   const bondPrice = price > 0 ? Math.floor((price * (10_000 - BOND_DISC_BPS)) / 10_000) : 0;
+  // EXEC-CD-21 · סולם-הגיבוי — סיכום-חי (מדידה-קנונית מהמצב)
+  const rm = reserveMeasure(st);
+  const rPhase = st.reserve?.phase ?? 0;
+  const ph3 = RESERVE_PHASES[3];
   return NextResponse.json({
     ok: true,
     height: h,
@@ -61,6 +65,17 @@ export async function GET() {
       vePct: REV_VE_PCT,
       treasuryPct: REV_TREASURY_PCT,
       saosSupplyMu: Object.values(st.balances).reduce((s, w) => s + (w.SAOS ?? 0), 0) + (st.balances[VE_VAULT]?.SAOS ?? 0),
+    },
+    reserve: {
+      phase: rPhase,
+      phaseName: RESERVE_PHASES[rPhase]?.name ?? "—",
+      unitBps: rm.unitBps,
+      realBps: rm.realBps,
+      vaultMu: rm.unitMu,
+      realMu: rm.realMu,
+      supplyMu: rm.supplyMu,
+      redeemOpen: rPhase >= 3 && ph3 !== undefined && rm.unitBps >= ph3.unitBps,
+      events: (st.reserve?.events ?? []).slice(-6).reverse(),
     },
     bonds: {
       ...st.bond,

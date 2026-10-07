@@ -29,7 +29,9 @@ import {
   BLOCKS_PER_WEEK, VE_MAX_WEEKS, EPOCH_BLOCKS, ROUTER_EVERY, REV_FLOOR,
   REV_BURN_PCT, REV_VE_PCT, ROUTER_USDS_FLOOR, REV_MIN_CYCLE, VE_POT,
   LADDER_FUEL_FLOOR,
+  RESERVE_ROUTER_PCT, RESERVE_VAULT, pushReserveEvent, LADDER_EVERY,
 } from "./kernel";
+import { ladderTick } from "./ladder"; // EXEC-CD-21 · סולם-הגיבוי
 
 // FIX(Roast-67 · ZFB-gas-tank): מימון-דלק-דטרמיניסטי מהפונטיין — 10% מכל-מחזור-ראוטר
 // הופך-עמלות-שנמדדו (מעל-רצפת-הסולם) לקרדיטים-בארנק-האוצר (ה-FUEL_FUNDER) —
@@ -71,6 +73,7 @@ export function economyTick(st: DexState, nowMs: number): void {
   if (h % ROUTER_EVERY === 0) revenueCycle(st, h, nowMs);
   if (h % EPOCH_BLOCKS === 0) epochFlip(st, h, nowMs);
   if (h % BOOKGAS_RECYCLE_EVERY === 0) bookGasRecycle(st, h, nowMs); // EXEC-CD-9 · fuel-freeze-fix
+  if (h % LADDER_EVERY === 0) ladderTick(st, h, nowMs); // EXEC-CD-21 · סולם-הגיבוי: סחיבה→המרה-אמת→מדרגות (תחזוקה-שמזינה-גיבוי)
   launchpadTick(st, nowMs); // Task 57/58 · הגירות-אוטומטיות של מסילת-ההשקות (גיוס-הסף → בריכה)
   aleTick(st, nowMs); // Task 55 · ALE: הזרעת-POL-אוטונומית כל-ALE_EVERY-בלוקים
 }
@@ -186,6 +189,24 @@ function revenueCycle(st: DexState, h: number, nowMs: number): void {
         st.credits["treasury"] = (st.credits["treasury"] ?? 0) + gasAlloc;
         st.gasFundedMu = (st.gasFundedMu ?? 0) + gasAlloc;
         st.journal.push({ h, t: nowMs, soldier: "router", action: "gas_tank_fund", note: `gasTank +${gasAlloc}µ credits →treasury (fees-backed: profit ${fromProfit} + meter ${fromMeter}) — ZFB runway` });
+      }
+    }
+  }
+  // ── EXEC-CD-21 · RESERVE-SLICE: חלק-קבוע-מכל-מחזור-ראוטר זורם-לכספת-העתודה ──
+  // "התחזוקה-עצמה מזינה-את-הגיבוי": כל-מחזור-ראוטר מקצה RESERVE_ROUTER_PCT%-מהתפוקה
+  // לכספת-העתודה-הגלויה (בעקבות-חלוקת-ה-burn/ve, מוגן-באותו-יתרה-אמת — fail-closed).
+  // אפס-נגיעה-במשטר-העמלות (התביעה-כבר-נצרכה-למעלה — היתרה-היא-חופשית-כללית).
+  {
+    const reserveSlice = Math.floor((take * RESERVE_ROUTER_PCT) / 100);
+    if (reserveSlice > 0) {
+      const tBal = st.balances["treasury"] ?? (st.balances["treasury"] = {});
+      if ((tBal.USDS ?? 0) >= reserveSlice) {
+        tBal.USDS = (tBal.USDS ?? 0) - reserveSlice;
+        const rvBal = st.balances[RESERVE_VAULT] ?? (st.balances[RESERVE_VAULT] = {});
+        rvBal.USDS = (rvBal.USDS ?? 0) + reserveSlice;
+        st.reserve = st.reserve ?? { phase: 0, sinceH: h, streak: 0, streakTarget: 0, lastH: 0, sweptMu: 0, routerSlicedMu: 0, realSwappedMu: 0, migrated: true, redeemWindowH: 0, redeemWindowMu: 0, redeemMu: 0, events: [] };
+        st.reserve.routerSlicedMu += reserveSlice;
+        pushReserveEvent(st, h, "router_slice", reserveSlice, `${reserveSlice}µ from router cycle → reserve-vault (${RESERVE_ROUTER_PCT}% — maintenance feeds the backing ladder)`);
       }
     }
   }

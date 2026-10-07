@@ -115,6 +115,8 @@ export const GAS_TABLE = {
   lend_borrow: 100,   // שאילה-מהבריכה נגד-בטחונות (HF ≥ 1.1, רצפת-נזילות-10%)
   lend_repay: 60,    // פירעון: ריבית → 90% מלווים + 10% אוצר (מדידה-חיה)
   lend_liquidate: 60, // ניזולת-HF<1 — פתוח-לכל-אזרח, בונוס-5%
+  // ── EXEC-CD-21 · סולם-הגיבוי ──
+  redeem_saos: 60,   // פדיון: שריפת-SAOS מול כספת-העתודה (מדרגה 3+ בלבד — ההוכחה-הקשה)
 } as const;
 
 export type OpKind = keyof typeof GAS_TABLE;
@@ -207,6 +209,35 @@ export const ROUTER_USDS_FLOOR = 1_000_000; // רצפת-USDS-אוצר — הרא
 // קרן-ה-ve-יבשה-6-אפוקים. אותו-דפוס-של-roast-79 (שער-המזרקה): שער-נגד-אבק היה-החלטת-
 // תזמון, לא-אבטחה — האבטחה-היא-הרצפות (REV_FLOOR · ROUTER_USDS_FLOOR) והגיבוי-הכפול.
 export const REV_MIN_CYCLE = 1_000;     // מתחת-לזה — אין-מחזור (עמלות-אבק נשארות)
+// ── EXEC-CD-21 · סולם-הגיבוי (THE-RESERVE-LADDER): מטבעות-הבית → כסף-אמת, צעד-צעד ──
+// הדוקטרינה (הוראת-מפעיל: "איך נוכל להפוך את הכלכלה שלנו לכסף אמת צעד צעד... עד שתהפוך
+// אותם לרלוונטיים עם גב נזיל אמת"): מטבעות-הבית אינם נסחרים-בחוץ עוד — הסוואפ-הראשי
+// הוא-עליהם בלבד, העמלים/הראוטר/הבונדים/הפקדות-אמת מזינים **כספת-עתודה ריכוזית
+// גלויה** (reserve-vault), ומדרגות-הסולם נפתחות-אוטומטית כשהמדידה-החיה עומדת-בספים.
+// אפס-הבטחות-ריקות: כל-מדרגה היא מספר-מדוד במצב-הקנוני, והירידה-מדרגה-כנה כמו-העלייה.
+export const RESERVE_VAULT = "reserve-vault";      // כספת-העתודה (חשבון-ריכוזי-גלוי — מאומת-מה-wallets)
+export const LADDER_EVERY = 200;                   // טיק-סולם כל-200-בלוקים (10 דק' בטיק-3s)
+export const RESERVE_STREAK = 3;                   // מדרגה-נפתחת-רק אחרי 3-טיקים-רצופים-מעל-הסף
+export const RESERVE_ROUTER_PCT = 15;              // % מכל מחזור-ראוטר → כספת-העתודה (תחזוקה-שמזינה-גיבוי)
+export const RESERVE_SWEEP_PCT = 50;               // % מעודף-האוצר-מעל-כל-הרצפות → סחיבה-פר-טיק
+export const RESERVE_SWEEP_CAP = 200_000;          // תקרת-סחיבה-פר-טיק (גבול-נזק)
+export const RESERVE_MIN_SWEEP = 2_000;            // מתחת-לזה — אין-סחיבה (אבק)
+export const RESERVE_REAL_PCT = 35;                // % מהסחיבה → המרה-לנכסי-דלת (גיבוי-אמת)
+export const RESERVE_REAL_CAP = 25_000;            // תקרת-המרה-פר-טיק
+export const RESERVE_REAL_DEPTH_BPS = 1_000;       // מקסימום 10% מעומק-הבריכה-לטיק (המרה-מכבדת-שוק)
+export const RESERVE_REDEEM_WINDOW_CAP_BPS = 500;  // פדיון: מקסימום 5% מהכספת-לאפוק (EPOCH_BLOCKS)
+export const REAL_DOOR_ASSETS = ["WTRX", "WSOL", "WETH", "WBNB", "WBASE"] as const; // גיבוי-אמת: 1:1 דלת
+export const UNIT_FLOOR_ASSETS = ["USDS", "WSTEEM", "WSBD", "WBLURT"] as const;      // רצפת-יחידה
+/** מדרגות-הסולם: unitBps = רצפת-יחידה (כל-הערך-המדוד בכספת) · realBps = גיבוי-דלת-אמת.
+ * המדרגה-נמדדת-חי מהמצב-הקנוני (reserveMeasure) — אין-משתני-תצורה-חיצוניים. */
+export interface ReservePhase { id: number; name: string; unitBps: number; realBps: number; note: string }
+export const RESERVE_PHASES: ReservePhase[] = [
+  { id: 0, name: "מטבע-בית", unitBps: 0, realBps: 0, note: "ערך-פנימי בלבד — אין עדיין רצפה מדודה; העמלים מזינים את הסולם" },
+  { id: 1, name: "רצפת-יחידה", unitBps: 1_000, realBps: 0, note: "10% רצפת-יחידה בכספת-העתודה — המטבע כבר לא אוויר" },
+  { id: 2, name: "גיבוי-אמת", unitBps: 3_000, realBps: 1_000, note: "30% רצפה + 10% גיבוי-דלת (נכסי-רשת אמת 1:1)" },
+  { id: 3, name: "פדיון", unitBps: 6_000, realBps: 2_000, note: "60% רצפה + 20% אמת — חלון-פדיון SAOS→עתודה נפתח (5% לאפוק)" },
+  { id: 4, name: "רלוונטיות", unitBps: 10_000, realBps: 5_000, note: "100% רצפה + 50% אמת — מטבעות-הבית רלוונטיים; שער-הפצה-חוץ נפתח" },
+];
 export const DYN_FEE_MIN_BPS = 4;       // עמלה-דינמית: רצפה
 export const DYN_FEE_MAX_BPS = 1_500;   // עמלה-דינמית: תקרה
 export const DYN_FEE_K = 4;             // fee = base + vol/4 (0.25bps-ל-bps-תנודה)
@@ -406,6 +437,25 @@ export interface DexState {
   // ── Task 72 · דלת-המטבעות: אורקל-מחירים קנוני (רשויות: תמונות-מצב-ישנות-בלעדיו) ──
   // נכס → { mu: µ-USDS ל-1-יחידת-שלמה · atH: גובה-העדכון · src: תווית-מקור }. חלק-מה-stateRoot.
   oracle?: Record<string, { mu: number; atH: number; src: string }>;
+  // ── EXEC-CD-21 · סולם-הגיבוי (רשויות: תמונות-מצב-ישנות-בלעדיו = undefined → ladderTick מאתחל) ──
+  reserve?: ReserveLadderState;
+}
+
+/** EXEC-CD-21 · מצב-סולם-הגיבוי — חלק-מה-stateRoot (דטרמיניסטי מלא, נישא-בתמונות-מצב). */
+export interface ReserveLadderState {
+  phase: number;            // המדרגה הנוכחית (0..4 — RESERVE_PHASES)
+  sinceH: number;           // גובה-כניסה-למדרגה
+  streak: number;           // טיקים-רצופים באותו-כיוון-מדידה
+  streakTarget: number;     // המדרגה-המועמדת (או -1 = ירידה)
+  lastH: number;            // טיק-אחרון
+  sweptMu: number;          // Σ USDS שסויב-מהאוצר-העודף אל הכספת
+  routerSlicedMu: number;   // Σ USDS שהגיע-ממחזורי-הראוטר (חלק-קבוע)
+  realSwappedMu: number;    // Σ USDS שהומר-לנכסי-דלת (גיבוי-אמת)
+  migrated: boolean;        // הגירה-חד-פעמית: נכסי-דלת-אוצר → כספת
+  redeemWindowH: number;    // תחילת-חלון-הפדיון הנוכחי
+  redeemWindowMu: number;   // Σ ערך-פדיון-בחלון הנוכחי
+  redeemMu: number;         // Σ פדיון-מונוטוני
+  events: { h: number; kind: string; mu?: number; note: string }[]; // טריגרי-תחזוקה/רווח/מדרגות (טבעת 64)
 }
 
 /** Task 57/58 · השקה-על-מסילת-ההשקות: עקומת-מחיר-וירטואלית (pump.fun) או
@@ -610,6 +660,8 @@ export function genesisState(): DexState {
     revAux: { protorevMu: 0, launchpadMu: 0 },
     cow: [], cowSeq: 1,
     cowStats: { matched: 0, batches: 0, surplusMu: 0, fallbackPool: 0, fallbackBook: 0 },
+    // EXEC-CD-21 · סולם-הגיבוי נולד-מאפס (הכנות: אין-עתודה עד שהרווח/הפקדות-אמת מזינים אותה)
+    reserve: { phase: 0, sinceH: 0, streak: 0, streakTarget: 0, lastH: 0, sweptMu: 0, routerSlicedMu: 0, realSwappedMu: 0, migrated: false, redeemWindowH: 0, redeemWindowMu: 0, redeemMu: 0, events: [] },
     // FIX(Roast-65-a · LOW-11/LOW-10): faucet-cooldown וטבעת-תביעות-חוץ — חלק-מהמצב-הקנוני
     faucetAt: {},
     extClaims: [],
@@ -658,6 +710,45 @@ export function genesisState(): DexState {
 }
 
 export const stateRoot = (st: DexState): string => stateRootOf(st);
+
+// ── EXEC-CD-21 · סולם-הגיבוי: מדידה-קנונית + פנקס-טריגרים (כאן-כדי-שגם-ה-kernel-ישתמש-בלי-מעגל-ייבוא) ──
+/** מדידה-חיה של כספת-העתודה מהמצב-הקנוני בלבד (אפס-float):
+ * תמחור-קנוני (oracle → assets.refPrice; נכס-בלי-מחיר = נספר-לשקיפות, לא-לרצפה — כנות-fail-closed).
+ * unitMu = ערך-כל-הכספת (רצפת-יחידה) · realMu = ערך-נכסי-דלת בלבד (גיבוי-אמת). */
+export function reserveMeasure(st: DexState): {
+  unitMu: number; realMu: number; supplyMu: number; unitBps: number; realBps: number;
+  holdings: Record<string, number>; prices: Record<string, number>;
+} {
+  const rv = st.balances[RESERVE_VAULT] ?? {};
+  const price = (a: string): number => st.oracle?.[a]?.mu ?? st.assets[a]?.refPrice ?? 0;
+  let unitMu = 0, realMu = 0;
+  const holdings: Record<string, number> = {};
+  const prices: Record<string, number> = {};
+  for (const [a, amt] of Object.entries(rv)) {
+    if (!(amt > 0)) continue;
+    holdings[a] = amt;
+    const p = price(a);
+    prices[a] = p;
+    if (!(p > 0)) continue; // כנות: אין-מחיר-קנוני → לא-נספר-לרצפה
+    const v = Math.floor((amt * p) / 1000); // µ-USDS
+    unitMu += v;
+    if ((REAL_DOOR_ASSETS as readonly string[]).includes(a)) realMu += v;
+  }
+  // אספקת-SAOS האמת: Σ כל-היתרות (ve-vault הוא חשבון-ביתרות ונספר-פעם-אחת; שרוף-לא-קיים).
+  // FIX(EXEC-CD-21 · honest-supply): המדידה-שלנו לא מכפילה-את-ve-vault (שלא כמו מדד-הכלכלה
+  // ההיסטורי) — יחס-גיבוי חייב-להיות מול-האספקה-האמת, אחרת-הוא מנופח-שקרית למטה.
+  const supplyMu = Object.values(st.balances).reduce((s, w) => s + (w.SAOS ?? 0), 0);
+  const unitBps = supplyMu > 0 ? Math.floor((unitMu * 10_000) / supplyMu) : 0;
+  const realBps = supplyMu > 0 ? Math.floor((realMu * 10_000) / supplyMu) : 0;
+  return { unitMu, realMu, supplyMu, unitBps, realBps, holdings, prices };
+}
+
+/** פנקס-הטריגרים (טבעת 64) — "תחזוקה-שמרוויחה": כל-סחיבה/המרה/מדרגה/פדיון נרשם-וגלוי. */
+export function pushReserveEvent(st: DexState, h: number, kind: string, mu: number | undefined, note: string): void {
+  const r = st.reserve ?? (st.reserve = { phase: 0, sinceH: h, streak: 0, streakTarget: 0, lastH: h, sweptMu: 0, routerSlicedMu: 0, realSwappedMu: 0, migrated: false, redeemWindowH: 0, redeemWindowMu: 0, redeemMu: 0, events: [] });
+  r.events.push({ h, kind, ...(mu !== undefined ? { mu } : {}), note });
+  if (r.events.length > 64) r.events = r.events.slice(-64);
+}
 
 // ─── עימות-עסקאות: applyOp — מחזיר {ok, gas, err?} (חתימת kernel.cjs) ────────
 export type OpResult = { ok: true; gas: number; events?: TradeEvent[] } | { ok: false; err: string; gas: number };
@@ -934,6 +1025,62 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       };
       st.bondUserH = { ...(st.bondUserH ?? {}), [issuer]: st.height };
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "bond_buy", note: `${usdsIn}µ USDS → ${saosOut}µ SAOS (-3%, ve ${BOND_VE_WEEKS}w)` });
+      return { ok: true, gas };
+    }
+    case "redeem_saos": {
+      // EXEC-CD-21 · פדיון-סולם: שריפת-SAOS מול כספת-העתודה — ההוכחה-הקשה שהגיבוי אמת.
+      // נפתח-רק במדרגה 3+, נמדד-חי (רצפת-היחידה מעל-סף-המדרגה ברגע-הפדיון — לא-בהיסטוריה),
+      // מוגבל-חלון (5% מהכספת-לאפוק), משלם USDS-ראשון ואז נכסי-דלת לפי-המחיר-הקנוני.
+      // אין-פדיון-חלקי — fail-closed. השריפה מורידה-אספקה → היחס-משתפר-עצמו (מנוע-אנטי-בנק-ראן).
+      const saosMu = Math.floor(op.amount ?? 0);
+      if (!(saosMu > 0)) return { ok: false, err: "bad-amount", gas: 0 };
+      const r = st.reserve;
+      if ((r?.phase ?? 0) < 3) return { ok: false, err: "redeem-locked-phase", gas: 0 };
+      const m = reserveMeasure(st);
+      const ph3 = RESERVE_PHASES[3];
+      if (ph3 && m.unitBps < ph3.unitBps) return { ok: false, err: "redeem-floor-lost", gas: 0 };
+      if (avail(st, issuer, "SAOS") < saosMu) return { ok: false, err: "insufficient", gas };
+      const refSaos = st.oracle?.["SAOS"]?.mu ?? st.assets["SAOS"]?.refPrice ?? 0;
+      if (!(refSaos > 0)) return { ok: false, err: "no-ref-price", gas: 0 };
+      const owed = Math.floor((saosMu * refSaos) / 1000); // µ-USDS
+      const rvBal = st.balances[RESERVE_VAULT] ?? (st.balances[RESERVE_VAULT] = {});
+      const rvValue = m.unitMu;
+      if (!(rvValue > 0) || owed > rvValue) return { ok: false, err: "reserve-insufficient", gas: 0 };
+      if (st.height - (r?.redeemWindowH ?? 0) >= EPOCH_BLOCKS) {
+        r!.redeemWindowH = st.height;
+        r!.redeemWindowMu = 0;
+      }
+      const capMu = Math.floor((rvValue * RESERVE_REDEEM_WINDOW_CAP_BPS) / 10_000);
+      if ((r?.redeemWindowMu ?? 0) + owed > capMu) return { ok: false, err: "redeem-window-cap", gas: 0 };
+      // תשלום-קנוני: USDS ראשון, אחר-כך נכסי-דלת (סדר-קבוע — דטרמיניזם)
+      const payouts: Record<string, number> = {};
+      const usdsPay = Math.min(rvBal.USDS ?? 0, owed);
+      let rem = owed - usdsPay;
+      if (usdsPay > 0) payouts["USDS"] = usdsPay;
+      if (rem > 0) {
+        for (const a of REAL_DOOR_ASSETS) {
+          if (rem <= 0) break;
+          const ref = st.oracle?.[a]?.mu ?? st.assets[a]?.refPrice ?? 0;
+          if (!(ref > 0)) continue;
+          const have = rvBal[a] ?? 0;
+          if (!(have > 0)) continue;
+          const needVal = Math.floor((have * ref) / 1000);
+          const takeVal = Math.min(needVal, rem);
+          const takeMu = Math.floor((takeVal * 1000) / ref);
+          if (takeMu > 0) { payouts[a] = takeMu; rem -= takeVal; }
+        }
+        if (rem > 0) return { ok: false, err: "reserve-insufficient", gas: 0 };
+      }
+      const c = consume(); if (c) return c;
+      addBal(st, issuer, "SAOS", -saosMu);
+      for (const [a, amt] of Object.entries(payouts)) {
+        addBal(st, RESERVE_VAULT, a, -amt);
+        addBal(st, issuer, a, amt);
+      }
+      r!.redeemWindowMu += owed;
+      r!.redeemMu += owed;
+      pushReserveEvent(st, st.height, "redeem", owed, `${issuer} burned ${saosMu}µ SAOS → ${owed}µ reserve payout (${Object.entries(payouts).map(([a, n]) => `${n}µ ${a}`).join(" + ")})`);
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "redeem_saos", note: `${saosMu}µ SAOS burned → ${owed}µ reserve payout — backing proven live` });
       return { ok: true, gas };
     }
     case "dca_create": {
