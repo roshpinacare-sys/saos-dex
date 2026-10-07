@@ -183,7 +183,14 @@ function useShowcase(): { data: ShowcaseResp | null; loading: boolean; rerun: ()
       setLoading(false);
     }
   }, []);
-  useEffect(() => { void run(); }, [run]);
+  useEffect(() => {
+    void run();
+    // FIX(6-a · one-shot-freeze): היה-ריצה-יחידה-באתחול — גובה/stateRoot/עיגונים היו-קופאים
+    // תוך-דקות. עתה: ריענון-60ש׳ (יישור-לדפוסי-הסקר-בקובץ: settle 32ש׳ · truth 45ש׳ · chains 15ש׳)
+    // + RUN-PROOF ידני כפי-שהיה.
+    const t = setInterval(() => void run(), 60_000);
+    return () => clearInterval(t);
+  }, [run]);
   return { data, loading, rerun: () => void run() };
 }
 
@@ -205,8 +212,8 @@ interface SettleResp {
     agents: { agent: string; score: number; pass: boolean; conservationAfterEach: boolean; tasks: { task: string; ok: boolean; note: string }[] }[];
   };
   realMoney: {
-    ok: boolean; liveRails: number; totalRails?: number; verifiedNow: number;
-    rails: { rail: string; identity: string; native: string; extra: string; ok: boolean; detail: string }[];
+    ok: boolean; liveRails: number; rpcReachableRails?: number; totalRails?: number; verifiedNow: number;
+    rails: { rail: string; identity: string; native: string; extra: string; ok: boolean; enabled?: boolean; detail: string }[];
     anchors: { rail: string; height: number; ok: boolean; verified: boolean; detail: string }[];
   };
   stability: {
@@ -587,7 +594,8 @@ function SovereignMetricsPanel({ showcase, loading, rerun }: {
               <div className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">SOVEREIGN ANCHORS</div>
               <div className="mt-0.5 font-mono text-lg font-black text-purple-400" dir="ltr">{fmtInt(sc.sovereignty.verified)}</div>
               <div className="mt-0.5 font-mono text-[10px] text-zinc-500" dir="ltr">
-                {sc.sovereignty.rails} rails · {fmtInt(sc.sovereignty.mismatches)} mismatches · 0 bridges
+                {/* FIX(6-a): הוסרה-הטענה-הקבועה "· 0 bridges" — טענת-מבנה-קשיחה; הריילים-והמיסמאצ'ים חיים */}
+                {sc.sovereignty.rails} rails · {fmtInt(sc.sovereignty.mismatches)} mismatches
               </div>
             </div>
           </div>
@@ -741,24 +749,31 @@ function SettlementDeskPanel({ report, loading, refresh, stabilize, stabilizing 
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">Real Money · Rails Live</h3>
               <span className={`font-mono text-[10px] font-bold ${s.realMoney.ok ? "text-emerald-300" : "text-amber-300"}`}>
-                {s.realMoney.liveRails}/{s.realMoney.totalRails ?? s.realMoney.rails.length} live · {s.realMoney.verifiedNow} verified now
+                {/* FIX(6-a · live-semantics): "live" = relay-מאופשר + חתימה-חיה; מסילות-שרק-ענו-ל-RPC
+                    (כבויות-חתימה) מוצגות-בכנות כ-reachable — לא-עוד ניפוח 4/7. */}
+                {s.realMoney.liveRails}/{s.realMoney.totalRails ?? s.realMoney.rails.length} signing-live · {s.realMoney.verifiedNow} verified now
+                {(s.realMoney.rpcReachableRails ?? 0) > s.realMoney.liveRails
+                  ? ` · ${s.realMoney.rpcReachableRails} rpc-reachable (signing off)`
+                  : ""}
               </span>
             </div>
             <div className="max-h-56 space-y-1 overflow-y-auto pr-1" dir="ltr">
               {s.realMoney.rails.map((r) => {
                 const an = anchorOf(r.rail);
+                // FIX(6-a · live-semantics): ענה-ל-RPC אבל-ה-relay לא-מאפשר-חתימה עליה → ענבר (לא-ירוק)
+                const railDot = r.ok && r.enabled === false ? "amber" : r.ok ? "green" : "red";
                 return (
                   <div key={r.rail} className="rounded-md border border-zinc-800/80 bg-zinc-950/60 px-2.5 py-1.5">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-1.5">
-                        <StatusDot tone={r.ok ? "green" : "red"} />
+                        <StatusDot tone={railDot} />
                         <span className="font-mono text-[10px] font-black uppercase text-zinc-300">{r.rail}</span>
                         <span className="truncate font-mono text-[9px] text-zinc-500">{r.identity}</span>
                       </div>
                       <span className="shrink-0 font-mono text-[10px] font-bold text-amber-300">{r.native}</span>
                     </div>
                     <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[8px] text-zinc-600">
-                      <span className="truncate">{r.extra}</span>
+                      <span className="truncate">{r.extra}{r.ok && r.enabled === false ? " · relay: signing-disabled" : ""}</span>
                       {an && (
                         <span className={`shrink-0 ${an.verified ? "text-emerald-400" : an.height === 0 ? "text-zinc-500" : an.detail.includes("not indexed") || an.detail.includes("awaiting") ? "text-amber-400" : "text-red-400"}`}>
                           {an.height === 0 ? "no anchor record (honest)" : `anchor h${an.height} ${an.verified ? "✓ re-verified" : an.detail.includes("not indexed") || an.detail.includes("awaiting") ? "· reconciling" : "· mismatch"}`}
@@ -770,7 +785,8 @@ function SettlementDeskPanel({ report, loading, refresh, stabilize, stabilizing 
               })}
             </div>
             <p className="mt-2 font-mono text-[9px] leading-snug text-zinc-500" dir="ltr">
-              book = SIM µ (honest). every seal = real anchor on public rails — re-read from public RPC right now.
+              book = SIM µ (honest). the signing-live counter = rails the relay reports ENABLED + RPC-answered;
+              rails that only answered RPC (signing disabled) show amber, not live. verified = read back from public RPC right now.
             </p>
           </div>
 
@@ -823,7 +839,15 @@ function SettlementDeskPanel({ report, loading, refresh, stabilize, stabilizing 
 
 // ─── פאנל: System Health & Relay (testid=system-health-panel) — טור-ימין ────
 function SystemHealthPanel({ st, relay, mempool }: { st: StateView | undefined; relay: RelayView | null; mempool: number }) {
-  const breakers = relay ? (["steem", "hive", "blurt", "tron", "eth", "sol", "fleet"] as const).map((c) => relay.chains[c]?.breaker.state).filter((s): s is "closed" | "open" | "half-open" => !!s) : [];
+  // FIX(6-a · breaker-aggregation): הנורה-הגלובלית מרכיבה-רק-שרשראות-**מאופשרות**
+  // (relay.chains.*.enabled). breaker-פתוח-על-שרשרת-כבויה (fleet/hive-מנוטרלות) היה
+  // צובע-את-כל-המערכת-אדום-על-שרשרת-בריאה; השרשרות-הכבויות ממשיכות-להיות-מוצגות-בשורות-למטה.
+  const enabledBreakerChains = relay
+    ? (["steem", "hive", "blurt", "tron", "eth", "sol", "fleet"] as const).filter((c) => relay.chains[c]?.enabled === true)
+    : [];
+  const breakers = relay
+    ? enabledBreakerChains.map((c) => relay.chains[c]?.breaker.state).filter((s): s is "closed" | "open" | "half-open" => !!s)
+    : [];
   const breakerOpen = breakers.includes("open");
   const breakerHalf = breakers.includes("half-open");
   const mismatched = (relay?.metrics.mismatches ?? 0) > 0;
@@ -1346,13 +1370,18 @@ function SwapPanel({ pools, busy, post }: { pools: PoolView[]; busy: boolean; po
         SWAP {assetIn} → {assetOut}
       </GoldButton>
       <div className="mt-2 grid grid-cols-3 gap-2 font-mono text-[10px] text-zinc-500" dir="ltr">
-        {pools.map((p) => (
-          <div key={p.key} className="rounded border border-zinc-800/70 px-2 py-1">
-            <div className="truncate font-bold text-zinc-400">{p.key}</div>
-            <div>mid {fmt(p.mid, 2)}</div>
-            <div>swaps {fmtInt(p.swaps)}</div>
-          </div>
-        ))}
+        {pools.map((p) => {
+          // FIX(6-a · unit-truth): שני-האוריינטציות-בכרטיסים נראו-כסתירה (µ-A/B מול µ-B/A)
+          // — עתה: תווית-יחידה-מפורשת לכל-mid (מחיר-הבסיס בציטוט-הקווטה).
+          const [pa, pb] = p.key.split("/");
+          return (
+            <div key={p.key} className="rounded border border-zinc-800/70 px-2 py-1">
+              <div className="truncate font-bold text-zinc-400">{p.key}</div>
+              <div title={`µ-${pb} ל-µ-${pa}`}>mid {fmt(p.mid, 2)} <span className="text-zinc-600">µ{pb}/µ{pa}</span></div>
+              <div>swaps {fmtInt(p.swaps)}</div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1518,6 +1547,7 @@ function RouterPanel() {
   const [md, setMd] = useState<MicroMeasure | null>(null);
   const [rail, setRail] = useState<RailView | null>(null);
   const [milestone, setMilestone] = useState<MilestoneView | null>(null);
+  const [fleetCfg, setFleetCfg] = useState<boolean | null>(null); // FIX(6-a): שער-ה-MILESTONE על fleet.configured
   const [onramp, setOnramp] = useState<OnrampView | null>(null);
   const [assetIn, setAssetIn] = useState("ENERGY");
   const [assetOut, setAssetOut] = useState("USDS");
@@ -1529,6 +1559,8 @@ function RouterPanel() {
   const loadAll = useCallback(() => {
     fetch(api("/api/dex/route")).then((r) => r.json()).then((j) => { if (j?.ok) setRr(j as RouterResp); }).catch(() => { /* כנות */ });
     fetch(api("/api/dex/state")).then((r) => r.json()).then((j) => { if (j?.state?.income) setIncome(j.state.income as IncomeView); if (j?.state?.rail) setRail(j.state.rail as RailView); if (j?.state?.milestone) setMilestone(j.state.milestone as MilestoneView); }).catch(() => { /* כנות */ });
+    // FIX(6-a): מצב-הצי נמדד-חי — ניגון-ה-MILESTONE-האוטומטי מותנה בו (fleet-לא-מוגדר = רדום)
+    fetch(api("/api/dex/fleet")).then((r) => r.json()).then((j) => { if (j?.fleet) setFleetCfg(Boolean(j.fleet.configured)); }).catch(() => { /* כנות */ });
     fetch(api("/api/dex/onramp")).then((r) => r.json()).then((j) => { if (j?.ok) setOnramp(j.onramp as OnrampView); }).catch(() => { /* כנות */ });
     fetch(api("/api/dex/repeg")).then((r) => r.json()).then((j) => { if (j?.ok) setRp(j as RepegView); }).catch(() => { /* כנות */ });
     fetch(api("/api/dex/microdose?pair=ENERGY/SAOS")).then((r) => r.json()).then((j) => { if (j?.ok) setMd(j.pool as MicroMeasure); }).catch(() => { /* כנות */ });
@@ -1650,8 +1682,11 @@ function RouterPanel() {
               <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-amber-300" dir="ltr">
                 <Zap className="h-3 w-3" /> MICRO-RAIL · מסילת-המיקרו-הריבונית
               </div>
-              <span className="font-mono text-[10px] text-zinc-500" dir="ltr">
-                net {rail && rail.netMu >= 0 ? "+" : ""}{fmtInt(rail?.netMu ?? 0)}µ · {rail?.doses ?? 0} doses
+              <span className="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500" dir="ltr">
+                net {rail && rail.netMu >= 0 ? "+" : ""}{fmtInt(rail?.netMu ?? 0)}µ
+                {/* FIX(6-a · doses-honesty): doses=0 הוא-מצב-האמת-הנוכחי — מוצג-בולט, לא-מטושטש */}
+                <Pill tone={(rail?.doses ?? 0) > 0 ? "green" : "amber"}>{rail?.doses ?? 0} doses</Pill>
+                {(rail?.doses ?? 0) === 0 && <Pill tone="amber">המסילה-טרם-דושה — אפס-מנות</Pill>}
               </span>
             </div>
             {/* פרמיות-חיות מעל-העוגן — המסילה שוחקת-אותן מנה-אחר-מנה */}
@@ -1670,7 +1705,7 @@ function RouterPanel() {
             </div>
             {/* תקציב-המסילה — התקציב-שנמצא-בתיקיות (אפס-הטבעה) */}
             <div className="mt-2 grid grid-cols-3 gap-1.5 font-mono text-[10px] sm:grid-cols-5" dir="ltr" data-testid="rail-budget">
-              <Stat label="USDS" value={fmtInt(rail?.budget.usdsMu ?? 0)} sub="הון-עובד" />
+              <Stat label="USDS" value={fmtInt(rail?.budget.usdsMu ?? 0)} sub={(rail?.doses ?? 0) > 0 ? "הון-עובד" : "הון-עומד (טרם-עבד — אפס-מנות)"} />
               <Stat label="WSTEEM" value={fmtInt(rail?.budget.wsteemMu ?? 0)} sub="מלאי-מכירה" />
               <Stat label="ENERGY" value={fmtInt(rail?.budget.energyMu ?? 0)} sub="צד-מיקרו" />
               <Stat label="SAOS" value={fmtInt(rail?.budget.saosMu ?? 0)} sub="צד-קנייה" />
@@ -1689,12 +1724,18 @@ function RouterPanel() {
             )}
             <p className="mt-1.5 text-[9px] leading-snug text-zinc-600">
               היתרון-שלנו: אפס-עמלת-רשת (גז 100µ-למנה = 0.067%) · תקשורת-חוזים-ישירה (אין-MEV/סנדוויץ') · אטומיות · מסדרון-עיגון 1:1.
-              התקציב — הנכסים-הישנים-שבתיקיות (שקית-bot-a + תוצרי-REPEG) בהעברות-חינם. הפרמיות-נשחקות-מנה-אחר-מנה עד-העוגן.
+              התקציב — הנכסים-הישנים-שבתיקיות (שקית-bot-a + תוצרי-REPEG) בהעברות-חינם.
+              {/* FIX(6-a · prose-gate): שחיקת-הפרמיות היא-תיאור-המנגנון — לא-מצב-קיים כשdoses=0 */}
+              {(rail?.doses ?? 0) > 0
+                ? "הפרמיות-נשחקות-מנה-אחר-מנה עד-העוגן."
+                : "טרם-נרשמה-מנה-ראשונה — שחיקת-הפרמיות-תתחיל-רק-עם-הזרקת-המנה-הראשונה."}
             </p>
             {/* ══ SETTLE-17: THE-MILESTONE — עדות-ה-P&L-על-Hive-באוטומט ══ */}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-emerald-500/20 bg-zinc-900/80 px-2.5 py-1.5" data-testid="milestone-row">
               <span className="flex items-center gap-1.5 font-mono text-[10px] font-bold text-emerald-300" dir="ltr">
                 <Anchor className="h-3 w-3" /> MILESTONE · עדות-P&L-על-Hive
+                {/* FIX(6-a · fleet-gate): העיגון-האוטומטי דרך-הצי — מתניה-בכנות: צי-לא-מוגדר (כספת-חסרה) = רדום */}
+                {fleetCfg === false && <Pill tone="amber">auto-anchor-dormant · הצי-לא-מוגדר</Pill>}
               </span>
               <span className="flex flex-wrap items-center gap-2 font-mono text-[10px] text-zinc-400" dir="ltr">
                 <Pill tone={(milestone?.anchored ?? 0) > 0 ? "green" : "zinc"}>{milestone?.anchored ?? 0} anchored</Pill>
@@ -1853,7 +1894,7 @@ interface RealVenueView {
 interface TruthView {
   ok: boolean; at: string; height: number; feedOk: boolean; feedStale: boolean;
   assets: TruthAsset[];
-  rail: { wblurt: { listed: boolean; backingMu: number; liveBlurtMu: number; liveAccount: string; verified: boolean; mintedNowMu: number; note: string } };
+  rail: { wblurt: { listed: boolean; backingMu: number; liveBlurtMu: number; liveAccount: string; verified: boolean; mintedNowMu: number; supplyMu?: number; dormant?: boolean; note: string } };
   ladder: TruthStep[];
   realVenue?: RealVenueView | { ok: false; error: string };
   totals: { estateRealUsd: number | null; estateLockedUsd: number | null; usdsSupplyMu: number; usdsRealCoveragePct: number | null; conclusion: string };
@@ -1894,7 +1935,7 @@ function TruthPanel() {
             <Stat label="נזיל-חוץ-אמת" value={t.totals.estateRealUsd !== null ? `$${t.totals.estateRealUsd.toFixed(2)}` : "—"} sub="STEEM+SBD+HIVE+BLURT חי" />
             <Stat label="נעול (SP/BP)" value={t.totals.estateLockedUsd !== null ? `$${t.totals.estateLockedUsd.toFixed(2)}` : "—"} sub="כוח-צי — מוגן-הוראה-R24 (איסור-powerdown)" />
             <Stat label="כיסוי-אמת-USDS" value={t.totals.usdsRealCoveragePct !== null ? `${t.totals.usdsRealCoveragePct.toFixed(4)}%` : "—"} sub="גיבוי-חוץ ÷ היצע" />
-            <Stat label="מסילת-WBLURT" value={t.rail.wblurt.verified ? "VERIFIED" : "BROKEN"} sub={`${fmtInt(t.rail.wblurt.backingMu)}µ מגובה-חי`} />
+            <Stat label="מסילת-WBLURT" value={t.rail.wblurt.dormant ? "DORMANT" : t.rail.wblurt.verified ? "VERIFIED" : "BROKEN"} sub={t.rail.wblurt.dormant ? "מוכח-טכנית · רדום — אספקה 0" : `${fmtInt(t.rail.wblurt.backingMu)}µ מגובה-חי`} />
           </div>
 
           {/* ספר-הפסק-דין פר-נכס */}
@@ -1927,7 +1968,9 @@ function TruthPanel() {
                 <Coins className="h-3 w-3" /> TRUTH-RAIL · WBLURT ← BLURT-אמת ({t.rail.wblurt.liveAccount})
               </span>
               <span className="flex items-center gap-2 font-mono text-[9px]" dir="ltr">
-                <Pill tone={t.rail.wblurt.verified ? "green" : "red"}>{t.rail.wblurt.verified ? "BACKING-VERIFIED" : "BACKING-BROKEN"}</Pill>
+                {/* FIX(6-a · dormant-honesty): verified=true-על-אספקה-0 הוא אמת-טריוויאלית —
+                    מוצג-DORMANT-ולא BACKING-VERIFIED (סתירה "מגובה · 0µ") */}
+                <Pill tone={t.rail.wblurt.dormant ? "zinc" : t.rail.wblurt.verified ? "green" : "red"}>{t.rail.wblurt.dormant ? "DORMANT · אספקה-0" : t.rail.wblurt.verified ? "BACKING-VERIFIED" : "BACKING-BROKEN"}</Pill>
                 <span className="text-zinc-400">backing {fmtInt(t.rail.wblurt.backingMu)}µ = live {(t.rail.wblurt.liveBlurtMu / 1000).toFixed(3)} BLURT</span>
                 {t.rail.wblurt.mintedNowMu > 0 && <Pill tone="gold">minted {fmtInt(t.rail.wblurt.mintedNowMu)}µ</Pill>}
               </span>
@@ -2170,6 +2213,9 @@ function ChainStreamPanel() {
     if (c.blockAgeSec === null) return "—";
     return c.blockAgeSec < 120 ? `${c.blockAgeSec}s` : `${Math.floor(c.blockAgeSec / 60)}m`;
   };
+  // FIX(6-a · doors-honesty): "עוגן" בכותרת = דלת-**ממומנת** בלבד (backing>0 — פקדה-אמת
+  // שאומתה-מול-RPC-והוטבעה). דלת-ללא-בריכה/ללא-זהות/אפס-גיבוי אינה "עוגן-חי".
+  const fundedDoors = door ? door.peg.filter((p) => p.backingMu > 0).length : null;
 
   return (
     <Panel
@@ -2261,7 +2307,12 @@ function ChainStreamPanel() {
           {/* ─── דלת-המטבעות · 5 עוגנים — האיך-מתחברים: כתובות-הפקדה + מצב-הכיסוי ─── */}
           <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-900/70 p-3" data-testid="peg-doors-strip">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">דלת-המטבעות · 5 עוגנים על 5 רשתות-אמת</h3>
+              {/* FIX(6-a · doors-honesty): הייתה-טענה-קבועה "5 עוגנים על 5 רשתות-אמת" בעוד 4/5
+                  NO-POOL/אפס-גיבוי/זהות-לא-נגזרת. עתה: נספרות-רק-הדלתות-הממומנות-בפועל. */}
+              <h3 className="text-[11px] font-bold uppercase tracking-wider text-zinc-400">
+                דלת-המטבעות · {door ? `${fundedDoors}/${door.peg.length} עוגנים-ממומנים` : "עוגני-רשתות-אמת"}
+                {door && fundedDoors !== null && fundedDoors < door.peg.length ? " — היתר-ממתין-לפקדה-הראשונה" : ""}
+              </h3>
               <span className="font-mono text-[9px] text-zinc-600" dir="ltr">send real coins → public-RPC verification → backed mint (single-use claim)</span>
             </div>
             {!door ? (
@@ -2279,11 +2330,22 @@ function ChainStreamPanel() {
                       <span>oracle {p.oracleMu !== null ? `$${(p.oracleMu / 1e6).toPrecision(4)}` : "—"}</span>
                       <span>backing {fmtInt(p.backingMu)}µ</span>
                     </div>
+                    {/* FIX(6-a · divergent-visible): סטיית-הבריכה-מהאורקל — שבב-עם-הגודל-המדוד (mid מול-oracle ב-mµ) */}
+                    {p.verdict === "DIVERGENT" && p.spreadBps !== null && (
+                      <div className="mt-0.5 font-mono text-[9px] text-red-400" dir="ltr">
+                        DIVERGENT · mid {p.pool?.midMu != null ? fmtInt(p.pool.midMu) : "—"} vs oracle-mµ {p.oracleMu !== null ? fmtInt(Math.round(p.oracleMu / 1000)) : "—"} → {p.spreadBps > 0 ? "+" : ""}{fmtInt(p.spreadBps)}bps
+                      </div>
+                    )}
                     <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[9px]">
                       <span className="text-zinc-600">deposit:</span>
-                      <span className="text-amber-400/90" title={PEG_DEPOSIT_ADDR(p.asset, door.identities) ?? ""}>
-                        {PEG_DEPOSIT_ADDR(p.asset, door.identities) ? shortHash(PEG_DEPOSIT_ADDR(p.asset, door.identities)!, 14) : "לא-נגזר"}
-                      </span>
+                      {PEG_DEPOSIT_ADDR(p.asset, door.identities) ? (
+                        <span className="text-amber-400/90" title={PEG_DEPOSIT_ADDR(p.asset, door.identities)!}>
+                          {shortHash(PEG_DEPOSIT_ADDR(p.asset, door.identities)!, 14)}
+                        </span>
+                      ) : (
+                        /* FIX(6-a): זהות-לא-נגזרת = דלת-לא-חמושה — מוצג-בולט (שבב), לא-טקסט-זעיר */
+                        <Pill tone="red">זהות-לא-נגזרת</Pill>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -2391,6 +2453,9 @@ export default function DexTerminal() {
   }, [world, marketKey]);
   // Task 83 · נרות-השוק-הנבחר (ריענון-5ש׳)
   const klines = useKlines(market?.key, kInterval);
+  // FIX(6-a · flat-market-note): כשכל-הסגירות-שוות — הגרף-נראה-קפוא; נאמר-זאת-בכנות בכותרת
+  const kFirstClose = klines[0]?.c;
+  const kFlat = klines.length > 1 && kFirstClose !== undefined && klines.every((k) => k.c === kFirstClose);
 
   const opWallet = world?.wallets.find((w) => w.name === "operator");
   const st = world?.state;
@@ -2422,7 +2487,7 @@ export default function DexTerminal() {
               <h1 className="text-base font-black tracking-tight text-zinc-50">
                 SAOS-DEX <span className="font-mono text-amber-400">SOVEREIGN TERMINAL</span>
               </h1>
-              <p className="text-[10px] text-zinc-500">ספר-דטרמיניסטי · ארנה-אוטונומית · עיגון-ריבוני עד-5-רשתות (החיות-בפועל: בכרטיס-Real-Money) · SAOS במרכז</p>
+              <p className="text-[10px] text-zinc-500">ספר-דטרמיניסטי · ארנה-אוטונומית · עיגון-ריבוני רב-רשתות (החיות-בפועל: בכרטיס-Real-Money) · SAOS במרכז</p>
             </div>
           </div>
 
@@ -2457,8 +2522,9 @@ export default function DexTerminal() {
                 <Crown className="h-3 w-3" aria-hidden /> SOVEREIGN MARKET
               </Pill>
             )}
-            {/* FIX(Roast-65-e4 · F11): ×5-קבוע → מספר-המסילות-החי בפועל מעמדת-הסליקה (liveRails), נפילה-כנה ל-… */}
-            <Pill tone="amber" testid="header-sim-pill">SIM book · REAL-money audited ×{settle.data?.realMoney ? settle.data.realMoney.liveRails : "…"}</Pill>
+            {/* FIX(Roast-65-e4 · F11): ×5-קבוע → מספר-המסילות-החתומות-חי בפועל (liveRails —
+                relay-enabled && RPC-ענה — FIX 6-a). נפילה-כנה ל-… */}
+            <Pill tone="amber" testid="header-sim-pill">SIM book · REAL-money signing ×{settle.data?.realMoney ? settle.data.realMoney.liveRails : "…"}</Pill>
             {IS_STATIC && (
               <Pill tone="violet" testid="header-mirror-pill">PUBLIC MIRROR · read-only</Pill>
             )}
@@ -2614,7 +2680,7 @@ export default function DexTerminal() {
                 <DepthChart market={market} height={420} />
               )}
               <div className="mt-2 flex flex-wrap items-center justify-between gap-2 font-mono text-[10px] text-zinc-600" dir="ltr">
-                <span>{chartView === "candles" ? `OHLCV ${kInterval} · מסחר-אמת בלבד · git-backed (db/klines.json)` : "depth מהספר-החי (12 רמות) · bids ירוק / asks אדום"}</span>
+                <span>{chartView === "candles" ? `OHLCV ${kInterval} · מסחר-אמת בלבד · git-backed (db/klines.json)${kFlat ? " · שוק-נעוץ — טווח 0bps (אין-פיזור-מחירים-נמדד, לא-גרף-קפוא)" : ""}` : "depth מהספר-החי (12 רמות) · bids ירוק / asks אדום"}</span>
                 <span>{chartView === "candles" ? `${klines.length} candles` : `${(market?.bids.length ?? 0) + (market?.asks.length ?? 0)} levels`}</span>
               </div>
             </Panel>
@@ -2717,7 +2783,7 @@ export default function DexTerminal() {
           </span>
           <span className="flex items-center gap-3">
             <span className="flex items-center gap-1"><Anchor className="h-3.5 w-3.5" /> עיגון חי · {relay ? `${fmtInt(relay.metrics.verified)} verified` : "…"}</span>
-            <span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> גיבוי 1:1 · {st ? (st.dbOk ? "ראיות-תקינות" : "ראיות-כבויות") : "…"}</span>
+            <span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" /> עטיפות 1:1 · {st ? (st.dbOk ? "ראיות-תקינות" : "ראיות-כבויות") : "…"}</span>
           </span>
         </div>
       </footer>

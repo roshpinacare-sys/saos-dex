@@ -386,6 +386,9 @@ export interface RailBalance {
   native: string;              // יתרה-טבעית (מחרוזת-אנושית)
   extra: string;               // רכיב-נוסף (SBD/HBD/VESTS/nonce)
   ok: boolean;                 // האם-הקריאה-חיה-הצליחה
+  // FIX(6-a · live-semantics): האם-ה-relay מדווח-מסילה-**מאופשרת** (זהות+מפתח-חתימה).
+  // עניה-ל-RPC ≠ חתימה-חיה — hive-מנוטרלת/blurt-חסר-מפתח ענו-ל-RPC ונספרו "live" (ניפוח).
+  enabled?: boolean;
   detail: string;              // מקור-הנתון או-הכשל (כנות-מלאה)
   at: string;
 }
@@ -395,7 +398,8 @@ export interface AnchorSpot {
 export interface RealMoneyReport {
   rails: RailBalance[];
   anchors: AnchorSpot[];
-  liveRails: number;           // כמה-רשתות ענו-חי
+  liveRails: number;           // FIX(6-a): מסילות-חתימה-חיות בלבד (relay-enabled && RPC-ענה) — לא-עוד "ענה-ל-RPC"
+  rpcReachableRails: number;   // FIX(6-a): כמה-ענו-ל-RPC בלבד (כולל-מסילות-כבויות) — שקיפות-מלאה
   totalRails: number;          // FIX(70-b ·2): המונה-הכולל — לא-קשיח-ב-UI
   verifiedNow: number;         // כמה-עיגונים אומתו-כרגע-בקריאה-חוזרת
   ok: boolean;                 // ≥1 rail חי && 0 mismatch
@@ -555,7 +559,11 @@ export async function realMoneyAudit(): Promise<RealMoneyReport> {
   const rs = relayStatus() as {
     account: string | null; tronIdentity: string | null;
     identities: { eth: string | null; sol: string | null };
+    chains?: Partial<Record<ChainName, { enabled: boolean }>>;
   };
+  // FIX(6-a · live-semantics): דגל-האפשור-מגיע-מה-relay-עצמו (מקור-האמת על-חתימה) —
+  // לא מהעניה-ל-RPC.
+  const relayEnabled = (rail: ChainName): boolean => rs.chains?.[rail]?.enabled === true;
   const fleetSt = (rs as { fleet?: { accounts?: { usable?: boolean; account?: string }[] } }).fleet;
   const fleetIdentity = fleetSt?.accounts?.find((a) => a.usable && a.account)?.account ?? null;
   const identity: Record<ChainName, string | null> = {
@@ -564,7 +572,7 @@ export async function realMoneyAudit(): Promise<RealMoneyReport> {
     // SETTLE-13: זהות-הצי = החייל-המשמש-חתימה (סבב) — כנות: אין-זהות-אחת
     fleet: fleetIdentity,
   };
-  const rails = await Promise.all(
+  const railsRaw = await Promise.all(
     (Object.entries(identity) as [ChainName, string | null][]).map(([rail, id]) =>
       id ? auditRail(rail, id) : Promise.resolve({
         rail, identity: "—", ok: false, native: "—", extra: "—",
@@ -572,14 +580,19 @@ export async function realMoneyAudit(): Promise<RealMoneyReport> {
       }),
     ),
   );
+  const rails: RailBalance[] = railsRaw.map((r) => ({ ...r, enabled: relayEnabled(r.rail) }));
   const anchors = await anchorSpotCheck(rs.account ?? null);
-  const liveRails = rails.filter((r) => r.ok).length;
+  // FIX(6-a · live-semantics): "חי" = relay מדווח-מסילה-**מאופשרת** (זהות+מפתח-חתימה) וגם-RPC-ענה.
+  // לפני-כן: hive-disabled (authority-mismatch) ו-blurt-חסר-מפתח נספרו "live" רק-בזכות-עניה-ל-RPC
+  // → ניפוח 4/7. עתה: שני-מונים-כנים — liveRails (חתימה) מול rpcReachableRails (עניה-בלבד).
+  const liveRails = rails.filter((r) => r.ok && r.enabled).length;
+  const rpcReachableRails = rails.filter((r) => r.ok).length;
   const verifiedNow = anchors.filter((a) => a.verified).length;
   // FIX(70-b ·2): המונה-הכולל עובר-חי — ה-UI לא קודס "5" על-7 מסילות
   const totalRails = rails.length;
   // FIX(Roast-63): "awaiting finalized block" (SOL) אינו-מיסמאץ' — טרם-אינדוקס/פיינליזציה
   const mismatches = anchors.filter((a) => !a.ok && a.height > 0 && !a.detail.includes("not indexed") && !a.detail.includes("awaiting finalized block")).length;
-  return { rails, anchors, liveRails, totalRails, verifiedNow, ok: liveRails >= 1 && mismatches === 0 };
+  return { rails, anchors, liveRails, rpcReachableRails, totalRails, verifiedNow, ok: liveRails >= 1 && mismatches === 0 };
 }
 
 /* ── 4. יציבות-שוק: האם-הכל-יושב (מחירים-מתכנסים, ספרד-צמודה, עומק-דו-צדדי) ── */
