@@ -107,12 +107,32 @@ export function tronIdentityFromWif(wif: string): string | null {
   }
 }
 
+/** EXEC-CD-13 · נגזרת-TRON מסקלר-hex (TRON_PRIVATE_KEY) — אותה-מתמטיקה בדיוק,
+ * קלט-סקלר-ישיר במקום-מעטפת-WIF. מפתח-הסכם-האב (headcorner) = הזרע-הריבוני-החי
+ * כשחומר-הכספת-אינו-זמין (ניקוי-סנדבוקס). */
+export function tronIdentityFromHexScalar(hexScalar: string): string | null {
+  try {
+    const priv = Buffer.from(hexScalar.replace(/^0x/, "").trim(), "hex");
+    if (priv.length !== 32) return null;
+    const pub65 = Buffer.from(secp256k1.getPublicKey(new Uint8Array(priv), false));
+    const h = keccak_256(pub65.subarray(1));
+    const payload = Buffer.concat([Buffer.from([0x41]), Buffer.from(h.subarray(12))]);
+    const sh1 = createHash("sha256").update(payload).digest();
+    const chk = createHash("sha256").update(sh1).digest().subarray(0, 4);
+    return b58(Buffer.concat([payload, chk]));
+  } catch {
+    return null;
+  }
+}
+
 export function depositIdentities(): DoorIdentities {
   const wif = process.env.STEEM_ACTIVE_WIF || "";
+  const tronScalar = (process.env.TRON_PRIVATE_KEY || "").trim(); // EXEC-CD-13: נגזרת-ישירה מסקלר-מפתח-הסכם-האב
   const solKey = (process.env.SOL_PRIVATE_KEY || "").trim();
   const ethKey = (process.env.ETH_PRIVATE_KEY || "").trim();
   let tron: string | null = null;
   if (wif.length >= 51) tron = tronIdentityFromWif(wif);
+  if (!tron && tronScalar.length >= 32) tron = tronIdentityFromHexScalar(tronScalar); // נפילה-כנה-לסקלר
   let sol: string | null = null;
   if (solKey.length >= 32) {
     try { sol = solIdentity(solKey).address; } catch { sol = null; }

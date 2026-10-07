@@ -28,37 +28,13 @@ import { GoldButton, Panel, Pill, StatusDot, Stat, fmt, fmtInt, shortHash } from
 import { PriceChart, DepthChart, type KlineCandle } from "@/components/dex/chart";
 import { MobileNav, TopTabs, type ViewId } from "@/components/dex/nav";
 import { AgentView } from "@/components/dex/agent-view";
+import { LeadingCoinsPanel } from "@/components/dex/leading-coins";
+import { dexApi as api, isStaticMirror as IS_STATIC } from "@/lib/dex/api-url";
 
-/** קידומת-הגשר — כל-קריאת-רשת עוברת דרכה אל דמון-3010.
- *  STATIC-MIRROR (Task 35): כשהטרמינל נבנה לייצוא-סטטי ל-Pages, קריאות-הקריאה מנותבות
- *  לקבצי-JSON ציבוריים שמפרסם הלב בענן (dex/world.json) — המוצר נשאר זהה-לגמרי,
- *  רק הצינור מתאים אליו. פעולות-כתיבה (POST) נשארות בצד הריבוני — כישלון-כן במראה. */
-const IS_STATIC = process.env.NEXT_PUBLIC_STATIC_MIRROR === "1";
-const BASE = "/saos-dex";
-const api = (p: string): string => {
-  if (!IS_STATIC) return `${BASE}${p}`;
-  const path = p.split("?")[0];
-  const staticMap: Record<string, string> = {
-    "/api/dex/state": "/Console/dex/world.json",
-    "/api/dex/relay": "/Console/dex/relay.json",
-    "/api/dex/agent": "/Console/dex/agent.json",
-    "/api/dex/fleet": "/Console/dex/fleet.json",
-    "/api/dex/portfolio": "/Console/dex/portfolio.json",
-    "/api/dex/bridge": "/Console/dex/bridge.json",
-    "/api/dex/onramp": "/Console/dex/onramp.json",
-    "/api/dex/showcase": "/Console/dex/showcase.json",
-    "/api/dex/chains": "/Console/dex/chains.json",
-    "/api/dex/door": "/Console/dex/door.json",
-    "/api/dex/settle": "/Console/dex/mirror-stub.json",
-  };
-  const mapped = staticMap[path];
-  // t= — שבירת-מטמון: Pages שומר תשובות ~10ד' לפי-כתובת; כל-סקר לוקח עותק-חי
-  if (mapped) return `${mapped}?t=${Date.now()}`;
-  // שאר נקודות-ה-API (settle כבד, route/microdose פרמטריות, POST-ים): ה-stub ההגון —
-  // ok:false כנות במקום 404, הלקוח נשאר במצב-המתנה המעוצב שלו.
-  if (path.startsWith("/api/dex/")) return `/Console/dex/mirror-stub.json?t=${Date.now()}`;
-  return `${BASE}${p}`;
-};
+/* קידומת-הגשר — כל-קריאת-רשת עוברת דרכה אל דמון-3010.
+ * EXEC-CD-13: העוזר הועבר ל-src/lib/dex/api-url.ts (מקור-אמת-אחד) כדי שגם
+ * רכיבי-קבצים-חוץ (LeadingCoinsPanel) ישתמשו-באותו-נתיב בדיוק —
+ * ההתנהגות זהה-לגמרי: לייב → /saos-dex · מראה-סטטי → מיפוי-mirror/stub-הגון. */
 
 /** P0(25-a) — מפתח-אחסון-מקומי לטוקן-המפעיל: לעולם לא יוצא מהדפדפן (localStorage בלבד) */
 const OPERATOR_KEY = "saos-dex.operator-token";
@@ -1035,7 +1011,7 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
   market: MarketView | undefined;
   opWallet: WalletView | undefined;
   busy: boolean;
-  post: (url: string, body?: unknown) => Promise<void>;
+  post: (url: string, body?: unknown) => Promise<void | { ok: boolean; error?: string; note?: string; reason?: string }>;
   onDone: () => void;
 }) {
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -1273,7 +1249,7 @@ function TradeForm({ market, opWallet, busy, post, onDone }: {
 
 // ─── פאנל: הזמנות-פתוחות שלי ────────────────────────────────────────────────
 function MyOrders({ orders, busy, post, onDone }: {
-  orders: MyOrder[]; busy: boolean; post: (url: string, body?: unknown) => Promise<void>; onDone: () => void;
+  orders: MyOrder[]; busy: boolean; post: (url: string, body?: unknown) => Promise<void | { ok: boolean; error?: string; note?: string; reason?: string }>; onDone: () => void;
 }) {
   if (orders.length === 0) return <p className="py-2 text-center font-mono text-[11px] text-zinc-600">אין פקודות-לימיט פתוחות</p>;
   return (
@@ -1302,7 +1278,7 @@ function MyOrders({ orders, busy, post, onDone }: {
 }
 
 // ─── פאנל: SWAP (בריכות) עם minOut-guard ────────────────────────────────────
-function SwapPanel({ pools, busy, post }: { pools: PoolView[]; busy: boolean; post: (url: string, body?: unknown) => Promise<void> }) {
+function SwapPanel({ pools, busy, post }: { pools: PoolView[]; busy: boolean; post: (url: string, body?: unknown) => Promise<void | { ok: boolean; error?: string; note?: string; reason?: string }> }) {
   const [poolKey, setPoolKey] = useState("");
   const [flip, setFlip] = useState(false);
   const [amountIn, setAmountIn] = useState("");
@@ -2382,7 +2358,9 @@ export default function DexTerminal() {
     setTimeout(() => { document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }); }, 80);
   }, []);
 
-  const post = useCallback(async (url: string, body?: unknown) => {
+  /* EXEC-CD-13: post מחזיר עתה את ה-json (| undefined בכשל-רשת) — תוספת-תואמת-לאחור
+   * כדי שרכיבים-חוץ (LeadingCoinsPanel) יוכלו להגיב ל-j.ok בלי-לשכפל-את-העזר. */
+  const post = useCallback(async (url: string, body?: unknown): Promise<{ ok: boolean; error?: string; note?: string; reason?: string } | undefined> => {
     setBusy(true);
     try {
       // FIX(FOUNDRY top-bug): הקונסולה מזדהה-בכותרת-מנהלת (שער-CSRF בשרת)
@@ -2392,6 +2370,7 @@ export default function DexTerminal() {
       else if (j.error === "operator-unauthorized" || j.error === "operator-auth-unconfigured") { setOpPanel(true); flash("err", "נדרש אימות-מפעיל: הזן את DEX_OPERATOR_TOKEN דרך כפתור OPERATOR בכותרת"); }
       else flash("err", j.error ?? j.reason ?? "נדחה");
       void load();
+      return j;
     } catch (e) {
       if (IS_STATIC) {
         flash("err", "מראה-ציבורית לקריאה-בלבד — פעולות מסחר מתבצעות בצד הריבוני");
@@ -2560,6 +2539,9 @@ export default function DexTerminal() {
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4">
         {view === "terminal" ? (<>
+        {/* ═════ EXEC-CD-13: LEADING-COINS — מטבעות-מובילים-חיים + סוואפ-חוצה-נכסים בראש-העמוד ═════ */}
+        <LeadingCoinsPanel post={post} flash={flash} onNeedOperator={() => setOpPanel(true)} />
+
         {/* ═════ פאנל-הכתר: SAOS SOVEREIGN METRICS — ההוכחה החיה בראש-המסך ═════ */}
         <SovereignMetricsPanel showcase={showcase.data} loading={showcase.loading} rerun={showcase.rerun} />
 
