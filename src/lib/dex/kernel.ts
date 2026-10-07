@@ -1104,8 +1104,8 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const everyK = Math.floor(op.everyK ?? 0);
       const slicesMax = Math.floor(op.slicesMax ?? 0);
       const minOutBps = Math.floor(op.minOutBps ?? 100);
-      if (!assetIn || !ASSETS.includes(assetIn)) return { ok: false, err: "bad-asset", gas: 0 };
-      if (!ASSETS.includes(assetOut as Asset) || assetOut === assetIn) return { ok: false, err: "bad-asset-out", gas: 0 };
+      if (!assetIn || !knownAsset(st, assetIn)) return { ok: false, err: "bad-asset", gas: 0 };
+      if (!knownAsset(st, assetOut) || assetOut === assetIn) return { ok: false, err: "bad-asset-out", gas: 0 }; // EXEC-CD-30: knownAsset — נכסים-רשומים-דינמית (asset_list) כשרים כמו-הסטטיים
       if (!(perSlice > 0) || !(slicesMax >= 1) || slicesMax > 200) return { ok: false, err: "bad-slice", gas: 0 };
       if (!Number.isInteger(everyK) || everyK < 1 || everyK > 10_000) return { ok: false, err: "bad-everyk", gas: 0 };
       if (!(minOutBps >= 0) || minOutBps > 2_000) return { ok: false, err: "bad-minout", gas: 0 };
@@ -1141,7 +1141,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const limitPx = Math.floor(op.limitPx ?? 0);
       const amt = Math.floor(op.amount ?? 0);
       const expiresH = Math.floor(op.expiresH ?? 0);
-      if ((side !== "buy" && side !== "sell") || !ASSETS.includes(base as Asset) || !ASSETS.includes(quote as Asset) || base === quote)
+      if ((side !== "buy" && side !== "sell") || !knownAsset(st, base) || !knownAsset(st, quote) || base === quote)
         return { ok: false, err: "bad-order-params", gas: 0 };
       if (!(triggerPx > 0) || !(amt > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
       if (limitPx < 0) return { ok: false, err: "bad-limit", gas: 0 };
@@ -1196,7 +1196,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const takePx = Math.floor(op.limitPx ?? 0);     // רגל-ה-take-profit
       const amt = Math.floor(op.amount ?? 0);
       const expiresH = Math.floor(op.expiresH ?? 0);
-      if ((side !== "buy" && side !== "sell") || !ASSETS.includes(base as Asset) || !ASSETS.includes(quote as Asset) || base === quote)
+      if ((side !== "buy" && side !== "sell") || !knownAsset(st, base) || !knownAsset(st, quote) || base === quote)
         return { ok: false, err: "bad-order-params", gas: 0 };
       if (!(stopPx > 0) || !(takePx > 0) || !(amt > 0)) return { ok: false, err: "bad-price-amount", gas: 0 };
       if (side === "sell" ? stopPx >= takePx : takePx >= stopPx)
@@ -1394,10 +1394,11 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // "שנוכל להעביר חופשי ללא עלות של גז ותלות — על הרשת שלנו". כללים:
       //  · אפס-גז (מפרט-האופקודה למעלה) · העברה-טהורה בין-יתרות-נכסים בלבד —
       //    אפס-נגיעה ב-credits → Σcredits נשמר מעצמו והאינווריאנטה עומדת.
-      //  · תקרת-FREE_XFER_CAP-פר-פקודה (גבול-נזק) · נכס-מרשימת-ASSETS בלבד
-      //    (fail-closed — אין-יצירת-נכסים-רפאים דרך-החינם) · dedupe קשיח כרגיל.
+      //  · תקרת-FREE_XFER_CAP-פר-פקודה (גבול-נזק) · נכס-מוכר-בלבד (EXEC-CD-30: knownAsset —
+      //    הרשימה-הסטטית או נכס-רשום-קנוני asset_list; הכוונה-המקורית-נגד-רפאים נשמרת —
+      //    רישום-נכס הוא אופ-אוצר-בלבד עם גז, לא יצירת-רפאים-חינם) · dedupe קשיח כרגיל.
       const a = op.asset, amt = op.amount ?? 0;
-      if (!a || !ASSETS.includes(a)) return { ok: false, err: "bad-asset", gas: 0 };
+      if (!knownAsset(st, a)) return { ok: false, err: "bad-asset", gas: 0 };
       if (!op.to || op.to === issuer || !(amt > 0)) return { ok: false, err: "bad-xfer", gas: 0 };
       if (amt > FREE_XFER_CAP) return { ok: false, err: "xfer-exceeds-cap", gas: 0 };
       if (avail(st, issuer, a) < amt) return { ok: false, err: "insufficient", gas: 0 };
@@ -1523,7 +1524,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // FIX(SETTLE-9 fail-closed): הצבע-החד (op.side?op.base:op.quote) היה-לפני כל-
       // אימות — פרמטרים-זבל נדחו רק במקרה (תאונת-escrow). אימות-מפורש לפני-הכל.
       if ((op.side !== "buy" && op.side !== "sell")
-        || !ASSETS.includes(op.base as Asset) || !ASSETS.includes(op.quote as Asset)
+        || !knownAsset(st, op.base) || !knownAsset(st, op.quote)
         || op.base === op.quote)
         return { ok: false, err: "bad-order-params", gas: 0 };
       const lockAsset = (op.side === "sell" ? op.base : op.quote) as string;
