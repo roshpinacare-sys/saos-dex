@@ -53,7 +53,7 @@ const CHAINS: ChainDef[] = [
   { id: "trx", name: "TRON", kind: "tron", native: "TRX", feed: "trx", explorer: "https://tronscan.org", rpc: "https://api.trongrid.io" },
   { id: "steem", name: "STEEM", kind: "graphene", native: "STEEM", feed: "steem", explorer: "https://steemscan.com", condenser: "https://api.steemit.com", depositAccount: "headcorner" },
   { id: "hive", name: "Hive", kind: "graphene", native: "HIVE", feed: "hive", explorer: "https://hiveblocks.com", condenser: "https://api.hive.blog", condensers: ["https://api.hive.blog", "https://api.deathwing.me"], depositAccount: "headcorner" },
-  { id: "blurt", name: "Blurt", kind: "graphene", native: "BLURT", feed: "blurt", explorer: "https://blurtblockexplorer.com", condenser: "https://blurt-rpc.saboin.com", depositAccount: "headcorner" },
+  { id: "blurt", name: "Blurt", kind: "graphene", native: "BLURT", feed: "blurt", explorer: "https://blurtblockexplorer.com", condenser: "https://blurt-rpc.saboin.com", condensers: ["https://blurt-rpc.saboin.com", "https://rpc.blurt.blog"], depositAccount: "headcorner" },
 ];
 
 /* ── צורות-הפלט ──────────────────────────────────────────────────────────── */
