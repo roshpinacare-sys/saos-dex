@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     const body = (await req.json()) as {
       action?: "order" | "fill";
       base?: string; quote?: string; side?: "buy" | "sell";
-      price?: number; amount?: number; market?: boolean;
+      price?: number; amount?: number; market?: boolean; issuer?: string;
       postOnly?: boolean; ioc?: boolean; // Task 83 · סוגי-פקודות מוסדיים
     };
     const action = body.action === "fill" ? "fill" : "order";
@@ -36,9 +36,13 @@ export async function POST(req: Request) {
     if (!isMarket && (!(price && price > 0))) {
       return NextResponse.json({ ok: false, error: "price-required" }, { status: 200 });
     }
+    // EXEC-CD-22 · THE-LEGION: פקודת-סוכן — issuer מאומת (חשבון-סוכן ריבוני משלו
+    // ברשת: יתרות+credits+הזמנות-משלו). ברירת-מחדל operator (תאימות-לאחור מלאה).
+    const agentRaw = typeof body.issuer === "string" ? body.issuer.trim().toLowerCase() : "";
+    const agent = /^[a-z0-9][a-z0-9-]{0,23}$/.test(agentRaw) ? agentRaw : "operator";
     const r = submitOp({
       type: action,
-      issuer: "operator",
+      issuer: agent,
       nonce: nextNonce("op"),
       base: body.base as never, quote: body.quote as never,
       side: body.side, price, amount,
