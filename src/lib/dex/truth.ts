@@ -78,7 +78,8 @@ export interface LadderStep {
   what: string;
   // FIX(Roast-66 · ladder-derived): VESTED/BROKEN/PROBE-DOWN נוספו — מדרגה-1 נגזרת
   // מהאימות-בכל-קריאה (היה: LIVE-מקודד-קשיח-גם-כש-verified=false).
-  status: "LIVE" | "READY" | "BLOCKED" | "OPERATOR" | "DUST" | "VESTED" | "BROKEN" | "PROBE-DOWN";
+  // FIX(6-a · dormant-honesty): DORMANT = מסילה-מוכחת-טכנית-אך-רדומה (אספקה-0).
+  status: "LIVE" | "READY" | "BLOCKED" | "OPERATOR" | "DUST" | "VESTED" | "BROKEN" | "PROBE-DOWN" | "DORMANT";
   valueUsd: number | null;
   detail: string;   // איך-זה-עובד / מה-החוסם
   zeroFee: boolean; // דבר-גורר-דבר — העברת-ערך-באפס-עמלה
@@ -106,6 +107,10 @@ export interface TruthReport {
       bpOwnedMu: number;
       deficitMu: number | null;
       mintedNowMu: number;       // כמה-הוטבע-בקריאה-זו (deficit)
+      // FIX(6-a · dormant-honesty): היצע-המסילה — verified=true על-אספקה-0 הוא אמת-טריוויאלית
+      // (אין-תביעות-ואין-מה-לגבות) וה-UI חייב-להציג אותה כ-DORMANT, לא כ-BACKING-VERIFIED.
+      supplyMu: number;
+      dormant: boolean;
       note: string;
     };
   };
@@ -220,6 +225,8 @@ function timeoutReport(st: DexState, reason: string): TruthReport {
         bpOwnedMu: 0,
         deficitMu: null,
         mintedNowMu: 0,
+        supplyMu: supplyMu(st, "WBLURT"),
+        dormant: supplyMu(st, "WBLURT") === 0,
         note: `probe:${reason} — אין-מדידה-חיה-בשער-הזמן; אין-פסק-דין (כנות, לא-BACKING-BROKEN)`,
       },
     },
@@ -475,7 +482,8 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
   // FIX(Roast-66 · ladder-derived): המדרגה-הראשונה-הייתה-מקודדת-"LIVE,zeroFee:true"-קשיח
   // — הצגה-שקרית-כשהמסילה-לא-מאומתת (הוכח-חי: LIVE-מוצג-עם-verified=false-באותה-תשובה).
   // עכשיו: status נגזר-מהאימות-בכל-קריאה.
-  const ladder1Status = wblurtVerified === true ? "LIVE" : wblurtBackedVested ? "VESTED" : railProbe === "ok" ? "BROKEN" : "PROBE-DOWN";
+  // FIX(6-a · dormant-honesty): אספקה-0 + verified טריוויאלי — המדרגה מציגה DORMANT (ולא "LIVE")
+  const ladder1Status = wblurtVerified === true ? (supplyWblurt > 0 ? "LIVE" : "DORMANT") : wblurtBackedVested ? "VESTED" : railProbe === "ok" ? "BROKEN" : "PROBE-DOWN";
   const ladder: LadderStep[] = [
     {
       n: 1,
@@ -552,6 +560,24 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
     return feeds.usd.blurt !== null && blurt ? blurt.liquid * feeds.usd.blurt : null;
   }
 
+  // FIX(6-a · conclusion-derived): פסק-הדין-הכולל נגזר-מהמדידה-החיה של-realVenue
+  // (powerdown.active/weeklySp/weeks) ומההזמנות-הפתוחות — אפס-מספרים-קשיחים ואפס-txids-
+  // צלייה-היסטוריים. powerdown-כבוי = זה-נאמר-בגלוי (ולא-עוד "SP-powerdown-חי 436.7-SP").
+  const rvOk = realV && "balances" in realV ? realV : null;
+  const pd = rvOk?.powerdown ?? null;
+  const spTxt = pd && pd.active
+    ? `SP-powerdown-חי (${pd.weeklySp.toFixed(1)}-SP/שבוע × ${pd.weeks} — נותרו ${pd.remainingSp.toFixed(1)}-SP)`
+    : "SP-powerdown לא-פעיל (אפס-זרימה-שבועית — ה-SP-נעול עד-החלטת-מפעיל)";
+  const lockedParts: string[] = [];
+  if (spLockedUsd !== null) lockedParts.push(`SP $${spLockedUsd.toFixed(2)}`);
+  if (bpLockedUsd !== null) lockedParts.push(`BP $${bpLockedUsd.toFixed(2)}`);
+  const gridTxt = rvOk && rvOk.openOrders.length > 0
+    ? `הזמנת-גריד-אמת-על-ספר-STEEM (${rvOk.openOrders.length} הזמנות-חיות)`
+    : "ערוץ-ההזמנות-האמת-על-ספר-STEEM פתוח (אין-הזמנה-חיה-כרגע)";
+  const wblurtBridgeTxt = wblurtVerified === true
+    ? (supplyWblurt > 0 ? "WBLURT-מגובה-ומאומת" : "WBLURT-מוכח-טכנית-אך-רדום (אספקה-0)")
+    : wblurtBackedVested ? "WBLURT-מגובה-נעול (vested)" : "WBLURT-ללא-אימות-חי";
+
   const usdsSupplyTotal = usdsSupply;
   return {
     ok: true,
@@ -575,10 +601,14 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
         bpOwnedMu,
         deficitMu: railProbe === "ok" ? Math.max(0, backingWblurt - liveBlurtMu) : null,
         mintedNowMu: rail.mintedNowMu,
+        supplyMu: supplyWblurt, // FIX(6-a · dormant-honesty): ההיצע-החי — למטה-הגדרת-ה-DORMANT
+        dormant: supplyWblurt === 0,
         note: rail.mintedNowMu > 0
           ? `הוטבעו ${rail.mintedNowMu}µ WBLURT בקריאה-זו מול-גיבוי-חוץ-מאומת (claim-ייחודי-פר-mint — F11)`
           : wblurtVerified === true
-            ? "הגיבוי-מכוסה-מלא-ומאומת-חי (supply ≤ backing ≤ live)"
+            ? supplyWblurt === 0
+              ? "DORMANT — מוכח-טכנית · רדום: אספקה 0 (אין-תביעות-ואין-היצע) — האימות-טריוויאלי; המסילה-תתעורר-עם-ה-mint-הראשון"
+              : "הגיבוי-מכוסה-מלא-ומאומת-חי (supply ≤ backing ≤ live)"
             : wblurtBackedVested
               ? `BACKING-VESTED — הגיבוי מכוסה-במלואו ע"י נזיל+BP-שבבעותנו (${(bpOwnedMu / 1000).toFixed(3)}-BLURT-vested); פדיון-מלא דורש-powerdown; גירעון-נזיל ${Math.max(0, backingWblurt - liveBlurtMu)}µ`
               : wblurtVerified === false
@@ -594,9 +624,11 @@ async function truthLedgerFull(st: DexState): Promise<TruthReport> {
       usdsSupplyMu: usdsSupplyTotal,
       usdsRealCoveragePct: usdsSupply > 0 ? (estateUsd * 1000 * 100) / usdsSupply : null,
       conclusion:
-        `האמת: הערך-החוץ-הנזיל = $${estateUsd.toFixed(2)} + נעול-מתפרק: SP-powerdown-חי (436.7-SP/שבוע × 4, txid 6e881cd4) + BP. ` +
+        `האמת: הערך-החוץ-הנזיל = $${estateUsd.toFixed(2)}` +
+        (lockedParts.length > 0 ? ` + נעול: ${lockedParts.join(" · ")}` : "") +
+        `. ${spTxt}. ` +
         `הפנים (USDS/SAOS) הוא סימולציה-ריבונית — מסומנת-ככזו-בכל-נכס. ` +
-        `הגשר-האמת-החי: WBLURT-מגובה + SP-powerdown-זורם + הזמנת-גריד-אמת-על-ספר-STEEM (b269647e).`,
+        `הגשר-האמת-החי: ${wblurtBridgeTxt} + ${gridTxt}.`,
     },
     honesty:
       "כל-מספר-כאן = קריאה-חיה מ-RPC-ציבורי או מהמצב-הקנוני. אף-ערך-לא-מאולף; פיד-נופל = השדה-נעלם (fail-כנה). " +

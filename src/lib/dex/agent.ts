@@ -25,8 +25,12 @@
 import { getLiveState, nextNonce, submitOp } from "./chain";
 import { knownAsset, avail, type Op } from "./kernel";
 import { buildAtomicRoutePlan, isExecIssuer } from "./exec-route";
-import { railPlan, railExecute, railStatusPublic, type RailRequest, type RailAction } from "./rail-exec";
+import { railPlan, railExecute, railStatusPublic, type RailRequest, type RailAction, type RailStatusPublic } from "./rail-exec";
 import { fleetStatusPublic } from "./fleet";
+// FIX(6-a · truth-matrix): מטריצת-ההצתה נגזרת-חי-מהמקורות-שה-UI כבר-מציג —
+// relayStatus (כשרי-הרשתות: enabled/anchored/verified/lastError) + זהויות-הדלת.
+import { relayStatus } from "./relay";
+import { depositIdentities } from "./peg-door";
 
 /* ── יומן-הסוכן (טבעת-זיכרון) ──────────────────────────────────────────────── */
 export interface AgentStep {
@@ -218,47 +222,105 @@ export interface IgnitionRow {
   what: string;
   gap: string;
 }
-/* Roast-74: המטריצה-נבנית-מהאמת-החיה-שנמדדה (לא-מהצהרות):
- * — STEEM_ACTIVE_WIF נבחן-חי מול-authority-החי (active/posting/owner) = לא-שולט.
- * — blurt.world + api.steem-engine.com = NXDOMAIN גלובלי (מדוד-דרך-DoH).
- * — BLURT: מפתח-כספת זהה למפתח-על-השרשרת (הצלבה-מלאה) → חמוש.
- */
-function ignitionMatrix(): IgnitionRow[] {
+/* FIX(6-a · truth-matrix): המטריצה הייתה-קשיחה-מלאה (SOL="live", ETH/HIVE/BLURT="armed"
+ * + txids-צלייה-היסטוריים-כ"ראייה-חיה") בניגוד-לדיווח-החי-של-ה-relay-עצמו. עכשיו: נגזרת-
+ * **חי** מאותם-מקורות-שהמערכת-כבר-מציגה — relayStatus (chains.*.enabled/anchored/verified/
+ * lastError · identities) + railStatusPublic (סמכויות-חי · נזיל-מדוד) + זהויות-הדלת.
+ * סמנטיקת-המצבים (נגזרת — לא-מוצהרת):
+ *   live       — relay מדווח enabled + עיגון-מאומת-קריאה-חוזרת (verified>0, אפס-מיסמאץ')
+ *   armed      — enabled עם-זהות, טרם-הוכח-עיגון-מאומת
+ *   needs-fuel — disabled/לא-ממומן/זהות-לא-נגזרת (הפער-המדויק מה-relay ב-gap)
+ *   pending    — אין-מסילה-כלל
+ * אפס-txids-היסטוריים-כ"ראייה-חיה" — ההיסטוריה חיה-בפנקס-הציבורי וב-System-Health. */
+type RelayChainSnap =
+  | { enabled: boolean; status: string; lastError: string | null; anchored: number; verified: number; mismatches: number }
+  | undefined;
+interface IgnitionRelay {
+  chains: Record<string, RelayChainSnap>;
+  tronIdentity: string | null;
+  identities?: { eth: string | null; sol: string | null };
+}
+
+function ignitionState(ch: RelayChainSnap, opts: { identityMissing?: boolean } = {}): IgnitionRow["state"] {
+  if (!ch) return "pending";
+  if (!ch.enabled || opts.identityMissing) return "needs-fuel";
+  if (/unfunded/i.test(ch.lastError ?? "")) return "needs-fuel";
+  if (ch.verified > 0 && ch.mismatches === 0) return "live";
+  return "armed";
+}
+
+function relayGap(ch: RelayChainSnap): string {
+  if (!ch) return "relay: אין-דיווח";
+  if (!ch.enabled) return `relay: כבוי (${ch.lastError ?? "אין-זהות-ריבונית-בסביבה"})`;
+  const base = `relay: ${ch.anchored} עוגנים · ${ch.verified} מאומתים`;
+  if (ch.mismatches > 0) return `${base} · ${ch.mismatches} מיסמאצ'ים — דורש-בדיקה`;
+  if (/unfunded/i.test(ch.lastError ?? "")) return `${base} · מושהה-מימון (unfunded)`;
+  return `${base} · סטטוס ${ch.status}`;
+}
+
+function railLiveSummary(relay: IgnitionRelay): string {
+  return (["steem", "hive", "blurt"] as const).map((c) => {
+    const ch = relay.chains[c];
+    if (!ch) return `${c.toUpperCase()}-לא-מדווח`;
+    if (!ch.enabled) return `${c.toUpperCase()}-כבוי`;
+    return `${c.toUpperCase()}-${ch.verified > 0 && ch.mismatches === 0 ? "חי" : "חמוש"}`;
+  }).join(" · ");
+}
+
+function ignitionMatrix(relay: IgnitionRelay, rail: RailStatusPublic | { configured: boolean; error?: string }, doorIds: { tron: string | null; sol: string | null; evm: string | null }): IgnitionRow[] {
   const env = (k: string) => Boolean((process.env[k] || "").trim());
+  const chains = relay.chains;
+  const netOf = (n: "hive" | "steem" | "blurt") =>
+    "networks" in rail && rail.networks ? rail.networks[n] : undefined;
+  const authTxt = (n: "hive" | "steem" | "blurt"): string => {
+    const ni = netOf(n);
+    if (!ni) return "";
+    if (ni.authorityOk === false) return " · סמכות-active-נכשלה-אימות-חי — אפס-שידור";
+    if (ni.authorityOk === true) return " · סמכות-אומתה-חי";
+    return "";
+  };
+  const liquidTxt = (n: "hive" | "steem" | "blurt"): string => {
+    const ni = netOf(n);
+    return ni && ni.liquid !== null && ni.liquid >= 0 ? ` · נזיל ${ni.liquid.toFixed(3)}-מדוד` : "";
+  };
+  const rcTxt = (n: "hive" | "steem" | "blurt"): string => {
+    const ni = netOf(n);
+    return ni && ni.rcEffective !== null ? ` · RC ${Math.floor(ni.rcEffective / 1e6)}M` : "";
+  };
   return [
     {
-      network: "HIVE", state: "armed", keys: env("HIVE_ACTIVE_WIF") && env("HIVE_ANCHOR_ACCOUNT"),
+      network: "HIVE", state: ignitionState(chains.hive), keys: env("HIVE_ACTIVE_WIF") && env("HIVE_ANCHOR_ACCOUNT"),
       what: "מסילת-המרה-אמת (rail-exec · אימות-סמכות-חי) + עיגון-צי (fleet)",
-      gap: "נזילות-פיזית-זעירה (SWAP.HIVE≈0.072) — המסילה-מאומתת-על-מיקרו (txid 46ed2f58)",
+      gap: `${relayGap(chains.hive)}${authTxt("hive")}${liquidTxt("hive")}${rcTxt("hive")}`,
     },
     {
-      network: "STEEM", state: "armed", keys: env("STEEM_ACTIVE_WIF"),
+      network: "STEEM", state: ignitionState(chains.steem), keys: env("STEEM_ACTIVE_WIF"),
       what: "מסדרון-עיגון 1:1 בגרעין (WSTEEM) + מסילת-STEEM-חיה (rail-exec · אימות-סמכות-חי)",
-      gap: "מוצתת-roast-75: הסמכות-החיה-היא-חומר-headcorner-archive-מהכספת (הפרכת-חסימת-74) — powerup-0.1-STEEM-אמת · txid cfb5031d · block 109,474,189 · נזיל 3.281 · Steem-Engine-ראשי-מת (NXDOMAIN) · RC-שופע (~3.0T)",
+      gap: `${relayGap(chains.steem)}${authTxt("steem")}${liquidTxt("steem")}${rcTxt("steem")}`,
     },
     {
-      network: "BLURT", state: "armed", keys: env("BLURT_ACTIVE_WIF"),
-      what: "מסילת-BLURT-חמושה (powerup/transfer · chain_id-מ-@beblurt/dblurt · rpc.blurt.blog) — WBLURT-בגרעין",
-      gap: "אין-Engine (blurt.world-אבד) — אין-המרת-pegged · אין-rc_api (מדוד) — שער-RC-לא-רלוונטי · נזיל 41+ BLURT",
+      network: "BLURT", state: ignitionState(chains.blurt), keys: env("BLURT_ACTIVE_WIF"),
+      what: "מסילת-BLURT (powerup/transfer · chain_id-מ-@beblurt/dblurt · rpc.blurt.blog) — WBLURT-בגרעין",
+      gap: `${relayGap(chains.blurt)}${authTxt("blurt")}${liquidTxt("blurt")}`,
     },
     {
-      network: "TRON", state: "needs-fuel", keys: env("STEEM_ACTIVE_WIF"),
-      what: "דלת-פקדות-חיה (peg-door) — זהות-פקדה ריבונית + אימות-RPC + הטבעה-אטומית (WTRX)",
-      gap: "נמדד-75: זהות-הפקדה-ריקה (0-sun) וגם-12-ארנקי-TRON-של-הצי-ריקים — עיגון-0.3-TRX + הפקדת-~18.3-TRX (5$) ממתינים-למפעיל",
+      network: "TRON", state: ignitionState(chains.tron, { identityMissing: !relay.tronIdentity && !doorIds.tron }), keys: env("STEEM_ACTIVE_WIF"),
+      what: "דלת-פקדות (peg-door) — זהות-פקדה ריבונית + אימות-RPC + הטבעה-אטומית (WTRX)",
+      gap: `${relayGap(chains.tron)} · זהות-פקדה ${doorIds.tron ? "נגזרת" : "לא-נגזרת"}${relay.tronIdentity ? "" : " · זהות-עיגון-relay-לא-נגזרת"}`,
     },
     {
-      network: "SOL", state: "live", keys: env("SOL_PRIVATE_KEY"),
-      what: "דלת-פקדות-חיה (WSOL) + בריכת-USDS/WSOL-חיה-במחיר-אורקל + סוואפים-אמת",
-      gap: "מוצתת-roast-75: ריכוז-צי-10-ארנקים→זהות-הפקדה (60,715,000-lamports · רצפת-העיגון-מרוצה-×67) · 10-peg-ins→50µ-WSOL-מוטבעים · בריכה-@99.16$ · סוואפ-דו-כיווני-אמת על-הגרעין",
+      network: "SOL", state: ignitionState(chains.sol, { identityMissing: !relay.identities?.sol }), keys: env("SOL_PRIVATE_KEY"),
+      what: "דלת-פקדות (WSOL) + בריכת-USDS/WSOL-במחיר-אורקל + סוואפים-על-הגרעין",
+      gap: `${relayGap(chains.sol)} · זהות-relay ${relay.identities?.sol ? "נגזרת" : "לא-נגזרת"} · ${getLiveState().pools["USDS/WSOL"] ? "בריכת-WSOL-חיה-בגרעין" : "אין-בריכת-WSOL-פתוחה"}`,
     },
     {
-      network: "ETH", state: "armed", keys: env("ETH_PRIVATE_KEY"),
-      what: "דלת-פקדות-חמושה — זהות-פקדה EVM חיה (wallet:cashmachine · אותה-זהות relay) + אורקל-ETH-חי-על-השרשרת",
-      gap: "מוצת-roast-76: ריכוז-צי-10-ארנקים→זהות-הפקדה (10-txids-ציבוריים · משמורת-חיה-על-הדלת · ~0.0019-ETH) — הפקדה-הבאה/משיכת-מטא-טרנזקציה-בתור-ההצתה-המלאה",
+      network: "ETH", state: ignitionState(chains.eth, { identityMissing: !relay.identities?.eth && !doorIds.evm }), keys: env("ETH_PRIVATE_KEY"),
+      what: "דלת-פקדות-EVM (זהות-אחת · ETH/Base/BSC) + אורקל-ETH-על-השרשרת",
+      gap: `${relayGap(chains.eth)} · זהות-פקדה ${doorIds.evm ? "נגזרת" : "לא-נגזרת"}${relay.identities?.eth ? "" : " · זהות-עיגון-relay-לא-נגזרת"}`,
     },
     {
-      network: "BTC", state: "pending", keys: true,
-      what: "wallet:headcorner-btc-בכספת · אורקל-BTC-חי",
+      network: "BTC", state: "pending", keys: env("BTC_PRIVATE_KEY") || env("BTC_WIF"),
+      what: "אורקל-BTC-על-השרשרת",
       gap: "אין-מסילה-כלל (כנות) — נכס-אורקל-בלבד-כרגע",
     },
   ];
@@ -266,22 +328,25 @@ function ignitionMatrix(): IgnitionRow[] {
 
 /* ── מצב-ציבורי ────────────────────────────────────────────────────────────── */
 export async function agentStatus(): Promise<Record<string, unknown>> {
-  const [rail, fleet] = await Promise.all([
+  const [rail, fleet, relay, doorIds] = await Promise.all([
     railStatusPublic().catch((e) => ({ configured: false, error: String(e).slice(0, 120) })),
     Promise.resolve(fleetStatusPublic()),
+    Promise.resolve(relayStatus() as unknown as IgnitionRelay),
+    Promise.resolve(depositIdentities()),
   ]);
   return {
     ok: true,
     capabilities: {
       swap: "live (batch אטומי + חציית-אורקל)",
-      rail: rail.configured ? "armed (HIVE-חי · BLURT-חמוש · STEEM-חי-roast-75-txid-cfb5031d)" : "dead (אין-זהות-ריבונית-בסביבה)",
+      // FIX(6-a): הרכבה-חי-מדיווח-ה-relay — אפס-מחרוזת-קשיחה ואפס-txid-היסטורי
+      rail: rail.configured ? `armed · ${railLiveSummary(relay)}` : "dead (אין-זהות-ריבונית-בסביבה)",
       door: "live (peg-in/peg-out/open-pool/refresh-oracle — /api/dex/door)",
       fleet: fleet.configured ? `live (${fleet.usableCount} חיילים-שמישים)` : `quiet-disabled (${fleet.openError ?? "vault-unavailable"})`,
       oracle: "live (לולאת-חוץ-מצב 60ש׳ — בתוך-ה-stateRoot)",
     },
     rail,
     fleet: { configured: fleet.configured, usableCount: fleet.usableCount, accounts: fleet.accounts },
-    ignition: ignitionMatrix(),
+    ignition: ignitionMatrix(relay, rail, doorIds),
     journal: agentG().journal,
     honesty: "הסוכן אינו-מחזיק-מפתחות — הוא מפעיל-מנועים-מאובטחים (rail-exec/fleet/door/גרעין) · יומן-טבעת-40-ריצות · אפס-סודות-בפלט",
   };
