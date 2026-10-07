@@ -33,7 +33,7 @@ interface QuoteView {
   effPriceMu: number; legs: RouteLeg[]; alternatives: { amountOutMu: number; path: string[] }[];
 }
 interface LeadingData {
-  ok: true; at: string; coins: LeadingCoin[]; assets: LeadingAsset[];
+  ok: true; at: string; priceAgeSec: number | null; feedTtlSec: number | null; coins: LeadingCoin[]; assets: LeadingAsset[];
   networks: { connected: number; total: number; priceStale: boolean } | null;
   identities: { tron: string | null; sol: string | null; evm: string | null; note: string } | null;
   honesty: string;
@@ -149,7 +149,15 @@ export function LeadingCoinsPanel({ post, flash, onNeedOperator }: {
               {data.networks.connected}/{data.networks.total} רשתות-חיות
             </Pill>
           )}
-          <Pill tone={data ? "zinc" : "amber"} testid="leading-at">{data ? `אורקל-חי · ${new Date(data.at).toLocaleTimeString("he-IL")}` : "מתחבר…"}</Pill>
+          {/* EXEC-CD-13-AV: כנות-קצב — מחירי-עזר-חציוניים-עם-TTL-5דק' (לא-tick-חי);
+           * גיל-הפיד-האמיתי מוצג, ומעל-90ש׳ נצבע-אמבר. */
+          }
+          <Pill
+            tone={(data?.priceAgeSec ?? 999) > 90 ? "amber" : "green"}
+            testid="leading-feed-age"
+          >
+            מחירי-עזר · גיל {data?.priceAgeSec != null ? `${data.priceAgeSec}ש׳` : "…"} (ריענון-עד-{Math.round((data?.feedTtlSec ?? 300) / 60)}דק׳)
+          </Pill>
         </div>
       }
     >

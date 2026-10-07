@@ -293,13 +293,16 @@ function saveRailLifetime(): void {
 
 loadRailLifetime(); // אתחול-מודול — המוני-החיים חוזרים מהדיסק
 
-/** מקור-מימון: התיק-הקיים-הגדול קודם (דבר-גורר-דבר), אוצר-גיבוי. */
+/** מקור-מימון: התיק-הקיים-הגדול קודם (דבר-גורר-דבר), אוצר-גיבוי.
+ * EXEC-CD-13-AV (הפרכה-אדיברסרית): "operator" הוסר-מכל-הרשימות — הארנק-של-
+ * המפעיל-אינו-מאגר-מימון-לסוכנים! הרail-שאב-סוואפ-אמת-של-המפעיל (157,676µ
+ * WSTEEM) תוך-דקות. ריבונות-הארנק: הסוכנים-מממנים-עצמם-מההון-המיועד-להם-בלבד. */
 function fundingSource(st: DexState, asset: "USDS" | "WSTEEM" | "ENERGY" | "SAOS"): string | null {
   const pools: Record<string, string[]> = {
-    USDS: ["arb-ext", "treasury", "operator"],
-    WSTEEM: ["bot-a", "bot-b", "bot-c", "treasury", "operator"],
-    ENERGY: ["bot-c", "treasury", "operator"],
-    SAOS: ["arena", "treasury", "operator"],
+    USDS: ["arb-ext", "treasury"],
+    WSTEEM: ["bot-a", "bot-b", "bot-c", "treasury"],
+    ENERGY: ["bot-c", "treasury"],
+    SAOS: ["arena", "treasury"],
   };
   for (const src of pools[asset]) {
     if (avail(st, src, asset) >= 10_000) return src; // ≥10kµ — יש-מה להזרים

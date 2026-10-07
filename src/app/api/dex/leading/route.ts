@@ -82,11 +82,13 @@ export async function GET() {
     return NextResponse.json({
       ok: true,
       at: new Date().toISOString(),
+      priceAgeSec: feeds?.at ? Math.max(0, Math.round((Date.now() - feeds.at) / 1000)) : null, // EXEC-CD-13-AV: גיל-הפיד-האמיתי (TTL-5דק') — לא-זמן-הצבירה
+      feedTtlSec: 300,
       coins,
       assets,
       networks: stream ? { connected: stream.summary.connected, total: stream.summary.total, priceStale: stream.summary.priceStale } : null,
       identities: door ? door.identities : null,
-      honesty: "מחירי-אמת בלבד: זרם-הרשתות-החי + פידי-חוץ-חציוני + אורקל-קנוני. סוואפ מבוצע על בריכות-חיות בלבד — אין-בריכה = אין-ציטות-שווא; הדרך-לעוגן-חדש היא פקדה-אמת דרך הדלת.",
+      honesty: "מחירי-עזר-אמת (לא-tick-חי): חציון-מקורות-עם-ריענון-עד-5דק' (כבוד-למגבלות-ה-API-הציבוריים — ה-429s-נמדדו). סוואפ מבוצע על בריכות-חיות בלבד — אין-בריכה = אין-ציטוט; הדרך-לעוגן-חדש היא פקדה-אמת דרך הדלת.",
     });
   } catch (e) {
     return NextResponse.json({ ok: false, error: e instanceof Error ? e.message.slice(0, 140) : "leading-failed" }, { status: 200 });
