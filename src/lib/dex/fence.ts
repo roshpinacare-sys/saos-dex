@@ -66,6 +66,10 @@ const PINNED_HOSTS = new Set<string>([
   /* EXEC-CD-11 · THE-CHAIN-STREAM + peg-door.EVM_DOORS — דלת-Base (chainId 8453):
    * RPC-ציבורי-keyless לטלמטריה-חיה (chain-stream) ולאימות-פקדות-WBASE (peg-door) */
   "mainnet.base.org",
+  /* EXEC-CD-30 · סולם-גיבוי-SOL לדלת (peg-door SOL_RPCS) — ה-RPC-הציבורי-הראשי
+   * מגביל-קצת-אגרסיבית מ-IP-משותף (429 נמדד-חי); publicnode = RPC-ציבורי-מוכח
+   * (אותו-דפוס EVM_DOORS). אימות-פקדות/משמורת ממשיך-לרוץ-במקום-להיכשל. */
+  "solana-rpc.publicnode.com",
   /* R42 · truth.gridArmedLive — המו״פ הציבורי-שלנו (Console/Pages): קריאת-מצב-הגריד
    * החמוש = ההוכחה-החיה-של-כספת-המפתח (הגריד מתחמש-רק-לאחר-אימות-ואטימה, R38) */
   "roshpinacare-sys.github.io",

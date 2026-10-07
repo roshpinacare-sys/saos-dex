@@ -39,14 +39,26 @@ import { poolMidFor } from "./amm";
 
 const TRON_RPC = "https://api.trongrid.io";
 const SOL_RPC = "https://api.mainnet-beta.solana.com";
+/* EXEC-CD-30 · סולם-גיבוי-SOL: ה-RPC-הראשי (api.mainnet-beta) מגביל-קצת מ-IP-משותף
+ * (429 נמדד-חי-בגשר). כל-קריאת-SOL-של-הדלת עוברת-דרך-הסולם — כישלון-ראשי → גיבוי
+ * ציבורי (publicnode, מקובע-בגדר). אימות-אמת לא נופל על תקיפת-קצב. */
+const SOL_RPCS = ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"] as const;
 const ETH_RPC = "https://ethereum-rpc.publicnode.com";
 
 /* ── EXEC-CD-11 · רשימת-הדלתות — מקור-האמת היחיד (משותף ל-route ולדוח) ────────
  * עוגן→רשת: אפס-שכפול-מיפוי. זהות-הפקדה לכל-הרשתות היא-זהות-הזרע-הריבוני —
  * המיפוי ל-EVM הוא-הכתובת-האחת (עקומה-זהה), ל-TRX/SOL הנגזרות-היעודיות. */
-export const PEG_ASSETS = { WTRX: "trx", WSOL: "sol", WETH: "eth", WBNB: "bnb", WBASE: "base" } as const;
+/* EXEC-CD-30 · WUSDC נכנס לדלת — העוגן-השישי: USDC אמיתי על Solana mainnet
+ * (SPL, mint EPjFW…) — יציב-ערך שמאומת מול-RPC-ציבורי כמו-כל-עוגן.
+ * זהו-השער-הראשון-שמחבר-את-האוצר-האמיתי-של-הכספת (6.35 USDC מה-swap-האמיתי
+ * VJud9e1r…) אל-כספת-העתודה של ה-DEX — הצעד-הראשון-בשטיפת-ערך-פנימי→אמיתי. */
+export const PEG_ASSETS = { WTRX: "trx", WSOL: "sol", WETH: "eth", WBNB: "bnb", WBASE: "base", WUSDC: "sol-usdc" } as const;
 export type PegAsset = keyof typeof PEG_ASSETS;
 export type PegChain = (typeof PEG_ASSETS)[PegAsset];
+
+/** Solana USDC mint (mainnet) + SPL-Token program — האימות-מול-RPC-ציבורי בלבד. */
+export const USDC_SOL_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+export const SPL_TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
 export type EvmDoor = "eth" | "base" | "bsc";
 export const EVM_DOORS: Record<EvmDoor, { rpc: string; chainId: number; name: string; explorer: string }> = {
@@ -60,6 +72,23 @@ export const isEvmDoor = (c: string): c is EvmDoor => c === "eth" || c === "base
  * לפטור-משכרות+עמלה+מרווח (roast-67 · sol-rent-floor). */
 export const TRX_ANCHOR_GAS_SUN = 300_000;
 export const SOL_RENT_FLOOR_LAMPORTS = 896_880; // rentExempt(0B)=890,880 + fee 5,000 + margin 1,000
+
+/* EXEC-CD-30 · solRpc — קריאת-RPC-SOL-דרך-הסולם: ראשי → גיבוי. מחזיר-Response
+ * הראשון-שאינו-429/5xx; אם-הכל-נכשל — ה-Response-האחרון (כנות-שגיאה). */
+async function solRpc(body: unknown, where: string, timeoutMs = 20_000): Promise<Response> {
+  let last: Response | null = null;
+  for (const rpc of SOL_RPCS) {
+    try {
+      const r = await fencedFetch(rpc, where, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: "no-store",
+      });
+      if (r.status !== 429 && r.status < 500) return r;
+      last = r;
+    } catch (e) { last = null; if (rpc === SOL_RPCS[SOL_RPCS.length - 1]) throw e; }
+  }
+  return last as Response;
+}
 
 /* ── base58 (אותה-אלגוריתמיקה relay-sol) ── */
 const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
@@ -125,7 +154,43 @@ export function tronIdentityFromHexScalar(hexScalar: string): string | null {
   }
 }
 
+/* EXEC-CD-30 · זהויות-הפקדה-הקנוניות = כתובות-כספת-הריפו (חוק-המשפך §6:
+ * כל-ערך-נכנס → כתובות-מגובות-גיט). ה-manifest הוא **ציבורי** (כתובות-בלבד —
+ * אפס-סודות): האימות-מול-RPC צריך רק את-הכתובת-שאליה-הכסף-נכנס. הנגזרות-מ-env
+ * נשארות-נפילה-כנה (תאימות-דלת-היסטורית) אך-העדיפות-היא-לכספת. */
+const gVaultIds: { at: number; ids: { tron: string | null; sol: string | null; evm: string | null } | null } = { at: 0, ids: null };
+function repoVaultIdentities(): { tron: string | null; sol: string | null; evm: string | null } | null {
+  if (gVaultIds.ids && Date.now() - gVaultIds.at < 60_000) return gVaultIds.ids;
+  try {
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    const candidates = [
+      path.join(process.cwd(), "repo-vault", "manifest.json"),
+      path.join(process.cwd(), "..", "repo-vault", "manifest.json"),
+    ];
+    for (const p of candidates) {
+      if (!fs.existsSync(p)) continue;
+      const m = JSON.parse(fs.readFileSync(p, "utf8")) as { kind?: string; networks?: Array<{ network: string; address: string }> };
+      if (m?.kind !== "sovereign-repo-vault-manifest" || !Array.isArray(m.networks)) continue;
+      const by = (n: string): string | null => m.networks.find((x) => x.network === n)?.address ?? null;
+      const ids = { tron: by("tron"), sol: by("solana"), evm: by("evm") };
+      gVaultIds.ids = ids; gVaultIds.at = Date.now();
+      return ids;
+    }
+  } catch { /* fail-כנה — נפילה ל-env */ }
+  gVaultIds.ids = null; gVaultIds.at = Date.now();
+  return null;
+}
+
 export function depositIdentities(): DoorIdentities {
+  // EXEC-CD-30: הכספת-הריבונית קודמת — זו-הזהות-שאליה-הכסף-האמיתי-נכנס (ושנמדדת-חי)
+  const vault = repoVaultIdentities();
+  if (vault && (vault.tron || vault.sol || vault.evm)) {
+    return {
+      tron: vault.tron, sol: vault.sol, evm: vault.evm,
+      note: "זהויות-פקדה ריבוניות = כתובות-כספת-הריפו (manifest-ציבורי, אפס-סודות) — חוק-המשפך §6: כל-ערך-נכנס → כתובות-מגובות-גיט · EXEC-CD-11: כתובת-ה-EVM משרתת שלוש-רשתות (eth/base/bsc)",
+    };
+  }
   const wif = process.env.STEEM_ACTIVE_WIF || "";
   const tronScalar = (process.env.TRON_PRIVATE_KEY || "").trim(); // EXEC-CD-13: נגזרת-ישירה מסקלר-מפתח-הסכם-האב
   const solKey = (process.env.SOL_PRIVATE_KEY || "").trim();
@@ -189,25 +254,46 @@ export async function verifyTrxDeposit(txid: string, expectedAddr: string): Prom
   return { ok: true, detail: `TransferContract ${sun} sun → sovereign deposit identity`, amountMu: Math.floor(sun / 1000) };
 }
 
+interface SolTokenBalance { accountIndex: number; mint: string; owner?: string; uiTokenAmount?: { amount?: string; decimals?: number } }
 interface SolTx {
-  meta?: { err?: unknown; preBalances?: number[]; postBalances?: number[] } | null;
+  meta?: { err?: unknown; preBalances?: number[]; postBalances?: number[]; preTokenBalances?: SolTokenBalance[] | null; postTokenBalances?: SolTokenBalance[] | null } | null;
   transaction?: { message?: { accountKeys?: (string | { pubkey?: string })[] } };
+}
+
+/* EXEC-CD-30 · USDC-SPL: אימות-פקדת-USDC מול-RPC-ציבורי — delta-מטבעות-SPL
+ * (preTokenBalances→postTokenBalances) עבור-mint-USDC בבעלות-זהות-הפקדה.
+ * סקאלה: USDC = 6-decimals; 1 USDC = 1000µ (אותה-סקאלת-עוגנים: WTRX/WSOL).
+ * כנות: רק-delta-חיובי-נטו לבעלות-הזהות; ATA-שנוצר-בטרנזקציה (אין-pre) נספר-מ-0. */
+export async function verifySolUsdcDeposit(txid: string, expectedAddr: string): Promise<DepositProof> {
+  const r = await solRpc({
+    jsonrpc: "2.0", id: 1,
+    method: "getTransaction",
+    params: [txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }],
+  }, "peg-door.sol-usdc-tx");
+  if (!r.ok) return { ok: false, detail: "rpc-error", amountMu: 0, error: `solana rpc ${r.status}` };
+  const j = (await r.json()) as { result?: SolTx | null };
+  const tx = j.result;
+  if (!tx) return { ok: false, detail: "not-found-or-not-finalized", amountMu: 0, error: "signature unknown to public node yet (or not finalized — retry after a minute)" };
+  if (tx.meta?.err) return { ok: false, detail: "failed-on-chain", amountMu: 0, error: JSON.stringify(tx.meta.err).slice(0, 120) };
+  const sumFor = (rows: SolTokenBalance[] | null | undefined): number =>
+    (rows ?? [])
+      .filter((t) => t.mint === USDC_SOL_MINT && String(t.owner ?? "") === expectedAddr)
+      .reduce((s, t) => s + Number.parseInt(t.uiTokenAmount?.amount ?? "0", 10), 0);
+  const pre = sumFor(tx.meta?.preTokenBalances);
+  const post = sumFor(tx.meta?.postTokenBalances);
+  const delta = post - pre;
+  if (!(delta > 0)) return { ok: false, detail: "no-incoming-usdc", amountMu: 0, error: `USDC SPL delta for the deposit identity is ${delta} (outgoing or absent)` };
+  return { ok: true, detail: `+${delta} USDC-units (6dec) → sovereign deposit identity (finalized)`, amountMu: Math.floor(delta / 1_000) };
 }
 
 /** SOL: getTransaction (finalized) — delta-יתרות-על-כתובת-הפקדה (העברת-מערכת
  * native · 1 lamport = 1e-6µ). SPL-טוקנים לא-נתמכים בדלת (כנות). */
 export async function verifySolDeposit(txid: string, expectedAddr: string): Promise<DepositProof> {
-  const r = await fencedFetch(SOL_RPC, "peg-door.sol-tx", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0", id: 1,
-      method: "getTransaction",
-      params: [txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }],
-    }),
-    signal: AbortSignal.timeout(20_000),
-    cache: "no-store",
-  });
+  const r = await solRpc({
+    jsonrpc: "2.0", id: 1,
+    method: "getTransaction",
+    params: [txid, { encoding: "json", commitment: "finalized", maxSupportedTransactionVersion: 0 }],
+  }, "peg-door.sol-tx");
   if (!r.ok) return { ok: false, detail: "rpc-error", amountMu: 0, error: `solana rpc ${r.status}` };
   const j = (await r.json()) as { result?: SolTx | null };
   const tx = j.result;
@@ -273,6 +359,7 @@ const EVM_CHAIN_TO_DOOR: Record<"eth" | "bnb" | "base", EvmDoor> = { eth: "eth",
 export async function verifyPegDeposit(chain: PegChain, txid: string, ids: DoorIdentities): Promise<DepositProof> {
   if (chain === "trx") { if (!ids.tron) return { ok: false, detail: "no-identity", amountMu: 0, error: "TRON deposit identity not derivable" }; return verifyTrxDeposit(txid, ids.tron); }
   if (chain === "sol") { if (!ids.sol) return { ok: false, detail: "no-identity", amountMu: 0, error: "SOL deposit identity not derivable" }; return verifySolDeposit(txid, ids.sol); }
+  if (chain === "sol-usdc") { if (!ids.sol) return { ok: false, detail: "no-identity", amountMu: 0, error: "SOL deposit identity not derivable" }; return verifySolUsdcDeposit(txid, ids.sol); } // EXEC-CD-30
   if (!ids.evm) return { ok: false, detail: "no-identity", amountMu: 0, error: "EVM deposit identity not derivable" };
   return verifyEvmDeposit(EVM_CHAIN_TO_DOOR[chain], txid, ids.evm);
 }
@@ -281,6 +368,7 @@ export async function verifyPegDeposit(chain: PegChain, txid: string, ids: DoorI
 export interface Custody {
   tronSun: number | null; solLamports: number | null; evmWei: number | null; // evmWei = ETH (מורשת-תאימות)
   evmWeiByChain: { eth: number | null; base: number | null; bsc: number | null }; // EXEC-CD-11: מדידה-לכל-רשת-EVM
+  usdcUnits: number | null; // EXEC-CD-30: משמורת-USDC-SPL (6-dec raw) על-זהות-ה-SOL
   at: number; note: string;
 }
 interface CustodyRT { at: number; data: Custody | null; inflight: Promise<Custody> | null }
@@ -304,6 +392,29 @@ async function fetchCustody(ids: DoorIdentities): Promise<Custody> {
       return j?.result ? Number(BigInt(j.result)) : null;
     } catch { return null; }
   };
+  // EXEC-CD-30 · משמורת-USDC: getTokenAccountsByOwner (jsonParsed) → סכימת-חשבונות-ה-USDC
+  const usdcUnits = (async (): Promise<number | null> => {
+    if (!ids.sol) return null;
+    try {
+      const r = await solRpc({
+        jsonrpc: "2.0", id: 1,
+        method: "getTokenAccountsByOwner",
+        params: [ids.sol, { programId: SPL_TOKEN_PROGRAM }, { encoding: "jsonParsed", commitment: "confirmed" }],
+      }, "peg-door.sol-usdc-bal", 12_000);
+      if (!r.ok) return null;
+      const j = (await r.json()) as {
+        result?: { value?: Array<{ account?: { data?: { parsed?: { info?: { mint?: string; tokenAmount?: { amount?: string } } } } } }> };
+      };
+      let sum = 0; let seen = false;
+      for (const acc of j?.result?.value ?? []) {
+        const info = acc?.account?.data?.parsed?.info;
+        if (info?.mint !== USDC_SOL_MINT) continue;
+        seen = true;
+        sum += Number.parseInt(info?.tokenAmount?.amount ?? "0", 10);
+      }
+      return seen ? sum : 0; // אין-חשבון-USDC = אפס-פיזי אמיתי (לא-null)
+    } catch { return null; }
+  })();
   const [tronSun, solLamports, ethWei, baseWei, bscWei] = await Promise.all([
     (async (): Promise<number | null> => {
       if (!ids.tron) return null;
@@ -322,11 +433,11 @@ async function fetchCustody(ids: DoorIdentities): Promise<Custody> {
     (async (): Promise<number | null> => {
       if (!ids.sol) return null;
       try {
-        const r = await fencedFetch(SOL_RPC, "peg-door.sol-bal", {
-          method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getBalance", params: [ids.sol, { commitment: "confirmed" }] }),
-          signal: AbortSignal.timeout(12_000), cache: "no-store",
-        });
+        const r = await solRpc({
+          jsonrpc: "2.0", id: 1,
+          method: "getBalance",
+          params: [ids.sol, { commitment: "confirmed" }],
+        }, "peg-door.sol-bal", 12_000);
         const j = (await r.json()) as { result?: { value?: number } };
         return j?.result?.value ?? null;
       } catch { return null; }
@@ -336,8 +447,8 @@ async function fetchCustody(ids: DoorIdentities): Promise<Custody> {
     (async (): Promise<number | null> => evmBalance("bsc"))(),
   ]);
   return {
-    tronSun, solLamports, evmWei: ethWei, evmWeiByChain: { eth: ethWei, base: baseWei, bsc: bscWei }, at: Date.now(),
-    note: "יתרות-המשמורת-האמת על-כתובות-הפקדה — הגיבוי-הפיזי של העוגנים (WTRX/WSOL/WETH/WBNB/WBASE) — אצל-EVM המשמורת היא גם דלק-העיגון-עצמו (אותה-זהות-כמו-ה-relay)",
+    tronSun, solLamports, evmWei: ethWei, evmWeiByChain: { eth: ethWei, base: baseWei, bsc: bscWei }, usdcUnits: await usdcUnits, at: Date.now(),
+    note: "יתרות-המשמורת-האמת על-כתובות-הפקדה — הגיבוי-הפיזי של העוגנים (WTRX/WSOL/WETH/WBNB/WBASE/WUSDC) — אצל-EVM המשמורת היא גם דלק-העיגון-עצמו (אותה-זהות-כמו-ה-relay)",
   };
 }
 
@@ -366,6 +477,11 @@ export interface PegRow {
   claimsLamports: number | null;    // תביעות-מוטבעות ב-lamports (backingMu × 1e6)
   headroomLamports: number | null;  // משמורת − תביעות (דלק-העיגון-החופשי)
   runwayAnchors: number | null;     // עיגונים-נותרים עד-רצפת-ההגנה (headroom/5,000)
+  /* EXEC-CD-30 · שקיפות-משמורת-טוקן (WUSDC): משמורת-USDC-אמת (6-dec) מול-התביעות
+   * המוטבעות (backingMu × 1000) — עוגן-SPL-הראשון-עם-ביקורת-1:1-חיה. */
+  custodyTokenUnits: number | null;  // משמורת-USDC-פיזית (WUSDC בלבד)
+  claimsTokenUnits: number | null;   // תביעות-מוטבעות ב-USDC-units (backingMu × 1e3)
+  headroomTokenUnits: number | null; // משמורת − תביעות (כנות-גיבוי)
 }
 
 export interface DoorReport {
@@ -389,7 +505,7 @@ export interface DoorReport {
 export async function doorReport(st: DexState): Promise<DoorReport> {
   const ids = depositIdentities();
   const custody = await custodySnapshot(ids).catch(() => ({
-    tronSun: null, solLamports: null, evmWei: null, evmWeiByChain: { eth: null, base: null, bsc: null } as Custody["evmWeiByChain"], at: Date.now(), note: "מדידת-משמורת נכשלה — fail-כנה",
+    tronSun: null, solLamports: null, evmWei: null, evmWeiByChain: { eth: null, base: null, bsc: null } as Custody["evmWeiByChain"], usdcUnits: null as number | null, at: Date.now(), note: "מדידת-משמורת נכשלה — fail-כנה",
   }));
 
   const SOL_ANCHOR_FEE = 5_000; // lamports לעיגון-ממו-עצמי (roast-67/78 — נמדד-חי)
@@ -418,6 +534,11 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
       : headroomLamports > 0
         ? Math.floor(headroomLamports / SOL_ANCHOR_FEE)
         : 0;
+    // EXEC-CD-30 · שקיפות-WUSDC: משמורת-USDC-אמת מול-התביעות (ביקורת-1:1-חיה)
+    const custodyTokenUnits = asset === "WUSDC" ? custody.usdcUnits : null;
+    const claimsTokenUnits = asset === "WUSDC" ? Math.max(0, Math.floor(st.backing[asset] ?? 0)) * 1_000 : null;
+    const headroomTokenUnits = custodyTokenUnits !== null && claimsTokenUnits !== null
+      ? custodyTokenUnits - claimsTokenUnits : null;
     return {
       asset,
       oracleMu: o?.mu ?? null, oracleAtH: o?.atH ?? null, oracleSrc: o?.src ?? null,
@@ -426,12 +547,13 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
       pool: pool ? { key: pair, ra: pool.ra, rb: pool.rb, midMu: midMu ?? null } : null,
       spreadBps, verdict,
       custodyLamports, claimsLamports, headroomLamports, runwayAnchors,
+      custodyTokenUnits, claimsTokenUnits, headroomTokenUnits,
     };
   };
 
   const journal = st.journal
     .filter((j) => ["wrap_mint_ext", "oracle_set", "pool_open", "attest", "peg_out"].includes(j.action))
-    .filter((j) => /WTRX|WSOL|WETH|WBNB|WBASE|oracle|peg-out|median|TRX|SOL|ETH|BNB|BASE|peg/i.test(j.note ?? ""))
+    .filter((j) => /WTRX|WSOL|WETH|WBNB|WBASE|WUSDC|oracle|peg-out|median|TRX|SOL|ETH|BNB|BASE|USDC|peg/i.test(j.note ?? ""))
     .slice(-12)
     .reverse()
     .map((j) => ({ h: j.h, action: j.action, note: j.note ?? "" }));
@@ -461,6 +583,8 @@ export async function doorReport(st: DexState): Promise<DoorReport> {
       pegRow("WTRX", "USDS/WTRX"), pegRow("WSOL", "USDS/WSOL"),
       // EXEC-CD-11 · THE-CHAIN-STREAM: שלושת-העוגנים ה-EVM — אותו-דוקטרינה, רשתות-אמת
       pegRow("WETH", "USDS/WETH"), pegRow("WBNB", "USDS/WBNB"), pegRow("WBASE", "USDS/WBASE"),
+      // EXEC-CD-30 · העוגן-השישי: USDC-אמת-על-Solana (השער-מ-האוצר-האמיתי)
+      pegRow("WUSDC", "USDS/WUSDC"),
     ],
     outboundNote: "פדיון = הפרדה-ל-outbox על-הרשת + שליחה-פיזית-מכתובת-הפקדה בידי-המפעיל (מתועד-כנה — המטבע-האמיתי עוזב את-המשמורת רק-בשידור-אמת)",
     journal,
