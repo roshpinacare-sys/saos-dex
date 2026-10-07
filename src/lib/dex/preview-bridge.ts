@@ -103,11 +103,13 @@ function startBridge(): void {
     } catch { /* קריאת-מתג נכשלה — ממשיכים תקין */ }
 
     const url = req.url ?? "/";
-    if (url === "/" || url === "") {
-      res.writeHead(307, { location: "/saos-dex" });
-      res.end();
-      return;
-    }
+    /* PEACE TREATY (2026-10-07 · mother-console restoration · operator-ruled
+     * "עשה שלום, לא מלחמה"): the front door "/" now falls through to the
+     * edge-router below — it lands on the REAL mother console (:3050, kept
+     * alive by /api/revive → zip/mini-services/web supervisor, container-boot
+     * lineage). The DEX terminal remains the first-class deep link at
+     * /saos-dex, and /api/health stays local (keeper peace).
+     * (was: "/" → 307 /saos-dex — the operator ruled: "זה לא הדף".) */
     // FIX(task-10 · war-end): /api/health נענה כאן, מקומית — החוק-הנמדד:
     // dev-revive (keeper r190+) בודק 200 על :3000/api/health וכשהוא מקבל
     // 404 הוא הורג את מחזיק-הפורט (= ה-DEX החי!) ומקים dev שנשחט בעצמו —
