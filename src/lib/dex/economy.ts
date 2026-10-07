@@ -102,6 +102,22 @@ export function bookGasRecycle(st: DexState, h: number, nowMs: number): void {
  * עמלות-השקות) נצרכת-לפני-רווח-עמלות-הסוואפ (שמוגן-ברצפת-REV_FLOOR). כך
  * הפלאיהול סגור: ארב+השקות → שריפה/ve → ALE-זורע → עומק → עמלות. */
 function revenueCycle(st: DexState, h: number, nowMs: number): void {
+  // ── FEE-SWEEPER (EDGE-MAP Tier0 · הוראת-המפעיל "כל-השאר חייב לבצע עכשיו") ──
+  // עודפי-מדידה-מעל-רצפת-הסולם הופכים-רווח-ממומש (סמנטיקת-harvest, תנועה-ישירה
+  // כמו gas_tank_fund באותו-מקום). ביקורת-העמלות (pools===feeMeter+profit+minted)
+  // נשמרת-במדויק: העברה-פנימית-בין-שני-אגפי-החיבור, אפס-יצירת-ערך.
+  // רצפת-8,000µ לא-נוגעת — סולם-הערך לא-נשאר-בלי-גיבוי; המזרקה (mint_fuel)
+  // ממשיכה-לעבוד על profit-ראשון (fromProfit-קודם). treasuryProfitEver (מונה-מונוטוני)
+  // מתעד-את-ההכרה; כשהרווח יחצה REV_FLOOR+REV_MIN_CYCLE — מחזור-השריפה קם-מעצמו.
+  {
+    const meterAvail = Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
+    if (meterAvail > 0) {
+      st.feeMeter -= meterAvail;
+      st.treasuryProfit += meterAvail;
+      st.treasuryProfitEver = (st.treasuryProfitEver ?? 0) + meterAvail;
+      st.journal.push({ h, t: nowMs, soldier: "router", action: "fee_sweep", profitMu: meterAvail, note: `fee-sweep ${meterAvail}µ meter→realized-profit (floor ${LADDER_FUEL_FLOOR}µ intact) — measured fees realized (fee-audit invariant preserved)` });
+    }
+  }
   const aux = Math.max(0, (st.revAux?.protorevMu ?? 0) + (st.revAux?.launchpadMu ?? 0));
   const treasuryUsds = st.balances["treasury"]?.["USDS"] ?? 0;
   const usableProfit = Math.max(0, st.treasuryProfit - REV_FLOOR);
