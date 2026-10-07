@@ -712,15 +712,24 @@ export function genesisState(): DexState {
 export const stateRoot = (st: DexState): string => stateRootOf(st);
 
 // ── EXEC-CD-21 · סולם-הגיבוי: מדידה-קנונית + פנקס-טריגרים (כאן-כדי-שגם-ה-kernel-ישתמש-בלי-מעגל-ייבוא) ──
+/** מחיר-קנוני מנורמל — FIX(EXEC-CD-21 · price-scale): שני-מקורות-מחיר בשתי-סקאלות:
+ * oracle.mu = micro-USDS ל-1-יחידה-שלמה (WTRX 335,511 = $0.335) · assets.refPrice =
+ * milli-USDS ל-1-יחידה-שלמה (SAOS 1320 = 1.32 USDS). המנורמל מחזיר **תמיד** milli-USDS/יחידה
+ * (סקאלת-refPrice) — כדי-שכל-החישובים-מטה יפעלו-על-סקאלה-אחת בלבד. אפס = אין-מחיר (כנות). */
+export function canonPriceMu(st: DexState, a: string): number {
+  const o = st.oracle?.[a]?.mu;
+  if (o !== undefined && o > 0) return Math.floor(o / 1000); // micro→milli
+  return st.assets[a]?.refPrice ?? 0;
+}
 /** מדידה-חיה של כספת-העתודה מהמצב-הקנוני בלבד (אפס-float):
- * תמחור-קנוני (oracle → assets.refPrice; נכס-בלי-מחיר = נספר-לשקיפות, לא-לרצפה — כנות-fail-closed).
+ * תמחור-קנוני מנורמל (canonPriceMu); נכס-בלי-מחיר = נספר-לשקיפות, לא-לרצפה — כנות-fail-closed.
  * unitMu = ערך-כל-הכספת (רצפת-יחידה) · realMu = ערך-נכסי-דלת בלבד (גיבוי-אמת). */
 export function reserveMeasure(st: DexState): {
   unitMu: number; realMu: number; supplyMu: number; unitBps: number; realBps: number;
   holdings: Record<string, number>; prices: Record<string, number>;
 } {
   const rv = st.balances[RESERVE_VAULT] ?? {};
-  const price = (a: string): number => st.oracle?.[a]?.mu ?? st.assets[a]?.refPrice ?? 0;
+  const price = (a: string): number => canonPriceMu(st, a);
   let unitMu = 0, realMu = 0;
   const holdings: Record<string, number> = {};
   const prices: Record<string, number> = {};
@@ -1040,7 +1049,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const ph3 = RESERVE_PHASES[3];
       if (ph3 && m.unitBps < ph3.unitBps) return { ok: false, err: "redeem-floor-lost", gas: 0 };
       if (avail(st, issuer, "SAOS") < saosMu) return { ok: false, err: "insufficient", gas };
-      const refSaos = st.oracle?.["SAOS"]?.mu ?? st.assets["SAOS"]?.refPrice ?? 0;
+      const refSaos = canonPriceMu(st, "SAOS");
       if (!(refSaos > 0)) return { ok: false, err: "no-ref-price", gas: 0 };
       const owed = Math.floor((saosMu * refSaos) / 1000); // µ-USDS
       const rvBal = st.balances[RESERVE_VAULT] ?? (st.balances[RESERVE_VAULT] = {});
@@ -1060,7 +1069,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (rem > 0) {
         for (const a of REAL_DOOR_ASSETS) {
           if (rem <= 0) break;
-          const ref = st.oracle?.[a]?.mu ?? st.assets[a]?.refPrice ?? 0;
+          const ref = canonPriceMu(st, a);
           if (!(ref > 0)) continue;
           const have = rvBal[a] ?? 0;
           if (!(have > 0)) continue;
