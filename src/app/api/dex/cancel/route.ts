@@ -15,13 +15,17 @@ export async function POST(req: Request) {
   const g = consoleGuard(req);
   if (g) return g;
 
-  const body = (await req.json().catch(() => ({}))) as { orderId?: number };
+  // EXEC-CD-22 · THE-LEGION: ביטול-סוכן — סוכן מבטל רק את-הפקודות-שלו (owner-בדיקה),
+  // operator ממשיך לבטל-הכל (תאימות-לאחור).
+  const body = (await req.json().catch(() => ({}))) as { orderId?: number; issuer?: string };
   const orderId = Math.floor(Number(body.orderId));
   if (!(orderId > 0)) return NextResponse.json({ ok: false, error: "bad-order-id" }, { status: 200 });
   const rt = ensureChain();
   const order = rt.st.orders.find((o) => o.id === orderId);
   if (!order) return NextResponse.json({ ok: false, error: "not-found" }, { status: 200 });
-  if (order.owner !== "operator") return NextResponse.json({ ok: false, error: "not-owner (רק-ההזמנות של operator)" }, { status: 200 });
-  const r = submitOp({ type: "cancel", issuer: "operator", nonce: nextNonce("cx"), orderId });
+  const agentRaw = typeof body.issuer === "string" ? body.issuer.trim().toLowerCase() : "";
+  const agent = /^[a-z0-9][a-z0-9-]{0,23}$/.test(agentRaw) ? agentRaw : "operator";
+  if (order.owner !== agent) return NextResponse.json({ ok: false, error: `not-owner (ההזמנה שייכת ל-${order.owner})` }, { status: 200 });
+  const r = submitOp({ type: "cancel", issuer: agent, nonce: nextNonce("cx"), orderId });
   return NextResponse.json({ ok: r.queued, error: r.reason });
 }

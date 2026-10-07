@@ -27,7 +27,7 @@ export async function POST(req: Request) {
   if (g) return g;
 
   const body = (await req.json().catch(() => ({}))) as {
-    pair?: string; assetIn?: string; amount?: number; minOut?: number;
+    pair?: string; assetIn?: string; amount?: number; minOut?: number; issuer?: string;
   };
   const amount = Math.floor(Number(body.amount));
   // FIX(SETTLE-9 fail-closed): minOut NaN עקף את מגן-ההחלקה — Number(garbage)=NaN
@@ -38,9 +38,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "bad-request" }, { status: 200 });
   }
   const minOut = rawMinOut === undefined ? undefined : Math.max(0, Math.floor(rawMinOut));
+  // EXEC-CD-22 · THE-LEGION: סוואג'-סוכן — issuer מאומת (אותו-חוזה כמו order).
+  const agentRaw = typeof body.issuer === "string" ? body.issuer.trim().toLowerCase() : "";
+  const agent = /^[a-z0-9][a-z0-9-]{0,23}$/.test(agentRaw) ? agentRaw : "operator";
   const r = submitOp({
     type: "pool_swap",
-    issuer: "operator",
+    issuer: agent,
     nonce: nextNonce("sw"),
     pair: body.pair, assetIn: body.assetIn as never, amount, minOut,
   });
