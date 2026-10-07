@@ -108,6 +108,42 @@ function startBridge(): void {
       res.end();
       return;
     }
+    // FIX(task-10 · war-end): /api/health נענה כאן, מקומית — החוק-הנמדד:
+    // dev-revive (keeper r190+) בודק 200 על :3000/api/health וכשהוא מקבל
+    // 404 הוא הורג את מחזיק-הפורט (= ה-DEX החי!) ומקים dev שנשחט בעצמו —
+    // מלחמת-הפורט-האינסופית (מדוד 4+ סבבים). מענה 200 כנה מכאן = האמא-האמיתית
+    // "חיה" בעיני-החוק, אין-קטל, אין-תחרות. הכנות: שני-המעלים נבדקים חי.
+    if (url === "/api/health") {
+      const probe = (port: number, path: string) =>
+        new Promise<string>((resolve) => {
+          const rq = http.get({ host: "127.0.0.1", port, path, timeout: 2500 }, (r) => {
+            r.resume();
+            resolve(r.statusCode === 200 ? "UP" : `HTTP ${r.statusCode ?? "?"}`);
+          });
+          rq.on("timeout", () => { rq.destroy(); resolve("SLOW"); });
+          rq.on("error", () => resolve("DOWN"));
+        });
+      void Promise.all([probe(3010, "/saos-dex/api/dex/metrics"), probe(3050, "/")])
+        .then(([dex, consoleUp]) => {
+          if (res.headersSent) return;
+          res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+          res.end(JSON.stringify({
+            ok: true,
+            service: "preview-bridge",
+            port: 3000,
+            doctrine: "edge-router (Task 7/10): /saos-dex→3010 · rest→3050 · health-local",
+            upstreams: { dex3010: dex, console3050: consoleUp },
+            at: new Date().toISOString(),
+          }));
+        })
+        .catch(() => {
+          try {
+            res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+            res.end(JSON.stringify({ ok: true, service: "preview-bridge", degraded: true }));
+          } catch { /* לקוח נטש */ }
+        });
+      return;
+    }
     // ═══ נתב-קצה: /saos-dex* → ה-DEX החי (3010, אותו תהליך) · כל-השאר →
     // קונסולת-ה-WEAVE (3050, ילדת-ה-DEX). מנועי-הבית (publish/charter/health/
     // gate/כספת) חיים-מאחורי-אותו-origin — הצי מדבר-אל-3000 ומגיע-הביתה.
