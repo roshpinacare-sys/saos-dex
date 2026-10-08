@@ -1,15 +1,16 @@
 {
   "instrument": "invariant-fuzzer",
-  "at": "2026-10-08T02:13:16.988Z",
-  "engineHeight": 158655,
-  "engineRoot": "ce7c0f7bcd42fecc54ac6c276a0fb5ee2a0ab68d39c15ef880a873a478583b98",
-  "seed": 424242,
+  "at": "2026-10-08T06:08:03.490Z",
+  "mode": "fixture",
+  "engineHeight": 163183,
+  "engineRoot": "533efe74200b02cbe7481e619ab46cc20043da272866589400625d2b2017bdbc",
+  "seed": 1511375070,
   "sequences": 8,
   "opsPerSeq": 120,
   "totals": {
-    "ops": 960,
-    "accepted": 20,
-    "rejected": 940,
+    "ops": 120,
+    "accepted": 10,
+    "rejected": 110,
     "threw": 0,
     "violations": 0
   },
@@ -21,140 +22,95 @@
     "I5_engineAuditorClean": true,
     "I6_determinism": true,
     "I7_replayClosed": true,
-    "I8_defenseProbes": "23/23"
+    "I8_defenseProbes": true,
+    "I9_feeTruth": true,
+    "I10_auditorCanary": true,
+    "I11_canonCanonicality": true,
+    "I12_transferEffect": true,
+    "I13_invariantPrimitive": true
   },
-  "defenseProbes": [
+  "goldenTrace": [
     {
-      "name": "P01 negative-amount",
-      "pass": true,
-      "detail": "bad-transfer"
+      "name": "t-usds-1001",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P02 zero-amount",
-      "pass": true,
-      "detail": "bad-transfer"
+      "name": "t-saos-17",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P03 float-amount",
-      "pass": true,
-      "detail": "non-integer-amount"
+      "name": "swap-saos-101",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P04 proto-issuer",
-      "pass": true,
-      "detail": "forbidden-issuer"
+      "name": "swap-usds-5003",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P05 proto-recipient",
-      "pass": true,
-      "detail": "forbidden-recipient"
+      "name": "swap-energy-static-fee",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P06 constructor-issuer",
-      "pass": true,
-      "detail": "forbidden-issuer"
+      "name": "order-buy-1250",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P07 over-balance-transfer",
-      "pass": true,
-      "detail": "insufficient"
+      "name": "order-fuzz-c-zero-credit-reject",
+      "ok": false,
+      "err": "insufficient-credits"
     },
     {
-      "name": "P08 negative-price-order",
-      "pass": true,
-      "detail": "bad-price-amount"
+      "name": "order-fuzz-d-empty-lock-wallet",
+      "ok": false,
+      "err": "insufficient-credits"
     },
     {
-      "name": "P09 wrap_mint-external-non-treasury",
-      "pass": true,
-      "detail": "treasury-only"
+      "name": "transfer-fuzz-b-exact-gas",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P10 mint_fuel-non-treasury",
-      "pass": true,
-      "detail": "treasury-only"
+      "name": "cancel-all",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P11 primer-non-treasury",
-      "pass": true,
-      "detail": "treasury-only"
+      "name": "xfer-free-1000",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P12 oracle_set-non-treasury",
-      "pass": true,
-      "detail": "treasury-only"
+      "name": "ve-lock-12w",
+      "ok": true,
+      "err": ""
     },
     {
-      "name": "P13 asset_list-non-treasury",
-      "pass": true,
-      "detail": "treasury-only"
-    },
-    {
-      "name": "P14 xfer_free-over-cap",
-      "pass": true,
-      "detail": "xfer-exceeds-cap"
-    },
-    {
-      "name": "P15 batch-nested",
-      "pass": true,
-      "detail": "batch-nesting-forbidden"
-    },
-    {
-      "name": "P16 batch-over-8",
-      "pass": true,
-      "detail": "bad-batch"
-    },
-    {
-      "name": "P17 batch-foreign-issuer",
-      "pass": true,
-      "detail": "batch-atomic-fail@0:insufficient-credits"
-    },
-    {
-      "name": "P18 unknown-op",
-      "pass": true,
-      "detail": "unknown-op"
-    },
-    {
-      "name": "P19 no-nonce",
-      "pass": true,
-      "detail": "issuer+nonce-required"
-    },
-    {
-      "name": "P20 huge-ve-weeks",
-      "pass": true,
-      "detail": "bad-weeks"
-    },
-    {
-      "name": "P21 pool_swap-absurd-minOut",
-      "pass": true,
-      "detail": "min-out"
-    },
-    {
-      "name": "P22 negative-refPrice",
-      "pass": true,
-      "detail": "treasury-only"
-    },
-    {
-      "name": "P99 probes-left-state-unchanged",
-      "pass": true,
-      "detail": "canon-equal"
+      "name": "heartbeat",
+      "ok": true,
+      "err": ""
     }
   ],
-  "determinismPairs": [
-    {
-      "seed": 424242,
-      "match": true
-    },
-    {
-      "seed": 432161,
-      "match": true
-    },
-    {
-      "seed": 440080,
-      "match": true
+  "summary": {
+    "ops": 120,
+    "accepted": 10,
+    "rejected": 110,
+    "thrown": 0,
+    "finalRoot": "b8077cb051f96cae3e161ebd08ceb0c27e33470d6c41fca369f91182cceccda0",
+    "goldenRoot": "47834f1ac48bf6226f5931280efa95a5412b16c8932b988cd7862f717ed188aa",
+    "feeMeter": 1500,
+    "feeAcc": {
+      "SAOS/USDS": 85080,
+      "ENERGY/SAOS": 1561
     }
-  ],
+  },
   "violations": [],
-  "engineAuditFailures": [],
+  "auditFailures": [],
+  "probesFailed": [],
   "verdict": "PASS"
 }
