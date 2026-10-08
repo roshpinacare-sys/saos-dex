@@ -1,0 +1,534 @@
+{
+  "instrument": "mutation-test",
+  "at": "2026-10-08T03:28:33.211Z",
+  "mode": "full",
+  "baselineRoot": "0b1ae8de506ad979f7280508320a15415e64e7800c10c06f329bc0639cd6324d",
+  "totals": {
+    "mutants": 63,
+    "killed": 48,
+    "survived": 11,
+    "survivedDocumented": 7,
+    "survivedUndocumented": 4,
+    "invalidCompile": 4,
+    "skippedNoSite": 0,
+    "killScore": "81%",
+    "scoreDenominator": "killed+survived (INVALID מחוץ-לציון כמו-Stryker)"
+  },
+  "verdict": "FAIL",
+  "note": "K1=סוללה · K2=דיפרנציאל-בזל. שורד = שקול-נצפית-לסוללה וחייב הצדקה-מפורשת ב-DOCUMENTED_EQUIV.",
+  "documentedEquivalents": {
+    "O-NEQ#kernel.ts#2": "שקול-מוכח: canon משמיט מפתחות-undefined (מוכח-חי ב-I11) — mu:undefined זהה-ביט-ביט",
+    "O-LE#kernel.ts#2": "שקול-מתמטי: blocks≤0/debt≤0 דרך-הנוסחה עצמה מייצרים floor(0·rate·blocks)=0 → תוצאה-זהה-במתמטיקה (Math.max מקדים)",
+    "O-EQ#kernel.ts#1": "funderAfford — מישור-ה-settle (בניית-בלוקים/מימון-דלק), מחוץ-למישור-applyOp שהסוללה בודקת; מכוסה-במכשירי maker-kernel-test/insider-suite",
+    "O-EQ#kernel.ts#2": "funderAfford — כמו O-EQ#1 (מישור-settle)",
+    "O-EQ#kernel.ts#3": "funderFor(exclude) — כמו O-EQ#1 (מישור-settle)",
+    "O-NEQ#kernel.ts#1": "canonPriceMu — נצרך-בתמחור-מישור-settle/HTTP (reserve-value), לא בנתיבי-כסף-של-applyOp; מכוסה price-proof/insider",
+    "O-LE#kernel.ts#1": "maxNonceSuffix — עזר-מגישים-פנימיים (mm.submit), מחוץ-ל-applyOp; מכוסה jepsen-http"
+  },
+  "mutants": [
+    {
+      "id": "SEM-FEE0",
+      "kind": "semantic",
+      "file": "kernel.ts",
+      "why": "עמלת-הבריכה הסטטית מאפסת — הכנסות-העמלות נעלמות בשקט",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "SEM-FEE29",
+      "kind": "semantic",
+      "file": "kernel.ts",
+      "why": "החלקה-של-1bps מהעמלה — גניבה-מיקרוסקופית-מתמדת",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "SEM-DEDUPE",
+      "kind": "semantic",
+      "file": "kernel.ts",
+      "why": "מנגנון-ה-replay מנוטרל — עסקה-חוזרת עוברת פעמיים",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "SEM-INV-OFF",
+      "kind": "semantic",
+      "file": "invariant.ts",
+      "why": "פרימיטיבת-האסרט עצמה מנוטרלת — כל-ההצהרות נהיות דקורטיביות",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "SEM-CANON-UNSORTED",
+      "kind": "semantic",
+      "file": "canonical.ts",
+      "why": "מיון-המפתחות בקנון מוסר — שורש-המצב תלוי-סדר-הכנסה (סתירת-תאומים-בין-ריפו-ים)",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "SEM-CANON-FLOAT",
+      "kind": "semantic",
+      "file": "canonical.ts",
+      "why": "שער-השלמים נפתח ל-float — המצב כבר לא דטרמיניסטי-בין-פלטפורמות",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "SEM-AUDIT-CREDITS",
+      "kind": "semantic",
+      "file": "settle.ts",
+      "why": "ביקורת-הקרדיטים מעוורת — הטבעה-לא-מגובה עוברת בשקט",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "SEM-AMM-NO-CUT",
+      "kind": "semantic",
+      "file": "amm.ts",
+      "why": "חיתוך-האוצר מבוטל — 100% מהעמלה ל-LP, האוצר מתרוקן-מהכנסות",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-EQ#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual ===→!==",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-EQ#kernel.ts#2",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual ===→!==",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-EQ#kernel.ts#3",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual ===→!==",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-NEQ#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual !==→===",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-NEQ#kernel.ts#2",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual !==→===",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-AND#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual &&→||",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-AND#kernel.ts#2",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual &&→||",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-LT#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual <→<=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-LT#kernel.ts#2",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual <→<=",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-LT#kernel.ts#3",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual <→<=",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-LE#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual <=→<",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-LE#kernel.ts#2",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual <=→<",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-GT#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual >→>=",
+      "status": "INVALID",
+      "note": "התרסקות-קומפילציה — מוטנט-לא-תקף, מחוץ-לציון (כמו-Stryker)"
+    },
+    {
+      "id": "O-GT#kernel.ts#2",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual >→>=",
+      "status": "INVALID",
+      "note": "התרסקות-קומפילציה — מוטנט-לא-תקף, מחוץ-לציון (כמו-Stryker)"
+    },
+    {
+      "id": "O-GT#kernel.ts#3",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual >→>=",
+      "status": "INVALID",
+      "note": "התרסקות-קומפילציה — מוטנט-לא-תקף, מחוץ-לציון (כמו-Stryker)"
+    },
+    {
+      "id": "O-GE#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual >=→>",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-GE#kernel.ts#2",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual >=→>",
+      "status": "SURVIVED",
+      "note": "שקול-נצפית לסוללה — חייב תיעוד-הצדקה"
+    },
+    {
+      "id": "O-FLOOR#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual Math.floor(→Math.ceil(",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "O-FLOOR#kernel.ts#2",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual Math.floor(→Math.ceil(",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-FLOOR#kernel.ts#3",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual Math.floor(→Math.ceil(",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-RETF#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual return false→return true",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-RETT#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual return true→return false",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "O-NOTIF#kernel.ts#1",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual if (!→if (",
+      "status": "INVALID",
+      "note": "התרסקות-קומפילציה — מוטנט-לא-תקף, מחוץ-לציון (כמו-Stryker)"
+    },
+    {
+      "id": "O-NOTIF#kernel.ts#2",
+      "kind": "text",
+      "file": "kernel.ts",
+      "why": "textual if (!→if (",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "O-EQ#amm.ts#1",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual ===→!==",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-EQ#amm.ts#2",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual ===→!==",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-NEQ#amm.ts#1",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual !==→===",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-AND#amm.ts#1",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual &&→||",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-LT#amm.ts#1",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual <→<=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-LT#amm.ts#2",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual <→<=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-LE#amm.ts#1",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual <=→<",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-GT#amm.ts#1",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual >→>=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-GT#amm.ts#2",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual >→>=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-GE#amm.ts#1",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual >=→>",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-FLOOR#amm.ts#1",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual Math.floor(→Math.ceil(",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-FLOOR#amm.ts#2",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual Math.floor(→Math.ceil(",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-NOTIF#amm.ts#1",
+      "kind": "text",
+      "file": "amm.ts",
+      "why": "textual if (!→if (",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-EQ#book.ts#1",
+      "kind": "text",
+      "file": "book.ts",
+      "why": "textual ===→!==",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-EQ#book.ts#2",
+      "kind": "text",
+      "file": "book.ts",
+      "why": "textual ===→!==",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-NEQ#book.ts#1",
+      "kind": "text",
+      "file": "book.ts",
+      "why": "textual !==→===",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-LT#book.ts#1",
+      "kind": "text",
+      "file": "book.ts",
+      "why": "textual <→<=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-LE#book.ts#1",
+      "kind": "text",
+      "file": "book.ts",
+      "why": "textual <=→<",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-GT#book.ts#1",
+      "kind": "text",
+      "file": "book.ts",
+      "why": "textual >→>=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-NOTIF#book.ts#1",
+      "kind": "text",
+      "file": "book.ts",
+      "why": "textual if (!→if (",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "O-EQ#canonical.ts#1",
+      "kind": "text",
+      "file": "canonical.ts",
+      "why": "textual ===→!==",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "O-LT#canonical.ts#1",
+      "kind": "text",
+      "file": "canonical.ts",
+      "why": "textual <→<=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-EQ#settle.ts#1",
+      "kind": "text",
+      "file": "settle.ts",
+      "why": "textual ===→!==",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "O-EQ#settle.ts#2",
+      "kind": "text",
+      "file": "settle.ts",
+      "why": "textual ===→!==",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-NEQ#settle.ts#1",
+      "kind": "text",
+      "file": "settle.ts",
+      "why": "textual !==→===",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "O-AND#settle.ts#1",
+      "kind": "text",
+      "file": "settle.ts",
+      "why": "textual &&→||",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash: "
+    },
+    {
+      "id": "O-LT#settle.ts#1",
+      "kind": "text",
+      "file": "settle.ts",
+      "why": "textual <→<=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-GT#settle.ts#1",
+      "kind": "text",
+      "file": "settle.ts",
+      "why": "textual >→>=",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-FLOOR#settle.ts#1",
+      "kind": "text",
+      "file": "settle.ts",
+      "why": "textual Math.floor(→Math.ceil(",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-RETF#settle.ts#1",
+      "kind": "text",
+      "file": "settle.ts",
+      "why": "textual return false→return true",
+      "status": "KILLED",
+      "note": "differential (עבר-את-הסוללה אך טביעת-האצבע שונה)"
+    },
+    {
+      "id": "O-NOTIF#settle.ts#1",
+      "kind": "text",
+      "file": "settle.ts",
+      "why": "textual if (!→if (",
+      "status": "KILLED",
+      "note": "battery-FAIL/crash:  not an object (evaluating 'totals.credits')\n      at ledgerAudit (/home/z/my-project/saos-dex/.mutw"
+    }
+  ]
+}

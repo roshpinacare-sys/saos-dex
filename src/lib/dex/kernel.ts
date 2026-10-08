@@ -1783,17 +1783,21 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
     case "pool_add":
     case "pool_xAdd": {
       const r = poolAdd(st, op, nowMs, consume);
-      return r;
+      // FIX(F-12 · BMC-caught): משפחת-הבריכות צורכת-גז-אמת (consume→chargeGas)
+      // אך החזירה gas:0 בתוצאה — הפרת-חוזה-{ok,gas} (Roast-65-a LOW-12 כוסה
+      // order/cancel/fill ופספס-את-הבריכות). מאמתים-חיצוניים שקוראים-קבלות
+      // ראו-גז-אפס. מדווחים את-הגז-שנחייב-בפועל; מתמטיקת-המצב-לא-נגעה.
+      return r.ok ? { ...r, gas } : r;
     }
     case "pool_swap":
     case "pool_x": {
       const r = poolSwap(st, op, nowMs, consume);
-      return r;
+      return r.ok ? { ...r, gas } : r; // FIX(F-12 · BMC-caught): ראה-pool_add
     }
     case "pool_rmw":
     case "pool_xRm": {
       const r = poolRm(st, op, consume);
-      return r;
+      return r.ok ? { ...r, gas } : r; // FIX(F-12 · BMC-caught): ראה-pool_add
     }
     case "wrap_mint":
     case "wrap_burn": {
