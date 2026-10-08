@@ -356,8 +356,9 @@ export function resolveRoleFor(chain: ChainName): RelayAnchorRole | null {
         : envKey("HIVE_ACTIVE_WIF") ? "active" : null;
     case "blurt":
       return envKey("BLURT_ACTIVE_WIF") ? "active" : null;
-    case "tron": // זהות-TRON נגזרת-מהסקלר-הגרפני — פעולת-ערך עצמית
-      return envKey("STEEM_ACTIVE_WIF") || envKey("STEEM_POSTING_WIF") ? "active" : null;
+    case "tron": // פעולת-ערך → active. FIX(F-8): TRON_PRIVATE_KEY (זהות-הכספת-הריבונית, hex)
+      // הוא-מקור-סמכות-מלא — לא רק הסקלר-הגרפני; אפס-תלות במות-Steem.
+      return envKey("TRON_PRIVATE_KEY") || envKey("STEEM_ACTIVE_WIF") || envKey("STEEM_POSTING_WIF") ? "active" : null;
     case "eth":
     case "sol":
       return "active"; // חתימה-חיה בתוך relay-eth/relay-sol — פעולות-ערך (גז/עמלה)
@@ -599,7 +600,12 @@ async function loadKeysUncached(): Promise<RelayKeys | null> {
   const hivePost = envKey("HIVE_POSTING_WIF");
   const steemRaw = steemPost || envKey("STEEM_ACTIVE_WIF");
   const hiveRaw = hivePost || envKey("HIVE_ACTIVE_WIF");
-  if (!account || !steemRaw || !hiveRaw) return null;
+  // FIX(F-7 · EXEC-CD-35 · עצמאות-מפתחות-פר-שרשרת): היה `if (!account || !steemRaw || !hiveRaw) return null;`
+  // — מפתח-Steem-חסר (רוטציה-מתועדת) היה מחזיר null ומנטרל **גם-את-Hive-המאומת** (נמדד-חי:
+  // hive/posting MATCH מול-הרשות-החיה אך chainState.hive=disabled). עתה: ה-Relay חי כשיש
+  // לפחות-זהות-אחת; כל-שרשרת נשענת על **המפתח-שלה-בלבד** (ריק = מושבתת-שקטה ב-attemptChain).
+  // מפתח-זבל → pub=null → authority-mismatch כנה פר-שרשרת (fail-closed עדיין, אך מבודד).
+  if (!account || (!steemRaw && !hiveRaw)) return null;
   // Roast-82: BLURT — אופציונלי-בטעינה (השרשרת-מושבתת-בשקט-בלעדו, אותו-דפוס-SETTLE-11)
   // FIX(prefix): steem-js מנרמל-פאב-עם-קידומת-STM-ברירת-מחדל; BLURT רושמת-BLT. אותו-גוף-מפתח
   // (נמדד-חי: STM5HhJD…≡BLT5HhJD…=ה-active-של-headcorner) — רק-הקידומת-שונה. מציבים-BLT-סביב-הגזירה.
@@ -611,12 +617,10 @@ async function loadKeysUncached(): Promise<RelayKeys | null> {
   // הספרייה הנוכחית גוזרת פאב-שגוי מהפורמט-המנורמל 5K (גם ב-wifToPublic וגם בחתימה
   // → "Missing Active Authority" על-השרשרת). הגולמי: פאב-נכון + חתימה-מאומתת.
   // הנרמול-ההיסטורי (SETTLE-10/11) נשמר-כנפילה-חזרה רק-אם-החתימה-על-הגולמי נדחית.
-  const steemWif = steemRaw;
-  const hiveWif = hiveRaw;
-  if (!steemWif || !hiveWif) {
-    console.error("[saos-relay][ALERT] wif-invalid: מפתח-ב-.env אינו WIF תקין (base58check) — relay מושהה fail-closed (לא-לולאת-ניסיונות)");
-    return null;
-  }
+  const steemWif = steemRaw || "";
+  const hiveWif = hiveRaw || "";
+  // FIX(F-7): אין-עצירה-גלובלית על-מפתח-חסר-פר-שרשרת; ערך-קיים-ופסול ייתפס-כנה
+  // ב-authorityOk (pub=null → authority-mismatch → disabled פר-שרשרת, אפס-חתימה).
   const steemAuth: "posting" | "active" = steemPost ? "posting" : "active";
   const hiveAuth: "posting" | "active" = hivePost ? "posting" : "active";
   // אפשרות-עוגן-Hive נפרד (חשבון-צבא עם RC גבוה) — ברירת-מחדל: אותה זהות
@@ -628,23 +632,31 @@ async function loadKeysUncached(): Promise<RelayKeys | null> {
   const ethExpected = envKey("ETH_EXPECTED_ADDRESS") || null;
   const solExpected = envKey("SOL_EXPECTED_ADDRESS") || null;
   // Task 54 · פאב-אימות מהגולמי (ראה FIX(authority-pub) למעלה); כישלון = null → authorityOk ידווח כנה
-  const steemPub: string | null = pubOfWif(steemRaw);
-  const hivePub: string | null = pubOfWif(hiveRaw);
+  const steemPub: string | null = steemRaw ? pubOfWif(steemRaw) : null;
+  const hivePub: string | null = hiveRaw ? pubOfWif(hiveRaw) : null;
   // FIX(R13 · wif-forms): צורות-מנורמלות — fail-soft: פליטה-פסולה = null (ה-preflight ידווח כנה)
-  const steemWifNorm = await wifNormalized(steemRaw);
-  const hiveWifNorm = await wifNormalized(hiveRaw);
+  const steemWifNorm = steemRaw ? await wifNormalized(steemRaw) : null;
+  const hiveWifNorm = hiveRaw ? await wifNormalized(hiveRaw) : null;
   const blurtWifNorm = blurtRaw ? await wifNormalized(blurtRaw) : null;
   return { account, steemWif, steemAuth, hiveAccount, hiveWif, hiveAuth, blurtWif: blurtRaw, blurtPub, ethKey, solKey, ethExpected, solExpected, steemPub, hivePub, steemWifNorm, hiveWifNorm, blurtWifNorm };
 }
 
 /* בדיקת-נוכחות-סינכרונית (ל-rtInit — בלי-פענוח) */
-function keysConfigured(): { main: boolean; blurt: boolean; eth: boolean; sol: boolean; account: string | null } {
+function keysConfigured(): { main: boolean; steem: boolean; hive: boolean; tron: boolean; blurt: boolean; eth: boolean; sol: boolean; account: string | null } {
   // M2: קריאות-נוכחות-סודות דרך envKey בלבד (signer.ts)
   const account = envKey("SAOS_RELAY_AGENT_ACCOUNT").toLowerCase() || null;
   const steemWif = envKey("STEEM_POSTING_WIF") || envKey("STEEM_ACTIVE_WIF");
   const hiveWif = envKey("HIVE_POSTING_WIF") || envKey("HIVE_ACTIVE_WIF");
+  // FIX(F-7 · EXEC-CD-35): אתחול-פר-שרשרת — כל-שרשרת נשענת על המפתח-שלה בלבד
+  // (היה: main=steem∧hive → מפתח-Steem-חסר היה משבית גם-את-Hive-המאומת). tron נשאר
+  // נגזר-מהסקלר-הגרפני (זהות-STEEM-family) — סמנטיקה-קיימת-ללא-שינוי.
+  // FIX(F-7+F-8 · EXEC-CD-35): tron נשען על המפתח-שלו-עצמו (TRON_PRIVATE_KEY — זהות-הכספת)
+  // או על הסקלר-הגרפני; כבר-לא-מוצמד-למות-Steem.
   return {
     main: !!(account && steemWif && hiveWif),
+    steem: !!(account && steemWif),
+    hive: !!(account && hiveWif),
+    tron: !!(envKey("TRON_PRIVATE_KEY") || steemWif),
     blurt: !!envKey("BLURT_ACTIVE_WIF"),
     eth: !!envKey("ETH_PRIVATE_KEY"),
     sol: !!envKey("SOL_PRIVATE_KEY"),
@@ -680,6 +692,27 @@ async function tronIdentity(wif: string): Promise<string | null> {
 }
 
 /* scalarOf — עבר ל-signer.ts (M2) כ-deriveScalar */
+
+/* FIX(F-8 · EXEC-CD-35): זהות-TRON ממפתח-hex-טהור (זהות-הכספת-הריבונית) —
+ * אותה-נגזרת בדיוק (secp256k1→keccak→0x41→base58check) על סקלר מהקס. */
+async function tronIdentityFromHex(hexPriv: string): Promise<string | null> {
+  try {
+    const [{ secp256k1 }, { keccak_256 }, b58] = await Promise.all([
+      import("@noble/curves/secp256k1"),
+      import("@noble/hashes/sha3"),
+      bs58lib(),
+    ]);
+    const priv = Buffer.from(hexPriv, "hex");
+    const pub65 = Buffer.from(secp256k1.getPublicKey(priv, false));
+    const h = keccak_256(pub65.subarray(1));
+    const payload = Buffer.concat([Buffer.from([0x41]), Buffer.from(h.subarray(12))]);
+    const sh1 = createHash("sha256").update(payload).digest();
+    const chk = createHash("sha256").update(sh1).digest().subarray(0, 4);
+    return b58.encode(Buffer.concat([payload, chk]));
+  } catch {
+    return null;
+  }
+}
 
 /* ── JSON-RPC ── */
 async function rpc<T>(endpoint: string, body: unknown, timeoutMs = 20000): Promise<T> {
@@ -780,10 +813,14 @@ async function blurtSealBroadcast(account: string, payload: unknown, wif: string
   return signAndSendBlurt(BLURT_NODES[0], account, [buildOp(account, payload, "active")], wif);
 }
 
-/* ── TRON: עיגון מותנה-מימון (self-transfer 1 sun + extra_data = stateRoot) ── */
-async function tronSealBroadcast(tronAddress: string, stateRoot: string, wif: string): Promise<{ txid: string }> {
+/* ── TRON: עיגון מותנה-מימון (transfer 1 sun + extra_data = stateRoot) ──
+ * FIX(F-9 · EXEC-CD-35): יעד-העברת-העיגון = זהות-צי ידועה-שלנו (רשימה-לבנה —
+ * אותה-רשימה של tron-self-anchor.ts R21); TRON אוסר-transfer-עצמי (נמדד-חי). */
+const TRON_ANCHOR_TARGET = "TYVwwuvdDmfy3shxT3cb3RKLrRCshaZxTy";
+async function tronSealBroadcast(tronAddress: string, stateRoot: string, keyMaterial: string): Promise<{ txid: string }> {
   // M2: חתימת-TRON בתוך ה-Signer — הודעות-השגיאה-הכנות נשמרו מילה-במילה (classifier תלוי-בהן)
-  return signAndSendTron(TRON_RPC, tronAddress, stateRoot, wif);
+  // FIX(F-8): keyMaterial = WIF-גרפני או hex-טהור (זהות-הכספת) — ה-Signer מבחין-לפי-צורה
+  return signAndSendTron(TRON_RPC, tronAddress, stateRoot, keyMaterial, TRON_ANCHOR_TARGET);
 }
 
 /* ══ verifyOnChain — קריאה-חוזרת מה-RPC הציבורי והשוואת stateRoot ════════════
@@ -1227,7 +1264,9 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     rt.chainState[chain].lastError = "relay keys missing — quiet-disabled (no record, no breaker, no retry)";
     return;
   }
-  if ((chain === "eth" && !keys?.ethKey) || (chain === "sol" && !keys?.solKey) || (chain === "blurt" && !keys?.blurtWif)) {
+  if ((chain === "steem" && !keys?.steemWif) || (chain === "hive" && !keys?.hiveWif) || (chain === "eth" && !keys?.ethKey) || (chain === "sol" && !keys?.solKey) || (chain === "blurt" && !keys?.blurtWif)) {
+    // FIX(F-7 · EXEC-CD-35): שער-מפתח-פר-שרשרת — steem/hive נוספים לצד eth/sol/blurt;
+    // מפתח-חסר-פר-שרשרת מושבת **רק-את-השרשרת-ההיא** (עצמאות-מלאה, אפס-הדבקה).
     job.chains[chain].done = true;
     rt.chainState[chain].enabled = false;
     rt.chainState[chain].status = "disabled";
@@ -1282,10 +1321,20 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     // EPOCH-PATCH-SPEC: epoch-בתוך-ה-payload-הקנוני (לא-באתרי-קריאה-פר-שרשרת) — שומר-על
     // שוויון-בייטים-בין-שרשראות וסוגר-את-התנגשות-הגבהים-אחרי-ריסטארטים
     if (chain === "tron") {
-      if (!keys?.steemWif) throw new Error("tron identity requires relay keys (disabled)");
-      if (!rt.tronAddress) rt.tronAddress = await tronIdentity(keys.steemWif);
+      // FIX(F-8 · EXEC-CD-35): מקור-הזהות — TRON_PRIVATE_KEY (hex, זהות-הכספת-הריבונית)
+      // קודם; בהיעדרו — הסקלר-הגרפני (STEEM-family, ההיסטורי). אפס-קישור-למות-Steem.
+      const tronHex = envKey("TRON_PRIVATE_KEY");
+      const keyMaterial = tronHex && /^[0-9a-fA-F]{64}$/.test(tronHex)
+        ? tronHex
+        : keys?.steemWif || "";
+      if (!keyMaterial) throw new Error("tron identity requires relay keys (disabled)");
+      if (!rt.tronAddress) {
+        rt.tronAddress = /^[0-9a-fA-F]{64}$/.test(keyMaterial)
+          ? await tronIdentityFromHex(keyMaterial)
+          : await tronIdentity(keyMaterial);
+      }
       if (!rt.tronAddress) throw new Error("tron identity derivation failed");
-      const r = await tronSealBroadcast(rt.tronAddress, job.info.stateRoot, keys.steemWif);
+      const r = await tronSealBroadcast(rt.tronAddress, job.info.stateRoot, keyMaterial);
       rec.txid = r.txid;
       rec.status = "anchored";
     } else if (chain === "fleet") {
@@ -1566,7 +1615,7 @@ function rtInit(): RelayRT {
   });
   const rt: RelayRT = {
     jobs: [], processing: false, records: [],
-    chainState: { steem: mk(cfg.main), hive: mk(cfg.main), blurt: mk(cfg.blurt), tron: mk(cfg.main), eth: mk(cfg.eth), sol: mk(cfg.sol), fleet: mk(fleetConfigured()) },
+    chainState: { steem: mk(cfg.steem), hive: mk(cfg.hive), blurt: mk(cfg.blurt), tron: mk(cfg.tron), eth: mk(cfg.eth), sol: mk(cfg.sol), fleet: mk(fleetConfigured()) },
     metrics: { broadcasts: 0, verified: 0, mismatches: 0, breakerTrips: 0, economicWaits: 0, lastVerifyLatencyMs: null },
     account: cfg.account,
     tronAddress: null,
@@ -1579,7 +1628,7 @@ function rtInit(): RelayRT {
   };
   g.__saosDexRelay = rt;
   restoreRecords(rt); // ראיות-העיגון מהריצה-הקודמת חוזרות לפני-תחילת-הפיוס
-  if (cfg.main) startReconciler(rt); // לולאת-פיוס — רק-כשה-Relay חי
+  if (cfg.steem || cfg.hive || cfg.tron) startReconciler(rt); // לולאת-פיוס — רק-כשיש-זהות-עיגון-חיה (F-7: פר-שרשרת)
   return rt;
 }
 
