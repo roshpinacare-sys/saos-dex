@@ -191,12 +191,39 @@ async function rpc<T>(endpoint: string, body: unknown, timeoutMs = 20000): Promi
 }
 
 /**
- * signAndSendTron — עיגון-TRON מותנה-מימון (self-transfer 1 sun + extra_data).
+ * tronic — FIX(F-10b · EXEC-CD-35 · נמדד-חי): POST plain-JSON ל-TRON.
+ * ה-rpc() למעלה הוא מטיפוס-JSON-RPC (graphene — תשובה {result,error}); trongrid
+ * מחזיר **את-האובייקט-ישירות** ({txID,raw_data_hex,…} / {Error:…}) — קריאה-דרך-rpc()
+ * החזירה json.result=undefined תמיד → "createtransaction answered without txID"
+ * על-כל-עיגון-TRON מאז-ה-M2. עתה: מהדק-plain שמחזיר את-הגוף-כמות-שהוא.
+ */
+async function tronic<T>(endpoint: string, body: unknown, timeoutMs = 15000): Promise<T> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fencedFetch(endpoint, "signer.rpc", {
+      method: "POST", headers: { "content-type": "application/json", "user-agent": "saos-dex-signer/1.0 (+sovereign-dex)" }, body: JSON.stringify(body), signal: ctrl.signal,
+    });
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * signAndSendTron — עיגון-TRON מותנה-מימון (transfer 1 sun + extra_data = stateRoot).
  * כל-הכישלונות-הכנים נשמרים מילה-במילה (classifier של relay תלוי בהם):
  * "unfunded" / "unknown ≠ unfunded" / "success:false" וכו'.
+ *
+ * FIX(F-8 · EXEC-CD-35): `wif` מקבל שתי-צורות — WIF גרפני (51-52 base58) או
+ * מפתח-פרטי-hex (64) — זהות-הכספת-הריבונית (TRON_PRIVATE_KEY). הסקלר נגזר לפי-הצורה.
+ * FIX(F-9 · EXEC-CD-35): TRON אוסר-transfer-עצמי ("Cannot transfer TRX to yourself" —
+ * נמדד-חי R21). עתה: owner = זהות-העוגן, to = `toAddress` (יעד-רשימה-לבנה-שלנו —
+ * זהות-צי ידועה); 1-sun בלבד + extra_data = stateRoot (העיגון-עצמו).
  */
 export async function signAndSendTron(
   tronRpcUrl: string, tronAddress: string, stateRoot: string, wif: string,
+  toAddress?: string,
 ): Promise<{ txid: string }> {
   const balRes = await fencedFetch(`${tronRpcUrl}/v1/accounts/${tronAddress}`, "signer.tron.accounts", { signal: AbortSignal.timeout(12000) });
   if (!balRes.ok) throw new Error(`trongrid read failed: HTTP ${balRes.status} — anchor deferred (unknown ≠ unfunded)`);
@@ -206,22 +233,36 @@ export async function signAndSendTron(
   if (balance < 300_000) throw new Error(`unfunded: ${balance} sun (<0.3 TRX bandwidth floor) — queued honestly`);
 
   const [{ secp256k1 }, b58] = await Promise.all([import("@noble/curves/secp256k1"), bs58lib()]);
-  const raw58 = Buffer.from(b58.decode(tronAddress));
-  const hex20 = raw58.subarray(1, 21).toString("hex");
-  const built = await rpc<{ txID?: string; raw_data_hex?: string }>(`${tronRpcUrl}/wallet/createtransaction`, {
-    to_address: hex20, owner_address: hex20, amount: 1, extra_data: Buffer.from(stateRoot, "utf8").toString("hex"),
+  const owner58 = Buffer.from(b58.decode(tronAddress));
+  // FIX(F-10 · EXEC-CD-35 · נמדד-חי): /wallet/createtransaction דורש hex **עם קידומת-0x41**
+  // (42-תווים) — בלעדיה: "ContractValidateException: Invalid ownerAddress" (היה: hex20 עירום
+  // = כל-העיגונים-מתים-על-השער הזה). אימות: אותו-בנייה עם 41-מקדים → txID חוזר.
+  const ownerHex = "41" + owner58.subarray(1, 21).toString("hex");
+  const to58 = Buffer.from(b58.decode(toAddress ?? tronAddress));
+  const toHex = "41" + to58.subarray(1, 21).toString("hex");
+  const built = await tronic<{ txID?: string; raw_data_hex?: string }>(`${tronRpcUrl}/wallet/createtransaction`, {
+    to_address: toHex, owner_address: ownerHex, amount: 1, extra_data: Buffer.from(stateRoot, "utf8").toString("hex"),
   }, 15000);
   if (!built?.txID || !built?.raw_data_hex) throw new Error("createtransaction answered without txID/raw_data_hex");
 
-  const priv = await deriveScalar(wif);
+  // FIX(F-8): סקלר לפי-צורת-המפתח — hex-טהור (זהות-הכספת) או WIF (סקלר-גרפני)
+  const priv = /^[0-9a-fA-F]{64}$/.test(wif)
+    ? new Uint8Array(Buffer.from(wif, "hex"))
+    : await deriveScalar(wif);
   const msg = Buffer.from(built.txID, "hex");
   const sig = secp256k1.sign(msg, priv, { prehash: false });
   const compact = sig.toCompactRawBytes();
+  // FIX(F-11 · EXEC-CD-35 · נמדד-חי על-מייננט): פורמט-הסיגנטורה של TRON הוא
+  // [r(32) ‖ s(32) ‖ v(1)] — ה-recovery **בסוף** (כמו-Ethereum). היה [v, r, s]
+  // → "Validate signature error: Header byte out of range" (הצומת קרא את הבייט-האחרון).
+  // אימות: e1e09c7e… = העיגון-הראשון-אמת קיבל result:true עם הפורמט הזה.
   const sigBytes = new Uint8Array(65);
-  sigBytes[0] = sig.recovery ?? 0;
-  sigBytes.set(compact, 1);
-  const res = await rpc<{ result?: boolean; txid?: string; message?: string }>(`${tronRpcUrl}/wallet/broadcasttransaction`, {
-    txID: built.txID, raw_data_hex: built.raw_data_hex, signature: [Buffer.from(sigBytes).toString("hex")],
+  sigBytes.set(compact, 0);
+  sigBytes[64] = sig.recovery ?? 0;
+  const res = await tronic<{ result?: boolean; txid?: string; message?: string }>(`${tronRpcUrl}/wallet/broadcasttransaction`, {
+    txID: built.txID, raw_data: built.raw_data, raw_data_hex: built.raw_data_hex, signature: [Buffer.from(sigBytes).toString("hex")],
+    // FIX(F-11b · נמדד-חי): raw_data (האובייקט) חובה לצד raw_data_hex — בלעדיו
+    // trongrid מחזיר NullPointerException (ה-broadcast מגיע לצומת בלי-גוף-מנותח).
   }, 15000);
   if (res?.result && res?.txid) return { txid: res.txid };
   throw new Error("tron broadcast rejected: " + (res?.message ? Buffer.from(res.message, "hex").toString("utf8").slice(0, 120) : "unknown"));
