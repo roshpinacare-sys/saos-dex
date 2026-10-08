@@ -201,8 +201,8 @@ function mkOp(r: () => number, st: DexState, n: number): Op {
 }
 
 /* ── הרצה ───────────────────────────────────────────────────────────────────── */
-const SEQUENCES = 8;
-const OPS_PER_SEQ = 120;
+const SEQUENCES = Number(process.env.FUZZ_SEQS ?? 8);
+const OPS_PER_SEQ = Number(process.env.FUZZ_OPS ?? 120);
 const NOW = 1_700_000_000_000;
 
 interface SeqStat { seq: number; seed: number; ops: number; accepted: number; rejected: number; thrown: number; crashes: Violation[]; finalRoot: string }
@@ -251,7 +251,21 @@ async function main(): Promise<void> {
       if (!res.ok) {
         const after = canon(st);
         if (after !== before) {
-          stat.crashes.push({ code: "I1-REJECT-MUTATED-STATE", detail: `${op.type} rejected (${res.err}) but state changed`, seq, i, opType: op.type });
+          // FIX(fuzz-r3): לא רק "שונה" — **מה** שונה (הבדל-שדות מדויק + ה-op עצמו לשחזור)
+          const diff: string[] = [];
+          try {
+            const b = JSON.parse(before) as Record<string, unknown>, a = JSON.parse(after) as Record<string, unknown>;
+            const walk = (p1: unknown, p2: unknown, path: string): void => {
+              if (typeof p1 === "number" && typeof p2 === "number") { if (p1 !== p2) diff.push(`${path}: ${p1}→${p2}`); return; }
+              if (Array.isArray(p1) && Array.isArray(p2)) { if (p1.length !== p2.length) diff.push(`${path}.len: ${p1.length}→${p2.length}`); else p1.forEach((x, i) => walk(x, p2[i], `${path}[${i}]`)); return; }
+              if (p1 && p2 && typeof p1 === "object" && typeof p2 === "object") {
+                const o1 = p1 as Record<string, unknown>, o2 = p2 as Record<string, unknown>;
+                for (const k of new Set([...Object.keys(o1), ...Object.keys(o2)])) walk(o1[k], o2[k], `${path}.${k}`);
+              } else if (p1 !== p2) diff.push(`${path}: ${String(p1).slice(0, 30)}→${String(p2).slice(0, 30)}`);
+            };
+            walk(b, a, "$");
+          } catch { diff.push("(diff-walk failed)"); }
+          stat.crashes.push({ code: "I1-REJECT-MUTATED-STATE", detail: `${op.type} rejected (${res.err}) changed: ${diff.slice(0, 4).join(" | ").slice(0, 240)} · op=${JSON.stringify({ type: op.type, issuer: op.issuer, base: op.base, quote: op.quote, side: op.side, price: op.price, amount: op.amount, postOnly: op.postOnly }).slice(0, 200)}`, seq, i, opType: op.type });
         }
       } else {
         // I2 · זהות-הקרדיט אחרי-כל-op-מקובל

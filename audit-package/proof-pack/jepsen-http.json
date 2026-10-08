@@ -1,0 +1,38 @@
+{
+  "instrument": "jepsen-http",
+  "version": 2,
+  "at": "2026-10-08T01:46:47.605Z",
+  "verdict": "PASS",
+  "checks": [
+    {
+      "id": "J1-setup-lands",
+      "pass": true,
+      "detail": "treasury→jep-a +50,000µ landed in 3s (baseline 0µ = v1 residue counted, poll-verified)"
+    },
+    {
+      "id": "J2-overdraft-storm",
+      "pass": true,
+      "detail": "100 parallel × 1,000µ vs 50,000µ → route-queued=48 · route-cap-rejected=52 (free-op-cap-48 enforced!) · APPLIED: moved=48,000µ ≤ balance · conserved=true · src residue=2,000µ · 14695ms"
+    },
+    {
+      "id": "J2b-no-negative",
+      "pass": true,
+      "detail": "zero negative balances under parallel overdraft fire"
+    },
+    {
+      "id": "J3-queue-vs-apply",
+      "pass": true,
+      "detail": "30 orders from zero-credit wallet → route queued 30/30 (ok:true) · kernel applies 0 (insufficient-credits) · liveOrders=38 — the queue is NOT the ledger; the block-build is the gate"
+    },
+    {
+      "id": "J4-conservation-cleanup",
+      "pass": true,
+      "detail": "all test funds returned to treasury (residue=0µ, poll-verified)"
+    },
+    {
+      "id": "J4b-audit-clean",
+      "pass": true,
+      "detail": "settle ledger audit after the storm: ok=true"
+    }
+  ]
+}

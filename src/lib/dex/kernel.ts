@@ -561,13 +561,16 @@ export function addLock(st: DexState, who: string, a: string, d: number): void {
  * addLock(-mu) משאיר `locked[who][a]=0` (ולעיתים `locked[who]={}` ריק-שנברא) — בנתיבי-
  * דחייה זה משנה את canon(state) למרות-שה-op נדחה (הוכח-חי: order+insufficient-credits →
  * stateRoot שונה = הפרת-פשוטו-כמשמעו של "עסקה-לא-חוקית-לא-נוגעת-במצב" + סיכון-פיצול
- * מול-מאמת שמדלג-על-נדחים לפי-החוק). הניקוי מחזיר זהות-בתים בנתיבי-דחייה בלבד —
- * אסור-להשתמש בו בנתיבי-הצלחה (שם האבק הוא חלק-מההיסטוריה-הקנונית של השרשרת-החיה). */
-function releaseLockClean(st: DexState, who: string, a: string, mu: number): void {
+ * מול-מאמת שמדלג-על-נדחים לפי-החוק).
+ * FIX(FZ-1b · הריצה-השנייה-תפסה-את-התיקון-עצמו): הניקוי-העיוור מחק גם-אפסים/ריקים
+ * **שהיו-קיימים-לפני-ה-op** (locked.treasury={} · locked.operator.SAOS=0 — חיים-במצב)
+ * = מוטציה-הפוכה. עתה: הצורה-המדויקת-שלפני-ה-op נשמרת — נמחק רק-מה-שה-op עצמו יצר. */
+function releaseLockClean(st: DexState, who: string, a: string, mu: number, pre: { hadWho: boolean; hadKey: boolean }): void {
   if (mu > 0) addLock(st, who, a, -mu);
   const w = st.locked[who];
-  if (w && w[a] === 0) delete w[a];
-  if (w && Object.keys(w).length === 0) delete st.locked[who];
+  if (!w) return;
+  if (!pre.hadKey && w[a] === 0) delete w[a];
+  if (!pre.hadWho && Object.keys(w).length === 0) delete st.locked[who];
 }
 export function chargeGas(st: DexState, who: string, gas: number): boolean {
   if ((st.credits[who] ?? 0) < gas) return false;
@@ -1568,6 +1571,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (st.orders.filter((o) => o.live && o.owner === op.issuer).length >= 24)
         return { ok: false, err: "order-cap", gas: 0 };
       if (avail(st, op.issuer, lockAsset) < lockMu) return { ok: false, err: "insufficient-escrow", gas: 0 };
+      const preLock = { hadWho: st.locked[op.issuer] !== undefined, hadKey: st.locked[op.issuer]?.[lockAsset] !== undefined }; // FIX(FZ-1b): הצורה-שלפני-ה-op
       addLock(st, op.issuer, lockAsset, lockMu);
       const lockBefore = lockedOf(st, op.issuer, lockAsset);
       // FIX(SETTLE-7 double-escrow): הנעילה כבר-על-הספר (שורה למעלה) — מעבירים
@@ -1610,14 +1614,14 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         // להיות שחרר-חלק בטרם-הכשל — משחררים רק-את-מה-שנותר מהנעילה שלנו
         // (שחרור-מלא-עיוור כאן היה מייצר נעילה שלילית — אותו-חור שה-invariant תפס).
         const residual = lockedOf(st, op.issuer, lockAsset) - (lockBefore - lockMu);
-        releaseLockClean(st, op.issuer, lockAsset, residual); // FIX(FZ-1): ניקוי-אבק — נדחה = אפס-נגיעה
+        releaseLockClean(st, op.issuer, lockAsset, residual, preLock); // FIX(FZ-1): ניקוי-אבק — נדחה = אפס-נגיעה
         return cross;
       }
       // אין-חפיפה: הפקודה נחה בספר — עם-הנעילה-המלאה שלה (מגובה-מלא, לעולם לא משוחררת כאן)
       // Task 83 · IOC ואין-חפיפה: הפקודה מתבטלת-בכנות (מולאו-אפס) — שחרור-מלא + שריפת-נונס.
       if (ioc) {
         const c3 = consume();
-        releaseLockClean(st, op.issuer, lockAsset, lockMu); // FIX(FZ-1): נדחה = אפס-נגיעה
+        releaseLockClean(st, op.issuer, lockAsset, lockMu, preLock); // FIX(FZ-1): נדחה = אפס-נגיעה
         if (c3) return c3;
         st.journal.push({ h: st.height, t: nowMs, soldier: op.issuer, action: "order_ioc_cancel", note: `IOC ${op.side} ${amt}µ ${op.base} @${px} — אין-חפיפה, מתבטלת (0 מולאו)` });
         return { ok: true, gas, events: [] };
@@ -1625,7 +1629,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const c2 = consume();
       if (c2) {
         // כשל-gas/דדופ אחרי-הנעילה — משחררים-הכול (fail-closed)
-        releaseLockClean(st, op.issuer, lockAsset, lockMu); // FIX(FZ-1): נדחה = אפס-נגיעה (הוכח-חי במלחך)
+        releaseLockClean(st, op.issuer, lockAsset, lockMu, preLock); // FIX(FZ-1): נדחה = אפס-נגיעה (הוכח-חי במלחך)
         return c2;
       }
       const seq = st.nextSeq++;

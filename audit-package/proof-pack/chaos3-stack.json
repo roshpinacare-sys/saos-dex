@@ -1,0 +1,47 @@
+{
+  "instrument": "chaos3-stack",
+  "version": 2,
+  "at": "2026-10-08T01:58:22.310Z",
+  "verdict": "FINDINGS",
+  "rows": [
+    {
+      "service": "relay :3003",
+      "pidBefore": 20645,
+      "killed": true,
+      "selfHealed": true,
+      "seconds": 45,
+      "reviver": "supervisor (auto)",
+      "note": "new pid=27921"
+    },
+    {
+      "service": "governor :3042",
+      "pidBefore": 20651,
+      "killed": true,
+      "selfHealed": true,
+      "seconds": 75,
+      "reviver": "supervisor (auto)",
+      "note": "new pid=28059"
+    },
+    {
+      "service": "legion :3012",
+      "pidBefore": 14353,
+      "killed": true,
+      "selfHealed": false,
+      "seconds": 240,
+      "reviver": "MANUAL (no supervisor — WATCH-MAP GAP)",
+      "note": "stayed dead 240s"
+    },
+    {
+      "service": "state-push",
+      "pidBefore": 20670,
+      "killed": true,
+      "selfHealed": true,
+      "seconds": 5,
+      "reviver": "supervisor (auto)",
+      "note": "new pid=20674"
+    }
+  ],
+  "engineAlive": true,
+  "engineHeight": 158373,
+  "methodology": "kill = socket-holder pid + parent; death confirmed by absent socket; v1 lesson recorded (cmdline-pattern kill was a false kill)"
+}
