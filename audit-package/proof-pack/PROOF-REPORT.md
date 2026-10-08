@@ -238,3 +238,73 @@ anchorlessBirth **מת סופית**: TRON (e1e09c7e) + Hive (d902bd61) — שת�
 - ה-runner מסתמך-על-PAT-זמין-לסנכרון-גיט; בהיעדרו מדווח `unverified`-כנה (לא-שקר-ירוק).
 - התצוגה-בפורט-3000: תהליך-ה-dex (cwd=saos-dex) מחזיק-גם-את-3000-המגיש-את-האם — עובדה
 - נרשמת-לחקירה-עתידית; הסמן-הפונקציונלי (API-האם עונה-בשני-הנמלים) מוכיח-שהאם-היא-המוגשת.
+
+---
+
+## §12 · EXEC-CD-37 · ROUND 5 — רחב-ועמוק: מה עוד הענקים עושים — עשינו גם
+
+### השכבות-החדשות (כל-אחת = מכשיר-עם-הכרעה-מכונה)
+- **INSTRUMENT #18 · SUPPLY-CHAIN & SBOM** (`harness/supply-chain.ts`): SBOM-מדיד
+  של **181 חבילות-מותקנות** (152 תיקיות · lockSha256=ceb324b6…) + סריקה-סטטית של
+  163 קבצים/1.77MB מול-8 כללי-אסור (eval · new Function · חומר-מפתח-קשיח ·
+  Math.random-בתחום-הדטרמיניזם · טוקן-ב-URL · http-פתוח). תוצאת-המבחן-הראשון
+  דגלה 15-HIGH — **טריאז' כנה**: קבועי-פרוטוקול-ציבוריים (chain-id של
+  Hive/Blurt/Steem · topic0-Transfer) וז'יטר-backoff-מתועד מחוץ-לתחום-הדטרמיניזם
+  — הכללים חודדו-עם-נימוקים-מפורסמים, ה-INFO-נשאר-בארטיפקט. תוצאה-סופית:
+  **0 HIGH · 0 MEDIUM · .env-מחוץ-לגיט** — והממצא-המובהק: אפס-Math.random
+  במכונות-המצב (kernel/amm/chain/canonical).
+- **INSTRUMENT #19 · RESTORE-DRILL** (`scripts/restore-drill.ts`) — סגירת-הגבול-
+  הכן-מ-EXEC-CD-34 במדידה: העתקה-קרה של snapshot+tape+db → עותק-מבודד →
+  PRAGMA integrity_check=ok (9,410 blockHeaders) → **stateRoot(המצב) שווה-בתים
+  מול-blockHeader בגובה-זה** (f28e66f8…) → פרובה-חי: **זנב-RPO=2-ops** (מוות-
+  דיסק-עכשיו = אובדן-2-פעולות), גיל-snapshot=9s, **RTO=56ms**. תרגיל-שחזור,
+  לא-הצהרת-גיבוי.
+- **INSTRUMENT #20 · BREAK-GLASS** (`scripts/breakglass-drill.ts` — באם, DRY-RUN
+  מוחלט): מה-**כספת-בלבד** (מדמה-.env-שנהרס): Hive posting/active/owner —
+  **כולם-בסמכות-חיה-ניתנים-לחימוש** (אומת-RPC-ציבורי) · STEEM — סרוב-כן
+  (הרוטציה-המתועדת) · TRON — **הכתובת-שחתמה-על-mainnet (TPFmkf…) נגזרת-מהכספת
+  בדיוק** (derivation==manifest==חיה) + סריקת-99-WIF-כגיבוי. **RTO-מפתחות=1.9s**.
+- **INSTRUMENT #21 · ANCHOR-CONTINUITY** (`harness/anchor-continuity.ts`):
+  שרשרת-הביקורת (475 רשומות) — prevHash-שרשור ✓ · seq-מונוטוני ✓ · **כל-hash
+  מחושב-מחדש-עצמאית** (stableStringify-מועתק-נאמן — מאמת-עצמאי) ✓ · עיגון-Hive
+  **4eecbaa4…** נקרא-מחדש-מ-RPC-ציבורי → stateRoot-מוטבע == blockHeader ב-DB
+  **bit-equal** ✓. **תיקון-מכשיר-מתועד**: ההנחה-שג'נזיס-prevHash="" הייתה-שגויה
+  (הקנון הוא 64-אפסים — אומת-מול-appendAudit) — המכשיר תפס-את-עצמו, תוקן,
+  והשרשרת-הוכחה-שלמה (הדפוס: attack-the-instrument).
+- **INSTRUMENT #23 · BMC B8+B9** (`harness/bmc.ts`): שתי-אינוואריאנטות-עומק
+  חדשות — **B8 FEE-TRUTH** (מתמטיקת-העמלה מחושבת-מקבועי-המכשיר: feeAmt=
+  floor(in·bps/10⁴) עם-clamp 4..1500, treasuryCut=floor(feeAmt·30/100) —
+  ΔfeeAccruedTreasury≡ΔfeeMeter≡expected) ו-**B9 LOCK-TRUTH** (locked[w][a] ≡
+  Σ lockMu-פקודות-חיות · אף-lockMu-שלילי). depth-4: **160,000 רצפים · 646,600
+  applies · 1,650 ריפליים · 0 הפרות — B1..B9 עומדות-אחרי-כל-קידומת** (298ש').
+- **INSTRUMENT #22 · RELEASE-ENGINEERING**: CHANGELOG.md (Keep-a-Changelog,
+  אבני-דרך-מוסדיות) + **tag v0.5.0** (עידן-ההוכחה-הרציפה).
+
+### תפעול-חי-שנמדד-בדרך (בלי-שנשאל)
+- **התאוששות-breaker-עצמאית מתועדת-חי**: נפתח 06:32 (8×fetch-failed) →
+  half-open ~06:37 → **closed · failures=0 · עיגון-חדש נחת (4eecbaa4…,
+  h164,016) — אפס-התערבות**. anchored=3 · verified=3 · mismatches=0.
+- שרשרת-החתימות צומחת-חיה בזמן-המדידה (472→475-רשומות בין-הרצות) — המכשיר
+  מאמת-קובץ-שמשתנה-תחתיו והשרשרת עמדה-בכל-צילום.
+
+### מוסדות-חדשים
+- **docs/RUNBOOKS.md** — 10 נהלי-תפעול (RB-1..RB-10), כולם-נולדו-מאירוע-אמת
+  (F-1..F-12 · chaos · breaker · reaping) בפורמט SYMPTOM→DIAGNOSIS→REMEDY→VERIFY.
+- **docs/SLO.md** — 13 התחייבויות-מדודות + תקציבי-שגיאה + גבולות-כנים-מפורסמים.
+
+### ארטיפקטים-של-סבב-5
+`supply-chain.json` · `restore-drill.json` · `anchor-continuity.json` · `bmc.json`
+(עומק-4 עם-B8/B9) · MANIFEST.sha256-מרוענן · RUNBOOKS.md · SLO.md · CHANGELOG.md ·
+BREAKGLASS-DRILL.json (באם).
+
+### כנות-פתוחה של סבב-5
+- סריקת-האספקה היא-סטטית-היוריסטית (לא-CodeQL-מלא) — הכללים-החודדים-מתועדים-
+  בפומבי בתוך-המכשיר; נקודת-התורפה-הגדולה-נותרת-תלות-transitive-חדשה (SBOM
+  נותן-את-הרשימה; סריקת-פרצות-פעילה-בתלות עוד-לא-רצה — bun pm audit לא-זמין
+  offline; מוסדר-כהסלמה).
+- תרגיל-ה-break-glass הוא-DRY-RUN: הוא-מוכיח **נגזרת-וסמכות**, לא-כתיבה-בפועל
+  ל-.env-חדש-בסביבה-ריקה (אותה-נגזרת הופעלה-באמת-ובהצלחה ב-EXEC-CD-35 על-ה-.env
+  החי — השילוב סוגר).
+- anchor-continuity מאמת-את-**העיגון-האחרון-פר-שרשרת** מול-ה-DB; סריקה-מלאה-
+  היסטורית-של-כל-העיגונים תידרש-כשהם-יתרבו (ה-CLI verify-anchor.ts קיים-לזה).
+- steem/blurt/sol נשארים-כנים-מושבתים (רוטציה/מפתח-חסר) — מתועד-בכל-מכשיר.

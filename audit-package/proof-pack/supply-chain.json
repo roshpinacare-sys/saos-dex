@@ -1,0 +1,72 @@
+{
+  "instrument": "supply-chain.ts",
+  "ts": "2026-10-08T06:48:04.736Z",
+  "verdict": "PASS",
+  "sbom": {
+    "packages": 181,
+    "scannedDirs": 152,
+    "lockSha256": "ceb324b6d294aab608548fd490bb9284b513f875a46a7ea05240eb1ebdaa72c1",
+    "topPackages": [
+      "@alloc/quick-lru@5.3.0",
+      "@beblurt/blurt-rpc-core@0.1.0",
+      "@beblurt/dblurt@0.17.0",
+      "@img/colour@1.1.0",
+      "@img/sharp-libvips-linux-x64@1.3.3",
+      "@img/sharp-libvips-linuxmusl-x64@1.3.3",
+      "@img/sharp-linux-x64@0.35.4",
+      "@img/sharp-linuxmusl-x64@0.35.4",
+      "@jridgewell/gen-mapping@0.3.13",
+      "@jridgewell/remapping@2.3.5",
+      "@jridgewell/resolve-uri@3.1.2",
+      "@jridgewell/sourcemap-codec@1.6.0"
+    ]
+  },
+  "staticScan": {
+    "filesScanned": 163,
+    "bytesScanned": 1817170,
+    "rules": 7
+  },
+  "findings": {
+    "high": 0,
+    "medium": 0,
+    "list": [
+      {
+        "severity": "INFO",
+        "rule": "math-random-in-determinism-domain",
+        "file": "src/lib/dex/relay.ts",
+        "line": 959,
+        "detail": "return Math.floor(base * (0.8 + Math.random() * 0.4));"
+      },
+      {
+        "severity": "INFO",
+        "rule": "math-random-in-determinism-domain",
+        "file": "src/app/page.tsx",
+        "line": 336,
+        "detail": "const delay = ok ? periodMs : Math.min(periodMs * 2 ** backoff, 60_000) + Math.floor(Math.random() * 1_000);"
+      },
+      {
+        "severity": "INFO",
+        "rule": "math-random-in-determinism-domain",
+        "file": "harness/battery-core.ts",
+        "line": 318,
+        "detail": "const mk = (o: Partial<Op> & { type: OpKind }): Op => ({ issuer: \"fuzz-a\", nonce: `dp-${Math.random().toString(36).slice(2)}`, ...o } as Op)"
+      },
+      {
+        "severity": "INFO",
+        "rule": "math-random-in-determinism-domain",
+        "file": "harness/maker-kernel-test.ts",
+        "line": 25,
+        "detail": "const NONCE = () => `ktest-${Math.floor(nowMs)}-${Math.floor(Math.random() * 1e9)}`;"
+      },
+      {
+        "severity": "INFO",
+        "rule": "math-random-in-determinism-domain",
+        "file": "harness/pool-fuel-test.ts",
+        "line": 29,
+        "detail": "const NONCE = () => `cd9-${Math.floor(nowMs)}-${Math.floor(Math.random() * 1e9)}`;"
+      }
+    ]
+  },
+  "envNotInGit": true,
+  "elapsedMs": 33
+}

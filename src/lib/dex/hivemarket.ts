@@ -24,7 +24,7 @@ const HIVE_NODES = [
   "https://api.deathwing.me",
 ];
 const HIVE_CHAIN_ID =
-  "beeab0de00000000000000000000000000000000000000000000000000000000";
+  "beeab0de00000000000000000000000000000000000000000000000000000000"; // ALLOW-SUPPLY-CHAIN: Hive public genesis chain-id (קבוע-פרוטוקול-ציבורי)
 const ACCOUNT = process.env.SAOS_RELAY_AGENT_ACCOUNT || "headcorner";
 
 /** רצפת-RC לרגל-HIVE — כיסוי לימוד-העלות המדוד של הצי (custom_json ~273M בעומס;

@@ -28,6 +28,15 @@
  *   B6 DETERMINISM        — כל-רצף-97 מרופליים-פעמיים ⇒ אותו-stateRoot סופי.
  *   B7 GAS-RECEIPT (F-12) — לכל-קבלה: result.gas === ΔgasUsed (חוזה-הקבלות;
  *                           נולד מהממצא-הראשון של המכשיר-הזה).
+ *   B8 FEE-TRUTH (EXEC-CD-37) — לכל-pool_swap מקובל: המכשיר מחשב **בעצמו** (מקבועי
+ *                           ה-מכשיר, לא מייבוא מהגרעין) feeAmt=floor(in·bps/10⁴)
+ *                           עם bps מדונמי מוצב/רצפה 4/תקרה 1500, treasuryFee=
+ *                           floor(feeAmt·30/100) — ודורש ΔfeeAccruedTreasury ===
+ *                           ΔfeeMeter === treasuryFee בדיוק.
+ *   B9 LOCK-TRUTH (EXEC-CD-37) — אחרי-כל-קבלה: לכל (ארנק,נכס) locked[w][a] ===
+ *                           Σ lockMu של-פקודות-חיות (sell→base · buy→quote);
+ *                           אף-lockMu שלילי; אף-רשומת-locked מנותקת-מפקודה.
+ *                           תרגום-ישיר של החוזה "הנעילה נשארת מדויקת-בסוף".
  *
  * היסטוריית-ממצאים: הריצה-הראשונה (depth 3, 8,000 רצפים) תפסה F-12 אמיתי
  * (pool-משפחה מחזירה gas:0 תוך-צריכת-100) + תיקן-שני-באגי-מכשיר (B4 ספר-
@@ -134,6 +143,31 @@ function realTotals(st: DexState): Record<string, number> {
 const credSnap = (st: DexState): { cred: number; minted: number; gas: number } =>
   ({ cred: Object.values(st.credits).reduce((s, v) => s + v, 0), minted: st.feeMinted ?? 0, gas: st.gasUsed ?? 0 });
 
+/* ── B8: קבועי-העמלה של-המכשיר — מוצהרים-כאן, אסור לייבא מהגרעין (מוטנט-קבוע חייב להיתפס) ── */
+const BMC_FEE_BPS_STATIC = 30, BMC_TREASURY_CUT_PCT = 30, BMC_DYN_MIN = 4, BMC_DYN_MAX = 1_500;
+const bmcEffectiveBps = (p: { dynFeeBps?: number }): number =>
+  Math.min(BMC_DYN_MAX, Math.max(BMC_DYN_MIN, p.dynFeeBps ?? BMC_FEE_BPS_STATIC));
+const bmcTreasuryFee = (amountIn: number, bps: number): number =>
+  Math.floor(Math.floor((amountIn * bps) / 10_000) * BMC_TREASURY_CUT_PCT / 100);
+
+/* ── B9: אמת-נעילות — החייב-העיקול חייב להיות בדיוק סך-הפקודות-החיות שלו ── */
+const lockAssetOf = (o: { side: string; base: string; quote: string }): string => (o.side === "sell" ? o.base : o.quote);
+function lockTruth(st: DexState, seqNum: number, i: number): void {
+  for (const [w, assets] of Object.entries(st.locked)) {
+    for (const [a, v] of Object.entries(assets)) {
+      const liability = st.orders
+        .filter((o) => o.live && o.owner === w && lockAssetOf(o) === a)
+        .reduce((s, o) => s + (typeof o.lockMu === "number" ? o.lockMu : 0), 0);
+      if ((v as number) !== liability)
+        V.push({ code: "B9", seq: seqNum, i, detail: `locked[${w}][${a}]=${v} אך חייב-פקודות-חיות=${liability}` });
+    }
+  }
+  for (const o of st.orders) {
+    if (o.live && typeof o.lockMu === "number" && o.lockMu < 0)
+      V.push({ code: "B9-NEG", seq: seqNum, i, detail: `order#${o.id} lockMu=${o.lockMu} שלילי` });
+  }
+}
+
 /* ── הרצה-אקסהוסטיבית ────────────────────────────────────────────────────────── */
 interface BmcOutcome {
   verdict: "PASS" | "FAIL";
@@ -165,6 +199,8 @@ async function main(): Promise<void> {
       const preRoot = stateRootOf(st);
       const preReal = tpl.pure ? realTotals(st) : null;
       const preCred = credSnap(st);
+      const poolPre = op.type === "pool_swap" && op.pair ? st.pools[op.pair] : null;
+      const preFee = poolPre ? { t: poolPre.feeAccruedTreasury, m: st.feeMeter ?? 0 } : null;
       let res;
       try { res = applyOp(st, op, 1_700_000_000_000 + i); }
       catch (e) {
@@ -180,6 +216,13 @@ async function main(): Promise<void> {
       }
       anyAccept = true;
       moneyHygiene(st, seqNum, i);
+      lockTruth(st, seqNum, i); // B9 — אחרי-כל-קבלה
+      if (preFee && poolPre && op.type === "pool_swap" && typeof op.amount === "number") {
+        const postT = poolPre.feeAccruedTreasury, postM = st.feeMeter ?? 0;
+        const expected = bmcTreasuryFee(op.amount, bmcEffectiveBps(poolPre));
+        if (postT - preFee.t !== expected || postM - preFee.m !== expected)
+          V.push({ code: "B8", seq: seqNum, i, detail: `${tpl.name}: Δtreasury=${postT - preFee.t} Δmeter=${postM - preFee.m} אך מתמטיקת-המכשיר=${expected} (in=${op.amount} bps=${bmcEffectiveBps(poolPre)})` });
+      }
       const postCred = credSnap(st);
       const dGas = postCred.gas - preCred.gas, dMint = postCred.minted - preCred.minted, dCred = postCred.cred - preCred.cred;
       if (dCred + dGas - dMint !== 0)
@@ -228,7 +271,7 @@ async function main(): Promise<void> {
   await Bun.write(ARTIFACT, JSON.stringify({ ...outcome, ts: new Date().toISOString(), instrument: "bmc.ts" }, null, 2) + "\n");
   console.log(`\n${outcome.verdict === "PASS" ? "✅" : "❌"} BMC verdict=${outcome.verdict} · רצפים=${totalSeqs.toLocaleString()} · applies=${applies.toLocaleString()} · ריפליים=${replays} · נדחו-מלא=${rejectedFully.toLocaleString()} · עם-קבלה=${hadAccept.toLocaleString()} · ${outcome.elapsedMs}ms`);
   if (V.length) { console.log(`הפרות (${V.length}):`); for (const v of V.slice(0, 10)) console.log(`  [${v.code}] seq#${v.seq} op${v.i}: ${v.detail}`); }
-  else console.log(`טענה-כמתית: לכל-רצף מאורך-${DEPTH} על |T|=${n} תבניות — B1..B7 עומדות אחרי-כל-קידומת.`);
+  else console.log(`טענה-כמתית: לכל-רצף מאורך-${DEPTH} על |T|=${n} תבניות — B1..B9 עומדות אחרי-כל-קידומת.`);
   process.exit(V.length ? 1 : 0);
 }
 main().catch((e) => { console.error("bmc crash:", e); process.exit(1); });
