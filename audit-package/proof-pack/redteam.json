@@ -1,0 +1,162 @@
+{
+  "instrument": "redteam-probes",
+  "at": "2026-10-08T01:22:48.136Z",
+  "verdict": "PASS",
+  "summary": {
+    "fired": 18,
+    "failClosed": 18,
+    "infraOk": 2,
+    "infraTotal": 2
+  },
+  "results": [
+    {
+      "name": "R01 order: malformed JSON",
+      "target": "/saos-dex/api/dex/order",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R02 order: negative amount",
+      "target": "/saos-dex/api/dex/order",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R03 order: proto-pollution body",
+      "target": "/saos-dex/api/dex/order",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R04 order: deep-nesting 1k",
+      "target": "/saos-dex/api/dex/order",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R05 order: huge payload 256KB",
+      "target": "/saos-dex/api/dex/order",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R06 transfer: no auth replay-style",
+      "target": "/saos-dex/api/dex/transfer",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R07 settle: garbage body",
+      "target": "/saos-dex/api/dex/settle",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R08 revive: unauthorized",
+      "target": "/saos-dex/api/revive",
+      "status": 405,
+      "failClosed": true,
+      "note": "rejected 405"
+    },
+    {
+      "name": "R09 order: SQL-injection in fields",
+      "target": "/saos-dex/api/dex/order",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R10 order: unicode homoglyph issuer",
+      "target": "/saos-dex/api/dex/order",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R11 vault/login: garbage creds",
+      "target": "/api/vault/login",
+      "status": 400,
+      "failClosed": true,
+      "note": "rejected 400"
+    },
+    {
+      "name": "R12 vault/verify: no signature",
+      "target": "/api/vault/verify",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R13 swap/execute: unauthenticd attempt",
+      "target": "/api/swap/execute",
+      "status": 400,
+      "failClosed": true,
+      "note": "rejected 400"
+    },
+    {
+      "name": "R14 saos/value-engine: owner-gate",
+      "target": "/api/saos/value-engine",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R15 agent/bounty: fake agent claim",
+      "target": "/api/agent/bounty",
+      "status": 401,
+      "failClosed": true,
+      "note": "rejected 401"
+    },
+    {
+      "name": "R16 vault/addresses: public-surface (traversal param ignored)",
+      "target": "/api/vault/addresses?chain=../../etc/passwd",
+      "status": 200,
+      "failClosed": true,
+      "note": "200 = public manifest by design (funnel law §6 — addresses are public); traversal param ignored; zero filesystem content"
+    },
+    {
+      "name": "R17 saos/kernel: proto-injection",
+      "target": "/api/saos/kernel",
+      "status": 405,
+      "failClosed": true,
+      "note": "rejected 405"
+    },
+    {
+      "name": "R18 health: oversized-header 64KB",
+      "target": "/api/health",
+      "status": 431,
+      "failClosed": true,
+      "note": "rejected 431"
+    },
+    {
+      "name": "R99 engine-alive-after-fire",
+      "target": ":3010",
+      "status": 200,
+      "failClosed": true,
+      "note": "h alive · rejectedLast 15 → 15 (no delta recorded in window)"
+    },
+    {
+      "name": "R98 no-secret-leak",
+      "target": "all-responses",
+      "status": 200,
+      "failClosed": true,
+      "note": "0 secret patterns in 18 responses"
+    }
+  ],
+  "secretPatterns": [
+    "WIF-5",
+    "PVT_K1",
+    "sk- (api key)",
+    "github token",
+    "mnemonic",
+    "PEM key",
+    "long-hex-secret"
+  ]
+}
