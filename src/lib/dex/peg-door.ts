@@ -172,7 +172,7 @@ function repoVaultIdentities(): { tron: string | null; sol: string | null; evm: 
       if (!fs.existsSync(p)) continue;
       const m = JSON.parse(fs.readFileSync(p, "utf8")) as { kind?: string; networks?: Array<{ network: string; address: string }> };
       if (m?.kind !== "sovereign-repo-vault-manifest" || !Array.isArray(m.networks)) continue;
-      const by = (n: string): string | null => m.networks.find((x) => x.network === n)?.address ?? null;
+      const by = (n: string): string | null => (m.networks ?? []).find((x) => x.network === n)?.address ?? null; // EXEC-CD-43: ?? [] — הצרת-הגנה (tsc TS18048), ההגנה-עצמה בשורה-הקודמת
       const ids = { tron: by("tron"), sol: by("solana"), evm: by("evm") };
       gVaultIds.ids = ids; gVaultIds.at = Date.now();
       return ids;

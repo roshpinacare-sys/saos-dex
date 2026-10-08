@@ -63,7 +63,13 @@ export const GAS_TABLE = {
   asset_price: 40,
   harvest: 20,
   attest: 50,
-  heartbeat: 10,
+  // EXEC-CD-43 (P0 · אישור-מפעיל "מאשר תמשיך בצע ודחוף"): heartbeat הוא op-מערכת-כפוי
+  // שהשרשרת-עצמה מזריקה כל-בלוק (chain.ts) — גז-עליו היה שריפת-אוצר-סמויה של
+  // ~288kµ/יום (10µ×28,800 בלוקים) שאינה-ממוחזרת (אינו-ב-BOOK_GAS_KINDS) — גורם-ראשי
+  // למלכות-המוות-הדלקית (fees-in 474kµ מול gas 44.7Mµ). אפס-גז כמו משפחת-הערוצים
+  // הריבוניים (relay/wrap/batch): ה-op הוא נו-אופ טהור (אין-ג'ורנל, אין-נונס, אין-מצב)
+  // ולכן אפס-סיכון-ספאם מבני. מדידת-החיות נשארת: הבלוק-עצמו נבנה.
+  heartbeat: 0,
   refuel: 0, // THE-REFUEL: העברת-קרדיטים מהאוצר — אפס-גז (שירות-חיות כמו relay)
   mint_fuel: 0, // THE-FOUNTAIN: הטבעת-דלק מגובה-עמלות-מדודות — אפס-גז, אוצר-בלבד
   // EXEC-CD-9 · THE-PRIMER: הצתה-ריבונית-חד-פעמית של-סולם-הדלק — אפס-גז (משפחת-הערוצים-הריבוניים).
@@ -272,7 +278,10 @@ export const FUNDER_ORDER: FuelFunder[] = ["arena", "bot-a", "bot-b", "bot-c", "
 /** FIX(roast-81 · afford-single-source): יכולת-המימון-המקסימלית של ממנה — אותם-מרווחי-
  * ברזל של-funderFor (ארנה/בוטים שומרים-רצפת-10k לבריאות-המממן; האוצר/המפעיל ניתנים-עד-
  * תום-היתרה). SETTLE-9 dedup: המרווחים חיים-פה-בלבד — הדריפט-פה = דליפה-כלכלית. */
-export const FUNDER_KEEP = 10_000;
+export const FUNDER_KEEP = 2_000; // EXEC-CD-43 (P0 · אישור-מפעיל): היה 10,000 — נמדד-חי: bot-a/b/c
+// מחזיקים בדיוק 10,000µ כ"א (רצפת-ה-KEEP הישנה) → funderAfford=0 לכולם → סולם-הדלק
+// כולו (mm-stipend/settle/maker-refuel) מבני-מת בזמן-ש-30,000µ קפואים. 2,000 שומרים
+// מרווח-בריאות-אמתי למממן-פעיל ומשחררת ~8,000µ לבוט למחזור. האכיפה-עצמה נשארת בגרעין.
 export function funderAfford(st: DexState, who: FuelFunder): number {
   const cr = st.credits[who] ?? 0;
   const keep = who === "treasury" || who === "operator" ? 0 : FUNDER_KEEP;
@@ -289,7 +298,7 @@ export function funderFor(st: DexState, amt: number, exclude?: string): FuelFund
   return "operator";
 }
 
-export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM" | "SBD" | "BLURT" | "WBLURT" | "WTRX" | "WSOL" | "WETH" | "WBNB" | "WBASE";
+export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "STEEM" | "SBD" | "BLURT" | "WBLURT" | "WTRX" | "WSOL" | "WETH" | "WBNB" | "WBASE" | "WUSDC"; // EXEC-CD-43: WUSDC נרשם-בטיפוס — EXEC-CD-30 (REAL_DOOR_ASSETS/PEG_ASSETS) כבר-מטפל-בו-בקוד-החי; הטיפוס-בלבד-נשאר-מאחורה (נתפס-ע"י tsc)
 /** רשימת-ריצה של הנכסים — אימות-קלט fail-closed ב-routes ובגרעין (SETTLE-9).
  * Task 61 · BLURT/WBLURT — מסילת-האמת: WBLURT מוטבע מול-גיבוי-חוץ-אמת
  * (BLURT-אמת על headcorner, מאומת-חי מול-RPC-ציבורי בכל-קריאת-truth).
@@ -298,7 +307,7 @@ export type Asset = "SAOS" | "USDS" | "WSTEEM" | "ENERGY" | "WSBD" | "PHIVE" | "
  * R42 · THE-SBD-RAIL: SBD-נרשם-כנכס — ל-WSBD נולד מסדרון-גיבוי (WSBD⇄SBD),
  * והגריד-החוץ (מכירות מעל-קו-הזהות) מזרים-SBD-אמת-ל-headcorner —
  * הפעימה עוטפת-את-העודף (deficit-mint) לגיבוי-חי-מדוד. דבר-גורר-דבר. */
-export const ASSETS: Asset[] = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE", "STEEM", "SBD", "BLURT", "WBLURT", "WTRX", "WSOL", "WETH", "WBNB", "WBASE"];
+export const ASSETS: Asset[] = ["SAOS", "USDS", "WSTEEM", "ENERGY", "WSBD", "PHIVE", "STEEM", "SBD", "BLURT", "WBLURT", "WTRX", "WSOL", "WETH", "WBNB", "WBASE", "WUSDC"]; // EXEC-CD-43: השלמת-EXEC-CD-30 — רישום-fail-closed-תואם-דלת-ה-USDC
 
 export interface Pool {
   a: Asset; b: Asset; // ממוינים אלפבתית — מפתח-קנוני
@@ -1414,13 +1423,15 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       //    רישום-נכס הוא אופ-אוצר-בלבד עם גז, לא יצירת-רפאים-חינם) · dedupe קשיח כרגיל.
       const a = op.asset, amt = op.amount ?? 0;
       if (!knownAsset(st, a)) return { ok: false, err: "bad-asset", gas: 0 };
-      if (!op.to || op.to === issuer || !(amt > 0)) return { ok: false, err: "bad-xfer", gas: 0 };
+      const asset = a as Asset; // EXEC-CD-43: knownAsset מאמת גם-נכסים-דינמיים (asset_list) — הצרה-מקומית-בלבד
+      const to = String(op.to ?? "");
+      if (!to || to === issuer || !(amt > 0)) return { ok: false, err: "bad-xfer", gas: 0 };
       if (amt > FREE_XFER_CAP) return { ok: false, err: "xfer-exceeds-cap", gas: 0 };
-      if (avail(st, issuer, a) < amt) return { ok: false, err: "insufficient", gas: 0 };
+      if (avail(st, issuer, asset) < amt) return { ok: false, err: "insufficient", gas: 0 };
       pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — החינם הוא היתרון
-      addBal(st, issuer, a, -amt);
-      addBal(st, op.to, a, amt);
-      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "xfer_free", note: `→${op.to} ${amt}µ ${a}` });
+      addBal(st, issuer, asset, -amt);
+      addBal(st, to, asset, amt);
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "xfer_free", note: `→${to} ${amt}µ ${asset}` });
       return { ok: true, gas: 0 };
     }
     case "batch": {
