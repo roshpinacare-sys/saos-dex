@@ -1,0 +1,35 @@
+# EXEC-CD-43 (P0-0.4 · אישור-מפעיל "מאשר תמשיך בצע ודחוף") — הבלם-החסר.
+# עד-היום: כל-8-ה-workflows היו dispatch-only (דוקטרינת-מכסה R71/R75) — אף-push לא נבלם
+# על-ידי-שום-בדיקה. זהו workflow-ה-push היחיד: מינימלי (8-דקות-תקרה), אידמפוטנטי
+# (concurrency-cancel), ובלי-סודות (אין-טוקנים, אין-פריסה — רק-שערי-איכות).
+# כנות-מכסה: אם-דקות-ה-Actions יאזלו הריצות-ייתקעו — זה-המצב-הקיים-בכל-שאר-ה-workflows;
+# ההבדל ש-עתה יש-לפחות-גורם-אחד שמנסה-לבלום-commit-שבור.
+name: dex-ci
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: dex-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: install (frozen lockfile)
+        run: bun install --frozen-lockfile
+      - name: prisma generate
+        run: bunx prisma generate
+        env:
+          DATABASE_URL: "file:/tmp/ci-placeholder.db"
+      - name: typecheck (tsc --noEmit)
+        run: bun run typecheck
+      - name: kernel invariants B1-B9 (in-process BMC, no live engine needed)
+        run: bun harness/bmc.ts

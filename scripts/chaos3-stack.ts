@@ -109,3 +109,6 @@ async function main(): Promise<void> {
 }
 
 await main();
+
+// EXEC-CD-43: module-marker — מבטל-scope-גלובלי (TS2393 main-כפול-בין-סקריפטים + TS1375 top-level-await)
+export {};

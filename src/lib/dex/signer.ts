@@ -240,7 +240,7 @@ export async function signAndSendTron(
   const ownerHex = "41" + owner58.subarray(1, 21).toString("hex");
   const to58 = Buffer.from(b58.decode(toAddress ?? tronAddress));
   const toHex = "41" + to58.subarray(1, 21).toString("hex");
-  const built = await tronic<{ txID?: string; raw_data_hex?: string }>(`${tronRpcUrl}/wallet/createtransaction`, {
+  const built = await tronic<{ txID?: string; raw_data?: unknown; raw_data_hex?: string }>(`${tronRpcUrl}/wallet/createtransaction`, {
     to_address: toHex, owner_address: ownerHex, amount: 1, extra_data: Buffer.from(stateRoot, "utf8").toString("hex"),
   }, 15000);
   if (!built?.txID || !built?.raw_data_hex) throw new Error("createtransaction answered without txID/raw_data_hex");
