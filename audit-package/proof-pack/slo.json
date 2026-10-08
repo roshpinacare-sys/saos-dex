@@ -1,0 +1,74 @@
+{
+  "instrument": "slo-probe",
+  "at": "2026-10-08T01:24:58.951Z",
+  "n": 30,
+  "sloA": {
+    "target": "availability ≥ 99%",
+    "worst": 100,
+    "pass": true,
+    "errorBudgetUsedPct": 0
+  },
+  "sloB": {
+    "target": "p95 ≤ 1500ms",
+    "worst": 126,
+    "pass": true
+  },
+  "paths": [
+    {
+      "name": "mother:health",
+      "critical": true,
+      "n": 30,
+      "ok": 30,
+      "availability": 100,
+      "p50": 27,
+      "p95": 126,
+      "p99": 141,
+      "max": 141
+    },
+    {
+      "name": "engine:state",
+      "critical": true,
+      "n": 30,
+      "ok": 30,
+      "availability": 100,
+      "p50": 6,
+      "p95": 6,
+      "p99": 7,
+      "max": 7
+    },
+    {
+      "name": "engine:reserve",
+      "critical": true,
+      "n": 30,
+      "ok": 30,
+      "availability": 100,
+      "p50": 5,
+      "p95": 7,
+      "p99": 19,
+      "max": 19
+    },
+    {
+      "name": "mother:value-engine(GET)",
+      "critical": false,
+      "n": 30,
+      "ok": 30,
+      "availability": 100,
+      "p50": 7,
+      "p95": 10,
+      "p99": 10,
+      "max": 10
+    },
+    {
+      "name": "mother:saos-status",
+      "critical": false,
+      "n": 30,
+      "ok": 30,
+      "availability": 100,
+      "p50": 7,
+      "p95": 11,
+      "p99": 106,
+      "max": 106
+    }
+  ],
+  "verdict": "PASS"
+}

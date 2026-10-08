@@ -557,6 +557,18 @@ export function addLock(st: DexState, who: string, a: string, d: number): void {
   const l = (st.locked[who] = st.locked[who] ?? {});
   l[a] = (l[a] ?? 0) + d;
 }
+/** FIX(FZ-1 · reject-atomicity · המלחך-האדיברסרי 2026-10-08): שחרור-נעילה-עם-ניקוי-אבק.
+ * addLock(-mu) משאיר `locked[who][a]=0` (ולעיתים `locked[who]={}` ריק-שנברא) — בנתיבי-
+ * דחייה זה משנה את canon(state) למרות-שה-op נדחה (הוכח-חי: order+insufficient-credits →
+ * stateRoot שונה = הפרת-פשוטו-כמשמעו של "עסקה-לא-חוקית-לא-נוגעת-במצב" + סיכון-פיצול
+ * מול-מאמת שמדלג-על-נדחים לפי-החוק). הניקוי מחזיר זהות-בתים בנתיבי-דחייה בלבד —
+ * אסור-להשתמש בו בנתיבי-הצלחה (שם האבק הוא חלק-מההיסטוריה-הקנונית של השרשרת-החיה). */
+function releaseLockClean(st: DexState, who: string, a: string, mu: number): void {
+  if (mu > 0) addLock(st, who, a, -mu);
+  const w = st.locked[who];
+  if (w && w[a] === 0) delete w[a];
+  if (w && Object.keys(w).length === 0) delete st.locked[who];
+}
 export function chargeGas(st: DexState, who: string, gas: number): boolean {
   if ((st.credits[who] ?? 0) < gas) return false;
   st.credits[who] = (st.credits[who] ?? 0) - gas;
@@ -1598,14 +1610,14 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         // להיות שחרר-חלק בטרם-הכשל — משחררים רק-את-מה-שנותר מהנעילה שלנו
         // (שחרור-מלא-עיוור כאן היה מייצר נעילה שלילית — אותו-חור שה-invariant תפס).
         const residual = lockedOf(st, op.issuer, lockAsset) - (lockBefore - lockMu);
-        if (residual > 0) addLock(st, op.issuer, lockAsset, -residual);
+        releaseLockClean(st, op.issuer, lockAsset, residual); // FIX(FZ-1): ניקוי-אבק — נדחה = אפס-נגיעה
         return cross;
       }
       // אין-חפיפה: הפקודה נחה בספר — עם-הנעילה-המלאה שלה (מגובה-מלא, לעולם לא משוחררת כאן)
       // Task 83 · IOC ואין-חפיפה: הפקודה מתבטלת-בכנות (מולאו-אפס) — שחרור-מלא + שריפת-נונס.
       if (ioc) {
         const c3 = consume();
-        addLock(st, op.issuer, lockAsset, -lockMu);
+        releaseLockClean(st, op.issuer, lockAsset, lockMu); // FIX(FZ-1): נדחה = אפס-נגיעה
         if (c3) return c3;
         st.journal.push({ h: st.height, t: nowMs, soldier: op.issuer, action: "order_ioc_cancel", note: `IOC ${op.side} ${amt}µ ${op.base} @${px} — אין-חפיפה, מתבטלת (0 מולאו)` });
         return { ok: true, gas, events: [] };
@@ -1613,7 +1625,7 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const c2 = consume();
       if (c2) {
         // כשל-gas/דדופ אחרי-הנעילה — משחררים-הכול (fail-closed)
-        addLock(st, op.issuer, lockAsset, -lockMu);
+        releaseLockClean(st, op.issuer, lockAsset, lockMu); // FIX(FZ-1): נדחה = אפס-נגיעה (הוכח-חי במלחך)
         return c2;
       }
       const seq = st.nextSeq++;

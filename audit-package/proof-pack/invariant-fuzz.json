@@ -1,0 +1,160 @@
+{
+  "instrument": "invariant-fuzzer",
+  "at": "2026-10-08T01:11:33.293Z",
+  "engineHeight": 157487,
+  "engineRoot": "94297697bdc47ffcad4287c49155481ceedcd51da2b8f9cb9602ed4a8219df9b",
+  "seed": 1511375070,
+  "sequences": 8,
+  "opsPerSeq": 120,
+  "totals": {
+    "ops": 960,
+    "accepted": 27,
+    "rejected": 933,
+    "threw": 0,
+    "violations": 0
+  },
+  "invariants": {
+    "I1_rejectAtomicity": true,
+    "I2_creditIdentity": true,
+    "I3_transferConserve": true,
+    "I4_noNegativeNoFloat": true,
+    "I5_engineAuditorClean": true,
+    "I6_determinism": true,
+    "I7_replayClosed": true,
+    "I8_defenseProbes": "23/23"
+  },
+  "defenseProbes": [
+    {
+      "name": "P01 negative-amount",
+      "pass": true,
+      "detail": "bad-transfer"
+    },
+    {
+      "name": "P02 zero-amount",
+      "pass": true,
+      "detail": "bad-transfer"
+    },
+    {
+      "name": "P03 float-amount",
+      "pass": true,
+      "detail": "non-integer-amount"
+    },
+    {
+      "name": "P04 proto-issuer",
+      "pass": true,
+      "detail": "forbidden-issuer"
+    },
+    {
+      "name": "P05 proto-recipient",
+      "pass": true,
+      "detail": "forbidden-recipient"
+    },
+    {
+      "name": "P06 constructor-issuer",
+      "pass": true,
+      "detail": "forbidden-issuer"
+    },
+    {
+      "name": "P07 over-balance-transfer",
+      "pass": true,
+      "detail": "insufficient"
+    },
+    {
+      "name": "P08 negative-price-order",
+      "pass": true,
+      "detail": "bad-price-amount"
+    },
+    {
+      "name": "P09 wrap_mint-external-non-treasury",
+      "pass": true,
+      "detail": "treasury-only"
+    },
+    {
+      "name": "P10 mint_fuel-non-treasury",
+      "pass": true,
+      "detail": "treasury-only"
+    },
+    {
+      "name": "P11 primer-non-treasury",
+      "pass": true,
+      "detail": "treasury-only"
+    },
+    {
+      "name": "P12 oracle_set-non-treasury",
+      "pass": true,
+      "detail": "treasury-only"
+    },
+    {
+      "name": "P13 asset_list-non-treasury",
+      "pass": true,
+      "detail": "treasury-only"
+    },
+    {
+      "name": "P14 xfer_free-over-cap",
+      "pass": true,
+      "detail": "xfer-exceeds-cap"
+    },
+    {
+      "name": "P15 batch-nested",
+      "pass": true,
+      "detail": "batch-nesting-forbidden"
+    },
+    {
+      "name": "P16 batch-over-8",
+      "pass": true,
+      "detail": "bad-batch"
+    },
+    {
+      "name": "P17 batch-foreign-issuer",
+      "pass": true,
+      "detail": "batch-atomic-fail@0:insufficient-credits"
+    },
+    {
+      "name": "P18 unknown-op",
+      "pass": true,
+      "detail": "unknown-op"
+    },
+    {
+      "name": "P19 no-nonce",
+      "pass": true,
+      "detail": "issuer+nonce-required"
+    },
+    {
+      "name": "P20 huge-ve-weeks",
+      "pass": true,
+      "detail": "bad-weeks"
+    },
+    {
+      "name": "P21 pool_swap-absurd-minOut",
+      "pass": true,
+      "detail": "min-out"
+    },
+    {
+      "name": "P22 negative-refPrice",
+      "pass": true,
+      "detail": "treasury-only"
+    },
+    {
+      "name": "P99 probes-left-state-unchanged",
+      "pass": true,
+      "detail": "canon-equal"
+    }
+  ],
+  "determinismPairs": [
+    {
+      "seed": 1511375070,
+      "match": true
+    },
+    {
+      "seed": 1511382989,
+      "match": true
+    },
+    {
+      "seed": 1511390908,
+      "match": true
+    }
+  ],
+  "violations": [],
+  "engineAuditFailures": [],
+  "verdict": "PASS"
+}
