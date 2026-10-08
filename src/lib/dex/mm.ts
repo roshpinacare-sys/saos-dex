@@ -101,8 +101,13 @@ export function soldierEquity(st: DexState, soldier: string, fair: number): numb
 /** FIX(SETTLE-7 anti-bandit): תקרות-זריעה-מצטברות לבוטי-הרעש — FIX(Roast-64):
  * המדדים עברו ממודול-רגיש למצב (st.botSeedCounts) — ריסטארט לא מאפס עוד את
  * הגג-הכולל (זרימה-עוינת לא יכולה לגזור-מחדש מלאי-ג'נזיס-חדש-כל-ריסטארט). */
-const BOT_SEED_CAP_USDS = 2_400_000;
-const BOT_SEED_CAP_SAOS = 1_200_000;
+const BOT_SEED_CAP_USDS = 3_600_000;
+const BOT_SEED_CAP_SAOS = 1_800_000;
+// EXEC-CD-46 · noise-revival: נמדד-חי (h175,455): תקרות-החיים-הישנות מותשות (bot-a/b/c:
+// 2.4M/1.2M מלא) בזמן-שהבוטים מרוקנים-לגמרי (1-4µ מכל-נכס) → זרימת-הרעש (גילוי-המחיר
+// היחידה) מתה → fills=0 → feeMeter קפוא (1,485<רצפת-8,000) → המזרקה-יבשה. ההרמה
+// מחזירה-את-הזרימה בהעברות-ממלאי-קיים-של-הארנה (6.79M SAOS + 3.5M USDS בידיה —
+// אפס-הטבעה, Σשומר), עדיין-חסום-חיים (botSeedCounts במצב — שורד-ריסטארטים).
 
 /** ── THE-REARM (SETTLE-14 price-truth) ──
  * ממצא-חי: הארנה שרפה את כל-המלאי (8M SAOS + 20M USDS מג'נזיס) בלחימה-חד-צדדית
@@ -347,7 +352,11 @@ export function arenaTick(
       const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
       if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-h${st.height}`, to: "treasury", amount: mint });
     }
-    for (const ag of [...soldiers, "arena", "bot-a", "bot-b", "bot-c", "bot-e", "rail"]) {
+    // EXEC-CD-46 · arena-first: נמדד-חי (t+2min אחרי-refuel-fairness): החיילים-התעוררו
+    // (975/630/850µ) אבל-הארנה-נשארה 3µ — והיא-המממנת-את-בוטי-הרעש (זריעה=transfer
+    // שדורש-גז-100µ) ואת-המנעול-ואת-חגורת-הסולם. בלי-גז-ארנה: אפס-זריעה → אפס-רעש →
+    // אפס-פילים. הארנה-ראשונה-בתור = מפתח-המפל: גז-ארנה → זריעה → רעש → חציות → עמלות.
+    for (const ag of ["arena", ...soldiers, "bot-a", "bot-b", "bot-c", "bot-e", "rail"]) {
       const c = st.credits[ag] ?? 0;
       // FIX(SETTLE-15 fuel-oscillation, נתפס-בלוג-הדחיות): סף-10k = מילוי-מוקדם-בחלון-אחד,
       // אפס-דחיות; זו-העברה-טהורה (אפס-הטבעה) — השריפה-הכוללת-לא-משתנה, רק-התזמון-מוקדם.
@@ -367,10 +376,16 @@ export function arenaTick(
         // שנתפסה, אף-ממנה-לא-נחפר-מעבר-לרצפת-שלו.
         let funder: string | null = null;
         let amt = 0;
+        // EXEC-CD-46 · refuel-fairness: נמדד-חי (h175,455): המחזור-החי-היחיד (מחזור-גז-הספר
+        // ~9,600µ/חלון → אוצר) נבלע-כולו בסוכן-הראשון-בתור (soldier-1, דרישה ~27,925µ) —
+        // soldier-2/3/4 + arena + bot-e נשארים אפס-גז (45/0/10/3/20µ) לנצח → ספר-מייקר-יחיד →
+        // אין-צד-שני-לחצות → fills=0. תקרת-הוגנות-פר-סוכן-פר-חלון מפזרת-את-הדלק-הדח —
+        // כל-הגריד-חוזר-לצטט תוך-חלון-שניים, ומחזור-הגז-גדל-עם-השריפה (איזון-עצמי).
+        const REFUEL_FAIRNESS_CAP = 2_000;
         for (const f of FUNDER_ORDER) {
           if (f === ag) continue;
           const afford = funderAfford(st, f) - (fuelBudget.get(f) ?? 0);
-          if (afford >= Math.min(need, FUEL_ASK_MIN)) { funder = f; amt = Math.min(need, afford); break; }
+          if (afford >= Math.min(need, FUEL_ASK_MIN)) { funder = f; amt = Math.min(need, afford, REFUEL_FAIRNESS_CAP); break; }
         }
         if (!funder || amt <= 0) continue;
         fuelBudget.set(funder, (fuelBudget.get(funder) ?? 0) + amt);
