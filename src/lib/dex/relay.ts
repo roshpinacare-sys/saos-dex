@@ -42,7 +42,7 @@ import path from "path";
 import { createHash, timingSafeEqual } from "crypto";
 import type { SealInfo } from "./chain";
 import { chaosPartitioned } from "./chaos";
-import { fleetConfigured, fleetSealNow, fleetStatusPublic } from "./fleet";
+import { fleetConfigured, fleetSealNow, fleetSealOn, fleetStatusPublic } from "./fleet";
 
 import { fencedFetch } from "./fence"; // FIX(SETTLE-11)+FIX(Roast-65-b · H2): כל-ה-fetch-ים-דרך-הגדר (redirect:error מרוכז)
 import { ethSealBroadcast, verifyEthAnchor, ethIdentity, signEthAnchor, ETH_RPCS,
@@ -66,7 +66,7 @@ type GrapheneTx = {
   extensions: unknown[];
 };
 
-const ZERO_CHAIN_ID = "0000000000000000000000000000000000000000000000000000000000000000";
+export const ZERO_CHAIN_ID = "0000000000000000000000000000000000000000000000000000000000000000";
 /* Roast-74: מזהה-השרשרת-של-Steem (ג'נזיס = אפסים) — מיוצא למבצע-המסילה-הרב-רשתי */
 export const STEEM_CHAIN_ID = ZERO_CHAIN_ID;
 
@@ -177,6 +177,9 @@ interface RelayMetrics {
   mismatches: number;
   breakerTrips: number;
   economicWaits: number;
+  /* ROTATION ENGINE (Task 3-a): כמה-פעמים כשל-דלק על-הזהות-הראשית נפתר-בחייל-צי
+   * במקום עצירת-מנוע — המדד-הקנוני ל"המסילה-לא-עצרה". */
+  rotations: number;
   lastVerifyLatencyMs: number | null;
 }
 
@@ -758,8 +761,9 @@ export async function rcMana(endpoint: string, account: string): Promise<number 
   }
 }
 
-/* ── op טרי לכל שידור (signTransaction מוטט את האובייקט — מורשת anchor.cjs) ── */
-function buildOp(account: string, payload: unknown, auth: "posting" | "active"): [string, Record<string, unknown>] {
+/* ── op טרי לכל שידור (signTransaction מוטט את האובייקט — מורשת anchor.cjs) ──
+ * ROTATION ENGINE (Task 3-a): מיוצא-גם-ל-fleet.ts (חתימת-חיילים על blurt עם אותו-op-קנוני). */
+export function buildOp(account: string, payload: unknown, auth: "posting" | "active"): [string, Record<string, unknown>] {
   return ["custom_json", {
     // FIX(CROSS-F-01): POSTING כשיש-מפתח-פרסום — יכולת-העברת-כספים מוסרת-מהשידור-האוטומטי
     required_auths: auth === "active" ? [account] : [],
@@ -1310,6 +1314,8 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
    * Task 11-b: הועבר-למעלה-מתוך-ה-try (הפקה-טהורה-מהעבודה) — אותו-אובייקט-שנבנה
    * כאן-הוא-זה שהוערך בשער-המדיניות (לפני-המפתח) ושייחתם במסגרת-החתימה. */
   const payload = canonicalSealPayload(job);
+  /* ROTATION ENGINE (Task 3-a): התפקיד-שבאמת-חתם כשהמשמרת-נתנה-לחייל-צי (ל-audit-trail-כנה) */
+  let rotatedRole: "posting" | "active" | null = null;
   try {
     /* chaos-gate — scripts/chaos-test.ts: מחיצת-רשת מוזרקת בתוך-נתיב-הכשל הרגיל.
      * SECURITY INTENT: הזריקה חייבת לעבור בדיוק כמו RPC בלתי-נגיש — catch →
@@ -1410,18 +1416,42 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
     // מ-RPC-ציבורי) אינם כשל-מערכת — הם המתנה-כלכלית כנה. ספירתם ככשל-קשי
     // יצרה-מעגל-שבירה: breaker נפתח ×7 על-רכבת-בריאה שרק-מוגבלת-תדר.
     // SETTLE-13: "no usable account" (צי: כל-החשבונות-RC-קר/בהתקררות) = המתנה-כלכלית-גם-כן
-    const economic = /rc-low|has not enough RC|unfunded|backing-floor|gas-ceiling|rate limit|too many requests|quota|\b429\b|no usable account/i.test(msg);
+    const economic = /rc-low|has not enough RC|unfunded|backing-floor|gas-ceiling|rate limit|too many requests|quota|\b429\b|no usable account|acnt\.balance\s*>=?\s*fee/i.test(msg);
     if (economic) {
       // חוסר-תקציב = המתנה כלכלית כנה — לא כשל-מערכת (לא נספר ל-breaker); בדיקה-מחדש תקופתית
       cs.attempts = 0;
       cs.rcWaits += 1;
       rt.metrics.economicWaits += 1;
-      rec.status = "pending";
-      rec.attempt = cs.rcWaits;
-      cs.nextTryAt = Date.now() + econWaitMin(chain) * 60_000;
-      if (cs.rcWaits > 48) { rec.status = "failed"; cs.done = true; rec.error = msg + " · budget-wait expired (honest)"; }
-      else rec.error = msg;
-      rt.chainState[chain].lastError = msg;
+      /* ── ROTATION ENGINE (Task 3-a · ניהול-דלק-אוטונומי): כשל-דלק על הזהות-הראשית
+       * אינו עצירת-מנוע — הצבא-מהכספת מקבל-את-המשמרת (hive/steem: RC · blurt: fee-balance).
+       * ניסיון-אחד-מדוד-פר-כשל; הצלחה = עיגון-מלא עם rec.account=חייל; כשל = המתנה-
+       * הכלכלית-הכנה נמשכת (ה-breaker-הפר-חשבון של-הצי רוסן-לולאות). אפס-סודות בלוגים. ── */
+      let rotated = false;
+      if (chain === "steem" || chain === "hive" || chain === "blurt") {
+        try {
+          const r = await fleetSealOn(chain, payload, anchorAccount ?? undefined);
+          rec.txid = r.txid;
+          rec.account = r.account;
+          rec.status = "anchored";
+          rec.error = undefined;
+          rotated = true;
+          rotatedRole = r.role;
+          rt.metrics.rotations += 1;
+          rt.chainState[chain].endpointHost = hostOf(chain === "steem" ? STEEM_NODES[0] : chain === "hive" ? HIVE_NODES[0] : BLURT_NODES[0]);
+          console.info(`[saos-relay][ROTATION] ${chain}: ${anchorAccount} → ${r.account} (fuel-fallback · wait#${cs.rcWaits} · txid ${r.txid})`);
+        } catch (rotErr) {
+          const rm = String((rotErr as Error)?.message || rotErr).slice(0, 140);
+          console.info(`[saos-relay][ROTATION] ${chain}: fleet-fallback unavailable — ${rm} · continuing honest economic wait`);
+        }
+      }
+      if (!rotated) {
+        rec.status = "pending";
+        rec.attempt = cs.rcWaits;
+        cs.nextTryAt = Date.now() + econWaitMin(chain) * 60_000;
+        if (cs.rcWaits > 48) { rec.status = "failed"; cs.done = true; rec.error = msg + " · budget-wait expired (honest)"; }
+        else rec.error = msg;
+        rt.chainState[chain].lastError = msg;
+      }
     } else if (/expecting 32 bytes|invalid (wif|private|key)|bad (wif|base58)|checksum/i.test(msg)) {
       // FIX(SETTLE-11): שגיאת-תצורה (מפתח-פסול) היא קבועה — אין-טעם-בניסיונות-חוזרים;
       // לא-נספרת-ל-breaker (לא-רכבת-כשלים-אמיתית), סימון-כנה וסיום.
@@ -1461,7 +1491,9 @@ async function attemptChain(rt: RelayRT, keys: RelayKeys | null, job: SealJob, c
      * בתהליך). role = התפקיד-שבאמת-חתם (post-self-heal ל-graphene; פעולות-ערך = active;
      * צי = posting). אפס-סודות: חשבון-ציבורי/גובה/txid בלבד. */
     const usedRole: RelayAnchorRole | null =
-      chain === "steem" ? (keys?.steemAuth ?? null)
+      rotatedRole // Task 3-a: המשמרת-מהצי — התפקיד-המדוד שבאמת חתם (posting/active)
+      ? rotatedRole
+      : chain === "steem" ? (keys?.steemAuth ?? null)
       : chain === "hive" ? (keys?.hiveAuth ?? null)
       : chain === "fleet" ? "posting"
       : "active"; // blurt (buildOp active) · tron/eth/sol (פעולות-ערך)
@@ -1616,7 +1648,7 @@ function rtInit(): RelayRT {
   const rt: RelayRT = {
     jobs: [], processing: false, records: [],
     chainState: { steem: mk(cfg.steem), hive: mk(cfg.hive), blurt: mk(cfg.blurt), tron: mk(cfg.tron), eth: mk(cfg.eth), sol: mk(cfg.sol), fleet: mk(fleetConfigured()) },
-    metrics: { broadcasts: 0, verified: 0, mismatches: 0, breakerTrips: 0, economicWaits: 0, lastVerifyLatencyMs: null },
+    metrics: { broadcasts: 0, verified: 0, mismatches: 0, breakerTrips: 0, economicWaits: 0, rotations: 0, lastVerifyLatencyMs: null },
     account: cfg.account,
     tronAddress: null,
     ethAddress: null,

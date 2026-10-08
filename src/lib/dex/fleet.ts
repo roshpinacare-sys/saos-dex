@@ -26,7 +26,11 @@ import path from "path";
 import { scryptSync, createDecipheriv, createHash } from "crypto";
 import steemLibRaw from "steem";
 import { fencedFetch } from "./fence"; // FIX(Roast-65-b · H2): גדר + redirect:error מרוכזים
-import { ANCHOR_ID, HIVE_CHAIN_ID, HIVE_NODES, grapheneSealBroadcast, rcMana } from "./relay";
+import { signAndSendBlurt } from "./signer";
+import {
+  ANCHOR_ID, HIVE_CHAIN_ID, HIVE_NODES, STEEM_NODES, BLURT_NODES, ZERO_CHAIN_ID,
+  buildOp, grapheneSealBroadcast, rcMana,
+} from "./relay";
 
 interface SteemAuth {
   auth: { wifToPublic(wif: string): string };
@@ -78,6 +82,10 @@ const PROBE_TTL_MS = 10 * 60_000;         // תוקף-בדיקת-סמכויות/
 const ACCT_BREAKER_TRIPS = 3;             // כשלים-רצופים-פר-חשבון → התקררות
 const ACCT_COOLDOWN_MS = 10 * 60_000;
 const MAX_ANCHOR_TRIES = 3;               // עד-3-חשבונות-בניסיון-חותם-אחד
+/* ROTATION ENGINE (Task 3-a): BLURT היא fee-borne (אין-RC — אומת-חי). היתרה
+ * הנמדדה-חי של-headcorner היתה 0.083-BLURT-והשרשרת דחתה "acnt.balance>=fee".
+ * רצפה-שמרטנית לחייל-צי כדי-לשאת-עיגון-custom_json; ניתנת-לכוונון-בסביבה. */
+const BLURT_FEE_MIN = Number(process.env.BLURT_FEE_MIN ?? "1");
 
 const MAGIC = "SAOS-FLEET-VAULT-1";
 
@@ -167,8 +175,14 @@ function accountsFromJson(json: string): VaultAccount[] {
 interface FleetAccountRT {
   postingWif: string;      // סוד — זיכרון-בלבד
   postingPub: string;
-  authorityOk: boolean | null;
-  rcEffective: number | null;
+  authorityOk: boolean | null;   // HIVE posting-סמכות-חיה
+  rcEffective: number | null;    // HIVE RC-אפקטיבי (הקרנה-קנונית)
+  /* ROTATION ENGINE (Task 3-a): מטריצת-שרשראות-פר-חייל — מדידה-חיה-כנה, null=לא-ידוע */
+  steemOk: boolean | null;       // STEEM posting-סמכות-חיה
+  steemRc: number | null;        // STEEM RC-אפקטיבי
+  blurtOk: boolean | null;       // BLURT סמכות-חיה (posting או active)
+  blurtRole: "posting" | "active" | null;
+  blurtBalance: number | null;   // BLURT נזיל (fee-borne — אין-RC)
   failCount: number;
   lastFailAt: number | null;
   anchoredCount: number;
@@ -248,6 +262,8 @@ function tryOpen(rt: FleetRT): void {
           postingWif: pubOk ? winningWif : "",   // לא-מאומת → לא-נשמר
           postingPub: a.keys.posting!.pub,
           authorityOk: null, rcEffective: null,
+          steemOk: null, steemRc: null,
+          blurtOk: null, blurtRole: null, blurtBalance: null,
           failCount: 0, lastFailAt: null,
           anchoredCount: 0, lastTxid: null, lastAnchorAt: null,
         });
@@ -319,9 +335,46 @@ export async function fleetProbe(force = false): Promise<void> {
         acct.rcEffective = null;
       }
     }
+    /* ── ROTATION ENGINE (Task 3-a): מדידת-STEEM-ו-BLURT-פר-חייל — אותו-עקרון-כנות:
+     * סמכות-מול-השרשרת (לא-נניח) + משאבים (RC/יתרה). null = לא-נמדד (צומת-שקט). ── */
+    for (const node of STEEM_NODES) {
+      try {
+        const res = await rpcJson<{ id: number; name: string; posting: { key_auths: [string, number][] } }[]>(
+          node, { jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [names], id: 1 },
+        );
+        for (const a of res ?? []) {
+          const acct = rt.accounts.get(a.name);
+          if (acct) acct.steemOk = (a.posting?.key_auths ?? []).some((k) => k[0] === acct.postingPub);
+        }
+        break;
+      } catch { /* צומת-הבא — כנות: null נשאר לא-ידוע */ }
+    }
+    for (const [name, acct] of rt.accounts) {
+      if (!acct.postingWif || acct.steemOk !== true) { acct.steemRc = null; continue; }
+      acct.steemRc = await rcMana(STEEM_NODES[0], name);
+    }
+    for (const node of BLURT_NODES) {
+      try {
+        const res = await rpcJson<{ id: number; name: string; posting: { key_auths: [string, number][] }; active: { key_auths: [string, number][] }; balance: string }[]>(
+          node, { jsonrpc: "2.0", method: "condenser_api.get_accounts", params: [names], id: 1 },
+        );
+        for (const a of res ?? []) {
+          const acct = rt.accounts.get(a.name);
+          if (!acct) continue;
+          const postingHit = (a.posting?.key_auths ?? []).some((k) => k[0] === acct.postingPub);
+          const activeHit = (a.active?.key_auths ?? []).some((k) => k[0] === acct.postingPub);
+          acct.blurtOk = postingHit || activeHit;
+          acct.blurtRole = postingHit ? "posting" : activeHit ? "active" : null;
+          acct.blurtBalance = Number(String(a.balance ?? "0").split(" ")[0]) || 0;
+        }
+        break;
+      } catch { /* צומת-הבא */ }
+    }
     rt.probedAt = Date.now();
     const ok = names.filter((n) => rt.accounts.get(n)?.authorityOk).length;
-    console.info(`[saos-fleet] probe: ${ok}/${names.length} accounts authority-verified on Hive (TTL ${PROBE_TTL_MS / 60000}min)`);
+    const sOk = names.filter((n) => rt.accounts.get(n)?.steemOk === true).length;
+    const bOk = names.filter((n) => rt.accounts.get(n)?.blurtOk === true).length;
+    console.info(`[saos-fleet] probe: hive ${ok}/${names.length} · steem ${sOk}/${names.length} · blurt ${bOk}/${names.length} authority-verified (TTL ${PROBE_TTL_MS / 60000}min)`);
   } finally {
     rt.probing = false;
   }
@@ -329,13 +382,34 @@ export async function fleetProbe(force = false): Promise<void> {
 
 /* ── בחירת-חשבון: סמכות-חיה + RC + breaker-פר-חשבון, סבב-על-המובילים ─────────── */
 function usable(rt: FleetRT): { name: string; rc: number }[] {
+  return usableFor(rt, "hive").map((c) => ({ name: c.name, rc: c.rc }));
+}
+
+/* ROTATION ENGINE (Task 3-a): בחירת-חייל-פר-שרשרת —
+ *   hive:  posting-סמכות-חיה + RC≥210M (המדידה-הקנונית)
+ *   steem: posting-סמכות-חיה + RC (null=לא-נמדד → מותר-ניסיון-מדוד; ה-breaker-הפר-חשבון ירסן)
+ *   blurt: סמכות-חיה (posting/active) + יתרה≥BLURT_FEE_MIN (fee-borne — אין-RC)
+ * exclude=הזהות-הראשית שנכשלה-דלק — היא-מנופה מהסבב. */
+function usableFor(
+  rt: FleetRT, chain: "hive" | "steem" | "blurt", exclude?: string,
+): { name: string; rc: number; role: "posting" | "active" }[] {
   const now = Date.now();
-  const out: { name: string; rc: number }[] = [];
+  const ex = (exclude ?? "").toLowerCase();
+  const out: { name: string; rc: number; role: "posting" | "active" }[] = [];
   for (const [name, a] of rt.accounts) {
-    if (!a.postingWif || a.authorityOk !== true) continue;
-    if (a.rcEffective !== null && a.rcEffective < RC_MIN_FLEET) continue;
+    if (!a.postingWif || name === ex) continue;
     if (a.failCount >= ACCT_BREAKER_TRIPS && a.lastFailAt && now - a.lastFailAt < ACCT_COOLDOWN_MS) continue;
-    out.push({ name, rc: a.rcEffective ?? 0 });
+    if (chain === "hive") {
+      if (a.authorityOk !== true || a.rcEffective === null || a.rcEffective < RC_MIN_FLEET) continue;
+      out.push({ name, rc: a.rcEffective, role: "posting" });
+    } else if (chain === "steem") {
+      if (a.steemOk !== true) continue;
+      if (a.steemRc !== null && a.steemRc < RC_MIN_FLEET) continue;
+      out.push({ name, rc: a.steemRc ?? 0, role: "posting" });
+    } else {
+      if (a.blurtOk !== true || (a.blurtBalance ?? 0) < BLURT_FEE_MIN) continue;
+      out.push({ name, rc: a.blurtBalance ?? 0, role: a.blurtRole ?? "posting" });
+    }
   }
   return out.sort((x, y) => y.rc - x.rc);
 }
@@ -350,30 +424,52 @@ export type FleetAnchorPayload = {
 export async function fleetSealNow(
   payload: FleetAnchorPayload,
 ): Promise<{ txid: string; account: string; block: number | null }> {
+  const r = await fleetSealOn("hive", payload);
+  return { txid: r.txid, account: r.account, block: r.block };
+}
+
+/* ── fleetSealOn (Task 3-a · מנוע-הרוטציה): חתימת-חייל-על-כל-שרשרת-גרפנית ──────
+ * hive/steem: נתיב-החתימה-הקנוני (grapheneSealBroadcast — chain-id-פר-שרשרת).
+ * blurt: ה-SDK-הרשמי בלבד (Roast-82 — steem-js נדחה-ע"י-השרשרת) עם role-מהמדידה.
+ * אותן-ערבויות: POSTING-עדיף, breaker-פר-חשבון, סבב-על-ממונים-לפי-משאב-חי. */
+export async function fleetSealOn(
+  chain: "hive" | "steem" | "blurt",
+  payload: FleetAnchorPayload,
+  exclude?: string,
+): Promise<{ txid: string; account: string; block: number | null; role: "posting" | "active" }> {
   const rt = fleetInit();
   if (!rt.openedOk) throw new Error(`fleet disabled: ${rt.openError ?? "vault unavailable"}`);
   await fleetProbe(false);
-  const cands = usable(rt);
-  if (cands.length === 0) throw new Error("fleet: no usable account (probe first — authority/RC/breaker)");
+  const cands = usableFor(rt, chain, exclude);
+  if (cands.length === 0) {
+    throw new Error(`fleet: no usable ${chain} account (probe first — authority/RC/fee/breaker)`);
+  }
   let lastErr: Error | null = null;
   for (let i = 0; i < Math.min(MAX_ANCHOR_TRIES, cands.length); i++) {
     const sel = cands[(rt.rrIndex + i) % cands.length];
     const acct = rt.accounts.get(sel.name)!;
     try {
-      const r = await grapheneSealBroadcast(HIVE_NODES[0], HIVE_CHAIN_ID, sel.name, payload, acct.postingWif, "posting");
+      let r: { txid: string; block?: number | null };
+      if (chain === "blurt") {
+        r = await signAndSendBlurt(BLURT_NODES[0], sel.name, [buildOp(sel.name, payload, sel.role)], acct.postingWif);
+      } else {
+        const node = chain === "steem" ? STEEM_NODES[0] : HIVE_NODES[0];
+        const chainId = chain === "steem" ? ZERO_CHAIN_ID : HIVE_CHAIN_ID;
+        r = await grapheneSealBroadcast(node, chainId, sel.name, payload, acct.postingWif, sel.role);
+      }
       acct.anchoredCount += 1;
       acct.lastTxid = r.txid;
       acct.lastAnchorAt = new Date().toISOString();
       acct.failCount = 0;
       rt.rrIndex = (rt.rrIndex + i + 1) % Math.max(1, cands.length);
-      return { txid: r.txid, account: sel.name, block: r.block };
+      return { txid: r.txid, account: sel.name, block: r.block ?? null, role: sel.role };
     } catch (e) {
       lastErr = e as Error;
       acct.failCount += 1;
       acct.lastFailAt = Date.now();
     }
   }
-  throw lastErr ?? new Error("fleet: anchor failed on all candidates");
+  throw lastErr ?? new Error(`fleet: ${chain} anchor failed on all candidates`);
 }
 
 /* ── מצב-ציבורי (אפס-סודות — ל-API/UI) ─────────────────────────────────────── */
@@ -391,6 +487,12 @@ export function fleetStatusPublic(): Record<string, unknown> {
       authorityOk: a.authorityOk,
       rcEffective: a.rcEffective,
       rcOk: a.rcEffective !== null && a.rcEffective >= RC_MIN_FLEET,
+      /* ROTATION ENGINE (Task 3-a): מטריצה-ציבורית-מלאה (אפס-סודות) */
+      steemOk: a.steemOk,
+      steemRc: a.steemRc,
+      blurtOk: a.blurtOk,
+      blurtRole: a.blurtRole,
+      blurtBalance: a.blurtBalance,
       failCount: a.failCount,
       anchoredCount: a.anchoredCount,
       lastTxid: a.lastTxid,
@@ -399,6 +501,13 @@ export function fleetStatusPublic(): Record<string, unknown> {
         && !(a.failCount >= ACCT_BREAKER_TRIPS && a.lastFailAt && Date.now() - a.lastFailAt < ACCT_COOLDOWN_MS),
     })),
     usableCount: usable(rt).length,
+    /* גדלי-מוכנות-פר-שרשרת — מזין ישירות את Fuel Deck (receipts/fuel-state-latest.json) */
+    usableByChain: {
+      hive: usableFor(rt, "hive").length,
+      steem: usableFor(rt, "steem").length,
+      blurt: usableFor(rt, "blurt").length,
+    },
+    blurtFeeMin: BLURT_FEE_MIN,
   };
 }
 
