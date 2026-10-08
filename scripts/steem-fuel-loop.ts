@@ -75,8 +75,9 @@ if (rStm > 0 || rSbd > 0 || rVest > 0) {
   }];
   try {
     const r = await grapheneOpsBroadcast(STEEM_NODES[0], ZERO_CHAIN_ID, ACCOUNT, [op], WIF, "posting");
-    ledger.claimed = { txid: r.txid, claimed: { steem: rStm, sbd: rSbd, vesting: rVest } };
-    console.log(JSON.stringify({ status: "claimed", txid: r.txid, claimed: ledger.claimed.claimed }));
+    const claimed = { txid: r.txid, claimed: { steem: rStm, sbd: rSbd, vesting: rVest } };
+    ledger.claimed = claimed;
+    console.log(JSON.stringify({ status: "claimed", txid: r.txid, claimed: claimed.claimed }));
   } catch (e) {
     ledger.error = String((e as Error)?.message ?? e).slice(0, 160);
     console.log(JSON.stringify({ status: "claim-failed-honest", error: ledger.error }));

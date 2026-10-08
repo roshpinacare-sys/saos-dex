@@ -199,7 +199,7 @@ async function buildSol(): Promise<Record<string, unknown>> {
   const memo = JSON.stringify(payload);
   const memoProgram32 = bs58.decode(SOL_MEMO_PROGRAM);
 
-  let blockhash: Buffer | null = null, balance: number | null = null, live = true;
+  let blockhash: Uint8Array | null = null, balance: number | null = null, live = true;
   const notes: string[] = [];
   try {
     const ep = SOL_RPCS[0];
