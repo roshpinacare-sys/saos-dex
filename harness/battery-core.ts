@@ -527,7 +527,15 @@ export async function runBattery(rawState: DexState, M: BatteryMods, opts: Batte
               if (dSenderIn !== -amt) bads.push(`Δsender[in]=${dSenderIn} ≠ -${amt}`);
               if (dSenderOut !== outExp) bads.push(`Δsender[out]=${dSenderOut} ≠ out=${outExp}`);
               if (dTreasury !== treasuryFee) bads.push(`Δtreasury=${dTreasury} ≠ fee=${treasuryFee}`);
-            } else if (dSenderIn !== outExp - amt) bads.push(`Δtreasury-net=${dSenderIn} ≠ ${outExp - amt}`);
+            } else {
+              // FIX(EXEC-CD-38 · attack-the-instrument): הבדיקה-הקודמת ציפתה dSenderIn==outExp-amt —
+              // באג-ממדי במכשיר: outExp ביחידות-נכס-היציאה, dSenderIn ביחידות-נכס-הכניסה.
+              // אמת-הגרעין (amm.ts poolSwap): Δissuer[assetIn] = treasuryFee - amountIn (עמלת-האוצר
+              // חוזרת-לעצמו), Δissuer[assetOut] = out. ההפרה I9-FEE-TRUTH שנתפסה 2026-10-08 07:13Z
+              // (in=1590, dynFeeBps≈7..12 → feeAmt=1 → Δ=-1589) הייתה-הגרעין-צודק-והמכשיר-טועה.
+              if (dSenderIn !== treasuryFee - amt) bads.push(`Δtreasury-net=${dSenderIn} ≠ ${treasuryFee - amt}`);
+              if (dSenderOut !== outExp) bads.push(`Δtreasury[out]=${dSenderOut} ≠ out=${outExp}`);
+            }
             if (pA && pB) {
               const dInPool = pB.a === op.assetIn ? (pA.ra - pB.ra) : (pA.rb - pB.rb);
               const dOutPool = pB.a === op.assetIn ? (pA.rb - pB.rb) : (pA.ra - pB.ra);

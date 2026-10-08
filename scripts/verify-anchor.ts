@@ -10,8 +10,10 @@
  * מקורות-אמת אפשריים (בדיקה על כל מי שזמין):
  *   · --height N --root R     ציפייה ידנית (הבודק יודע בעצמו מה ה-root הנכון)
  *   · --anchors <path>        state/anchors.json שפורסם (רשומות לפי txid)
- *   · --db <path>             db/dex.db → SealRecord (השוואת stateRoot/merkleRoot
- *                             מול החותם המקומי של חלון הגובה)
+ *   · --db <path>             db/dex.db → SealRecord (stateRoot/height) + EvidenceReceipt
+ *                             kind=seal כ-pre-image לאימות-עצמאי של ה-digest (EXEC-CD-38:
+ *                             ה-digest בפורמט-החי = hash-מסמך-החותם, לא שורש-המרקל; pre-image
+ *                             שנגרס-ברוטציה מדווח "לא-ניתן-להכרעה" — לא-מיסמאץ')
  * בלי אף מקור: SELF-REPORT כנה — העדות מוצגת כפי שהיא על השרשרת (מפורקת
  * ומאומתת-מבנית: פרוטוקול/פעולה/חתימה), אבל לא נקראת "VERIFIED" — כנות
  * מוסדית: אימות דורש צד-השוואה, אחרת זה רק קריאה.
@@ -30,8 +32,30 @@
  * ═══════════════════════════════════════════════════════════════════════ */
 
 import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+
+/** stableStringify — העתק-מפרט נאמן של canon() (src/lib/dex/canonical.ts):
+ * מפתחות-ממוינים · undefined-נופל · מערכים-בסדר · אין-רווח. הכלי אפס-יבוא-מ-src
+ * לפי-עיצובו — לכן המפרט מוצמד-כאן; שינוי-ב-canon() מחייב-עדכון-כאן. */
+function stableStringify(v: unknown): string {
+  const walk = (x: unknown): string => {
+    if (x === null || x === undefined) return "null";
+    const t = typeof x;
+    if (t === "number") { if (!Number.isSafeInteger(x)) throw new Error("non-integer"); return JSON.stringify(x); }
+    if (t === "boolean" || t === "string") return JSON.stringify(x);
+    if (Array.isArray(x)) return "[" + x.map(walk).join(",") + "]";
+    if (t === "object") {
+      const o = x as Record<string, unknown>;
+      const keys = Object.keys(o).filter((k) => o[k] !== undefined).sort();
+      return "{" + keys.map((k) => JSON.stringify(k) + ":" + walk(o[k])).join(",") + "}";
+    }
+    throw new Error(`unsupported ${t}`);
+  };
+  return walk(v);
+}
+const sha256Hex = (s: string): string => createHash("sha256").update(s).digest("hex");
 
 const ANCHOR_ID = "saos-dex.anchor.v1";
 
@@ -62,6 +86,11 @@ interface Expectation {
   stateRoot?: string;
   merkleRoot?: string;
   account?: string;
+  /** EXEC-CD-38: ה-digest בעיגון-החי הוא hash-מסמך-החותם (SealInfo), לא שורש-המרקל.
+   * כשקבלת-העדות (EvidenceReceipt kind=seal) מחזיקה את ה-pre-image המלא — אנחנו
+   * מאמתים אותו עצמאית (hash-עצמי מחושב-מחדש). כשה-pre-image נגזר — כנות: לא-ניתן
+   * להכרעה, ואין-לספור-זאת-כמיסמאץ' (stateRoot נשאר ההתחייבות-הניתנת-לאימות). */
+  sealDoc?: { digest: string } | null;
 }
 
 interface OnChainFinding {
@@ -145,6 +174,22 @@ function expectationsFromDb(file: string, payloadHeight?: number): Expectation[]
         ? db.query("SELECT root, stateRoot, fromHeight, toHeight, leavesCount FROM SealRecord WHERE toHeight = ? OR stateRoot IS NOT NULL ORDER BY createdAt DESC LIMIT 400").all(payloadHeight)
         : db.query("SELECT root, stateRoot, fromHeight, toHeight, leavesCount FROM SealRecord ORDER BY createdAt DESC LIMIT 400").all()
     ) as Array<{ root: string; stateRoot: string; fromHeight: number | null; toHeight: number | null; leavesCount: number }>;
+    // EXEC-CD-38: קבלות-העדות (kind=seal) מחזיקות את מסמך-החותם המלא (canon(info) כולל-digest)
+    // — ה-pre-image היחיד שמאפשר אימות-צד-שלישי של ה-digest. הטבלה חסומה (רוטציה) —
+    // חלונות-ישנים עשויים-שלא-להחזיק-pre-image וזה-מדווח-בכנות, לא-כמיסמאץ'.
+    let sealDocs = new Map<number, string>();
+    try {
+      const receipts = db.query("SELECT payload FROM EvidenceReceipt WHERE kind = 'seal' ORDER BY createdAt DESC LIMIT 400").all() as Array<{ payload: string }>;
+      for (const rc of receipts) {
+        try {
+          const doc = JSON.parse(rc.payload) as { toHeight?: number; digest?: string; at?: number; blockHashes?: string[]; root?: string; stateRoot?: string; fromHeight?: number; leaves?: number };
+          if (typeof doc.toHeight !== "number" || !isHex64(doc.digest ?? "")) continue;
+          // בדיקה-עצמית: sha256(canon({..., digest: ""})) === digest — המסמך מאמת-את-עצמו
+          const self = sha256Hex(stableStringify({ ...doc, digest: "" }));
+          if (self === doc.digest) sealDocs.set(doc.toHeight, doc.digest); // מסמך-שלם-ומאומת
+        } catch { /* קבלה-לא-ניתנת-לפירוק — מדלגים */ }
+      }
+    } catch { /* טבלה חסרה — ממשיכים בלי pre-image */ }
     db.close();
     return rows
       .filter((r) => isHex64(r.stateRoot) && (payloadHeight === undefined || (r.fromHeight ?? 0) <= payloadHeight && payloadHeight <= (r.toHeight ?? Number.MAX_SAFE_INTEGER)))
@@ -153,6 +198,7 @@ function expectationsFromDb(file: string, payloadHeight?: number): Expectation[]
         height: r.toHeight ?? undefined,
         stateRoot: r.stateRoot,
         merkleRoot: isHex64(r.root) ? r.root : undefined,
+        sealDoc: sealDocs.get(r.toHeight ?? -1) ? { digest: sealDocs.get(r.toHeight ?? -1)! } : null,
       }));
   } catch {
     return [];
@@ -220,15 +266,30 @@ const expects: Expectation[] = [
   ...expectationsFromDb(DB_PATH, found.payload.height),
 ];
 
-/* 2) השוואה — ביט מול ביט על stateRoot (+height כשיש) + merkleRoot מול db */
+/* 2) השוואה — ביט מול ביט על stateRoot (+height כשיש) + digest מול ה-pre-image שלו.
+ * FIX(EXEC-CD-38 · attack-the-instrument): הכלי השווה את payload.digest מול SealRecord.root —
+ * טעות-קטגוריה: ה-digest בפורמט-החי הוא hash-מסמך-החותם (chain.ts: info.digest=sha256(canon(info)))
+ * ואילו root הוא שורש-המרקל של חלון-hashי-הבלוקים — שניים-שאינם-מוגדרים-להיות-שווים.
+ * זה-יצר "מיסמאץ'"-כוזב לכל עיגון-שאינו-האחרון (נתפס 2026-10-08 בסריקה-ההיסטורית-המלאה).
+ * עכשיו: digest נאמת מול קבלת-העדות (pre-image מאומת-עצמית); אין-pre-image = לא-ניתן-להכרעה
+ * (מדווח-בכנות, לא-נכשל); פורמט-ישן (payload.digest==root) עוד-מתקבל. */
 const comparisons = expects.map((e) => {
   const rootOk = e.stateRoot !== undefined && found!.payload.stateRoot === e.stateRoot;
   const heightOk = e.height === undefined || found!.payload.height === e.height;
-  const merkleOk = e.merkleRoot === undefined || found!.payload.merkleRoot === e.merkleRoot;
+  let digestState: "seal-doc-verified" | "root-format" | "undecidable" | "mismatch" = "undecidable";
+  if (e.sealDoc) digestState = found!.payload.digest === e.sealDoc.digest ? "seal-doc-verified" : "mismatch";
+  else if (e.merkleRoot !== undefined && (found!.payload.digest === e.merkleRoot || found!.payload.merkleRoot === e.merkleRoot)) digestState = "root-format";
+  else if (found!.payload.digest !== undefined) digestState = "undecidable";
+  const digestLabel = digestState === "seal-doc-verified" ? "digest=hash-מסמך-החותם אומת-מול-קבלת-העדות"
+    : digestState === "root-format" ? "digest בפורמט-ישן (שורש-מרקל) — שווה"
+    : digestState === "mismatch" ? "digest שונה מה-pre-image המקומי"
+    : "digest לא-ניתן-להכרעה מקומית (pre-image נגרץ מהרוטציה — stateRoot הוא-ההתחייבות-הניתנת-לאימות)";
+  const hardFail = !rootOk || digestState === "mismatch";
   return {
     source: e.source,
-    pass: rootOk && heightOk && merkleOk,
-    detail: `stateRoot ${rootOk ? "שווה" : "שונה"}${e.height !== undefined ? ` · height ${heightOk ? "שווה" : "שונה"}` : ""}${e.merkleRoot !== undefined ? ` · merkleRoot ${merkleOk ? "שווה" : "שונה"}` : ""}`,
+    pass: rootOk && heightOk && digestState !== "mismatch",
+    hardFail,
+    detail: `stateRoot ${rootOk ? "שווה" : "שונה"}${e.height !== undefined ? ` · height ${heightOk ? "שווה" : "שונה"}` : ""} · ${digestLabel}`,
   };
 });
 
@@ -242,7 +303,8 @@ const structural = {
 const structuralOk = Object.values(structural).every(Boolean);
 
 let verdict: "VERIFIED" | "MISMATCH" | "SELF-REPORT";
-if (comparisons.some((c) => c.pass)) verdict = "VERIFIED";
+// EXEC-CD-38: הפסק fail-closed — מקור-אחד-עובר אינו-מכסה hard-fail במקור-אחר (מחלוקת-מקורות = חשד)
+if (comparisons.some((c) => c.pass) && !comparisons.some((c) => c.hardFail)) verdict = "VERIFIED";
 else if (comparisons.length > 0) verdict = "MISMATCH";
 else verdict = "SELF-REPORT";
 
