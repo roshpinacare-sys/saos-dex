@@ -1,0 +1,42 @@
+{
+  "instrument": "insider-suite",
+  "at": "2026-10-08T01:49:40.936Z",
+  "verdict": "PASS",
+  "checks": [
+    {
+      "id": "I1-impersonation-measured",
+      "pass": true,
+      "detail": "one token acted as 'arena' (1µ probe, returned) — trust model measured honestly: single operator token = full wallet power BY DESIGN, kernel-bound (caps+conservation) but not per-identity"
+    },
+    {
+      "id": "I2-cap-enforced-for-operator",
+      "pass": true,
+      "detail": "3,000,000µ > FREE_XFER_CAP → rejected: bad-amount (1..2000000µ — תקרת-החינם-פר-פקודה)"
+    },
+    {
+      "id": "I3-token-hygiene",
+      "pass": true,
+      "detail": "DEX_OPERATOR_TOKEN: .env gitignored=true mode=600 · master-key file exists=false gitignored=true mode=n/a — secrets stay off the ledger and off the disk-world-readable"
+    },
+    {
+      "id": "I4a-integrity-layer",
+      "pass": true,
+      "detail": "+7µ on treasury.SAOS → stateRoot differs (flip detected by canonical hash)"
+    },
+    {
+      "id": "I4b-economy-layer-supply-break",
+      "pass": true,
+      "detail": "covert destroy 500µ (treasury) → supply audit: CAUGHT (native USDS: live 69704418 ≠ genesis+declared 69704918)"
+    },
+    {
+      "id": "I4c-redistribution-via-root-layer",
+      "pass": true,
+      "detail": "covert -500µ/+500µ shift → supply-audit silent BY DESIGN (Σ preserved) · integrity layer CAUGHT it (stateRoot differs) — division of labor documented and proven"
+    },
+    {
+      "id": "I5-post-audit-clean",
+      "pass": true,
+      "detail": "ledger audit after insider fire: ok=true"
+    }
+  ]
+}
