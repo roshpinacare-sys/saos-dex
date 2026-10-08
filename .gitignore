@@ -63,6 +63,9 @@ grids/state/pnl.json
 # (db/*.db already declared under "# local data" — now effective: the !db/dex.db
 # negation above was removed. db/*.db.pre-migration added to cover the backup copy.)
 db/*.db.pre-migration
+# EXEC-CD-32: גיבוי-הראיות של-שחזור-הגשר (dex.db.pre-recovery-154896, 4.3MB) —
+# ארכיון-מצב-ריצה על-הדיסק; האמת-בגיט היא state-snapshot+tape (העקרון: git=אמת).
+db/*.db.pre-recovery-*
 *.sqlite
 *.sqlite3
 !db/klines.json
