@@ -55,6 +55,14 @@ async function loop(intervalMs) {
   for (;;) {
     try {
       const r = await runTick();
+      // T-51: שיקוף-רצף-הענן (grid-trigger.yml) — tick → peg-offer;
+      // חסימה-כנה מתפרסמת-כ-offer.json ולא-מפילה-את-הטיק (כמו-continue-on-error-בענן).
+      try {
+        const peg = await import("./peg.mjs");
+        await peg.runPeg({});
+      } catch (e) {
+        console.error("peg-error:", String(e?.message ?? e).slice(0, 120));
+      }
       backoff = r.ok ? 1 : Math.min(backoff * 2, 8);
     } catch (e) {
       console.error("tick-error:", String(e?.message ?? e).slice(0, 120));
