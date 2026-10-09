@@ -21,6 +21,15 @@
  * כנות-מבנית: ההמרה-בפועל STEEM→BLURT/TRX דורשת venue-חוץ — הערוץ נרשם
  * "venue-pending" עד-הכרעה (הצ'רטר: אפס-endpoints-לא-מורשים). חבילות-מימוש
  * לא מדמות-יתרות-שאינן. אפס-סודות בקבלות · אפס-נתיבי-עבודה.
+ *
+ * T-34 החלטות-מוטמעות:
+ *  · D1 (spread): מדידת-מחירים-בלבד (CoinGecko-public, read-only) — מזין-את-
+ *    הכרעת-ה-venue; **אפס-מסחר** בלי-הכרעת-בעלים (הצ'רטר).
+ *  · D3 (payload-canon): saos.liquidation-pkg/1 (חבילות למטה) · saos.tx-meta/1
+ *    (tx/<chain>/<ts>-<op>.json — מטא-בלבד) · saos.tx-latency/1
+ *    (tx/broadcast-latency.jsonl ~150B/שורה — metadata-only).
+ *  · D4 (mesh): סדר-הקפצת-צמתים = דירוג-latency-חי מ-receipts/rpc-mesh-latest.json
+ *    (טרי <26ש') — fallback ל-STEEM_NODES הקנוני.
  */
 import fs from "fs";
 import path from "path";
@@ -34,6 +43,59 @@ const WIF = process.env.STEEM_POSTING_WIF ?? "";
 const MOTHER = path.join(process.cwd(), "..");
 const OUT = path.join(MOTHER, "receipts", "revenue-router-latest.json");
 const PKG_DIR = path.join(process.cwd(), "state", "broadcast-pending");
+const TX_DIR = path.join(process.cwd(), "tx");           // saos.tx-meta/1 — בידוד-נתונים
+const TX_LATENCY = path.join(TX_DIR, "broadcast-latency.jsonl"); // saos.tx-latency/1
+
+/* ── D4: סדר-צמתים מהדירוג-החי (rpc-mesh) — fallback קנוני ── */
+function steemNodeOrder(): string[] {
+  try {
+    const mesh = JSON.parse(fs.readFileSync(path.join(MOTHER, "receipts", "rpc-mesh-latest.json"), "utf8")) as { at?: string; ranked?: { steem?: Array<{ node: string; ok: boolean }> } };
+    const fresh = mesh.at ? Date.now() - Date.parse(mesh.at) < 26 * 3600 * 1000 : false;
+    const ok = (mesh.ranked?.steem ?? []).filter((n) => n.ok).map((n) => n.node);
+    if (fresh && ok.length > 0) return [...ok, ...STEEM_NODES.filter((n) => !ok.includes(n))];
+  } catch { /* כנות */ }
+  return STEEM_NODES;
+}
+
+/* ── D3: לוג-שידור — מטא-בלבד, אפס-סודות ── */
+function logTxMeta(chain: string, op: string, entry: Record<string, unknown>): void {
+  try {
+    const dir = path.join(TX_DIR, chain);
+    fs.mkdirSync(dir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.writeFileSync(path.join(dir, `${ts}-${op}.json`), JSON.stringify({ schema: "saos.tx-meta/1", at: new Date().toISOString(), chain, op, ...entry, keysLeaked: false }, null, 1) + "\n");
+    fs.mkdirSync(TX_DIR, { recursive: true });
+    // T-34-QB: node ביומן-ה-latency (מזין-את-דירוג-rpc-mesh) · txid מקוצר-ל-16 (מלא-ב-tx-meta/1) — תקרת-~150B/שורה
+    const line = JSON.stringify({ at: new Date().toISOString(), chain, op, node: entry.node ?? null, ms: entry.latencyMs ?? null, status: entry.status ?? null, txid: entry.txid ? String(entry.txid).slice(0, 16) : null });
+    fs.appendFileSync(TX_LATENCY, line + "\n");
+  } catch { /* כנות */ }
+}
+
+/* ── D1: מדידת-שערים (read-only · CoinGecko-public · אפס-מסחר) ── */
+async function measureSpread(): Promise<Record<string, unknown>> {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 9000);
+    try {
+      const res = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=steem,blurt,tron&vs_currencies=usd", { signal: ctl.signal });
+      if (!res.ok) return { status: "unreachable-honest", note: "measurement-only · no trading" };
+      const p = (await res.json()) as { steem?: { usd?: number }; blurt?: { usd?: number }; tron?: { usd?: number } };
+      const steemUsd = p.steem?.usd ?? null, blurtUsd = p.blurt?.usd ?? null, tronUsd = p.tron?.usd ?? null;
+      const treasuryUsd = steemUsd != null ? liquidSteemMeas * steemUsd : null;
+      return {
+        status: "measured (read-only)",
+        pricesUsd: { steem: steemUsd, blurt: blurtUsd, tron: tronUsd },
+        treasuryUsd,
+        impliedIfLiquidated: {
+          blurtBuyable: steemUsd != null && blurtUsd ? Math.floor((liquidSteemMeas * steemUsd) / blurtUsd * 1e6) / 1e6 : null,
+          tronBuyable: steemUsd != null && tronUsd ? Math.floor((liquidSteemMeas * steemUsd) / tronUsd * 1e6) / 1e6 : null,
+        },
+        doctrine: "measurement-only — feeds venue decision · zero execution (charter: venue-pending owner decision)",
+      };
+    } finally { clearTimeout(t); }
+  } catch { return { status: "unreachable-honest", note: "measurement-only · no trading" }; }
+}
+let liquidSteemMeas = 0;
 
 if (!ACCOUNT || !WIF) {
   console.error(JSON.stringify({ status: "not-armed (STEEM_POSTING_WIF/SAOS_RELAY_AGENT_ACCOUNT missing) — honest exit" }));
@@ -70,6 +132,7 @@ const [acc] = await grapheneAny<Acct[]>(STEEM_NODES, "condenser_api.get_accounts
 if (!acc) throw new Error("steem unreachable on all nodes (honest)");
 const rStm = num(acc.reward_steem_balance), rSbd = num(acc.reward_sbd_balance), rVest = num(acc.reward_vesting_balance);
 const liquidSteem = num(acc.balance), liquidSbd = num(acc.sbd_balance);
+liquidSteemMeas = liquidSteem;
 
 /* ── 2) תביעה כשיש-מה (אותו-מנוע-מוכח) ── */
 let claim: { txid: string; claimed: { steem: number; sbd: number; vesting: number } } | null = null;
@@ -81,10 +144,20 @@ if (rStm > 0 || rSbd > 0 || rVest > 0) {
     reward_sbd: acc.reward_sbd_balance,
     reward_vesting: acc.reward_vesting_balance,
   }];
-  try {
-    const r = await grapheneOpsBroadcast(STEEM_NODES[0], ZERO_CHAIN_ID, ACCOUNT, [op], WIF, "posting");
-    claim = { txid: r.txid, claimed: { steem: rStm, sbd: rSbd, vesting: rVest } };
-  } catch (e) { claimError = String((e as Error)?.message ?? e).slice(0, 140); }
+  const order = steemNodeOrder();
+  for (const node of order) {
+    const t0 = Date.now();
+    try {
+      const r = await grapheneOpsBroadcast(node, ZERO_CHAIN_ID, ACCOUNT, [op], WIF, "posting");
+      claim = { txid: r.txid, claimed: { steem: rStm, sbd: rSbd, vesting: rVest } };
+      logTxMeta("steem", "claim_reward_balance", { status: "confirmed", txid: r.txid, block: r.block ?? null, node: node.replace("https://", ""), latencyMs: Date.now() - t0, amounts: claim.claimed });
+      break;
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? e).slice(0, 100);
+      logTxMeta("steem", "claim_reward_balance", { status: "failed-honest", node: node.replace("https://", ""), latencyMs: Date.now() - t0, error: msg });
+      claimError = msg;
+    }
+  }
 }
 
 /* ── 3) יעדי-דלק — מדידה-חיה, אפס-המצאה ── */
@@ -162,6 +235,9 @@ packages.push({
   status: "BROADCAST-READY-INTERNAL (execution gate: venue decision — honest queue, no unauthorized endpoints)",
 });
 
+/* ── D1: שערים-חיים (מדידה-בלבד) ── */
+const spread = await measureSpread();
+
 const receipt = {
   schema: "saos.revenue-router/1",
   at: NOW,
@@ -170,6 +246,7 @@ const receipt = {
   yield: { rewards: { steem: rStm, sbd: rSbd, vesting: rVest }, liquid: { steem: liquidSteem, sbd: liquidSbd } },
   claim,
   claimError,
+  spread,
   packages,
   routing: { steemNodes: STEEM_NODES.length, blurtNodes: BLURT_NODES.length, failover: "per-call circuit override (429/timeout → next node)" },
   keysLeaked: false,
@@ -185,4 +262,4 @@ try {
   fs.writeFileSync(pkgFile, JSON.stringify({ at: NOW, account: ACCOUNT, packages }, null, 1) + "\n");
 } catch { /* כנות */ }
 
-console.log(`revenue-router: claim=${claim ? claim.txid.slice(0, 10) + "…" : claimError ? "failed-honest" : "nothing-to-claim"} · liquid=${liquidSteem}STEEM/${liquidSbd}SBD · blurt-army-unfunded=${armyUnfunded.length} · tron=${tronSun ?? "?"}sun · packages=${packages.length}`);
+console.log(`revenue-router: claim=${claim ? claim.txid.slice(0, 10) + "…" : claimError ? "failed-honest" : "nothing-to-claim"} · liquid=${liquidSteem}STEEM/${liquidSbd}SBD · blurt-army-unfunded=${armyUnfunded.length} · tron=${tronSun ?? "?"}sun · packages=${packages.length} · spread=${(spread.status as string) ?? "?"}`);
