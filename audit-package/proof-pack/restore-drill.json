@@ -1,25 +1,25 @@
 {
   "instrument": "restore-drill.ts",
-  "ts": "2026-10-08T17:44:43.835Z",
-  "verdict": "PASS",
-  "rtoMs": 50,
+  "ts": "2026-10-09T13:46:12.939Z",
+  "verdict": "FAIL",
+  "rtoMs": 63,
   "snapshot": {
-    "height": 173439,
-    "savedAt": "2026-10-08T17:44:36.332Z",
-    "ageSec": 7,
-    "stateRoot": "523c8bc99542c8fbc60501c37f38037d3301797a33e27a28090e28232ad3c1e4"
+    "height": 185919,
+    "savedAt": "2026-10-09T04:18:31.184Z",
+    "ageSec": 34062,
+    "stateRoot": "613b6a2203fb971b70dd8e99efe0512ca4a43042a7f6af1ddfc78c8e3695c80e"
   },
   "db": {
     "integrity": "ok",
-    "headerRows": 5058,
-    "dbRootMatch": true
+    "headerRows": -1,
+    "dbRootMatch": false
   },
   "engine": {
-    "reachable": true,
-    "height": 173441,
-    "tailOpsAtRisk": 2
+    "reachable": false,
+    "height": -1,
+    "tailOpsAtRisk": -1
   },
-  "restoreDir": "/tmp/saos-restore-drill-1791481483785",
+  "restoreDir": "/tmp/saos-restore-drill-1791553572876",
   "checks": [
     {
       "name": "source-exists",
@@ -29,32 +29,27 @@
     {
       "name": "snapshot-shape",
       "ok": true,
-      "detail": "version=1 height=173439"
+      "detail": "version=1 height=185919"
+    },
+    {
+      "name": "db-open",
+      "ok": false,
+      "detail": "SQLiteError: no such table: blockHeader"
     },
     {
       "name": "db-integrity",
       "ok": true,
-      "detail": "integrity_check=ok · blockHeader rows=5058"
+      "detail": "integrity_check=ok · blockHeader rows=-1"
     },
     {
       "name": "stateRoot-snapshot-vs-dbHeader",
-      "ok": true,
-      "detail": "height=173439 · db=523c8bc99542c8fb… vs computed=523c8bc99542c8fb…"
+      "ok": false,
+      "detail": "height=185919 · db=absent… vs computed=613b6a2203fb971b…"
     },
     {
       "name": "engine-live-probe",
-      "ok": true,
-      "detail": "engine h=173441 · snapshot h=173439 · זנב-אובד-לו-הדיסק-מת-עכשיו=2 ops"
-    },
-    {
-      "name": "rpo-tail-bounded",
-      "ok": true,
-      "detail": "tail=2 ops (חוזה-קדנס ≤48s ⇒ צפי ≤ ~40 ops)"
-    },
-    {
-      "name": "snapshot-fresh",
-      "ok": true,
-      "detail": "savedAt-גיל=7s (חוזה ≤48s · סייג-מדידה 10min)"
+      "ok": false,
+      "detail": "engine unreachable — RPO-זנב לא נמדד חי (ה-DB-קשר בפסקה-3 עומד בפני-עצמו)"
     }
   ]
 }

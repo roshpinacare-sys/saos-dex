@@ -44,6 +44,7 @@ const FLEET_CORE: Array<[string, number]> = [
   ["money", 3034], ["fleet-verify", 3038], ["curation", 3040],
   ["kpi", 3041], ["governance", 3042], ["treasury-audit", 3043],
   ["scout-market", 3044], ["business", 3045], ["content-factory", 3046],
+  ["web", 3050], // T-47: קונסולת-האם (חוזה-הדלת-הקדמית · / → 3050) — נכנסת-לתוקף-בהפעלה-הבאה-של-הדקס
 ];
 const FLEET_ROOT = "/home/z/my-project/zip";
 const BUN = "/usr/local/bin/bun";
