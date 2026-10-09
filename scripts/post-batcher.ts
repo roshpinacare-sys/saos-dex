@@ -31,6 +31,29 @@ const LOCAL_RECEIPT = path.join(MOTHER, "receipts", "post-batcher-latest.json");
 const HELD_RECEIPT = path.join(MOTHER, "receipts", "post-batcher-lineage-held.json");
 const REMOTE_RECEIPT_PATH = "receipts/post-batcher-latest.json";
 const FETCH_TIMEOUT_MS = 45000;
+// T-37: יומן-שמירת-השושלת (audit כנה של-כל-חוצה) + רשימת-שורשים-משורשרת לחציית-אחים
+const GUARD_LOG = path.join(MOTHER, "receipts", "lineage-guard.jsonl");
+const BOOKS_LINEAGE = path.join(MOTHER, "receipts", "books-lineage.json");
+const GUARD_TAIL = 1000; // תקרת-שורות — נגד-נפיחות-מפתחות
+const CHAIN_TAIL = 64;
+
+function appendGuard(row: Record<string, unknown>): void {
+  try {
+    fs.appendFileSync(GUARD_LOG, JSON.stringify(row).slice(0, 240) + "\n");
+    const lines = fs.readFileSync(GUARD_LOG, "utf8").trim().split("\n").filter(Boolean);
+    if (lines.length > GUARD_TAIL) fs.writeFileSync(GUARD_LOG, lines.slice(-GUARD_TAIL).join("\n") + "\n");
+  } catch { /* כנות */ }
+}
+
+function writeBooksLineage(root: string, verify: LineageVerify): void {
+  try {
+    let chain: Array<Record<string, unknown>> = [];
+    try { chain = (JSON.parse(fs.readFileSync(BOOKS_LINEAGE, "utf8")) as { chain?: Array<Record<string, unknown>> }).chain ?? []; } catch { /* ארכיון-ראשון */ }
+    chain.push({ at: verify.checkedAt, root, prevRoot: verify.prevRoot, verdict: verify.verdict });
+    if (chain.length > CHAIN_TAIL) chain = chain.slice(-CHAIN_TAIL);
+    fs.writeFileSync(BOOKS_LINEAGE, JSON.stringify({ schema: "saos.books-lineage/1", at: new Date().toISOString(), head: root, chain }, null, 1) + "\n");
+  } catch { /* כנות */ }
+}
 
 /** חיטוי-דליפות: אף-פלט-git (עשוי-להכיל-URL-מטוקן) לא-יודפס-מעולם */
 function scrub(s: string): string {
@@ -184,6 +207,7 @@ async function main(): Promise<void> {
   if (mismatch) {
     // fail-closed: הקבלה-הקנונית-האחרונה **לא-נדרסת** (היא-העוגן-הטוב-האחרון);
     // עדות-ההחזקה נכתבת-בקובץ-נפרד והחבילה מסומנת ARCHIVE-HELD.
+    appendGuard({ at, root: tree.root, prevRoot: verify.prevRoot, verdict: verify.verdict, action: "archive-refused" });
     fs.writeFileSync(HELD_RECEIPT, JSON.stringify({
       schema: "saos.post-batcher-held/1", at,
       bookCount: payloads.length, skipped,
@@ -202,6 +226,8 @@ async function main(): Promise<void> {
     staged: path.relative(MOTHER, pkgFile),
     status: "BROADCAST-READY (staging-only)", keysLeaked: false,
   }, null, 1) + "\n");
+  appendGuard({ at, root: tree.root, prevRoot: verify.prevRoot, verdict: verify.verdict, action: "archived-broadcast-ready" });
+  writeBooksLineage(tree.root, verify);
   console.log(`post-batcher: books=${payloads.length} skipped=${skipped.length} · lineageRoot=${tree.root.slice(0, 16)}… · leaves=${tree.leaves.length} · saved=${saved}B · lineage=${verify.verdict} · BROADCAST-READY (staged, zero broadcast)`);
 }
 
