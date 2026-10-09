@@ -13,6 +13,7 @@
  */
 import fs from "fs";
 import path from "path";
+import { execFileSync } from "child_process";
 import { buildMerkleTree } from "../../src/lib/saos/merkle";
 
 const DEX = process.cwd();
@@ -20,6 +21,82 @@ const MOTHER = path.join(DEX, "..");
 const OUT_PKG = path.join(DEX, "state", "broadcast-pending");
 const OUT_RECEIPT = path.join(MOTHER, "receipts", "post-batcher-latest.json");
 const MAX_BATCH_BYTES = 32 * 1024;
+
+/* ── T-36 · לולאת-אימות-השושלת מול-עותקי-האחות — החלטת-המפעיל (שאלה-2 שלאחר-T-35):
+ *    לפני-אחסון-שורש-מרקל חדש — חוצה-מול-השכבה-הנציחה של-העותק-האחות (origin/main
+ *    בשני-הערוצים-המטוקנים). כלל-הרצף: הקבלה-הקודמת-שפורסמה חייבת-להיות זהה-בין
+ *    מקומי-למרוחק; אי-התאמה = **fail-closed** (אחסון-נעצר, קבלה-קנונית-לא-נדרסת).
+ *    רשת-לא-נגישה ≠ אי-התאמה — מסומן remote-unreachable-honest ולא-חוסם. ── */
+const LOCAL_RECEIPT = path.join(MOTHER, "receipts", "post-batcher-latest.json");
+const HELD_RECEIPT = path.join(MOTHER, "receipts", "post-batcher-lineage-held.json");
+const REMOTE_RECEIPT_PATH = "receipts/post-batcher-latest.json";
+const FETCH_TIMEOUT_MS = 45000;
+
+/** חיטוי-דליפות: אף-פלט-git (עשוי-להכיל-URL-מטוקן) לא-יודפס-מעולם */
+function scrub(s: string): string {
+  return String(s)
+    .replace(/x-access-token:[^@\s]+@/g, "x-access-token:***@")
+    .replace(/https:\/\/[^@\s]*:[^@\s]*@/g, "https://***@")
+    .slice(0, 160);
+}
+
+function gitMother(args: string[], timeoutMs: number): string {
+  return execFileSync("git", ["-C", MOTHER, ...args], {
+    timeout: timeoutMs, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+interface LineageVerify {
+  verdict: "CONTINUITY-PROVEN" | "CONTINUITY-ADOPTED-FROM-SIBLING" | "first-archive-no-sibling-yet" | "remote-unreachable-honest" | "MISMATCH-FAIL-CLOSED";
+  prevRoot: string | null;
+  prevRootMatchesLocal: boolean | null;
+  prevRootMatchesRemote: boolean | null;
+  remoteReceiptAt: string | null;
+  checkedAt: string;
+  channel: string;
+}
+
+function verifyLineage(): { verify: LineageVerify; localPrev: string | null; mismatch: boolean } {
+  const checkedAt = new Date().toISOString();
+  let localPrev: string | null = null;
+  try { localPrev = (JSON.parse(fs.readFileSync(LOCAL_RECEIPT, "utf8")) as { lineageRoot?: string }).lineageRoot ?? null; } catch { /* עדיין-אין-קבלה-מקומית */ }
+  let remotePrev: string | null = null;
+  let remoteAt: string | null = null;
+  let fetched = false;
+  try {
+    gitMother(["fetch", "-q", "origin", "main"], FETCH_TIMEOUT_MS);
+    fetched = true;
+  } catch (e) {
+    console.error(`[post-batcher] lineage: sibling fetch unreachable-honest (${scrub((e as Error)?.message ?? e)})`);
+  }
+  if (fetched) {
+    try {
+      const j = JSON.parse(gitMother(["show", `origin/main:${REMOTE_RECEIPT_PATH}`], 10000)) as { lineageRoot?: string; at?: string };
+      remotePrev = j.lineageRoot ?? null;
+      remoteAt = j.at ?? null;
+    } catch { /* אין-קבלה-על-origin/main — ארכיון-ראשון */ }
+  }
+  if (!fetched) return {
+    verify: { verdict: "remote-unreachable-honest", prevRoot: localPrev, prevRootMatchesLocal: null, prevRootMatchesRemote: null, remoteReceiptAt: null, checkedAt, channel: "origin/main (tokened — credential never printed)" },
+    localPrev, mismatch: false,
+  };
+  if (remotePrev == null) return {
+    verify: { verdict: "first-archive-no-sibling-yet", prevRoot: localPrev, prevRootMatchesLocal: null, prevRootMatchesRemote: null, remoteReceiptAt: null, checkedAt, channel: "origin/main (tokened — credential never printed)" },
+    localPrev, mismatch: false,
+  };
+  if (localPrev != null && remotePrev !== localPrev) return {
+    verify: { verdict: "MISMATCH-FAIL-CLOSED", prevRoot: localPrev, prevRootMatchesLocal: true, prevRootMatchesRemote: false, remoteReceiptAt: remoteAt, checkedAt, channel: "origin/main (tokened — credential never printed)" },
+    localPrev, mismatch: true,
+  };
+  if (localPrev == null) return {
+    verify: { verdict: "CONTINUITY-ADOPTED-FROM-SIBLING", prevRoot: remotePrev, prevRootMatchesLocal: null, prevRootMatchesRemote: true, remoteReceiptAt: remoteAt, checkedAt, channel: "origin/main (tokened — credential never printed)" },
+    localPrev, mismatch: false,
+  };
+  return {
+    verify: { verdict: "CONTINUITY-PROVEN", prevRoot: localPrev, prevRootMatchesLocal: true, prevRootMatchesRemote: true, remoteReceiptAt: remoteAt, checkedAt, channel: "origin/main (tokened — credential never printed)" },
+    localPrev, mismatch: false,
+  };
+}
 
 /* ── ספרי-המדדים הקנוניים — כל-ספר עם-מחלץ-תחום (≤2KB פר-ספר) ── */
 interface Book { name: string; file: string; pick: (j: Record<string, unknown>) => Record<string, unknown> }
@@ -79,15 +156,19 @@ async function main(): Promise<void> {
   }
   // שורש-שושלת: עלה = גוף-ה-payload-המקומט (אותה-ספריית-מרקל-מוכחת)
   const tree = await buildMerkleTree(payloads.map((p) => JSON.stringify({ book: p.book, at: p.at, body: p.body })));
+  // T-36: חציית-השושלת מול-העותק-האחות **לפני-האחסון** (fail-closed על-אי-התאמה)
+  const { verify, mismatch } = verifyLineage();
+  const heldStatus = "ARCHIVE-HELD (lineage mismatch vs sibling — fail-closed)";
   const batch = {
     schema: "saos.post-batch/1",
     at,
     bookCount: payloads.length, // כנות: מה-שקיים-בדיסק-באמת
     lineageRoot: tree.root,
     leafCount: tree.leaves.length,
+    lineageVerify: verify,
     payloads: payloads.map(({ body, ...rest }) => ({ ...rest, body })),
-    status: "BROADCAST-READY (staging-only — actual posting broadcast remains cadence/owner-gated)",
-    doctrine: "books→content-payloads · native-TS compaction · proven merkle lineage · zero secrets · zero auto-broadcast",
+    status: mismatch ? heldStatus : "BROADCAST-READY (staging-only — actual posting broadcast remains cadence/owner-gated)",
+    doctrine: "books→content-payloads · native-TS compaction · proven merkle lineage · sibling-continuity cross-check · zero secrets · zero auto-broadcast",
     keysLeaked: false,
   };
   const batchStr = JSON.stringify(batch, null, 1) + "\n";
@@ -100,15 +181,28 @@ async function main(): Promise<void> {
   fs.writeFileSync(pkgFile, batchStr);
   fs.writeFileSync(path.join(OUT_PKG, "post-batch-latest.json"), batchStr);
   const saved = payloads.reduce((n, p) => n + (p.bytes.raw - p.bytes.compact), 0);
+  if (mismatch) {
+    // fail-closed: הקבלה-הקנונית-האחרונה **לא-נדרסת** (היא-העוגן-הטוב-האחרון);
+    // עדות-ההחזקה נכתבת-בקובץ-נפרד והחבילה מסומנת ARCHIVE-HELD.
+    fs.writeFileSync(HELD_RECEIPT, JSON.stringify({
+      schema: "saos.post-batcher-held/1", at,
+      bookCount: payloads.length, skipped,
+      lineageRoot: tree.root, leafCount: tree.leaves.length, lineageVerify: verify,
+      staged: path.relative(MOTHER, pkgFile),
+      status: heldStatus, keysLeaked: false,
+    }, null, 1) + "\n");
+    console.error(`[post-batcher] FAILED: lineage MISMATCH vs sibling (local=${(verify.prevRoot ?? "null").slice(0, 16)}… remote=${(verify.remoteReceiptAt ? "differs" : "null")}) — ARCHIVE-HELD, canonical receipt preserved (fail-closed)`);
+    process.exit(1);
+  }
   fs.writeFileSync(OUT_RECEIPT, JSON.stringify({
-    schema: "saos.post-batcher/1", at,
+    schema: "saos.post-batcher/2", at,
     bookCount: payloads.length, skipped,
-    lineageRoot: tree.root, leafCount: tree.leaves.length,
+    lineageRoot: tree.root, leafCount: tree.leaves.length, lineageVerify: verify,
     compaction: { rawBytes: payloads.reduce((n, p) => n + p.bytes.raw, 0), compactBytes: payloads.reduce((n, p) => n + p.bytes.compact, 0), savedBytes: saved },
     staged: path.relative(MOTHER, pkgFile),
     status: "BROADCAST-READY (staging-only)", keysLeaked: false,
   }, null, 1) + "\n");
-  console.log(`post-batcher: books=${payloads.length} skipped=${skipped.length} · lineageRoot=${tree.root.slice(0, 16)}… · leaves=${tree.leaves.length} · saved=${saved}B · BROADCAST-READY (staged, zero broadcast)`);
+  console.log(`post-batcher: books=${payloads.length} skipped=${skipped.length} · lineageRoot=${tree.root.slice(0, 16)}… · leaves=${tree.leaves.length} · saved=${saved}B · lineage=${verify.verdict} · BROADCAST-READY (staged, zero broadcast)`);
 }
 
 main().catch((e) => { console.error(`[post-batcher] FAILED: ${String((e as Error).message ?? e).slice(0, 200)}`); process.exit(1); });
