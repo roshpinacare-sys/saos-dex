@@ -39,7 +39,11 @@ const CHAIN_TAIL = 64;
 
 function appendGuard(row: Record<string, unknown>): void {
   try {
-    fs.appendFileSync(GUARD_LOG, JSON.stringify(row).slice(0, 240) + "\n");
+    // T-64: תיקון-פגם-כתיבה — JSON.stringify(row).slice(0,240) חתך-את-המחרוזת-באמצע-אובייקט
+    // → כל-שורה-פגומה-לנצח (נתפס-ע"י-סריקת-תקינות-הקבלות-בcensus). מעתה: חיתוך-שדה-הפעולה-בלבד,
+    // הJSON-שלם-תמיד; השורות-ההיסטוריות-הפגומות-שוחזרו-בסימון-כן (verdict=truncated-repair-T-64).
+    const safe = { ...row, action: String(row.action ?? "").slice(0, 80) };
+    fs.appendFileSync(GUARD_LOG, JSON.stringify(safe) + "\n");
     const lines = fs.readFileSync(GUARD_LOG, "utf8").trim().split("\n").filter(Boolean);
     if (lines.length > GUARD_TAIL) fs.writeFileSync(GUARD_LOG, lines.slice(-GUARD_TAIL).join("\n") + "\n");
   } catch { /* כנות */ }
