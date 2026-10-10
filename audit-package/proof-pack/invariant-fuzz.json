@@ -1,16 +1,16 @@
 {
   "instrument": "invariant-fuzzer",
-  "at": "2026-10-09T19:00:43.535Z",
+  "at": "2026-10-10T06:46:37.451Z",
   "mode": "fixture",
-  "engineHeight": 185919,
-  "engineRoot": "613b6a2203fb971b70dd8e99efe0512ca4a43042a7f6af1ddfc78c8e3695c80e",
+  "engineHeight": 321,
+  "engineRoot": "ad68adc00782710c6d16b2920ee02b711ab7f7006df03f6a295bd29862ab854c",
   "seed": 1511375070,
   "sequences": 8,
   "opsPerSeq": 120,
   "totals": {
     "ops": 120,
-    "accepted": 18,
-    "rejected": 102,
+    "accepted": 22,
+    "rejected": 98,
     "threw": 0,
     "violations": 0
   },
@@ -19,7 +19,7 @@
     "I2_creditIdentity": true,
     "I3_transferConserve": true,
     "I4_noNegativeNoFloat": true,
-    "I5_engineAuditorClean": true,
+    "I5_engineAuditorClean": false,
     "I6_determinism": true,
     "I7_replayClosed": true,
     "I8_defenseProbes": true,
@@ -98,19 +98,30 @@
   ],
   "summary": {
     "ops": 120,
-    "accepted": 18,
-    "rejected": 102,
+    "accepted": 22,
+    "rejected": 98,
     "thrown": 0,
-    "finalRoot": "d400d7d990d63ec02e9420b8262fee98a09a854a1828eeada0b8f157b1510285",
-    "goldenRoot": "36cbf07be3b6c1a47d6e211a8fb1dc1ddd95b9a5ea9154eb90c6a43790165927",
-    "feeMeter": 1500,
+    "finalRoot": "c8ee1ed0e934a8f6039775d424d23190793bd2b510bafd273d3d0d5a45d43b3a",
+    "goldenRoot": "8ab276410cc5427deb4d621ebdb0b8ad118f18927aa290a8f3e26a6c2df878a1",
+    "feeMeter": 2180,
     "feeAcc": {
-      "SAOS/USDS": 85080,
-      "ENERGY/SAOS": 1561
+      "SAOS/USDS": 6339,
+      "ENERGY/SAOS": 741
     }
   },
   "violations": [],
-  "auditFailures": [],
+  "auditFailures": [
+    "seed1511375070/op14: credits: Σ22946996+gas351575−minted300000 ≠ genesis 28000000",
+    "seed1511375070/op29: credits: Σ22946821+gas351750−minted300000 ≠ genesis 28000000",
+    "seed1511375070/op44: credits: Σ22946706+gas351865−minted300000 ≠ genesis 28000000",
+    "seed1511375070/op59: credits: Σ22946691+gas351880−minted300000 ≠ genesis 28000000",
+    "seed1511375070/op74: credits: Σ22946526+gas352045−minted300000 ≠ genesis 28000000",
+    "seed1511375070/op89: credits: Σ22946471+gas352100−minted300000 ≠ genesis 28000000",
+    "seed1511375070/op104: credits: Σ22946396+gas352175−minted300000 ≠ genesis 28000000",
+    "seed1511375070/op119: credits: Σ22946201+gas352370−minted300000 ≠ genesis 28000000",
+    "seed1511375070/op14: credits: Σ22946996+gas351575−minted300000 ≠ genesis 28000000",
+    "seed1511375070/op29: credits: Σ22946821+gas351750−minted300000 ≠ genesis 28000000"
+  ],
   "probesFailed": [],
-  "verdict": "PASS"
+  "verdict": "FAIL"
 }
