@@ -1,9 +1,9 @@
 {
-  "ts": "2026-10-09T19:00:43.555Z",
-  "run": 17,
+  "ts": "2026-10-10T06:46:37.470Z",
+  "run": 38,
   "engine": {
-    "up": false,
-    "height": -1,
+    "up": true,
+    "height": 319,
     "root": ""
   },
   "ports": {
@@ -16,15 +16,15 @@
   "git": [
     {
       "repo": "saos-control-center",
-      "local": "7055863",
-      "remote": "857840a",
-      "synced": false
+      "local": "3105700",
+      "remote": "3105700",
+      "synced": true
     },
     {
       "repo": "saos-dex",
-      "local": "8a3f6c8",
-      "remote": "ed9e76a",
-      "synced": false
+      "local": "e4a6a38",
+      "remote": "e4a6a38",
+      "synced": true
     }
   ],
   "battery": {
@@ -38,7 +38,7 @@
       "violations": [],
       "seqsRejectedFully": 1331,
       "seqsHadAccept": 6669,
-      "elapsedMs": 13768,
+      "elapsedMs": 9313,
       "model": {
         "wallets": 3,
         "assets": [
@@ -48,26 +48,29 @@
         "pools": [
           "SAOS/USDS"
         ],
-        "baseRoot": "877cb8e00497020f598c4faf4ab6b815b6b067387850ba3f7fc7805f4d68627c"
+        "baseRoot": "b767c853afa003c92e70d5983b08ea9bc00abeaa9335280c4e9317717d7892c1"
       },
-      "ts": "2026-10-09T19:00:33.162Z",
+      "ts": "2026-10-10T06:46:30.086Z",
       "instrument": "bmc.ts"
     },
     "fuzzer": {
-      "verdict": "PASS"
+      "verdict": "FAIL(1)"
     }
   },
   "alerts": [
     {
-      "rule": "git-drift"
+      "rule": "proof-fail"
     },
     {
       "rule": "engine-down"
     },
     {
-      "rule": "proof-fail"
+      "rule": "git-drift"
+    },
+    {
+      "rule": "port-down"
     }
   ],
   "verdict": "ALERT",
-  "elapsedMs": 24891
+  "elapsedMs": 17857
 }
