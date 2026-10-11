@@ -66,7 +66,9 @@ async function rpc<T>(node: string, body: unknown, timeoutMs = 8_000): Promise<T
   }
 }
 
-async function rpcAny<T>(method: string, params: unknown[]): Promise<T> {
+/* 9-c (2026-10-11): מיוצא עתה לשער-המפתח (grids/key-gate.mjs דרך grid-beat) —
+ * אותו-failover מרובה-צמתים לאימות-רשות-החיה. אין-שינוי-התנהגות. */
+export async function rpcAny<T>(method: string, params: unknown[]): Promise<T> {
   // FIX(70 ·שידור-כנה): היה-רק-השגיאה-האחרונה — צומת-מת (404-גוף-ריק) מעליף
   // את-הודעת-השרשרת-האמיתית של-הצמתים-החיים. עתה: כל-השגיאות-נאספות-ומדווחות.
   const errs: string[] = [];
