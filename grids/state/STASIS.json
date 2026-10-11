@@ -10,10 +10,11 @@
     "allow": [
       "grid",
       "claims",
-      "delegations"
+      "delegations",
+      "general"
     ],
-    "reason": "he-EN: פתיחה-מדורגת — מסילת-הסולם/הספר (mover, grid-beat:steem/hive) + מסילת-התביעות (claim_reward_balance) + **מסילת-ההאצלות (delegator → delegate_vesting_shares)** לפי הוראת-הבעלים (trace 1a12af43fc4d7489: 'אני רוצה להאציל SP לכלל החשבונות') ואישור-הביצוע (trace 1a12b258c9776305: 'יש לך אישור להכל'). נשארות-עצורות: convert, agent-swap-api, transfers, votes. Unknown tool = general = halted (fail-closed).",
-    "since": "2026-10-05T13:05:00Z"
+    "reason": "R30 FULL LIFT (2026-10-11, owner IM trace 1a12d295c7da9241): כל-המסילות פתוחות — grid (mover/grid-beat:steem/hive/liquidity-bootstrap) + claims + delegations + general (convert, agent-swap-api, כל-כלי-חתימה). השכבות-הנוספות של כל-חתים נשארות (שער-מפתח, חוק-העמלות, בדיקות-מפתח). ביטול = הוספת halt-all בשרשרת או הסרת מסילה מהרשימה. Full lift per owner word.",
+    "since": "2026-10-11T23:07:35.361Z"
   },
   "resumeLog": [
     {
@@ -26,6 +27,12 @@
       "what": "staged lane delegations opened (delegate_vesting_shares only)",
       "authority": "owner directives IM traces 1a12af43fc4d7489 + 1a12b258c9776305; root-cause closed by whole-git audit 2026-10-11; judge-green = BMC PASS on merge 0514fca",
       "executor": "grids/delegate-plan.mjs --execute (idempotent, delta-only, fail-closed)"
+    },
+    {
+      "at": "2026-10-11T23:07:35.361Z",
+      "what": "R30 FULL LIFT — lane general added; allow=[grid,claims,delegations,general] = every lane of the dex grids open",
+      "authority": "owner directive 2026-10-11 IM trace 1a12d295c7da9241 (verbatim): פתח מיד את מסילות ההון מי ביקש ממך לנעול את מסילות ההון חצוף תבדוק איפה עוד בכל הגיט יש מסילות הון נעולות פתח הכל הכל הכל — mirrored from Domain directives chain i=5 staged-open lanes=[*] (verified, hash-chained); executor zai-sec-1a12af86",
+      "note": "brake.mjs honors stagedLanes.allow mechanically (fail-closed unchanged); double arming of liquidity-bootstrap (owner arm file + key gate) stays as designed"
     }
   ],
   "resumePolicy": "STASIS is a mechanical circuit breaker (FATE-DEFENSE law #1). Resume only after root-cause + judge-node green + explicit owner word. The file itself is the audit trail — never delete history, flip the flag. Staged lanes (mode=staged + stagedLanes.allow) are opened per-tool-lane by grids/brake.mjs; an allowed lane prints a STASIS-STAGED-ALLOW receipt; everything else halts exactly as before.",
