@@ -949,6 +949,15 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
   // נדחה לפני-כל-נגיעה-במצב (אותו-עיקרון Roast-65-a HIGH-1 שהוחל-רק על order/cow/price).
   if (op.amount !== undefined && !Number.isSafeInteger(op.amount))
     return { ok: false, err: "non-integer-amount", gas: 0 };
+  // FIX(zai-audit-2026-10-11 · H1 · amountB-gate): pool_open קרא op.amountB ישר-ל-reserves
+  // (st.pools[canon].rb) בלי שער — amountB=50000.5 היה נכנס למצב-הקנוני → stateRoot זורק
+  // CanonicalError → HALT קבוע (אותו-כשל R15-a, בפתח-הצד-השני). אותו-טיפול: דחייה-בדלת.
+  if (op.amountB !== undefined && !Number.isSafeInteger(op.amountB))
+    return { ok: false, err: "non-integer-amountB", gas: 0 };
+  // FIX(zai-audit-2026-10-11 · L2 · lp-gate): pool_rmw עם lp=12.5 היה שורף-נונס+גז
+  // ואז זורק ב-addBal — op-"נדחה" שנגע-במצב. שער-בדלת לפני consume ולפני כל-נגיעה.
+  if (op.lp !== undefined && !Number.isSafeInteger(op.lp))
+    return { ok: false, err: "non-integer-lp", gas: 0 };
   const issuer = String(op.issuer ?? "").toLowerCase();
   if (!issuer || !op.nonce) return { ok: false, err: "issuer+nonce-required", gas: 0 };
   // FIX(Roast-64 · prototype-pollution): זיהוי-מסוכן נדחה-בדלת (שים-לב: גם addBal/
@@ -2408,9 +2417,25 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const newMu = bp.mu - principalPart;
       if (newMu + newInt <= 0) delete oB[asset]; else oB[asset] = { mu: newMu, int: newInt, atH: st.height };
       if (Object.keys(oS).length === 0 && Object.keys(oB).length === 0) delete positions[owner]; else positions[owner] = { s: oS, b: oB };
+      // FIX(zai-audit-2026-10-11 · H2 · self-collateral-clobber): כש-colAsset === asset
+      // שני המפתחות ב-spread היו זהים — האחרון ([colAsset], מהמצב-הישן) דרס את הראשון
+      // ([asset], עם bMu/resMu/sEarnedMu-החדשים) → עדכוני-שוק אבדו בשקט (bMu מנופח,
+      // עקומת-APR מוטה, ספר-מלווים סוטה מ-Σpositions — והמבקר לא צועק כי הערכים
+      // שלמים-בטוחים). מיזוג-מתוקן: דלתא-אחת לשוק-אחד כשהנכס זהה.
+      const mktA = ls.markets[asset]!;
+      const mktB = ls.markets[colAsset]!;
+      const updA = { bMu: Math.max(0, m.bMu - principalPart), sEarnedMu: m.sEarnedMu + toSuppliers, resMu: m.resMu + toReserve, lastH: st.height };
+      const updB = { sMu: Math.max(0, mktB.sMu - takeFromMu), sEarnedMu: Math.max(0, mktB.sEarnedMu - takeFromEarned), lastH: st.height };
+      const mergedMarkets: typeof ls.markets = { ...ls.markets };
+      if (colAsset === asset) {
+        mergedMarkets[asset] = { ...mktA, ...updA, sMu: updB.sMu, sEarnedMu: Math.max(0, updA.sEarnedMu - takeFromEarned), lastH: st.height };
+      } else {
+        mergedMarkets[asset] = { ...mktA, ...updA };
+        mergedMarkets[colAsset] = { ...mktB, ...updB };
+      }
       st.lend = {
         ...ls,
-        markets: { ...ls.markets, [asset]: { ...m, bMu: Math.max(0, m.bMu - principalPart), sEarnedMu: m.sEarnedMu + toSuppliers, resMu: m.resMu + toReserve, lastH: st.height }, [colAsset]: { ...ls.markets[colAsset]!, sMu: Math.max(0, ls.markets[colAsset]!.sMu - takeFromMu), sEarnedMu: Math.max(0, ls.markets[colAsset]!.sEarnedMu - takeFromEarned), lastH: st.height } },
+        markets: mergedMarkets,
         positions,
         totals: { ...ls.totals, borrowsMu: Math.max(0, ls.totals.borrowsMu - principalPart), interestPaidMu: ls.totals.interestPaidMu + interestPart, resToTreasuryMu: ls.totals.resToTreasuryMu + toReserve, liquidations: ls.totals.liquidations + 1 },
       };
