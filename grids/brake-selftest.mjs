@@ -79,6 +79,15 @@ let ok = withCapture(() => m.stasisHalt("mover") === false && m.stasisHalt("grid
 t("staged + allowed lane (grid) lets the ladder machines sign", ok);
 t("allow path prints the STASIS-STAGED-ALLOW receipt with the lane", captured.lines.some((l) => /STASIS-STAGED-ALLOW mover \(lane=grid\)/.test(l)));
 
+// 2-b) 9-c (2026-10-11): liquidity-bootstrap — מסילת-בת של lane=grid (חותם limit_order_create בלבד)
+captured.lines.length = 0;
+m = await loadWith(STAGED(["grid", "claims"]), captured);
+ok = withCapture(() => m.stasisHalt("liquidity-bootstrap") === false, captured);
+t("staged + grid lane opens the liquidity-bootstrap sub-lane", ok);
+t("liquidity-bootstrap gets the STASIS-STAGED-ALLOW receipt on lane=grid", captured.lines.some((l) => /STASIS-STAGED-ALLOW liquidity-bootstrap \(lane=grid\)/.test(l)));
+m = await loadWith(STAGED(["claims"]), captured);
+t("staged WITHOUT grid still halts liquidity-bootstrap (fail-closed)", m.stasisHalt("liquidity-bootstrap") === true);
+
 // 3) staged + כלי-לא-מוכר → עצירה (fail-closed: אין-היכרות = אין-מסילה)
 captured.lines.length = 0;
 m = await loadWith(STAGED(["grid", "claims"]), captured);

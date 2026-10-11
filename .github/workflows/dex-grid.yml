@@ -86,6 +86,19 @@ jobs:
           CONSOLE_TOKEN: ${{ secrets.CONSOLE_PUSH_TOKEN }}
         run: bun run grid-beat.ts
 
+      # 9-c (2026-10-11) · רגל-הזרקת-הנזילות — מסילת-בת של lane=grid, fail-closed לכל-אורכה:
+      # בלי קובץ-החימוש של הבעלים grids/liquidity-arm.json המסילה מסרבת בכנות (exit 0 —
+      # הסירוב הוא ההצלחה-על-פי-תכנון). פרמטרים חייבים לעבור grids/validate-params.mjs
+      # (פרמטרים-רעים = exit 2), המפתח מאומת מול רשות-ה-active החיה (grids/key-gate.mjs),
+      # דלתא-בלבד מול השרשרת (אידמפוטנטי) + קריאה-אחרי-כתיבה + תקרת-אופים מהחימוש.
+      - name: Liquidity bootstrap leg (owner-armed; refusal without arm-file = success by design)
+        if: steps.brake.outputs.active != 'true' || steps.brake.outputs.lane_allowed == 'true'
+        env:
+          SAOS_RELAY_AGENT_ACCOUNT: headcorner
+          STEEM_ACTIVE_WIF: ${{ secrets.STEEM_ACTIVE_WIF }}
+        run: node grids/liquidity-bootstrap.mjs --execute
+        continue-on-error: true
+
       # Z-81 · רגל-ההמרה: קציר-הנחת-ה-SBD (D-023) — אותו-שער verify-then-sign,
       # אותם-שערי-מדיניות (היסטרזיס ≥1500bps, תקרת-חשיפה, רזרבת-בידים, fail-closed).
       # המדידה-החיה: הנחה-מתמדת של SBD מול ערך-ההמרה ($1) — המרה קונה ~69% יותר
@@ -112,6 +125,22 @@ jobs:
             echo "no convert evidence change — clean exit"
           else
             git commit -m "convert-leg: SBD-discount harvest evidence $(date -u +%FT%TZ) [skip ci]"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      # 9-c · קבלת-הבוטסטרפ (רישום-בלבד; אפס-סודות — ה-txids כבר פומביים על-השרשרת)
+      - name: Liquidity evidence commit (receipt = commit)
+        if: always()
+        run: |
+          set -u
+          git config user.name "liquidity-leg[bot]"
+          git config user.email "liquidity-leg[bot]@users.noreply.github.com"
+          git add grids/state/liquidity-receipt.jsonl grids/state/events.jsonl 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "no liquidity evidence change — clean exit"
+          else
+            git commit -m "liquidity-bootstrap: owner-armed depth deployment receipt $(date -u +%FT%TZ) [skip ci]"
             git pull --rebase origin main
             git push origin HEAD:main
           fi
