@@ -24,7 +24,7 @@ import { MINT_FUEL_CAP } from "./kernel"; // EXEC-CD-9 · אותו-גבול-נז
 import { getPool } from "./amm";
 import { aleTick } from "./ale";
 import { launchpadTick } from "./launchpad";
-import { bookGasRecycleAvail, bookGasTake, BOOKGAS_RECYCLE_CAP } from "./bookgas"; // EXEC-CD-9 · מד-גז-הספר
+import { bookGasRecycleAvail, bookGasTake, bookGasFloor, BOOKGAS_RECYCLE_CAP } from "./bookgas"; // EXEC-CD-9 · מד-גז-הספר
 import {
   BLOCKS_PER_WEEK, VE_MAX_WEEKS, EPOCH_BLOCKS, ROUTER_EVERY, REV_FLOOR,
   REV_BURN_PCT, REV_VE_PCT, ROUTER_USDS_FLOOR, REV_MIN_CYCLE, VE_POT,
@@ -85,6 +85,13 @@ export function economyTick(st: DexState, nowMs: number): void {
  * נשמרת-בדיוק. אפס-נגיעה ב-treasuryProfit/feeMeter (אלו עמלות-בריכות — משטר-נפרד).
  * כל-µ-נגרע-מהמד-פעם-אחת-בלבד; תקרה-פר-טיק (BOOKGAS_RECYCLE_CAP) — גבול-נזק. */
 export function bookGasRecycle(st: DexState, h: number, nowMs: number): void {
+  // FIX(zai-audit-2026-10-11 · H3 · replay-determinism): רצפת-המצב עד-כה יושרה רק בטעינת-שרשרת —
+  // שחזור-מה-op-log על-רפליקה-טרייה (מד-0/0, collected גדל-מההזנות) היה מחשב avail שונה
+  // מהתהליך-החי (שהמד שלו נושא-היסטוריה) → taken שונה → st.bookGasRecycledMu שונה
+  // → stateRoot שונה באותו-גובה, בלי-אזעקה. עתה: סנכרון-רצפה פר-טיק לפני-כל-מחזור —
+  // המד מתיישר מול המצב-הקנוני והמחזור הופך פונקציה-טהורה של (הזנות-הבלוקים, מצב-הגובה).
+  // על-תהליך-חי-בריא הסנכרון נייטרלי (recycled-מטר === recycled-מצב תמיד).
+  bookGasFloor(st.bookGasRecycledMu ?? 0);
   const amt = Math.min(bookGasRecycleAvail(), BOOKGAS_RECYCLE_CAP, MINT_FUEL_CAP);
   if (amt <= 0) return;
   const taken = bookGasTake(amt); // צריכה-פעם-אחת מהמד — לפני-כל-נגיעה-במצב
