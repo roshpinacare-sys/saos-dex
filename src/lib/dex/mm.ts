@@ -15,7 +15,7 @@ import type { DexState, Op, Asset } from "./kernel";
 import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDER, funderAfford, poolKey, avail, notional, maxNonceSuffix, nonceExists } from "./kernel";
 import { sortBook } from "./book";
 import { poolMid, poolMidFor, getPool } from "./amm";
-import { railTick, RAIL_OWNED_POOLS } from "./rail";
+import { railTick, RAIL_OWNED_POOLS, RAIL_DUST_MU } from "./rail";
 
 export const MARKETS: { base: Asset; quote: Asset }[] = [
   { base: "SAOS", quote: "USDS" },
@@ -517,13 +517,33 @@ export function arenaTick(
         if (!starving) {
         let lvl = 1;
         for (const [, d] of desired) {
-          const size = Math.floor(params.sizeMu * (1 + (lvl - 1) * 0.5));
+          const fullSize = Math.floor(params.sizeMu * (1 + (lvl - 1) * 0.5));
           lvl++;
           const lockAsset = d.side === "sell" ? m.base : m.quote;
+          // ── SETTLE-17-b (inventory-adaptive quotes · T15 2026-10-11) ──
+          // הממצא-החי (truth-gate 38178302247, agent-verify 48/51): שוק USDS/WSTEEM
+          // חד-צדדי-מחדש — bestAsk=0 בציבור. שורש: גודל-הציטוט קבוע (sizeMu=80Kµ×רמה)
+          // בזמן-שהחיילים מחזיקים <80Kµ WSTEEM — כל-הצבת-אסק מדלגת בכנות-מלאי
+          // (mm.ts:142-148 תיעד את אותו-שורש ב-SETTLE-17 המקורי), והשוק נשאר חד-צדדי
+          // לנצח בזמן-שהחוק המתואר (A43: "לפחות-הצעת-מכירה-חיה-אחת") נשבר-בפועל.
+          // התיקון: גודל-מסתגל — החייל מצטט את מה שהוא יכול לנעול באמת (עד-הגודל
+          // המלא, מעל-רצפת-אבק RAIL_DUST_MU). אפס-הטבעה, אפס-זיוף: הצעה-קטנה-ממלאי
+          // אמת היא הצעה-חיה-אמת; משמעת-הערבות/הספרד/הריקוט כולן נשמרות לאיתן.
+          // הכיוון-השני מרוויח-אותו-ריפוי (bestBid=0 על SAOS/USDS נמדד-חי באותו-סנפּשׁוט).
+          const budget = inflightAvail(soldier, lockAsset);
+          const fullLock = d.side === "sell" ? fullSize : notional(d.px, fullSize);
+          let size = fullSize;
+          if (budget < fullLock) {
+            // מסתגל: הגודל-הכנה-המרבי שאפשר לנעול מהמלאי-האמת (מעל-רצפת-האבק)
+            size = d.side === "sell"
+              ? budget
+              : Math.floor((budget * 1000) / Math.max(1, d.px)); // הופך-notional
+            if (size < RAIL_DUST_MU) continue; // אבק — כנות-מלאה, לא ציטוט-רעש
+          }
           const lockMu = d.side === "sell" ? size : notional(d.px, size);
           // FIX(R45 · inflight-escrow): הבדיקה מנכה-את-הנעילות-שכבר-נדחפה-בטיק-הזה —
           // סדרת-פקודות-של-אותו-חייל לא-מתחרה-עוד-על-אותה-יתרה-מתה.
-          if (lockMu <= 0 || inflightAvail(soldier, lockAsset) < lockMu) continue;
+          if (lockMu <= 0 || lockMu > budget) continue;
           inflightAdd(soldier, lockAsset, lockMu);
           submit(rt, st, soldier, {
             type: "order", base: m.base, quote: m.quote, side: d.side,
@@ -610,20 +630,54 @@ export function arenaTick(
         }
         const px = Math.floor((fair * (10_000 + (roll === 3 ? 40 : -40))) / 10_000);
         const side: "buy" | "sell" = roll === 4 ? "sell" : "buy";
-        const amt = 20_000 + (tick % 7) * 8_000;
-        // FIX(R44 · noise-escrow-guard): פקודת-הלימיט של בוט-הרעש נבדקת-לכיסוי לפני-
-        // השליחה — כמו-טייק-השוק. נמדד-חי: order(bot-c):insufficient-escrow ב-
-        // world.json (h28759) — הבוט המשיך-להציע-פקודות אחרי-שאזל-מלאיו, כל-טיק
-        // מחדש, מזהם-את-מונה-הדחיות ומבזבז-סליקה. כעת: בלי-כיסוי → אין-פקודה (הבוט
-        // שותק-בכנות, בדיוק-כמו-סוחר-אמת-שאין-לו-מה-להציע).
+        // FIX(SETTLE-17-b/c · maker-ask-role · T15 2026-10-11) — שורש-העיצוב-שנמדד:
+        // בגלגולי-הלימיט של-בוטי-הרעש לא-היה-תפקיד-של-מכירה-מנוחה: גלגול-3 קנייה-
+        // אגרסיבית (fair+40bps), גלגול-4 "מכירה" ב-fair−40bps = חוצה-בידים-מיד
+        // (לעולם לא נחה כאסק-מנוח), גלגול-5 קנייה-מנוחה. צד-האסקים של-הספר היה
+        // יתום-מבני — כל-אסק חי בא מהחיילים (שהיו ריקים-ממלאי; SETTLE-17 המקורי).
+        // הריפוי: גלגול-4 נהיה תפקיד-המכירה-המנוחה (maker ask) — מחיר fair+minGap
+        // (משמעת-החיילים), והמוכר נגזר-מהמלאי-האמת: מי-שמחזיק-בסיס ≥ אבק מציב
+        // אסק-מנוח מהמלאי-שלו-עצמו (מימוש-דטרמיניסטי: יתרה-מרבית, שובר-שוויון-
+        // שם). הגלגל-עצמו (קצב, כיוון, איזון-זוגיות SETTLE-14) נשמר-במדויק;
+        // המכירות-האגרסיביות ממשיכות-דרך-מילויי-השוק (גלגול-1,2). אפס-הטבעה,
+        // ערבות-אמת מאיזון-המוחזק-עצמו, הגרעין אוכף.
+        const makerAskPx = fair + Math.max(1, Math.floor((fair * 5) / 10_000));
+        const nominal = 20_000 + (tick % 7) * 8_000;
+        let seller = bot;
+        let sellPx = px;
+        if (side === "sell" && inflightAvail(bot, m.base) < RAIL_DUST_MU) {
+          const holders = ["bot-a", "bot-b", "bot-c"]
+            .filter((b) => inflightAvail(b, m.base) >= RAIL_DUST_MU)
+            .sort((a, b) => (inflightAvail(b, m.base) - inflightAvail(a, m.base)) || a.localeCompare(b));
+          if (holders[0]) {
+            seller = holders[0]; sellPx = makerAskPx;
+            // היגיינה-למוכר-הנגזר: פקודת-רעש-אחת-פר-זוג (אותו-חוק של הבוט-הפועל) —
+            // האסק-המנוח-הישן שלו מבוטל לפני ההצבה (החלפה, לא ערימה)
+            for (const o of st.orders) {
+              if (o.live && o.owner === seller && o.base === m.base && o.quote === m.quote) {
+                submit(rt, st, seller, { type: "cancel", orderId: o.id }, pushOp);
+              }
+            }
+          }
+        } else if (side === "sell") {
+          sellPx = makerAskPx; // התפקיד-החדש: אסק-מנוח-מעל-הפייר (לא-חוצה-בידים)
+        }
+        const haveNow = inflightAvail(seller, side === "buy" ? m.quote : m.base);
+        const amt = haveNow >= (side === "buy" ? px * nominal : nominal)
+          ? nominal
+          : (side === "buy"
+              ? Math.floor(haveNow / Math.max(1, px))
+              : haveNow);
+        if (amt >= RAIL_DUST_MU) {
         {
           const needMu = side === "buy" ? px * amt : amt; // קנייה: הצעת-ציטוט; מכירה: הבסיס-עצמו
-          const haveMu = inflightAvail(bot, side === "buy" ? m.quote : m.base);
+          const haveMu = inflightAvail(seller, side === "buy" ? m.quote : m.base);
           if (needMu > 0 && haveMu >= needMu) {
-            inflightAdd(bot, side === "buy" ? m.quote : m.base, needMu);
-            submit(rt, st, bot, { type: "order", base: m.base, quote: m.quote, side, price: px, amount: amt }, pushOp);
+            inflightAdd(seller, side === "buy" ? m.quote : m.base, needMu);
+            submit(rt, st, seller, { type: "order", base: m.base, quote: m.quote, side, price: side === "sell" ? sellPx : px, amount: amt }, pushOp);
           }
         }
+        } // סוף-שער-האבק (SETTLE-17-b)
       } else {
         const p = getPool(st, poolKey(m.base, m.quote));
         // R26 · בוטי-רעש לא-נוגעים-בבריכת-המסדרון: הזרימה-שלהם חד-צדדית-מבנית
@@ -650,6 +704,76 @@ export function arenaTick(
             submit(rt, st, bot, { type: "pool_swap", pair: poolKey(p.a, p.b), assetIn, amount: amt }, pushOp);
           }
         }
+      }
+    }
+
+    // ── SETTLE-17-c (treasury book-keeper of last resort · T15 2026-10-11) ──
+    // הממקום: אחרי-זרימת-הרעש (ציטוט-שהוצב-לפני-הרעש נאכל-באותו-טיק — נמדד-חי
+    // בהרצה-המקומית: האסק נבלע מיד במילוי-שוק של בוט ולא נשאר חי).
+    // הממצא-החי (truth-gate 38178302247, agent-verify 48/51): הספר חד-צדדי
+    // (USDS/WSTEEM bestAsk=0 · SAOS/USDS bestBid=0) בזמן-שכל-קווי-האספקה
+    // החתומים מרוקנים-מבנית (rearmCounts.wsteem=1M תקרה-כלולה; חיילים ≤2µ
+    // WSTEEM — מתחת-לכל-רצפת-ציטוט; ה-POL של-האוצר נעול-בחוק — treasury-lp-locked).
+    // החוק-המתואר (A43: "השוק-דו-צדדי — לפחות-הצעת-מכירה חיה-אחת; מחלת-
+    // החד-צדדיות לא חוזרת בשקט") חייב-להיאכף-בפועל.
+    // הריפוי, אפס-הטבעה: כשצד-בספר ריק ולאוצר יש מלאי-חופשי-אמת — האוצר מציב
+    // ציטוט-חי **אחד** ב-fair±minGap, בגודל-המלאי-האמת (רצפת-אבק RAIL_DUST_MU,
+    // תקרה params.sizeMu). חימוש-מחדש (re-arm): כשאין מלאי-חופשי אבל יש STEEM
+    // טבעי-עצל באוצר — עטיפת-SETTLE-18 הקיימת (1:1 כנה, הגיבוי נרשם ב-backing,
+    // הגרעין אוכף מלאי-אמת), פרוסה-חסומה ≤20Kµ פעם-ב-16-טיק — בדיוק-הדפוס
+    // של קו-ה-rearm, מנותב לשומר-הסף. משמעות-ערבות/ספרד זהות-לחיילים.
+    // משמעת-ריקוט: הציטוט נשאר-מנוח עד שהפייר זז מעל הרף. עמידה-מן-הצד: ברגע
+    // שמישהו-אחר מספק-את-הצד — השומר מבטל-את-ציטוטו. fail-closed: אין-מלאי
+    // ואין-מה לעטוף → אין-ציטוט (עומק-מזויף = אסור). אפס-מקור-נסתר, Σשומר.
+    if (params.enabled) {
+      const minGapK = Math.max(1, Math.floor((fair * 5) / 10_000)); // ≥5bps סביב-הפייר
+      const keeperOrders = st.orders.filter((o) => o.live && o.owner === "treasury" && o.base === m.base && o.quote === m.quote);
+      const keeperAsk = keeperOrders.find((o) => o.side === "sell");
+      const keeperBid = keeperOrders.find((o) => o.side === "buy");
+      const bookAsks = sortBook(st, m.base, m.quote, "sell");
+      const bookBids = sortBook(st, m.base, m.quote, "buy");
+      const stillGoodK = (o: { price: number }, px: number): boolean =>
+        Math.abs(((fair - o.price) / fair) * 10_000) <= params.requoteBps + params.spreadBps;
+      // (א) צד-האסקים
+      if (bookAsks.length === 0) {
+        let tw = inflightAvail("treasury", m.base);
+        // re-arm — עטיפת-SETTLE-18 של המלאי-הטבעי-העצל (חסום: ≤20Kµ/פרוסה, 16-טיק)
+        if (tw < RAIL_DUST_MU && tick % 16 === 0) {
+          const natSteem = avail(st, "treasury", "STEEM");
+          if (m.base === "WSTEEM" && natSteem > 0) {
+            pushOp({ type: "wrap_mint", issuer: "treasury", nonce: `keeper-rearm-h${st.height}`, wrapAsset: "WSTEEM", amount: Math.min(natSteem, 20_000) });
+          }
+        }
+        // מחזור-מלאי — נמדד-חי ונפסל: מילוי-שוק-קנייה חוצה-אסקים (הצד-שריק —
+        // זה-התנאי) → no-cross לנצח. המלאי-הכנה-היחיד: עטיפת-ה-SETTLE-18 למעלה
+        // (נמדד-חי: backing 982110→1000000 = +17,890µ המלאי-הטבעי כולו, מדויק).
+        const px = fair + minGapK;
+        if (keeperAsk && !stillGoodK(keeperAsk, px)) {
+          submit(rt, st, "treasury", { type: "cancel", orderId: keeperAsk.id }, pushOp);
+        } else if (!keeperAsk && tw >= RAIL_DUST_MU) {
+          const size = Math.min(tw, params.sizeMu);
+          inflightAdd("treasury", m.base, size);
+          submit(rt, st, "treasury", { type: "order", base: m.base, quote: m.quote, side: "sell", price: px, amount: size }, pushOp);
+        }
+      } else if (keeperAsk) {
+        submit(rt, st, "treasury", { type: "cancel", orderId: keeperAsk.id }, pushOp); // עמידה-מן-הצד
+      }
+      // (ב) צד-הבידים
+      if (bookBids.length === 0) {
+        const tq = inflightAvail("treasury", m.quote);
+        const px = fair - minGapK;
+        if (keeperBid && !stillGoodK(keeperBid, px)) {
+          submit(rt, st, "treasury", { type: "cancel", orderId: keeperBid.id }, pushOp);
+        } else if (!keeperBid && tq >= RAIL_DUST_MU) {
+          const size = Math.min(Math.floor((tq * 1000) / Math.max(1, px)), params.sizeMu);
+          const lockMu = notional(px, size);
+          if (size >= RAIL_DUST_MU && lockMu > 0 && lockMu <= tq) {
+            inflightAdd("treasury", m.quote, lockMu);
+            submit(rt, st, "treasury", { type: "order", base: m.base, quote: m.quote, side: "buy", price: px, amount: size }, pushOp);
+          }
+        }
+      } else if (keeperBid) {
+        submit(rt, st, "treasury", { type: "cancel", orderId: keeperBid.id }, pushOp); // עמידה-מן-הצד
       }
     }
   }

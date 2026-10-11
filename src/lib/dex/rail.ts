@@ -193,6 +193,12 @@ export interface RailSummary {
   premiums: { id: string; pair: string; mid: number; anchor: number; premBps: number; active: boolean }[];
   budget: { credits: number; usdsMu: number; wsteemMu: number; energyMu: number; saosMu: number };
   funding: { pending: number; committed: number; rejected: number; dropped: number }; // FIX(Roast-67)
+  /* FIX(T15 · A39-reanchor 2026-10-11): המונה-המונוטוני-הגיט-גיבוי של המסילה —
+   * Σהמימון-שזרם-אי-פעם מסומן-לעוגן (railLifetime × markMu, נטען-max-מהדיסק,
+   * קומיט-רק-על-אישור-בלוק — Roast-67). equityMu הוא-דלק-עובד-שנצרך-מעצב
+   * (שמירת- peg — זהו תפקיד המסילה); הראצ'ט האמתי שלא-יורד-לעולם הוא הזה.
+   * אותו-דפוס-חוק כמו R46-b של treasuryProfitEver. */
+  fundedEverMu: number;
   note: string;
 }
 
@@ -206,12 +212,20 @@ export function railSummary(): RailSummary {
   const b = st.balances[RAIL] ?? {};
   const eq = railEquityMu(st);
   const funded = (railRt.baseEquityMu ?? 0) + railRt.inflowMu;
+  // FIX(T15 · fundedEverMu): Σהמימון-הגיט-גיבוי-לכל-החיים, מסומן-לעוגן-עכשיו
+  // (markMu = אותה-סמנטיקת-הסמקה-של-railEquityMu עצמה; המונה מעולם לא יורד — railLifetime)
+  const fundedEverMu =
+    Math.floor(((railLifetime.usds ?? 0) * markMu(st, "USDS")) / 1000) +
+    Math.floor(((railLifetime.wsteem ?? 0) * markMu(st, "WSTEEM")) / 1000) +
+    Math.floor(((railLifetime.energy ?? 0) * markMu(st, "ENERGY")) / 1000) +
+    Math.floor(((railLifetime.saos ?? 0) * markMu(st, "SAOS")) / 1000);
   return {
     enabled: true,
     equityMu: eq,
     fundedMu: funded,
     netMu: eq - funded,
     doses: railRt.doses,
+    fundedEverMu,
     lifetime: {
       usds: railLifetime.usds ?? 0,
       wsteem: railLifetime.wsteem ?? 0,

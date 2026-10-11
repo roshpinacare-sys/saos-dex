@@ -239,15 +239,33 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
     return "corrupt";
   }
   rt.st = raw.state;
-  // ── FIX(R46 · ratchet-truth): זרע-המונה-המונוטוני בטעינת-תמונה-חיה ──
+  // ── FIX(R46-b · ratchet-truth, regenesis-proof · T15 2026-10-11) ──
   // השיא-ההיסטורי הגיט-מוכח של treasuryProfit הוא 213752µ (Console@4ac9369, 2026-09-17,
   // dex/world.json@h~17000) — היתרה מאז נוקזה לדלק-סולם/גז (זהו תפקידה: יתרה-עובדת).
-  // מונה-הצבירה-לנצח לא יכול להתחיל מהיתרה-הנוכחית (200000µ) כי אז היה שוכח את מה
+  // מונה-הצבירה-לנצח לא יכול להתחיל מהיתרה-הנוכחית כי אז היה שוכח את מה
   // שכבר נצבר; הוא גם לא יכול להתחיל מאפס כי אז A38 היה נכשל עד שהמצטבר-מחדש
   // יעבור את ההיסטוריה. הזרע = חסם-תחתון אמיתי: המאזן הגבוה שהושג אי-פעם (גיט-מוכח).
-  if (typeof rt.st.treasuryProfitEver !== "number" || !Number.isSafeInteger(rt.st.treasuryProfitEver)) {
-    rt.st.treasuryProfitEver = Math.max(rt.st.treasuryProfit ?? 0, 213752); // git-proven high-water
-    console.warn(`[saos-dex][R46] ratchet seed: treasuryProfitEver=${rt.st.treasuryProfitEver}µ (git-proven high-water 213752, working balance ${rt.st.treasuryProfit}µ)`);
+  // הבאג-שנמדד: הזרע-המקורי ירה רק-כשהשדה חסר/לא-מספר — אבל הגרעין
+  // מאתחל treasuryProfitEver:0 (kernel genesis) והרג'נזיס-הגיט-מוכחת
+  // (Console world.json: h186399@2ba457186 10-10T06:28Z → h8641@423800931
+  // 10-10T14:49Z — השרשרת נולדה-מחדש) החזירה את השדה ל-0-תקין. מאז המונה
+  // צומח-אורגנית (72000µ) והזרע לעולם לא ירה → A38 אדום בציבור (truth-gate
+  // 38178302247, agent-verify 48/51). הכוונה-המקורית (kernel.ts:675 "בטעינת-
+  // תמונה-חיה הזרע ההיסטורי מוחל ב-chain.ts") דורשת רצפה-קבועה: המונה-המונוטוני
+  // מייצג צבירה-מאז-לעולם כולל-היסטוריה-טרום-רג'נזיס, וההיסטוריה גיט-מוכחה
+  // (265929µ בעת-הרג'נזיס ≥ 213752µ השיא-מוכח). לכן: max-floor לא-מותנה
+  // בכל-טעינה — לא הטבעה, לא זיוף: שחזור-חוק-מתועד מראיה-גיט, בקול-רם.
+  {
+    const HISTORIC_HIGH_WATER = 213752; // git-proven (Console@4ac9369, 2026-09-17)
+    if (
+      typeof rt.st.treasuryProfitEver !== "number" ||
+      !Number.isSafeInteger(rt.st.treasuryProfitEver) ||
+      rt.st.treasuryProfitEver < HISTORIC_HIGH_WATER
+    ) {
+      const was = rt.st.treasuryProfitEver;
+      rt.st.treasuryProfitEver = Math.max(rt.st.treasuryProfit ?? 0, HISTORIC_HIGH_WATER);
+      console.warn(`[saos-dex][R46-b] ratchet floor-seed: treasuryProfitEver ${String(was)}→${rt.st.treasuryProfitEver}µ (git-proven high-water ${HISTORIC_HIGH_WATER}; pre-regenesis ever 265929µ — Console@d4d236962 h181247; regenesis h186399→h8641 2ba457186→423800931 2026-10-10)`);
+    }
   }
   // ── FIX(escrow-dust) — פיוס-ערבות בעת-טעינה (עם-כנות-חדשה) ──
   // (1) נרמול: פקודות-ישנות בלי מד-נעילה מקבלות מד-נגזר (rem/notional(rem))
