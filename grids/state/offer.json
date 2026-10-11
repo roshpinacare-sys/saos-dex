@@ -1,13 +1,11 @@
 {
- "ok": false,
- "publishedAt": "2026-10-11T13:25:37.982Z",
+ "ok": true,
+ "publishedAt": "2026-10-11T19:45:46.388Z",
  "engine": "saos-dex/grids/peg · B-1 (fleet/r130) — internal grid params → external offer; proposes, signs nothing",
  "account": "headcorner",
  "chain": "STEEM-internal-market",
- "verdict": "OFFER-BLOCKED",
- "blocker": [
-  "buy-side waiting for SBD inventory: 0 SBD commitable < 0.25 needed"
- ],
+ "verdict": "OFFER-READY",
+ "blocker": null,
  "bridge": {
   "activeGrids": [
    "mm-core",
@@ -55,53 +53,53 @@
    "micro-arb",
    "sweep"
   ],
-  "inventoryMu": 4142.08,
+  "inventoryMu": 4484.17,
   "capMu": 118000,
-  "utilizationPct": 3.5,
-  "simFeesMu": 4275.16,
+  "utilizationPct": 3.8,
+  "simFeesMu": 4312.41,
   "contribution": "shape only — levels/widths/symmetry doctrine; real sizes come from chain balances exclusively (no self-printing)"
  },
  "marks": {
-  "steemUsd": 0.060801,
-  "sbdUsd": 0.603155,
-  "paritySbdPerSteem": 0.100805,
+  "steemUsd": 0.061003,
+  "sbdUsd": 0.605844,
+  "paritySbdPerSteem": 0.100691,
   "sources": {
    "steem": "coingecko:steem",
    "sbd": "coingecko:steem-dollars"
   },
   "convertArb": {
    "faceUsd": 1,
-   "marketUsd": 0.603155,
-   "discountPct": 39.6845,
+   "marketUsd": 0.605844,
+   "discountPct": 39.4156,
    "verdict": "CONVERT-POSITIVE",
    "lockDays": 3.5,
    "note": "condenser convert: SBD→STEEM בערך-$1-פנים אחרי 3.5d · אדג' קיים רק אם שוק-חוץ מתמחר SBD<$1 · נזילות-המרה אינה-מיידית"
   }
  },
  "book": {
-  "bestBid": 0.10127300163049532,
-  "bestAsk": 0.1022912959802462,
-  "mid": 0.101782,
-  "spreadBps": 100
+  "bestBid": 0.10105092966855295,
+  "bestAsk": 0.102,
+  "mid": 0.101525,
+  "spreadBps": 93
  },
  "inventory": {
-  "steem": 127.867,
-  "sbd": 0.528
+  "steem": 18.129,
+  "sbd": 9.231
  },
- "openOrdersNow": 14,
+ "openOrdersNow": 23,
  "fair": {
   "internalRef": 0.104089,
-  "externalParity": 0.100805,
+  "externalParity": 0.100691,
   "boundary": "parity floor/ceiling (never sell below / pay above external value) + Z-80 book-touch maker clamp (asks ≥ bestAsk, bids ≤ bestBid)"
  },
- "parityBps": 325,
+ "parityBps": 337,
  "drag": {
-  "k": 1.05,
-  "spreadBps": 100,
+  "k": 1.0465,
+  "spreadBps": 93,
   "divisorBps": 2000,
   "max": 3,
-  "effAskStepBps": 52.5,
-  "effBidStepBps": 210,
+  "effAskStepBps": 52.325,
+  "effBidStepBps": 209.3,
   "note": "ladder spacing follows the live book spread (R81 drag, deterministic); no book → neutral 1.0"
  },
  "plan": {
@@ -109,45 +107,86 @@
    {
     "side": "ask",
     "level": 1,
-    "priceSbdPerSteem": 0.102291,
-    "sizeSteem": 8.692,
+    "priceSbdPerSteem": 0.102,
+    "sizeSteem": 1.203,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 2,
-    "priceSbdPerSteem": 0.102828,
-    "sizeSteem": 13.038,
+    "priceSbdPerSteem": 0.102534,
+    "sizeSteem": 1.805,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 3,
-    "priceSbdPerSteem": 0.103365,
-    "sizeSteem": 19.558,
+    "priceSbdPerSteem": 0.103067,
+    "sizeSteem": 2.707,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 4,
-    "priceSbdPerSteem": 0.103902,
-    "sizeSteem": 29.337,
+    "priceSbdPerSteem": 0.103601,
+    "sizeSteem": 4.06,
     "kind": "sell-steem-above-parity"
    },
    {
     "side": "ask",
     "level": 5,
-    "priceSbdPerSteem": 0.104439,
-    "sizeSteem": 44.005,
+    "priceSbdPerSteem": 0.104135,
+    "sizeSteem": 6.091,
     "kind": "sell-steem-above-parity"
    }
   ],
-  "bids": [],
+  "bids": [
+   {
+    "side": "bid",
+    "level": 1,
+    "priceSbdPerSteem": 0.098584,
+    "spendSbd": 0.63,
+    "sizeSteem": 6.39,
+    "kind": "buy-steem-below-parity"
+   },
+   {
+    "side": "bid",
+    "level": 2,
+    "priceSbdPerSteem": 0.09652,
+    "spendSbd": 0.945,
+    "sizeSteem": 9.791,
+    "kind": "buy-steem-below-parity"
+   },
+   {
+    "side": "bid",
+    "level": 3,
+    "priceSbdPerSteem": 0.094457,
+    "spendSbd": 1.417,
+    "sizeSteem": 15.002,
+    "kind": "buy-steem-below-parity"
+   },
+   {
+    "side": "bid",
+    "level": 4,
+    "priceSbdPerSteem": 0.092393,
+    "spendSbd": 2.126,
+    "sizeSteem": 23.01,
+    "kind": "buy-steem-below-parity"
+   },
+   {
+    "side": "bid",
+    "level": 5,
+    "priceSbdPerSteem": 0.09033,
+    "spendSbd": 3.189,
+    "sizeSteem": 35.304,
+    "kind": "buy-steem-below-parity"
+   }
+  ],
   "totals": {
-   "askSteem": 114.63,
-   "bidSbd": 0,
-   "steemCommit": 114.63,
-   "sbdCommit": 0.475
+   "askSteem": 15.866,
+   "bidSbd": 8.307,
+   "steemCommit": 15.866,
+   "sbdCommit": 8.307
   }
  },
  "triggers": {
