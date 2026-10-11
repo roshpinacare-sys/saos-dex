@@ -7,8 +7,12 @@
   "since": "2026-10-04T22:12:00Z",
   "scope": "all signing lanes of the dex grids: limit orders, cancels, converts (measurement/simulation continue)",
   "stagedLanes": {
-    "allow": ["grid", "claims"],
-    "reason": "he-EN: פתיחה-מדורגת-ממוקדת בלבד — מסילת-הסולם/הספר (mover, grid-beat:steem, grid-beat:hive — limit_order_create/cancel על הספר-הפנימי) ומסילת-התביעות (claim_reward_balance). כל-יתר המסילות נשארות-עצורות: convert (convert_hd), agent-swap-api, transfers, delegations, votes. Targeted staged lift only — the ladder/book machines (limit_order_create/cancel) and reward claims (claim_reward_balance) open; everything else (convert, swap-api, transfers, delegations, votes) stays halted. Unknown tool = general = halted (fail-closed).",
+    "allow": [
+      "grid",
+      "claims",
+      "delegations"
+    ],
+    "reason": "he-EN: פתיחה-מדורגת — מסילת-הסולם/הספר (mover, grid-beat:steem/hive) + מסילת-התביעות (claim_reward_balance) + **מסילת-ההאצלות (delegator → delegate_vesting_shares)** לפי הוראת-הבעלים (trace 1a12af43fc4d7489: 'אני רוצה להאציל SP לכלל החשבונות') ואישור-הביצוע (trace 1a12b258c9776305: 'יש לך אישור להכל'). נשארות-עצורות: convert, agent-swap-api, transfers, votes. Unknown tool = general = halted (fail-closed).",
     "since": "2026-10-05T13:05:00Z"
   },
   "resumeLog": [
@@ -16,6 +20,12 @@
       "at": "2026-10-05T13:05:00Z",
       "what": "staged lanes grid+claims opened",
       "authority": "owner directive 2026-10-05 IM trace 1a10bfe1342b2391: 'Re-enable its autonomous capabilities intelligently. Let it operate.' + calibration mandate; root-cause closed R24/R25; Wave-3 targeted resume; judge-green selftests R25-d; first-run observation required"
+    },
+    {
+      "at": "2026-10-11T14:20:00Z",
+      "what": "staged lane delegations opened (delegate_vesting_shares only)",
+      "authority": "owner directives IM traces 1a12af43fc4d7489 + 1a12b258c9776305; root-cause closed by whole-git audit 2026-10-11; judge-green = BMC PASS on merge 0514fca",
+      "executor": "grids/delegate-plan.mjs --execute (idempotent, delta-only, fail-closed)"
     }
   ],
   "resumePolicy": "STASIS is a mechanical circuit breaker (FATE-DEFENSE law #1). Resume only after root-cause + judge-node green + explicit owner word. The file itself is the audit trail — never delete history, flip the flag. Staged lanes (mode=staged + stagedLanes.allow) are opened per-tool-lane by grids/brake.mjs; an allowed lane prints a STASIS-STAGED-ALLOW receipt; everything else halts exactly as before.",
@@ -31,6 +41,12 @@
       "action": "staged-lanes-opened",
       "by": "T-B agent on owner directive 2026-10-05 (IM trace 1a10bfe1342b2391) — 'Re-enable its autonomous capabilities intelligently. Let it operate.' + calibration mandate",
       "note": "resumePolicy conditions measured and satisfied: (1) root-cause CLOSED — R24 forensics (stale-signer class, orderid ledger, fires>64) + R25-a..d fixes pushed and API-verified (82e9de4: rules.mjs observation-vs-feedback fires, arb dual ledgers, BEST one-liner, grid-beat sign-time brake); (2) judge-node GREEN — selftests green (book-law 27, community 20, observe, peg, supremacy, arb 222/222, run.mjs --selftest, rules 11/11) + new brake staged-lane selftest; (3) owner word EXPLICIT — IM trace 1a10bfe1342b2391 2026-10-05. Wave-3 of MASTER-ORDER-DRAFT-2026-10-05 §7 = targeted lift for the grid. mode=staged, active stays true; lanes grid+claims only; every other lane halts; first-run observation is the calibration evidence"
+    },
+    {
+      "at": "2026-10-11T14:20:00Z",
+      "action": "staged-lane-opened-delegations",
+      "by": "zai-agent on owner directives IM trace 1a12af43fc4d7489 ('אני רוצה להאציל SP לכלל החשבונות כדי לחלק את כוח העבודה וההצבעה ופוסטים בצורה נכונה') + IM trace 1a12b258c9776305 ('יש לך אישור להכל תמשיך בוא נתחיל לבצע')",
+      "note": "resumePolicy conditions measured and satisfied: (1) root-cause — the 2026-10-04 halt was 'stop and examine what the agents do'; the whole-git audit (26 repos, Actions-API ground truth + saos-dex kernel review with H1/H2/H3 fixed and BMC-verified, merge 0514fca) IS that examination; (2) judge-node green — harness/bmc.ts PASS 8000 sequences B1..B9 on the merged main; (3) explicit owner word — the two IM traces above. Lane scope: delegations ONLY (delegate_vesting_shares from @headcorner per grids/state/delegation-plan.json); transfers/votes/convert remain halted. Executor: grids/delegate-plan.mjs (idempotent delta-only, chain-verified key gate, read-after-write)."
     }
   ]
 }
