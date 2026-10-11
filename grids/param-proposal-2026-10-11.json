@@ -1,0 +1,40 @@
+{
+  "protocol": "SAOS-GRID-PARAMS/1",
+  "sealedAt": "2026-10-11T16:55:00Z",
+  "sealedBy": "zai-agent 9-c (grid-liquidity) · owner execution mandate trace 1a12b258c9776305",
+  "source": "measured 2026-10-11: saos-dex db/grid-public.json @cc8c2cd (book spread 77bps, parity 0.100976 SBD/STEEM, inventory 130.656 STEEM / 0.528 SBD, 72 fills counted) + Domain twin dex-grid run 38144052862 logs (12 cancels + 6 places all chain-rejected — stale WIF) + ledger fill tape 2026-10-04..10-07 (maker edges -83..+626bps)",
+  "rationale": {
+    "steemAskStepBps": "askStep 50→80bps: measured maker fills of 2026-10-07 landed at -64/-83bps edge because parity drifted -44bps over 10-05→10-07 after placement (fill-lag adverse selection). Max measured 4-day parity drift 44bps ⇒ 80bps step keeps expected maker edge ≥ 0 for any drift the daily beat can measure; the Z-80 touch-tightening still snaps level-1 to the live touch.",
+    "steemBidStepBps": "bidStep 200→150bps: parity drift measured ≤11bps/day (0.101424→0.100976 over 4 days) — a 200bps-first level is ~2.5 weeks of drift away, near-dead depth on a 27d expiry. 150bps raises reachable-fill odds ~33% while every fill still lands ≥ ~+120bps surplus vs external parity (fill requires a ≥1.5% dip; the dip itself is the adverse-selection price paid, already covered by the step).",
+    "commitPct": "0.90→0.85 STEEM: measured 10-04 run burned 29 cancels in one beat (6d6c169) — cancel storms leave less liquid headroom than assumed at plan time; 15% reserve keeps refresh atomic under failure. HIVE stays 0.90 (micro-inventory, dust laws dominate).",
+    "levels": "3x3 kept: book depth is thin (touch sizes ≈ tens of STEEM); more levels fragment the queue and raise RC burn per refresh without measurable fill gain on a book that traded 72 fills in 38 days.",
+    "hiveAskMinRecvHbd": "0.2 HBD kept — R99 measured price-fidelity law unchanged; HIVE leg stays honestly inventory-gated (0.034 HIVE / 0.003 HBD live) until fills accumulate price-grade fuel.",
+    "expectedFill": "STEEM: bid side expected 0.1–0.4 fills/week per level at 150bps (σ_daily ≈ 11bps measured, weekly range ≈ 77bps); ask side fills concentrate at level-1 (touch) ≈ 0.5–2/week when SBD demand lifts. Adverse selection bound: ask fills ≥ -0bps vs parity by construction (value line), bid fills ≥ +120bps surplus.",
+    "honesty": "fill-rate figures are estimates from a 72-fill tape and 7-day parity series, not promises; the ledger keeps marking every fill's live edge (marked-at-detection) so the next proposal re-fits from receipts."
+  },
+  "steem": {
+    "commitPct": 0.85,
+    "minKeepSteem": 0.5,
+    "minLevelSteem": 1.0,
+    "minLevelSbd": 0.05,
+    "bidLevels": 3,
+    "bidStepBps": 150,
+    "askLevels": 3,
+    "askStepBps": 80,
+    "parityBandBps": 5000,
+    "expiryDays": 27
+  },
+  "hive": {
+    "commitPct": 0.9,
+    "minKeepHive": 0.005,
+    "minLevelHive": 0.010,
+    "minLevelHbd": 0.001,
+    "askMinRecvHbd": 0.2,
+    "bidLevels": 3,
+    "bidStepBps": 200,
+    "askLevels": 3,
+    "askStepBps": 50,
+    "parityBandBps": 5000,
+    "expiryDays": 27
+  }
+}
