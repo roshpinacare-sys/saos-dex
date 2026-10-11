@@ -120,6 +120,15 @@ ok = m.laneOf("mover") === "grid" && m.laneOf("grid-beat:steem") === "grid" && m
   && m.laneOf("convert") === "general" && m.laneOf("agent-swap-api") === "general" && m.laneOf("") === "general" && m.laneOf(undefined) === "general";
 t("laneOf maps ladder machines to grid, everything else to general", ok);
 
+// 11-b) zai-audit 2026-10-11 · מסילת delegations — הכלי delegator ממופה למסילה משלו;
+// סגורה כברירת-מחדל (staged עם grid בלבד), נפתחת רק כשה-STASIS עצמו מרשה.
+m = await loadWith(STAGED(["grid"]), captured);
+ok = m.laneOf("delegator") === "delegations" && m.stasisHalt("delegator") === true;
+t("staged + delegations NOT in allow → delegator halts on its own lane", ok);
+m = await loadWith(STAGED(["grid", "delegations"]), captured);
+ok = m.stasisHalt("delegator") === false;
+t("staged + delegations allowed → delegator flows (fail-closed still binds unknown tools)", ok);
+
 for (const s of SANDBOXES) rmSync(s, { recursive: true, force: true }); // ניקוי-החול בתום-הריצה
 console.log(process.exitCode ? "brake-selftest: FAIL" : "brake-selftest: all vectors PASS");
 
