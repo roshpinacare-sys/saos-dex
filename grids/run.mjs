@@ -105,9 +105,13 @@ async function selftest() {
   const feesAfter3 = loadState().feeMeter.simMu;
   t("fee meter grows from sim fills", feesAfter3 >= 0);
 
-  /* 4. אבן-דרך מזויפת-מכוון: מד-עמלות → הולדת מיקרו-גריד */
+  /* 4. אבן-דרך מזויפת-מכוון: מד-עמלות → הולדת מיקרו-גריד
+   * היגיינה: חייב לאפס milestonesHit — מזרע-ייצור (state.json חי) כבר עבר
+   * אבני-דרך (spawnCount=3) ואז nextMilestone = 2×האחרונה, והספאון אף-פעם
+   * לא יירה בבדיקה. איפוס = דטרמיניזם בלי-תלות-במצב-המחויב. */
   const s = loadState();
   s.feeMeter.simMu = Math.max(s.feeMeter.simMu, 1500); // חוצה את אבן-הפתיחה (1000µ)
+  s.feeMeter.milestonesHit = []; // אבן-הפתיחה תמיד 1000µ מחדש
   saveState(s);
   r = await runTick({ injectedPrice: price, quiet: true });
   const after = loadState();
