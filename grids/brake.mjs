@@ -43,7 +43,10 @@ export function stasisState() {
  */
 export function laneOf(tool) {
   const t = String(tool ?? "").trim().toLowerCase();
-  if (t === "mover" || t === "grid-beat:steem" || t === "grid-beat:hive") return "grid";
+  // 9-c (2026-10-11): liquidity-bootstrap מצטרף למסילת-הספר — הוא חותם limit_order_create
+  // על ספר-STEEM הפנימי בדיוק כמו mover/grid-beat (ואף-פעם לא מבטל). החימוש-כפול שלו
+  // (קובץ-arm של-הבעלים + שער-מפתח) הוא שכבה-נוספת מעבר לבלם — לא תחליף לו.
+  if (t === "mover" || t === "grid-beat:steem" || t === "grid-beat:hive" || t === "liquidity-bootstrap") return "grid";
   // zai-audit 2026-10-11 · מסילת-ההאצלות (owner directive trace 1a12af43fc4d7489
   // "אני רוצה להאציל SP לכלל החשבונות" + אישור-ביצוע 1a12b258c9776305): כלי-ה-delegator
   // מקבל מסילה משלו — נפתחת רק ב-STASIS stagedLanes.allow (או full-lift), אף-פעם
