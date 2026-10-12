@@ -172,12 +172,14 @@ async function run(keysFile) {
   const m = await measureMid();
   if (!m) { console.log("[ladder] no honest mid measurement — hands in pockets (by law)"); process.exit(0); }
 
-  const acct = (await rpcAny("condenser_api.get_accounts", [[trader]]))[0];
+  let acct = null;
+  try { acct = (await rpcAny("condenser_api.get_accounts", [[trader]]))[0]; } catch { /* נפילה-כנה למטה */ }
+  if (!acct) { console.log("[ladder] trader account unreadable — honest abort (nothing signed)"); process.exit(1); }
   const traderSteem = num(acct.balance);
   const traderSbd = num(acct.sbd_balance);
 
-  const live = await rpcAny("condenser_api.find_limit_orders", { account: trader });
-  const liveOrders = live?.orders ?? [];
+  // condenser_api.get_open_orders (נמדד חי 03:3xZ — find_limit_orders אינו-קיים-בקונדנסר-על-הצמתים-החיים)
+  const liveOrders = await rpcAny("condenser_api.get_open_orders", [trader]).catch(() => []);
 
   const actions = [];
   const knownIds = myKnownOrderIds(plan);
@@ -211,7 +213,7 @@ async function run(keysFile) {
           : ["limit_order_create", { owner: trader, orderid: a.leg.orderId, amount_to_sell: `${(a.leg.sizeSteem * a.leg.priceSbd).toFixed(3)} SBD`, min_to_receive: `${a.leg.sizeSteem.toFixed(3)} STEEM`, fill_or_kill: false, expiration: exp }];
         const r = await signAndBroadcast(wif, [op]);
         executed.push({ ...a, txid: r.txid, block: r.block });
-        await rpcAny("condenser_api.get_transaction", [r.txid]); // קריאה-אחרי-כתיבה
+        await altRpc("condenser_api.get_transaction", [r.txid]); // קריאה-אחרי-כתיבה
       }
     } catch (e) {
       executed.push({ ...a, error: String(e?.message ?? e).slice(0, 120) });
