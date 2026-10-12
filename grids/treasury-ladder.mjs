@@ -129,18 +129,20 @@ export function diffOrders({ liveOrders, targetLegs, knownIds, priceTolBps = 50 
   for (const l of targetLegs) {
     const o = byId.get(l.orderId);
     if (!o) { actions.push({ action: "create", leg: l }); continue; }
-    const livePrice = num(o.sell_price) || (num(o.min_to_receive) / num(o.amount_to_sell));
-    if (Math.abs(livePrice - l.priceSbd) / l.priceSbd * 10000 > priceTolBps) actions.push({ action: "replace", leg: l, stalePrice: livePrice });
+    // real_price = שדה-האמת של get_open_orders (SBD/STEEM, נמדד-חי) — sell_price הוא-אובייקט-order_price
+    const livePrice = num(o.real_price) || (num(o.order_price?.quote) > 0 ? num(o.order_price?.base) / num(o.order_price?.quote) : 0);
+    if (livePrice > 0 && Math.abs(livePrice - l.priceSbd) / l.priceSbd * 10000 > priceTolBps) actions.push({ action: "replace", leg: l, stalePrice: livePrice });
   }
   const targetIds = new Set(targetLegs.map((l) => l.orderId));
   for (const o of liveMine) if (!targetIds.has(Number(o.orderid))) actions.push({ action: "cancel", orderId: Number(o.orderid) });
   return actions;
 }
-export function planLadder({ plan, mid, traderSteem }) {
+export function planLadder({ plan, mid, traderSteem, lockedSteem = 0 }) {
   const legs = [];
   const per = num(plan.maxPerLegSteem);
   const openCap = num(plan.maxOpenSteem);
-  let budget = Math.min(openCap, Math.max(0, traderSteem - 0.1)); // 0.1 STEEM דלק-החזקה
+  // התקציב סופר גם את מה שכבר מונח-על-הספר (locked) — אחרת הריצה-השנייה רואה-את-הרגליים-הפועלות-כיתומות (באג-שנמדד-חי ב-run 38200441621)
+  let budget = Math.min(openCap, Math.max(0, (traderSteem + lockedSteem) - 0.1)); // 0.1 STEEM דלק-החזקה
   for (const [i, leg] of (plan.sellLegs || []).entries()) {
     if (budget < 0.05) break;
     const size = Math.min(per, budget, num(leg.sizeSteem) || per);
@@ -180,6 +182,9 @@ async function run(keysFile) {
 
   // condenser_api.get_open_orders (נמדד חי 03:3xZ — find_limit_orders אינו-קיים-בקונדנסר-על-הצמתים-החיים)
   const liveOrders = await rpcAny("condenser_api.get_open_orders", [trader]).catch(() => []);
+  // ה-locked שלנו = סכום-הרגליים-המוכרות-המונחות (o.steem ביחידות-1e3, נמדד-חי 03:4xZ)
+  const knownIds0 = myKnownOrderIds(plan);
+  const lockedSteem = liveOrders.filter((o) => knownIds0.has(Number(o.orderid))).reduce((s, o) => s + (Number(o.steem) > 0 ? Number(o.steem) / 1000 : 0), 0);
 
   const actions = [];
   const knownIds = myKnownOrderIds(plan);
@@ -187,7 +192,7 @@ async function run(keysFile) {
   if (plan.anchorMid && KILL_LAW(m.mid, num(plan.anchorMid), CAPS.maxKillMidMovePct)) {
     for (const o of liveOrders) if (knownIds.has(Number(o.orderid))) actions.push({ action: "cancel", orderId: Number(o.orderid), why: "kill-law: mid moved beyond canary band" });
   } else {
-    const targets = planLadder({ plan, mid: m.mid, traderSteem }).map((l) => ({ ...l, orderId: legOrderId(l.legId) }));
+    const targets = planLadder({ plan, mid: m.mid, traderSteem, lockedSteem }).map((l) => ({ ...l, orderId: legOrderId(l.legId) }));
     // מנוע-maker: דחיית-חצייה
     for (const t of targets) if (m.bestBid != null && t.priceSbd <= m.bestBid) { t.blocked = `crossing-forbidden (price ${t.priceSbd} ≤ best-bid ${m.bestBid})`; }
     actions.push(...diffOrders({ liveOrders, targetLegs: targets.filter((t) => !t.blocked), knownIds }));
@@ -247,13 +252,17 @@ export async function selftest() {
   assert(oid === oid2, "orderid deterministic");
   const known = myKnownOrderIds({ sellLegs: [{}, {}], reinvestBuyLegs: true });
   assert(known.size === 3, "known-id space = plan legs");
-  const d = diffOrders({ liveOrders: [{ orderid: oid, sell_price: "0.100000" }], targetLegs: [{ legId: "sell-1", orderId: oid, priceSbd: 0.11 }], knownIds: known });
+  const d = diffOrders({ liveOrders: [{ orderid: oid, real_price: "0.100000" }], targetLegs: [{ legId: "sell-1", orderId: oid, priceSbd: 0.11 }], knownIds: known });
   assert(d.some((a) => a.action === "replace"), "stale price → replace");
-  const d2 = diffOrders({ liveOrders: [{ orderid: oid, sell_price: "0.1" }], targetLegs: [], knownIds: known });
+  const dSame = diffOrders({ liveOrders: [{ orderid: oid, real_price: "0.110000" }], targetLegs: [{ legId: "sell-1", orderId: oid, priceSbd: 0.11 }], knownIds: known });
+  assert(dSame.length === 0, "same price → no action (object-shape sell_price immunity)");
+  const d2 = diffOrders({ liveOrders: [{ orderid: oid, real_price: "0.1" }], targetLegs: [], knownIds: known });
   assert(d2.some((a) => a.action === "cancel"), "own orphan → cancel");
-  const d3 = diffOrders({ liveOrders: [{ orderid: 777, sell_price: "0.1" }], targetLegs: [], knownIds: known });
+  const d3 = diffOrders({ liveOrders: [{ orderid: 777, real_price: "0.1" }], targetLegs: [], knownIds: known });
   assert(d3.length === 0, "FOREIGN order (unknown orderid) → NEVER touched");
-  console.log("SELFTEST PASS: 17/17 vectors");
+  const l2 = planLadder({ plan: { maxPerLegSteem: 0.3, maxOpenSteem: 0.6, edgeBps: 150, sellLegs: [{}, {}] }, mid: 0.1028, traderSteem: 0.4, lockedSteem: 0.6 });
+  assert(l2.length === 2, "locked funds count toward the ladder budget (no orphan-cancels on re-runs)");
+  console.log("SELFTEST PASS: 19/19 vectors");
 }
 
 async function main() {
