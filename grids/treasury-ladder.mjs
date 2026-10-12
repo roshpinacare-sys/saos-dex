@@ -38,6 +38,25 @@ const PLAN_PATH = join(HERE, "state", "treasury-ladder-plan.json");
 const RECEIPT_PATH = join(HERE, "state", "treasury-receipts.jsonl");
 const PUBLIC_PATH = join(HERE, "state", "treasury-public.json");
 
+/* קבוצת-צמתים-שנייה למדידות (exec-20: צמתים-שונים מחזיקים-מתודות-שונות) */
+const ALT_NODES = ["https://api.steemit.com", "https://api.justyy.com", "https://steem-rpc.publicnode.com"];
+async function altRpc(method, params) {
+  const errs = [];
+  for (const node of ALT_NODES) {
+    try {
+      const r = await fetch(node, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(8000),
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      });
+      const j = await r.json();
+      if (j.result !== undefined) return j.result;
+      errs.push(`${new URL(node).host}: no-result`);
+    } catch (e) { errs.push(`${new URL(node).host}: ${String(e?.message ?? e).slice(0, 50)}`); }
+  }
+  throw new Error(`all-alt-nodes-failed · ${errs.join(" | ")}`);
+}
+
 /* ── תקרות-קשיחות (קנרית-לנצח — שינוי = מילת-בעלים + קומיט-מתועד) ─────────────── */
 export const CAPS = { maxOpenSteem: 0.6, maxPerLegSteem: 0.3, maxKillMidMovePct: 5, maxLegs: 2 };
 
@@ -60,27 +79,33 @@ export function validatePlan(plan) {
 
 /* ── מדידות-שוק (אמת בלבד — אין-מחירים-מומצאים) ───────────────────────────────── */
 export async function measureMid() {
-  // מחיר-הפיד דרך dgp — מתודה-אוניברסלית שקיימת-על-כל-הצמתים (exec-20: get_feed_history
-  // חסר-על-צמתים-חלופיים-של-CI; נפילה-כנה לספר-החי ואז ל-dgp)
-  let feedMid = null;
-  try {
-    const dgp = await rpcAny("condenser_api.get_dynamic_global_properties", []);
-    const cmp = dgp?.current_median_history_price;
-    if (cmp?.base && cmp?.quote) {
-      const b = num(cmp.base), q = num(cmp.quote);
-      if (b > 0 && q > 0) feedMid = b / q;
-    }
-  } catch { /* נפילה-כנה */ }
+  // מיד-חי מהספר: real_price (SBD/STEEM) — שדה-האמת של condenser (נמדד 03:3xZ: bid 0.1026 < ask 0.1028)
   let bestBid = null, bestAsk = null;
   try {
     const ob = await rpcAny("condenser_api.get_order_book", [10]);
-    if (ob?.bids?.[0]?.price) bestBid = num(ob.bids[0].price);
-    if (ob?.asks?.[0]?.price) bestAsk = num(ob.asks[0].price);
-  } catch { /* הספר-ציבורי נפל — נמשיך על-הפיד בלבד */ }
-  // מיד-נמדד: עדיפות לאמצע-הספר-החי; נפילה-כנה לפיד
+    if (ob?.bids?.[0]?.real_price) bestBid = num(ob.bids[0].real_price);
+    if (ob?.asks?.[0]?.real_price) bestAsk = num(ob.asks[0].real_price);
+  } catch { /* הספר-ציבורי נפל — נמשיך לפיד */ }
+  // פיד-חלופי: get_feed_history — על-שתי-קבוצות-צמתים (exec-20: המתודה חסרה-על-חלק-מהצמתים)
+  let feedMid = null;
+  try {
+    const feed = await rpcAny("condenser_api.get_feed_history", []);
+    const cur = feed?.current_median_history;
+    const b = num(cur?.base), q = num(cur?.quote);
+    if (b > 0 && q > 0) feedMid = b / q;
+  } catch { /* נפילה-כנה לקבוצת-הצמתים-השנייה */ }
+  if (feedMid == null) {
+    try {
+      // קבוצת-צמתים-שנייה (אותם-צמתים של-key-census-probe — justyy/publicnode מחזיקים-feed_history)
+      const feed2 = await altRpc("condenser_api.get_feed_history", []);
+      const cur = feed2?.current_median_history;
+      const b = num(cur?.base), q = num(cur?.quote);
+      if (b > 0 && q > 0) feedMid = b / q;
+    } catch { /* כנות: אין-פיד */ }
+  }
   const mid = bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : feedMid;
   if (!(mid > 0)) return null;
-  return { mid, feedMid, bestBid, bestAsk, source: bestBid != null ? "order-book" : "dgp-feed" };
+  return { mid, feedMid, bestBid, bestAsk, source: bestBid != null ? "order-book" : "feed" };
 }
 
 /* ── סוחר-מזהה-הצבות-שלו: orderid = hash(id-הרגל) תחום ל-uint32 ────────────────── */
