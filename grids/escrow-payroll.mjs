@@ -68,8 +68,16 @@ export function escrowIdFor(laneId) {
 }
 
 /* ── היסטוריית-חשבון — מה-כבר-על-השרשרת (אידמפוטנטיות) ───────────────────────── */
+/* R16-a נמדד-חי (ריצת-קנרית 02:09Z): קריאה-נכשלת שטופלה-כהיסטוריה-ריקה גרמה-לשידור-חוזר
+ * של-אותו-escrow_id → אילוץ-ייחודיות בכל-הצמתים. מעתה: כשל-קריאה = עצירה-כנה (fail-closed) —
+ * לעולם לא "היסטוריה-ריקה" על-ספק. */
 async function escrowOpsOf(account) {
-  const rows = await rpcAny("condenser_api.get_account_history", [account, -300, 300]).catch(() => []);
+  let rows;
+  try {
+    rows = await rpcAny("condenser_api.get_account_history", [account, -300, 300]);
+  } catch (e) {
+    throw new Error(`escrowOpsOf(${account}) failed — refusing to broadcast on unreadable history (fail-closed): ${String(e?.message ?? e).slice(0, 120)}`);
+  }
   const out = [];
   for (const row of Array.isArray(rows) ? rows : []) {
     try {
@@ -92,6 +100,18 @@ function approveDone(ops, escrowId, from, who) {
 }
 function releaseDone(ops, escrowId, from) {
   return ops.some((o) => o.type === "escrow_release" && o.body?.from === from && Number(o.body?.escrow_id) === escrowId);
+}
+
+/* אילוץ-ייחודיות = האוביקט כבר-קיים בשרשרת. רק אם-האימות-מאשר — מטופל-כ"כבר-בוצע"
+ * (כנות: ריצת-קנרית 02:09Z לימדה-את-המחלקה-הזו). אחרת — עצירה-כנה. */
+const UNIQ_RE = /uniqueness constraint/i;
+async function uniquenessRecovered(account, verify) {
+  try {
+    const ops = await escrowOpsOf(account);
+    return verify(ops);
+  } catch {
+    return false;
+  }
 }
 
 /* ── מפתחות — מקובץ-0700 או env; אימות-מול-רשות-חיה לכל-רגל ─────────────────── */
@@ -177,7 +197,16 @@ async function runLane(lane, keys, receipt) {
       escrow_expiration: new Date(Date.now() + 8 * 24 * 3600e3).toISOString().slice(0, 19),
     };
     await leg("transfer", async () => {
-      const r = await signAndBroadcast(wif, [["escrow_transfer", body]]);
+      let r;
+      try {
+        r = await signAndBroadcast(wif, [["escrow_transfer", body]]);
+      } catch (e) {
+        if (UNIQ_RE.test(String(e?.message ?? e)) && await uniquenessRecovered(lane.from, (ops) => transferDone(ops, escrowId, lane.from))) {
+          console.log(`escrow-payroll: transfer — uniqueness constraint = the escrow is already on chain (verified in history); treated as done`);
+          return { ok: true, recovered: "uniqueness-verified-on-chain" };
+        }
+        throw e;
+      }
       await sleep(2500);
       const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
       const onChain = tx?.operations?.some(([t, b]) => t === "escrow_transfer" && Number(b?.escrow_id) === escrowId);
@@ -199,7 +228,16 @@ async function runLane(lane, keys, receipt) {
     await leg(`approve:${who}`, async () => {
       // השרשרת דורשת בדיוק-אחד-מהשניים: approve=true או reject=true (נמדד-חי: בלי-
       // approve מפורש — "undefined is not valid JSON", ריצת-קנרית 02:07Z).
-      const r = await signAndBroadcast(wif, [["escrow_approve", { from: lane.from, to: lane.to, agent: lane.agent, who, escrow_id: escrowId, approve: true, reject: false }]]);
+      let r;
+      try {
+        r = await signAndBroadcast(wif, [["escrow_approve", { from: lane.from, to: lane.to, agent: lane.agent, who, escrow_id: escrowId, approve: true, reject: false }]]);
+      } catch (e) {
+        if (UNIQ_RE.test(String(e?.message ?? e)) && await uniquenessRecovered(who, (ops) => approveDone(ops, escrowId, lane.from, who))) {
+          console.log(`escrow-payroll: approve(${who}) — uniqueness constraint = already approved (verified in history); treated as done`);
+          return { ok: true, recovered: "uniqueness-verified-on-chain" };
+        }
+        throw e;
+      }
       await sleep(2500);
       const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
       const onChain = tx?.operations?.some(([t, b]) => t === "escrow_approve" && Number(b?.escrow_id) === escrowId && b?.who === who);
@@ -216,7 +254,16 @@ async function runLane(lane, keys, receipt) {
     const gate = await activeAuthorityOk({ account: lane.from, wif, rpc: rpcAny });
     if (!gate.ok) throw new Error(`release refused by key gate (${lane.from}): ${gate.reason}`);
     await leg("release", async () => {
-      const r = await signAndBroadcast(wif, [["escrow_release", { from: lane.from, to: lane.to, agent: lane.agent, who: lane.from, receiver: lane.to, escrow_id: escrowId, sbd_amount: SBD(lane.amountSbd), steem_amount: STEEM0 }]]);
+      let r;
+      try {
+        r = await signAndBroadcast(wif, [["escrow_release", { from: lane.from, to: lane.to, agent: lane.agent, who: lane.from, receiver: lane.to, escrow_id: escrowId, sbd_amount: SBD(lane.amountSbd), steem_amount: STEEM0 }]]);
+      } catch (e) {
+        if (UNIQ_RE.test(String(e?.message ?? e)) && await uniquenessRecovered(lane.from, (ops) => releaseDone(ops, escrowId, lane.from))) {
+          console.log(`escrow-payroll: release — uniqueness constraint = already released (verified in history); treated as done`);
+          return { ok: true, recovered: "uniqueness-verified-on-chain" };
+        }
+        throw e;
+      }
       await sleep(2500);
       const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
       const onChain = tx?.operations?.some(([t, b]) => t === "escrow_release" && Number(b?.escrow_id) === escrowId);
