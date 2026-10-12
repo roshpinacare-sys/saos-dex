@@ -197,7 +197,9 @@ async function runLane(lane, keys, receipt) {
     const gate = await activeAuthorityOk({ account: who, wif, rpc: rpcAny });
     if (!gate.ok) throw new Error(`approve refused by key gate (${who}): ${gate.reason}`);
     await leg(`approve:${who}`, async () => {
-      const r = await signAndBroadcast(wif, [["escrow_approve", { from: lane.from, to: lane.to, agent: lane.agent, who, escrow_id: escrowId, reject: false }]]);
+      // השרשרת דורשת בדיוק-אחד-מהשניים: approve=true או reject=true (נמדד-חי: בלי-
+      // approve מפורש — "undefined is not valid JSON", ריצת-קנרית 02:07Z).
+      const r = await signAndBroadcast(wif, [["escrow_approve", { from: lane.from, to: lane.to, agent: lane.agent, who, escrow_id: escrowId, approve: true, reject: false }]]);
       await sleep(2500);
       const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
       const onChain = tx?.operations?.some(([t, b]) => t === "escrow_approve" && Number(b?.escrow_id) === escrowId && b?.who === who);
