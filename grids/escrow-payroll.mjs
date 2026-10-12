@@ -74,7 +74,7 @@ export function escrowIdFor(laneId) {
 async function escrowOpsOf(account) {
   let rows;
   try {
-    rows = await rpcAny("condenser_api.get_account_history", [account, -300, 300]);
+    rows = await rpcAny("condenser_api.get_account_history", [account, -100, 100]); // nodes cap the batch at 100 (measured live, canary run 02:14Z)
   } catch (e) {
     throw new Error(`escrowOpsOf(${account}) failed — refusing to broadcast on unreadable history (fail-closed): ${String(e?.message ?? e).slice(0, 120)}`);
   }
