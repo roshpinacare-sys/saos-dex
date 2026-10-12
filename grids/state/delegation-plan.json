@@ -1,27 +1,103 @@
 {
-  "protocol": "SAOS-DELEGATION-PLAN/1",
-  "sealedAt": "2026-10-11T14:20:00Z",
-  "authority": "owner directives IM traces 1a12af43fc4d7489 ('אני רוצה להאציל SP לכלל החשבונות כדי לחלק את כוח העבודה וההצבעה ופוסטים בצורה נכונה') + 1a12b258c9776305 ('יש לך אישור להכל')",
-  "derivedFrom": "live chain measurement 2026-10-11 (condenser_api.get_accounts + get_vesting_delegations of @headcorner) — full analysis: Zip/sovereign/zai-audit/2026-10-11.json",
-  "delegator": "headcorner",
-  "vestsPerSPAtSeal": 1612.4,
-  "law": "absolute-amounts only (delegate_vesting_shares sets, never increments blindly); delta-only execution (target reached = zero ops); no new accounts, no authority changes, no transfers — SP delegation is reversible by design (7-day return period)",
-  "targets": [
-    { "account": "cashmachine", "role": "poster+trail", "sp": 150, "vests": 241860.0 },
-    { "account": "haran", "role": "poster+trail", "sp": 150, "vests": 241860.0 },
-    { "account": "israelnews", "role": "poster", "sp": 150, "vests": 241860.0 },
-    { "account": "lsa", "role": "poster", "sp": 150, "vests": 241860.0 },
-    { "account": "macrame", "role": "poster", "sp": 150, "vests": 241860.0 },
-    { "account": "siq", "role": "trail-rc", "sp": 50, "vests": 80620.0 },
-    { "account": "tov", "role": "trail-rc", "sp": 50, "vests": 80620.0 },
-    { "account": "wic", "role": "trail-rc", "sp": 50, "vests": 80620.0 },
-    { "account": "wog", "role": "trail-rc", "sp": 50, "vests": 80620.0 },
-    { "account": "woq", "role": "trail-rc", "sp": 50, "vests": 80620.0 },
-    { "account": "hcsoldier4", "role": "rc-min", "sp": 8, "vests": 12899.0 },
-    { "account": "hcsoldier5", "role": "rc-min", "sp": 8, "vests": 12899.0 },
-    { "account": "hcsoldier6", "role": "rc-min", "sp": 8, "vests": 12899.0 }
-  ],
-  "deployTotalSP": 1024,
-  "headcornerRetainsSP": 3002,
-  "note": "existing delegations (~64 SP workers / ~26 SP micros / 2.6 SP soldiers from earlier ops) are REPLACED by these absolute amounts — the executor measures live state and emits only the delta ops"
+ "protocol": "SAOS-DELEGATION-PLAN/1",
+ "sealedAt": "2026-10-12T01:45:26Z",
+ "authority": "owner mandate IM trace 1a12dbe9812eff11 (\"תצית תפתור תפעיל שלא יהיו חסימות\") + gate-08 warning honored: the machine must NOT re-shuffle the owner's direct GEN-2 deployment; this re-seal copies the LIVE chain picture exactly (delta=0), new deployments need a NEW sealed plan per owner word",
+ "derivedFrom": "live chain measurement 2026-10-12T01:45:26Z (condenser_api.get_vesting_delegations @headcorner, nodes api.steemit.com/justyy/publicnode)",
+ "delegator": "headcorner",
+ "vestsPerSPAtSeal": 1612.3526,
+ "law": "absolute-amounts only (delegate_vesting_shares sets, never increments blindly); delta-only execution (target reached = zero ops); no new accounts, no authority changes, no transfers — SP delegation is reversible by design (7-day return period)",
+ "reSeal": {
+  "what": "gate-08 re-seal — absolute targets replaced by the LIVE measured picture (the owner deployed SP/14 directly with GEN-2 keys on 10-11; the 1024-SP plan of 14:20Z pre-dated it and would have re-shuffled it), delta=0 by target==live construction",
+  "superseded": {
+   "sealedAt": "2026-10-11T14:20:00Z",
+   "authority": "owner directives IM traces 1a12af43fc4d7489 ('אני רוצה להאציל SP לכלל החשבונות כדי לחלק את כוח העבודה וההצבעה ופוסטים בצורה נכונה') + 1a12b258c9776305 ('יש לך אישור להכל')",
+   "totalTargetVests": 1651097
+  }
+ },
+ "targets": [
+  {
+   "account": "cashmachine",
+   "role": "poster+trail",
+   "sp": 195.052,
+   "vests": 120973.813573
+  },
+  {
+   "account": "haran",
+   "role": "poster+trail",
+   "sp": 195.052,
+   "vests": 120973.813573
+  },
+  {
+   "account": "hcsoldier4",
+   "role": "rc-min",
+   "sp": 44.194,
+   "vests": 27409.680707
+  },
+  {
+   "account": "hcsoldier5",
+   "role": "rc-min",
+   "sp": 44.194,
+   "vests": 27409.680707
+  },
+  {
+   "account": "hcsoldier6",
+   "role": "rc-min",
+   "sp": 44.194,
+   "vests": 27409.680707
+  },
+  {
+   "account": "hive-177702",
+   "role": "community",
+   "sp": 26.01,
+   "vests": 16131.754808
+  },
+  {
+   "account": "israelnews",
+   "role": "poster",
+   "sp": 195.052,
+   "vests": 120973.813573
+  },
+  {
+   "account": "lsa",
+   "role": "poster",
+   "sp": 195.052,
+   "vests": 120973.813573
+  },
+  {
+   "account": "macrame",
+   "role": "poster",
+   "sp": 195.052,
+   "vests": 120973.590917
+  },
+  {
+   "account": "siq",
+   "role": "trail-rc",
+   "sp": 78.026,
+   "vests": 48392.863774
+  },
+  {
+   "account": "tov",
+   "role": "trail-rc",
+   "sp": 78.026,
+   "vests": 48392.863774
+  },
+  {
+   "account": "wic",
+   "role": "trail-rc",
+   "sp": 78.026,
+   "vests": 48392.863774
+  },
+  {
+   "account": "wog",
+   "role": "trail-rc",
+   "sp": 27.762,
+   "vests": 17218.426681
+  },
+  {
+   "account": "woq",
+   "role": "trail-rc",
+   "sp": 172.734,
+   "vests": 107131.368386
+  }
+ ]
 }
