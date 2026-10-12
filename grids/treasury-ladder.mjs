@@ -60,21 +60,27 @@ export function validatePlan(plan) {
 
 /* ── מדידות-שוק (אמת בלבד — אין-מחירים-מומצאים) ───────────────────────────────── */
 export async function measureMid() {
-  const feed = await rpcAny("condenser_api.get_feed_history", []);
-  const cur = feed?.current_median_history;
-  if (!cur?.base || !cur?.quote) return null;
-  const base = num(cur.base), quote = num(cur.quote);
-  if (!(base > 0 && quote > 0)) return null;
-  const feedMid = base / quote;
+  // מחיר-הפיד דרך dgp — מתודה-אוניברסלית שקיימת-על-כל-הצמתים (exec-20: get_feed_history
+  // חסר-על-צמתים-חלופיים-של-CI; נפילה-כנה לספר-החי ואז ל-dgp)
+  let feedMid = null;
+  try {
+    const dgp = await rpcAny("condenser_api.get_dynamic_global_properties", []);
+    const cmp = dgp?.current_median_history_price;
+    if (cmp?.base && cmp?.quote) {
+      const b = num(cmp.base), q = num(cmp.quote);
+      if (b > 0 && q > 0) feedMid = b / q;
+    }
+  } catch { /* נפילה-כנה */ }
   let bestBid = null, bestAsk = null;
   try {
-    const ob = await rpcAny("condenser_api.get_order_book", [1]);
+    const ob = await rpcAny("condenser_api.get_order_book", [10]);
     if (ob?.bids?.[0]?.price) bestBid = num(ob.bids[0].price);
     if (ob?.asks?.[0]?.price) bestAsk = num(ob.asks[0].price);
   } catch { /* הספר-ציבורי נפל — נמשיך על-הפיד בלבד */ }
   // מיד-נמדד: עדיפות לאמצע-הספר-החי; נפילה-כנה לפיד
   const mid = bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : feedMid;
-  return { mid, feedMid, bestBid, bestAsk, source: bestBid != null ? "order-book" : "feed-only" };
+  if (!(mid > 0)) return null;
+  return { mid, feedMid, bestBid, bestAsk, source: bestBid != null ? "order-book" : "dgp-feed" };
 }
 
 /* ── סוחר-מזהה-הצבות-שלו: orderid = hash(id-הרגל) תחום ל-uint32 ────────────────── */
