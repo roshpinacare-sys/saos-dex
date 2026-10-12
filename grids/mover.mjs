@@ -44,7 +44,12 @@ const EVENTS_LOG = join(HERE, "state", "events.jsonl");
 const OFFER_PATH = join(HERE, "state", "offer.json");
 const MOVER_LOG = join(HERE, "state", "mover-log.jsonl");
 
-const STEEM_NODES = ["https://api.steemit.com", "https://api.justyy.com", "https://steem-rpc.publicnode.com"];
+/* exec-20 (runner-measured): api.steemit.com 503s Azure runners often and
+ * publicnode wobbles — order is cheapest-proven-first, all live-tested for
+ * condenser_api.get_account_history (escrowOpsOf fail-closed depends on it).
+ * steemitdev+ctimeg proven from runners by truthrail (PASS 01:38Z);
+ * boylikegirl proven live (get_account_history 200). */
+const STEEM_NODES = ["https://api.steemit.com", "https://api.steemitdev.com", "https://api.justyy.com", "https://steemapi.boylikegirl.club", "https://steem-rpc.publicnode.com"];
 const STEEM_CHAIN_ID = "0".repeat(64);
 export const ACCOUNT = process.env.SAOS_RELAY_AGENT_ACCOUNT || "headcorner";
 const PARITY_BAND_BPS = 5000;
