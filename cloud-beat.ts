@@ -568,7 +568,7 @@ async function main(): Promise<void> {
 
   /* ── שלב-האמת: קודם-commit-השרשרת לריפו, ורק-אז-פרסום-הציבורי ── */
   git("config user.name \"dex-beat[bot]\"", { allowFail: true });
-  git("config user.email \"dex-beat[bot]@users.noreply.github.com\"", { allowFail: true });
+  git("config user.email \"dex-beat[bot]@agents.roshpinacare-sys\"", { allowFail: true });
   /* 2026-09 hygiene (Task 7-c): db/dex.db removed from chainFiles — runtime
    * databases are no longer tracked in git (45MB blob; see README "Database
    * files (2026-09)"). The chain snapshot/tape/credits/ledger remain committed. */
@@ -651,7 +651,7 @@ async function main(): Promise<void> {
   }));
 
   execSync('git config user.name "dex-beat[bot]"', { encoding: "utf8", cwd: PUB });
-  execSync('git config user.email "dex-beat[bot]@users.noreply.github.com"', { encoding: "utf8", cwd: PUB });
+  execSync('git config user.email "dex-beat[bot]@agents.roshpinacare-sys"', { encoding: "utf8", cwd: PUB });
   execSync("git add dex/state.json dex/credits.json dex/world.json dex/relay.json dex/agent.json dex/fleet.json dex/portfolio.json dex/bridge.json dex/onramp.json dex/showcase.json dex/mirror-stub.json", { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
   const stagedPub = execSync("git diff --cached --name-only", { encoding: "utf8", cwd: PUB }).trim();
   if (stagedPub) {
