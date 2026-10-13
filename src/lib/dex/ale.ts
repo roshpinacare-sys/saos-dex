@@ -27,7 +27,12 @@
  * לנזילות-המקומית — aleState מדווח-עליו (vaultFeed) מה-backing-האמיתי.
  */
 import type { DexState, Pool } from "./kernel";
-import { addBal, bal } from "./kernel";
+/* FIX(SWEEP-1c · 2026-10-13): T25's pol-respect-locks calls avail() (lines 69/70/104)
+ * but the import was missing — every arena tick that reached the seed path died
+ * "avail is not defined" MID-BLOCK: state mutated, no header written, snapshot↔DB
+ * desync (measured live: cloud beat 38417068844 BOOT-REFUSED on real corroboration;
+ * reproduced locally h26500). One word — the import. */
+import { addBal, bal, avail } from "./kernel";
 import {
   ALE_EVERY, ALE_SEED_PCT, ALE_MIN_SEED, ALE_MAX_PER_CYCLE,
   ROUTER_USDS_FLOOR,
