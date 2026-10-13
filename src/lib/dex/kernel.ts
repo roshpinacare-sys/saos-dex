@@ -1760,9 +1760,14 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // מציג "genesis+declared" וההצהרה כאן היא בדיוק ההנפקה-המוצהרת של התוכנית.
       // אפס-הסתרה: המבקר ירדוף כל-סחיפה-מעבר-להנפקה-המוצהרת (fail-closed).
       {
-        const adj = (st.auditAdjustments ??= {});
-        adj.native = adj.native ?? {};
-        adj.native[gAsset] = (adj.native[gAsset] ?? 0) + gAmt;
+        // ההצהרה-הראשונה נושאת-note/atH (חוזה-השדה); ההנפקות-הבאות מצטברות-עליה.
+        st.auditAdjustments = {
+          note: st.auditAdjustments?.note ?? `T25 declared sovereign issuance (${FORGE_PROGRAM})`,
+          atH: st.auditAdjustments?.atH ?? st.height,
+          native: { ...(st.auditAdjustments?.native ?? {}), [gAsset]: (st.auditAdjustments?.native?.[gAsset] ?? 0) + gAmt },
+          lp: st.auditAdjustments?.lp,
+          feesSpentMu: st.auditAdjustments?.feesSpentMu,
+        };
       }
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "forge_issue", note: `+${gAmt}µ ${gAsset} · ${FORGE_PROGRAM} · ${gIssued + gAmt}/${gCap}µ (declared sovereign issuance)` });
       pushReserveEvent(st, st.height, "forge", gAmt, `forge_issue ${gAsset} ${FORGE_PROGRAM}`);
