@@ -4,7 +4,7 @@
   "private": true,
   "description": "SAOS-DEX — הבורסה הריבונית של הרשת: ספר-הזמנות דטרמיניסטי + AMM 30bps + ארנת-חיילים אוטונומית (מורשת saos-dex.ts + grid98.cjs)",
   "scripts": {
-    "dev": "DATABASE_URL=file:/home/z/my-project/saos-dex/db/dex.db next dev -p 3010 -H 127.0.0.1 2>&1 | tee dev.log",
+    "dev": "DATABASE_URL=file:/home/z/my-project/repos/saos-dex/db/dex.db SAOS_DEX_STATE_DIR=/home/z/my-project/repos/saos-dex/db next dev -p 3010 -H 127.0.0.1 2>&1 | tee dev.log",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && ([ -d public ] && cp -r public .next/standalone/ || true)",
     "start": "next start -p 3010 -H 127.0.0.1",
     "typecheck": "tsc --noEmit",
