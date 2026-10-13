@@ -587,11 +587,15 @@ async function main(): Promise<void> {
 
   /* ── הפרסום הציבורי: dex/grid.json ב-Console ── */
   const openNow = snap.openOrders.filter(() => true).length; // נספר מהתמונה שלפני-הפעולות; הריצה הבאה מראה את החדשות
+  // 24-e (2026-10-13) · aggregate-only law at the writer itself — restores the exec-22/22-b minimization upstream:
+  // the public book publishes verdict + status + summary + freshness + chain labels ONLY (saos/grid-truth/4-aggregate style):
+  // zero account identity (the account field removed — the verdict and the counters are the public identifier) and zero keys
+  // (the keyGate live-authority pubkey removed — authority is measured as ok/authorityOk booleans only).
+  // measured: the public consumers (Domain index loadGrid, receipts wall) read publishedAt/verdict/chains/chain/blocker only.
   const publicDoc = {
     ok: true,
     publishedAt: new Date().toISOString(),
     engine: "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
-    account: ACCOUNT,
     chain: "STEEM-internal-market",
     chains: ["STEEM", "HIVE"],
     real: true,
@@ -604,7 +608,7 @@ async function main(): Promise<void> {
       : blocker.length ? "ARMED-WAITING"
       : "ARMED-STABLE",
     blocker: blocker.length ? blocker : null,
-    keyGate: keyGate ? { ok: keyGate.ok, authorityOk: keyGate.authorityOk, liveAuthorityPub: keyGate.livePub } : null,
+    keyGate: keyGate ? { ok: keyGate.ok, authorityOk: keyGate.authorityOk } : null,
     zombieOrders: zombieOrders.length ? { count: zombieOrders.length, ids: zombieOrders.slice(0, 12), note: "open on-chain but not known-open in the ledger — ledger/chain drift surfaced honestly (lost concurrent push, or another actor trading this account)" } : null,
     hive: hiveLeg,
     policy: {
