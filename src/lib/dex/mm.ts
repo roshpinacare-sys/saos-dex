@@ -20,6 +20,13 @@ import { railTick, RAIL_OWNED_POOLS, RAIL_DUST_MU } from "./rail";
 export const MARKETS: { base: Asset; quote: Asset }[] = [
   { base: "SAOS", quote: "USDS" },
   { base: "WSTEEM", quote: "USDS" },
+  // [T24 · THE-STABLE-EXPANSION] זוגות-מול-היציב (אישור-הבעלים, trace 1a1355908…):
+  // WSBD ו-PHIVE ניזונים-מהאורקל-החי (sbd/hive feeds — R23) ולכן הפייר שלהם זז
+  // עם השווקים-הפתוחים — תנודתיות-אמת מול יחידת-החשבון USDS, אפס-אנקור-מזויף.
+  // מלאי-הבסיס מגיע מזריעת-המיקרו (MICRO_SEED — למטה) ממלאי-האוצר-הטבעי-בלבד,
+  // בתקרות-חיים-מצטברות-במצב — אפס-הטבעה, אפס-עומק-פיקטיבי, כנות-מלאה.
+  { base: "WSBD", quote: "USDS" },
+  { base: "PHIVE", quote: "USDS" },
 ];
 
 export interface ArenaParams {
@@ -151,6 +158,23 @@ const SOLDIER_SEED_CAP_WSTEEM = 320_000;    // תקרה-מצטברת-פר-חיי
 const soldierSeedCounts = (st: DexState, soldier: string): { wsteem: number } => {
   st.soldierSeedCounts ??= {};
   return (st.soldierSeedCounts[soldier] ??= { wsteem: 0 });
+};
+
+/* ── [T24 · MICRO-SEED] זריעת-מלאי-מיקרו לזוגות-המול-יציב ──────────────────
+ * החיילים נולדו עם SAOS+USDS בלבד (ג'נזיס) — בזוגות WSBD/USDS ו-PHIVE/USDS
+ * צד-האסק היה מת-לנצח (SETTLE-17-b מדד את אותו-שורש בדיוק על WSTEEM: כל-
+ * ציטוט-מכירה נדחה-בשקט-מחוסר-מלאי והספר-נשאר-חד-צדדי). הטיפול באותו-רוח:
+ * העברות-מלאי-טהרות מהאוצר (מלאי-טבעי-קיים-נמדד: WSBD ~60Kµ · PHIVE ~100Kµ)
+ * דרך-הארנה אל-החיילים, בתקרות-חיים-מצטברות-במצב (דפוס-Roast-64 — ריסטארט
+ * לא מאפס). הגדלים-המסתגלים (SETTLE-17-b) כבר-יודעים-לצטט ממלאי-אמת —
+ * אפס-הטבעה, אפס-עומק-פיקטיבי, והספר-הפוך לדו-צדדי מהשעה-הראשונה. */
+const MICRO_SEED: { asset: Asset; perSoldier: number; perSoldierCap: number; fleetCap: number }[] = [
+  { asset: "WSBD", perSoldier: 6_000, perSoldierCap: 9_000, fleetCap: 24_000 },
+  { asset: "PHIVE", perSoldier: 10_000, perSoldierCap: 15_000, fleetCap: 40_000 },
+];
+const microSeedCounts = (st: DexState, asset: string): number => {
+  st.microSeedCounts ??= {};
+  return (st.microSeedCounts[asset] ??= 0);
 };
 
 type PushOp = (op: Op) => void;
@@ -442,6 +466,34 @@ export function arenaTick(
         pushOp({ type: "transfer", issuer: "arena", nonce: `swseed-h${st.height}-${soldier}`, to: soldier, asset: "WSTEEM", amount: amt });
       }
     }
+
+    // [T24 · MICRO-SEED] זריעת-המיקרו לזוגות-המול-יציב — שני-שלבים בחלון-16:
+    // אוצר→ארנה (השלמת-מלאי-לפי-הצורך-הנמדד) וארנה→חיילים (אספקת-אסקים).
+    // אפס-הטבעה — כל-הדרך העברות-של-מלאי-טבעי; התקרות-חיות-במצב (ריסטארט-לא-מאפס).
+    // דחייה-כלשהי בגרעין (insufficient) = ניסיון-חוזר-בחלון-הבא — כנות, לא-התעקשות.
+    for (const ms of MICRO_SEED) {
+      const fleetUsed = microSeedCounts(st, ms.asset);
+      const fleetWant = soldiers.reduce((s, sol) => s + Math.max(0, ms.perSoldier - avail(st, sol, ms.asset)), 0);
+      if (fleetWant <= 0) continue; // כולם מזוינים — הקו-שותק-בכנות
+      // שלב-א: השלמת-הארנה מהאוצר — רק-עד-תקרת-החיים ורק-את-החסר-האמיתי
+      const tranche = Math.min(fleetWant, ms.fleetCap - fleetUsed);
+      if (tranche > 0 && avail(st, "arena", ms.asset) < tranche && avail(st, "treasury", ms.asset) >= tranche) {
+        pushOp({ type: "transfer", issuer: "treasury", nonce: `microseed-a-${ms.asset}-h${st.height}`, to: "arena", asset: ms.asset, amount: tranche });
+      }
+      // שלב-ב: ארנה→חיילים — רק-עודף-אמיתי; הספירה-החיה מנכה-כל-העברה-בתור
+      let arenaSpare = avail(st, "arena", ms.asset);
+      for (const sol of soldiers) {
+        const have = avail(st, sol, ms.asset);
+        if (have >= ms.perSoldier) continue;
+        const want = Math.min(ms.perSoldier - have, ms.perSoldierCap, arenaSpare);
+        if (want < RAIL_DUST_MU) continue; // אבק — כנות-מלאה
+        const used = microSeedCounts(st, ms.asset) + want;
+        if (used > ms.fleetCap) continue; // תקרת-החיים-מלאה — אין-מקור-נסתר
+        st.microSeedCounts![ms.asset] = used;
+        arenaSpare -= want;
+        pushOp({ type: "transfer", issuer: "arena", nonce: `microseed-s-${ms.asset}-h${st.height}-${sol}`, to: sol, asset: ms.asset, amount: want });
+      }
+    }
   }
 
   // קצבת-בוטים: כל-24 טיקים ממלאים-מחדש סוחרי-רעש שנדלדלו — בלי-זה הזרימה-
@@ -697,7 +749,10 @@ export function arenaTick(
           // כעת: הגודל נחתך-לכיסוי-האמת (×0.9), אפס-כיסוי → אין-סוואפ — הבוט
           // שותק-בכנות, כמו-סוחר-אמת-שאין-בכיסו-כלום.
           const haveMu = inflightAvail(bot, assetIn as Asset);
-          const wantMu = 15_000 + (tick % 5) * 5_000;
+          // [T24 · VOLUME-DIAL] הזרימה-החופשית על בריכות-שאינן-מסילה: 2× — החלק-
+          // המרכזי בהצתת-הנפח (אישור-הבעלים: נפח-ועמלות-אמת על השולחן-שלנו).
+          // חתוך-לכיסוי-אמת (×0.9) נשאר; שני-הכיוונים-מאוזנים (SETTLE-14) נשאר.
+          const wantMu = 30_000 + (tick % 5) * 10_000;
           const amt = Math.min(wantMu, Math.floor((haveMu * 9) / 10));
           if (amt > 0) {
             inflightAdd(bot, assetIn as Asset, amt);

@@ -566,13 +566,51 @@ async function main(): Promise<void> {
 
   forceFlush();
 
+  /* ── [T24] פנקס-המדידה-היומי — הנפח, העמלות והמילויים של כל יום, מצטבר-ב-git ──
+   * שאלת-הבעלים (trace 1a1355908…): עמלות 0 · נפח כמעט 0 · מצטבר כלום. מעתה
+   * כל פעימה רושמת את היום בפנקס: מילויים · סוואפים · עמלות (feeMeter) ·
+   * נפח-24ש' בציטוט-µ · מסחרות-24ש' — נגזר ממסחר-אמת בלבד (הנרות), אפס-המצאה. */
+  const METRICS_FILE = path.join(DB_DIR, "dex-metrics.json");
+  interface MetricsDay { beats: number; ticks: number; openFills: number; openSwaps: number; openFeeMeter: number; openHeight: number; dFills: number; dSwaps: number; dFeeMeter: number; dHeight: number; vol24QuoteMu: number; trades24: number; }
+  interface MetricsDoc { version: number; updatedAt: string; days: Record<string, MetricsDay>; }
+  let metrics: MetricsDoc = { version: 1, updatedAt: new Date().toISOString(), days: {} };
+  try { metrics = JSON.parse(fs.readFileSync(METRICS_FILE, "utf-8")) as MetricsDoc; } catch { /* יום-ראשון — פנקס חדש */ }
+  const { getState: gsNow, getMarkets: gmNow } = chain as {
+    getState: () => Record<string, unknown>;
+    getMarkets: () => unknown[];
+  };
+  const stNow = gsNow() as { fills?: number; swaps?: number; feeMeter?: number; height?: number };
+  const dayKey = new Date().toISOString().slice(0, 10);
+  const md: MetricsDay = metrics.days[dayKey] ?? {
+    beats: 0, ticks: 0,
+    openFills: stNow.fills ?? 0, openSwaps: stNow.swaps ?? 0, openFeeMeter: stNow.feeMeter ?? 0, openHeight: stNow.height ?? 0,
+    dFills: 0, dSwaps: 0, dFeeMeter: 0, dHeight: 0, vol24QuoteMu: 0, trades24: 0,
+  };
+  md.beats += 1; md.ticks += ticked;
+  md.dFills = Math.max(0, (stNow.fills ?? 0) - md.openFills);
+  md.dSwaps = Math.max(0, (stNow.swaps ?? 0) - md.openSwaps);
+  md.dFeeMeter = Math.max(0, (stNow.feeMeter ?? 0) - md.openFeeMeter);
+  md.dHeight = Math.max(0, (stNow.height ?? 0) - md.openHeight);
+  // נפח-24ש' מצטבר-על-כל-הזוגות — getMarkets כבר נושא stats24 (נגזרת-כנה מהנרות)
+  try {
+    let vQ = 0; let tr = 0;
+    for (const mk of gmNow() as { stats24?: { vol24QuoteMu?: number; trades24?: number } }[]) {
+      vQ += mk.stats24?.vol24QuoteMu ?? 0; tr += mk.stats24?.trades24 ?? 0;
+    }
+    md.vol24QuoteMu = vQ; md.trades24 = tr;
+  } catch { /* כנות: הנפח לא נמדד בריצה זו — יישאר הערך הקודם */ }
+  metrics.days[dayKey] = md;
+  metrics.updatedAt = new Date().toISOString();
+  fs.writeFileSync(METRICS_FILE, JSON.stringify(metrics));
+
   /* ── שלב-האמת: קודם-commit-השרשרת לריפו, ורק-אז-פרסום-הציבורי ── */
   git("config user.name \"dex-beat[bot]\"", { allowFail: true });
   git("config user.email \"dex-beat[bot]@agents.roshpinacare-sys\"", { allowFail: true });
   /* 2026-09 hygiene (Task 7-c): db/dex.db removed from chainFiles — runtime
    * databases are no longer tracked in git (45MB blob; see README "Database
    * files (2026-09)"). The chain snapshot/tape/credits/ledger remain committed. */
-  const chainFiles = ["db/state-snapshot.json", "db/tape.jsonl", "db/dex-credits.json", "db/rail-lifetime.json"];
+  // [T24] פנקס-המדידה-היומי נכלל בשרשרת — הנפח/העמלות/המילויים של כל יום שורדים ב-git
+  const chainFiles = ["db/state-snapshot.json", "db/tape.jsonl", "db/dex-credits.json", "db/rail-lifetime.json", "db/dex-metrics.json"];
   for (const f of chainFiles) git(`add -- ${f}`, { allowFail: true });
   let chainPushed = false;
   const staged = git("diff --cached --name-only", { allowFail: true });
@@ -614,8 +652,9 @@ async function main(): Promise<void> {
       ticks: ticked,
       fromHeight: heightBefore,
       toHeight: heightAfter,
-      cadenceMin: 120,
-      nextEtaMin: 120,
+      // [T24] קדנס-שעתי — הדופק של שולחן-הענקים (התאום-הציבורי ב-Domain הוא המכונה)
+      cadenceMin: 60,
+      nextEtaMin: 60,
       creditsThisRun: credited,
       relayLabel: "cloud relayer — treasury-signed credits, all documented in the live book",
     },
@@ -628,6 +667,8 @@ async function main(): Promise<void> {
     seal: (getProofs().seals ?? [])[0] ?? null,
     credits: ledger.credits.slice(-50),
     creditsTotal: ledger.credits.length,
+    // [T24] פנקס-המדידה-היומי — היום + ספירת-הימים: המצטבר שהבעלים ביקש לראות
+    metrics: { today: { day: dayKey, ...md }, daysTracked: Object.keys(metrics.days).length },
   };
   fs.mkdirSync(path.join(PUB, "dex"), { recursive: true });
   const stateFile = path.join(PUB, "dex", "state.json");
