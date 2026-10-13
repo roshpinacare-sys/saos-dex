@@ -183,12 +183,30 @@ async function main(): Promise<void> {
    * סדר-אמת: כל-רגל נכנסת-לבלוק (טיקים-קצרים) לפני-קריאת-יתרה-הבאה — אחרת
    * המאזן-הנקרא הוא-פנטום (נמדד-חי: legs=0 בפעימה-ראשונה-לפני-התיקון).
    * בריכות: pool_swap הלוך-ושוב עם minOut מול-רזרבות-טריות.
-   * ספר: IOC-לימיט חוצה-המוצע (קנייה ב-bestAsk, מכירה ב-bestBid) — מה שלא נחתך מיד מתבטל. */
+   * ספר: IOC-לימיט חוצה-המוצע (קנייה ב-bestAsk, מכירה ב-bestBid) — מה שלא נחתך מיד מתבטל.
+   * FIX(קציר-מצטבר): טבעת-הנרות היא 600 אירועים — הארנה (×10) + כבשנים-מקבילים
+   * מציפים-אותה-בטיקים-בודדים ואירועי-השחקן מסתובבים-החוצה (נמדד-חי: נפח-עצמי 0
+   * בפעימה-ראשונה-על-עמלות-10kµ). הקציר-מתבצע-אחרי-כל-נחיתה — מדידה, לא הערכה. */
+  let sweepVol = 0, sweepFills = 0;
+  const seenEv = new Set<string>();
+  const harvestSweeperEvents = (): void => {
+    try {
+      for (const e of getTape(600)) {
+        if (!e || e.taker !== "sweeper") continue;
+        const k = `${(e as any).at}|${(e as any).amountMu}|${(e as any).kind}|${(e as any).base}|${(e as any).quote}`;
+        if (seenEv.has(k)) continue;
+        seenEv.add(k);
+        sweepFills++;
+        sweepVol += typeof (e as any).quoteMu === "number" ? (e as any).quoteMu as number : 0;
+      }
+    } catch { /* הקציר-אינו-מפיל-את-הפעימה */ }
+  };
   const landOps = async (ticks: number): Promise<void> => {
     for (let i = 0; i < ticks; i++) {
       await stepOnce();
       if (rt.halted) { console.error(`[sweep] HALTED mid-run: ${rt.haltReason ?? "?"}`); break; }
     }
+    harvestSweeperEvents();
   };
 
   /* המימון-והדלק-נכנסים-לבלוקים: לפני-כל-קריאת-מאזן/קרדיטים */
@@ -334,13 +352,13 @@ async function main(): Promise<void> {
   }
   forceFlush();
 
-  /* ── שלב-ה: מדידה-כנה מהנרות — אפס-המצאה ── */
+  /* ── שלב-ה: מדידה-כנה מהנרות — אפס-המצאה (הקציר-המצטבר-הוא-המקור; הטבעת
+   * הסופית משלימה רק-אירועים-שעוד-על-הטבעת) ── */
   const st1 = getState();
+  harvestSweeperEvents();
   const tape = getTape(2_000);
-  const sweepVol = tape
-    .filter((e) => e.taker === "sweeper" && typeof e.quoteMu === "number")
-    .reduce((s, e) => s + (e.quoteMu as number), 0);
-  const sweepFills = tape.filter((e) => e.taker === "sweeper").length;
+  const sweepVolFinal = sweepVol;
+  const sweepFillsFinal = sweepFills;
   const dFees = Math.max(0, (st1.feeMeter ?? 0) - feeMeter0);
   const dFills = Math.max(0, (st1.fills ?? 0) - fills0);
   const dSwaps = Math.max(0, (st1.swaps ?? 0) - swaps0);
@@ -349,12 +367,12 @@ async function main(): Promise<void> {
   ledger.beats += 1;
   ledger.updatedAt = new Date().toISOString();
   ledger.lifetime.fundedFromTreasuryMu += fundedMu;
-  ledger.lifetime.fills += sweepFills;
-  ledger.lifetime.volQuoteMu += sweepVol;
+  ledger.lifetime.fills += sweepFillsFinal;
+  ledger.lifetime.volQuoteMu += sweepVolFinal;
   ledger.lifetime.feesMu += dFees;
   ledger.last = {
     at: ledger.updatedAt, heightFrom, heightTo, ticks: SWEEP_TICKS,
-    legs: legsSent, rejected, fills: sweepFills, volQuoteMu: sweepVol, feesMu: dFees, fundedMu,
+    legs: legsSent, rejected, fills: sweepFillsFinal, volQuoteMu: sweepVolFinal, feesMu: dFees, fundedMu,
     perMarket,
   };
   fs.writeFileSync(LEDGER_FILE, JSON.stringify(ledger, null, 1));
@@ -374,11 +392,11 @@ async function main(): Promise<void> {
     version: 1, publishedAt: ledger.updatedAt, book: "saos-dex-sweep/1",
     window: { hours: 24, coverage: "tape-ring-committed", trades: inWindow.length },
     vol24QuoteMu: vol24, feeMeterTotalMu: st1.feeMeter ?? 0,
-    sweep: { beats: ledger.beats, lifetimeVolQuoteMu: ledger.lifetime.volQuoteMu, lifetimeFeesMu: ledger.lifetime.feesMu, lastVolQuoteMu: sweepVol },
+    sweep: { beats: ledger.beats, lifetimeVolQuoteMu: ledger.lifetime.volQuoteMu, lifetimeFeesMu: ledger.lifetime.feesMu, lastVolQuoteMu: sweepVolFinal },
     markets: byMarket,
   }));
 
-  console.log(`[sweep] done h${heightFrom}→${heightTo} · legs=${legsSent}(rejected ${rejected}) · fills=${sweepFills} · swaps=${dSwaps} · vol=${sweepVol}µ · dFees=${dFees}µ · ${(Date.now() - t0) / 1000}s`);
+  console.log(`[sweep] done h${heightFrom}→${heightTo} · legs=${legsSent}(rejected ${rejected}) · fills=${sweepFillsFinal} · swaps=${dSwaps} · vol=${sweepVolFinal}µ · dFees=${dFees}µ · ${(Date.now() - t0) / 1000}s`);
   if (skipped.length) console.log(`[sweep] honest skips: ${skipped.slice(0, 8).join(" · ")}${skipped.length > 8 ? ` +${skipped.length - 8}` : ""}`);
 
   /* ── שלב-ו: התחייבות-עצמית של הפנקס (בלי-לגעת בקבצי-הלב של ה-commit-של cloud-beat) ── */
@@ -405,7 +423,7 @@ async function main(): Promise<void> {
       execSync("git add dex/flow.json", { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
       const stagedPub = execSync("git diff --cached --name-only", { encoding: "utf8", cwd: PUB }).trim();
       if (stagedPub) {
-        execSync(`git commit -m "dex-flow: h${heightTo} · vol24=${vol24}µ · sweep-fills=${sweepFills} · ${ledger.updatedAt.slice(0, 16)}Z"`, { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
+        execSync(`git commit -m "dex-flow: h${heightTo} · vol24=${vol24}µ · sweep-fills=${sweepFillsFinal} · ${ledger.updatedAt.slice(0, 16)}Z"`, { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
         const ok = pushWithRetry(PUB, "main");
         console.log(`[sweep] Console flow.json ${ok ? "published" : "push failed (next beat retries)"}`);
       } else {
