@@ -804,6 +804,8 @@ async function main(): Promise<void> {
     metrics: { today: { day: dayKey, ...md }, daysTracked: Object.keys(metrics.days).length },
     // [T25] רשת-התמיכה/ההתנגדות — הטריגרים של שולחן-הענקים
     sr: srBands,
+    // [T25] כבשן-הנזילות — ההנפקה-המוצהרת-החיה (מהמצב-הגולמי; הכל פומבי)
+    forge: (rt.st as unknown as { forge?: { program: string; sinceH: number; issuedMu: Record<string, number>; capMu: Record<string, number> } }).forge ?? null,
   };
   fs.mkdirSync(path.join(PUB, "dex"), { recursive: true });
   const stateFile = path.join(PUB, "dex", "state.json");
