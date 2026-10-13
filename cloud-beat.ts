@@ -712,7 +712,7 @@ async function main(): Promise<void> {
    * databases are no longer tracked in git (45MB blob; see README "Database
    * files (2026-09)"). The chain snapshot/tape/credits/ledger remain committed. */
   // [T24] פנקס-המדידה-היומי נכלל בשרשרת — הנפח/העמלות/המילויים של כל יום שורדים ב-git
-  const chainFiles = ["db/state-snapshot.json", "db/tape.jsonl", "db/dex-credits.json", "db/rail-lifetime.json", "db/dex-metrics.json"];
+  const chainFiles = ["db/state-snapshot.json", "db/tape.jsonl", "db/dex-credits.json", "db/rail-lifetime.json", "db/dex-metrics.json", "db/sweep-ledger.json", "db/flow24.json"];
   for (const f of chainFiles) git(`add -- ${f}`, { allowFail: true });
   let chainPushed = false;
   const staged = git("diff --cached --name-only", { allowFail: true });
