@@ -48,13 +48,55 @@ export const DEFAULT_PARAMS: ArenaParams = {
   stepBps: 20,     // רמות-צפופות (היה 25)
   levels: 2,       // גריד 2-רמות — מהדורת-דלק: חצי-שריפת-ריקוט (היו 3)
   sizeMu: 400_000, // 400 SAOS — IGNITION-R1: עומק-ציטוט ×5 (היה 80k; אותו-מלאי, ספר-עמוק, סיבוב-מהיר)
-  maxInventoryMu: 2_400_000,
+  maxInventoryMu: 12_000_000, // [T25-FORGE] ×5 — מדף-אמת לכבשן-הנזילות
   minEdgeBps: 15,
   requoteBps: 24,  // סבלנות-ריקוט — פחות-צ'רנוב-גז (היה 12; מהדורת-דלק)
   noise: true,
 };
 
 export interface SoldierRT { nonceSeq: number; fills: number; takes: number; }
+
+/* ── [T25 · THE-WASH] מכונת-השטיפה — המסחרור-המהיר של הצף-הדל ──────────────
+ * אישור-הבעלים (trace 1a13585a…): "יש לנו כסף דל איך נוכל להשתמש בו ולהעביר
+ * אותו בדקס מהר כדי לייצר נזילות" + "הרצה כבדה ושטיפה". העיקרון הפיזיקלי:
+ * נפח = צף × מהירות-מחזור. את הצף מזריע כבשן-הנזילות (cloud-beat → wallet
+ * "wash", מתועד); את המהירות מספק הטיק: סוואפ-בריכה בגודל-יחסי-לעומק (1.2%,
+ * תקרה 2.5Mµ), שני-הכיוונים-מאוזנים (זוגיות-טיק), רוטציה בין-הבריכות
+ * (כל-טיק-שלישי לפי-אינדקס-הזוג), חתוך-לכיסוי-אמת (×0.9). אפס-רנדומיות,
+ * אפס-שעון — ריפליי-אמת. העמלות זורמות: 70% LP · 30% אוצר → המזרקה מזינה-דלק.
+ */
+const WASH_WALLET = "wash";
+const WASH_FRAC_NUM = 12;
+const WASH_FRAC_DEN = 1_000; // 1.2% מהרזרבה-בנכס-הכניסה
+const WASH_CAP_PER_TRADE = 2_500_000;
+const WASH_ROTATE = 3;
+export function washTick(st: DexState, tick: number, mIdx: number, base: string, quote: string, pushOp: PushOp): void {
+  const pk = poolKey(base, quote);
+  const p = getPool(st, pk);
+  if (!p || p.ra <= 0 || p.rb <= 0) return;
+  if (RAIL_OWNED_POOLS.has(pk)) return; // מסדרון-העוגן — זרימת-השטיפה לא נוגעת (R26)
+  if ((tick + mIdx) % WASH_ROTATE !== 0) return; // רוטציה — שתי-בריכות-מנוחות-לכל-בריכה-פועלת
+  // FIX(T25 · wash-anchor-rule, v2): הכיוון נגזר-מסטיית-הבריכה-מעוגן-האורקל-שלה —
+  // לא-מזוגיות-טיק ולא-מתיק-השטיפה (שני-הקודמים נמדדו-חי-בסימולציה והיו משאבות-
+  // מבניות: זוגיות-על-תיק-חד-צדדי דחפה בריכת-יציב 32× מהעוגן; תיק-משותף-חוצה-בריכות
+  // דחף-USDS-לכל-בריכה). השטיפה-היא עתה מנוע-נזילות-שומר-עוגן: בריכה-יקרה-מהעוגן
+  // מקבלת-מכירה-פנימה, זולה — קנייה, על-העוגן — שטיפה-מאוזנת-שני-הכיוונים. הכל
+  // ממלאי-אמת של-הצף (אין-צד-שאין-מלאי-עבורו — דילוג-כנה), אפס-רנדומיות.
+  const midA = poolMidFor(p, p.a, p.b); // µ-ציטוט ל-1 יחידת a
+  const refA = st.assets[p.a]?.refPrice ?? 0;
+  if (!(midA > 0)) return;
+  const devBps = refA > 0 ? Math.floor(((midA - refA) * 10_000) / refA) : 0;
+  const pushA = devBps > 30 ? true : devBps < -30 ? false : tick % 2 === 0;
+  const assetIn = (pushA ? p.a : p.b) as Asset;
+  const have = avail(st, WASH_WALLET, assetIn);
+  if (!(have > 0)) return;             // אין-מלאי-לצד — דילוג-כנה (אפס-משאבה-חד-צדדית)
+  const reserve = pushA ? p.ra : p.rb;
+  const want = Math.min(Math.floor((reserve * WASH_FRAC_NUM) / WASH_FRAC_DEN), WASH_CAP_PER_TRADE);
+  const amt = Math.min(want, Math.floor((have * 9) / 10));
+  if (amt > 0) {
+    pushOp({ type: "pool_swap", issuer: WASH_WALLET, nonce: `wash:a${tick}:${base}`, pair: pk, assetIn, amount: amt });
+  }
+}
 
 /** מחיר-הוגן: עדות-משוקללת של הספר, הבריכה וסולם-הערך */
 export function fairPrice(st: DexState, base: string, quote: string): number {
@@ -109,8 +151,8 @@ export function soldierEquity(st: DexState, soldier: string, fair: number): numb
 /** FIX(SETTLE-7 anti-bandit): תקרות-זריעה-מצטברות לבוטי-הרעש — FIX(Roast-64):
  * המדדים עברו ממודול-רגיש למצב (st.botSeedCounts) — ריסטארט לא מאפס עוד את
  * הגג-הכולל (זרימה-עוינת לא יכולה לגזור-מחדש מלאי-ג'נזיס-חדש-כל-ריסטארט). */
-const BOT_SEED_CAP_USDS = 3_600_000;
-const BOT_SEED_CAP_SAOS = 1_800_000;
+const BOT_SEED_CAP_USDS = 18_000_000; // [T25-FORGE] ×5
+const BOT_SEED_CAP_SAOS = 9_000_000; // [T25-FORGE] ×5
 // EXEC-CD-46 · noise-revival: נמדד-חי (h175,455): תקרות-החיים-הישנות מותשות (bot-a/b/c:
 // 2.4M/1.2M מלא) בזמן-שהבוטים מרוקנים-לגמרי (1-4µ מכל-נכס) → זרימת-הרעש (גילוי-המחיר
 // היחידה) מתה → fills=0 → feeMeter קפוא (1,485<רצפת-8,000) → המזרקה-יבשה. ההרמה
@@ -125,14 +167,14 @@ const BOT_SEED_CAP_SAOS = 1_800_000;
  * תקרה-מצטברת-לכל-חיי-התהליך (8M SAOS + 20M USDS = מלאי-ג'נזיס-אחד),
  * ורק-אם-לאוצר יש-באמת (אפס-דחיות-ספר). עם-הסולם-הסימטרי (keel) הלחימה
  * כבר-לא-חד-צדדית — המלאי החדש נשחק בשני-הכיוונים ומתוחזק. */
-const REARM_TRANCHE_SAOS = 2_000_000;
-const REARM_TRANCHE_USDS = 4_000_000;
+const REARM_TRANCHE_SAOS = 6_000_000; // [T25-FORGE] ×3
+const REARM_TRANCHE_USDS = 12_000_000; // [T25-FORGE] ×3
 const REARM_TRANCHE_WSTEEM = 1_000_000;
-const REARM_LIFETIME_SAOS = 8_000_000;
-const REARM_LIFETIME_USDS = 20_000_000;
+const REARM_LIFETIME_SAOS = 48_000_000; // [T25-FORGE] ×6 — מלאי-הכבשן זורם-ארנה
+const REARM_LIFETIME_USDS = 120_000_000; // [T25-FORGE] ×6
 const REARM_LIFETIME_WSTEEM = 1_000_000; // גבול-אמת: סטוק-ה-STEEM-הטבעי של-האוצר (אפס-הטבעה)
-const REARM_FLOOR_SAOS = 600_000;   // מתחת-לזה הארנה לא יכולה למכור-לתוך-בידים
-const REARM_FLOOR_USDS = 1_200_000; // ולא-לקנות-מאסקים
+const REARM_FLOOR_SAOS = 3_000_000; // [T25-FORGE] ×5   // מתחת-לזה הארנה לא יכולה למכור-לתוך-בידים
+const REARM_FLOOR_USDS = 6_000_000; // [T25-FORGE] ×5 // ולא-לקנות-מאסקים
 const REARM_FLOOR_WSTEEM = 300_000; // מנעול-בריכת-WSTEEM צריך בסיס-למכור-בו
 // FIX(Roast-64 · phantom-lifetime-caps): היה const arenaRearm = {...} במודול —
 // ריסטארט = תקרה-מלאה-חדשה. עכשיו: st.rearmCounts (חוזה-מעלה).
@@ -170,8 +212,8 @@ const soldierSeedCounts = (st: DexState, soldier: string): { wsteem: number; wsb
  * לא מאפס). הגדלים-המסתגלים (SETTLE-17-b) כבר-יודעים-לצטט ממלאי-אמת —
  * אפס-הטבעה, אפס-עומק-פיקטיבי, והספר-הפוך לדו-צדדי מהשעה-הראשונה. */
 const MICRO_SEED: { asset: Asset; perSoldier: number; perSoldierCap: number; fleetCap: number }[] = [
-  { asset: "WSBD", perSoldier: 6_000, perSoldierCap: 9_000, fleetCap: 24_000 },
-  { asset: "PHIVE", perSoldier: 10_000, perSoldierCap: 15_000, fleetCap: 40_000 },
+  { asset: "WSBD", perSoldier: 20_000, perSoldierCap: 40_000, fleetCap: 300_000 }, // [T25] מסילת-SBD-אמת — דל-וכנה
+  { asset: "PHIVE", perSoldier: 300_000, perSoldierCap: 450_000, fleetCap: 2_000_000 }, // [T25-FORGE] ×50
 ];
 const microSeedCounts = (st: DexState, asset: string): number => {
   st.microSeedCounts ??= {};
@@ -503,9 +545,9 @@ export function arenaTick(
     // קו-בוטים + ניסיון-pool_open-על-העוגן).
     {
       const IGN: Array<{ asset: Asset; key: "wsbd" | "phive" | "energy"; pair: string; tranche: number; life: number; poolUnits: number; soldierSeed: number }> = [
-        { asset: "WSBD", key: "wsbd", pair: "USDS/WSBD", tranche: 30_000, life: 40_000, poolUnits: 3_000, soldierSeed: 6_000 },
-        { asset: "PHIVE", key: "phive", pair: "PHIVE/USDS", tranche: 40_000, life: 60_000, poolUnits: 30_000, soldierSeed: 10_000 },
-        { asset: "ENERGY", key: "energy", pair: "ENERGY/USDS", tranche: 25_000, life: 25_000, poolUnits: 12_000, soldierSeed: 4_000 },
+        { asset: "WSBD", key: "wsbd", pair: "USDS/WSBD", tranche: 40_000, life: 400_000, poolUnits: 120_000, soldierSeed: 20_000 }, // [T25] מסילת-SBD-אמת — עומק-ה-WSBD צומח-עם-הכסף-האמת
+        { asset: "PHIVE", key: "phive", pair: "PHIVE/USDS", tranche: 800_000, life: 8_000_000, poolUnits: 6_000_000, soldierSeed: 400_000 }, // [T25-FORGE]
+        { asset: "ENERGY", key: "energy", pair: "ENERGY/USDS", tranche: 600_000, life: 5_000_000, poolUnits: 8_000_000, soldierSeed: 300_000 }, // [T25-FORGE]
       ];
       const rcIg = rearmCounts(st);
       for (const g of IGN) {
@@ -528,12 +570,19 @@ export function arenaTick(
         if (!poolAlive) {
           const ref = st.assets[g.asset]?.refPrice ?? 0;
           if (ref > 0) {
+            // [T25 · ORIENT-FIX] הצד-א של הזוג-הקנוני נקבע-אלפביתית: USDS/WSBD → א'=USDS,
+            // אבל PHIVE/USDS ו-ENERGY/USDS → א'=הנכס. בלי-התיקון amount/amountB היו
+            // מתהפכים → בריכה במחיר 64-370× מהעוגן (ונשאבת-מיד-ע"י-הארביטרז').
             const usdsSide = Math.max(100, Math.floor((g.poolUnits * ref) / 1000));
+            const canonFirst = g.pair.split("/")[0];
+            const assetFirst = canonFirst === g.asset;
+            const amtA = assetFirst ? g.poolUnits : usdsSide;
+            const amtB = assetFirst ? usdsSide : g.poolUnits;
             if (avail(st, "treasury", "USDS") < usdsSide && avail(st, "arena", "USDS") > 12_000_000) {
               pushOp({ type: "transfer", issuer: "arena", nonce: `ign-ua-${g.key}-h${st.height}`, to: "treasury", asset: "USDS", amount: usdsSide });
             }
             if (avail(st, "treasury", "USDS") >= usdsSide && avail(st, "treasury", g.asset) >= g.poolUnits) {
-              pushOp({ type: "pool_open", issuer: "treasury", nonce: `ign-pool-${g.key}-h${st.height}`, pair: g.pair, amount: usdsSide, amountB: g.poolUnits });
+              pushOp({ type: "pool_open", issuer: "treasury", nonce: `ign-pool-${g.key}-h${st.height}`, pair: g.pair, amount: amtA, amountB: amtB });
             }
           }
         }
@@ -592,7 +641,7 @@ export function arenaTick(
     }
   }
 
-  for (const m of MARKETS) {
+  for (const [mIdx, m] of MARKETS.entries()) {
     const fair = fairPrice(st, m.base, m.quote);
     if (fair <= 0) continue;
 
@@ -811,10 +860,16 @@ export function arenaTick(
         // המחיר הוא-מבחוץ (STEEM-אמת באורקל) — רעש-סימולטיבי על-המסדרון הוא-לא
         // גילוי-מחיר אלא-סתם-עיוות. האמת באה-מהדלת, מהמסילה-ומהסימון-המחדש.
         if (p && !RAIL_OWNED_POOLS.has(poolKey(m.base, m.quote))) {
-          // FIX(SETTLE-14): הכיוון היה tick%3 — מוטה-מבנית 2:1 (על-הזוג-הריבוני:
-          // 2/3 קניות-בסיס). זרימה-חד-צדדית קטנה-אך-מתמדת היא-הרמת-מחיר,
-          // לא-גילוי-מחיר. זוגיות-טיק = איזון-מושלם שתי-הכיוונים.
-          const assetIn = tick % 2 === 0 ? p.a : p.b;
+          // FIX(SETTLE-14 → T25 · anchor-flow): הכיוון היה tick-parity — "איזון-מושלם"
+          // רק-על-הנייר: הבוטים עשירים-USDS-ועניים-נכס (זריעה-חד-צדדית), הצד-הדל-זול
+          // תמיד-השתחרר-במלואו והצד-הדחוס-נחתך-לאבק → משאבת-USDS-מבנית שהדחפה
+          // בריכות 7-27× מהעוגן (נמדד-חי בסימולציית-T25). עתה: הכיוון נגזר-מסטיית
+          // הבריכה-מעוגן-האורקל-שלה — נפח-הרעש עצמו הוא-מנוע-שימור-העוגן: יקר →
+          // מכירת-הבסיס-פנימה, זול → קנייתו, על-העוגן → זוגיות-טיק (שטיפה-סרק-טהורה).
+          const midM = poolMidFor(p, p.a, p.b);
+          const refM = st.assets[p.a]?.refPrice ?? 0;
+          const devM = refM > 0 && midM > 0 ? Math.floor(((midM - refM) * 10_000) / refM) : 0;
+          const assetIn = (devM > 30 ? p.a : devM < -30 ? p.b : (tick % 2 === 0 ? p.a : p.b)) as Asset;
           // FIX(R45 · noise-pool-guard): סוואפ-הבריכה של בוט-הרעש נבדק-לכיסוי לפני-
           // השליחה — החור שהשאיר R44 (תיקן-לימיט-פקודות-בלבד). נמדד-חי:
           // pool_swap(bot-b):insufficient ב-world.json (h29305) — bot-b עם
@@ -834,6 +889,10 @@ export function arenaTick(
         }
       }
     }
+
+    // [T25 · THE-WASH] מכונת-השטיפה — הסוואפ-הכבד-הסדיר על בריכת-הזוג (אחרי-הרעש,
+    // לפני-השומר): נפח = צף × מהירות. הצף מגיע-מהכבשן; הטיק מספק-את-המהירות.
+    washTick(st, tick, mIdx, m.base, m.quote, pushOp);
 
     // ── SETTLE-17-c (treasury book-keeper of last resort · T15 2026-10-11) ──
     // הממקום: אחרי-זרימת-הרעש (ציטוט-שהוצב-לפני-הרעש נאכל-באותו-טיק — נמדד-חי

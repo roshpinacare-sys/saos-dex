@@ -113,6 +113,11 @@ export const GAS_TABLE = {
   // הערכים חיים בתוך ה-op עצמו → ריפליי דטרמיניסטי. אפס-גז (משפחת-הערוצים
   // הריבוניים: relay/wrap/batch) — השקיפות היא המוצר, והמגן-המבני הוא אוצר-בלבד.
   oracle_set: 0,
+  // ── T25 · THE-DEPTH-FORGE (אישור-הבעלים trace 1a13585a…: "הדמה הזה יכול להפוך
+  // הכל לנזילות אמיתית... מצא דרך ובצע וודא שזה עובד") ── סל-ההנפקה-הריבונית-המוצהרת.
+  // דגם-PRIMER: הנפקה-גלויה-נגד-תוכנית-מזוהה-ותקרות-קשיחות-במצב (st.forge) —
+  // ההפך-מהעומק-המזויף: הכל ביומן, באירועים, ובמצב-הפומבי. אוצר-בלבד · גז-0.
+  forge_issue: 0,
   // ── Task 80 · THE-VAULT (כספת-ההלוואות — שלב 2 בשעון נתיב הכסף) ──
   vault_open: 80,     // שאיבת USDS נגד בטחונות WSTEEM (CDP מינימלי, יחס 250%)
   vault_repay: 60,    // פירעון + שחרור בטחונות (הריבית → אוצר)
@@ -143,6 +148,21 @@ export const FUEL_ASK_MIN = 2_000; // FIX(roast-81): סף-בקשה-מועילה 
 export const FUEL_FUNDERS = ["treasury", "arena", "bot-a", "bot-b", "bot-c", "operator"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor") + הבוטים (מחזיקי-רזרבה) + המפעיל-האנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון, SETTLE-5)
 export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter≥8000 להרמה — המטבע לא ירעיב-אותו
 export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
+
+// ── T25 · THE-DEPTH-FORGE: תקרות-התוכנית (µ). תקרה-קשיחה-במצב — כל-חריגה נדחית
+// בדלת-ה-op. התוכנית מזוהה-בשם; שינוי-תקרות = תוכנית-חדשה-חדשת-שם (רצף-ביקורתי).
+export const FORGE_PROGRAM = "T25-DEPTH-FORGE-1";
+export const FORGE_CAPS: Record<string, number> = {
+  // חשבון-תקרות (נמדד): הצתה ~92M SAOS + דליפת-שטיפה ~1M/פעימה − הכנסת-עמלות 30% →
+  // ריצה-של-שבועות. העמלות-עצמן ממחזרות-חזרה-לאוצר (30% נתח) — התקרה היא גג-ביטוח.
+  SAOS: 200_000_000,  // עומק-הזוג-הריבוני + צף-השטיפה + רצפת-תחזוקה
+  USDS: 400_000_000,  // הצד-המגובה בכל-הבריכות + צף-השטיפה + רצפת-תחזוקה
+  PHIVE: 24_000_000,  // עומק PHIVE/USDS
+  ENERGY: 24_000_000, // עומק ENERGY/USDS
+  // WSBD/WSTEEM מחוץ-לכבשן-בכוונה: נכסים-עטופים = ערבות-משמורת-אמת (backing 1:1,
+  // fail-closed) — מלאי-ה-WSBD מגיע-רק-ממסילת-SBD-החיה (R42: SBD-אמת ב-headcorner).
+  // עומק-ה-WSBD צומח-עם-הכסף-האמת-של-החברה — לא-עם-הכבשן.
+};
 export const FREE_XFER_CAP = 2_000_000; // THE-SWEEP (SETTLE-12): תקרת-העברה-חינם-פר-פקודה (2,000 יחידות) — החינם הוא המוצר, התקרה היא גבול-הנזק
 export const BATCH_MAX_OPS = 8; // דבר-גורר-דבר: תקרת-תתי-ops-פר-batch — אטומיות לא משלמת עליית-זיכרון בלתי-חסומה (structuredClone לכל-batch)
 // ── EXEC-CD-9 · POOL-OPEN-חצי-פתוח (אישור-מפעיל: "תקן הכל... לא אכפת לי שיהיה מה שצריך") ──
@@ -409,6 +429,9 @@ export interface DexState {
   botSeedCounts?: Record<string, { usds: number; saos: number; wsbd?: number; phive?: number; energy?: number }>; // FIX(Roast-64): תקרות-זריעת-בוטים-במצב (אותו-עיקרון) · IGNITION-R1
   soldierSeedCounts?: Record<string, { wsteem: number; wsbd?: number; phive?: number; energy?: number }>; // SETTLE-17: קו-אספקת-חיילים במצב (אותו-עיקרון — ריסטארט לא מאפס) · IGNITION-R1
   microSeedCounts?: Record<string, number>; // [T24] תקרות-זריעת-המיקרו לזוגות-המול-יציב (במצב — ריסטארט לא מאפס) · אוחד-עם-IGNITION-R1
+  // [T25 · THE-DEPTH-FORGE] סל-ההנפקה-הריבונית-המוצהרת: תוכנית-מזוהה + תקרות-קשיחות
+  // + מצטבר-מונפק — הכל גלוי במצב-הפומבי (ההפך-מעומק-מוסתר). fail-closed ב-op.
+  forge?: { program: string; sinceH: number; issuedMu: Record<string, number>; capMu: Record<string, number> };
   // ── Task 80 · THE-VAULT (רשויות: תמונות-ישנות-בלעדיהן = undefined) ──
   vaults?: Record<string, { colMu: number; debtMu: number; intMu: number; atH: number }>; // עמדת-כספת-פר-חשבון (בטחונות/קרן/ריבית-מונפת/גובה-הונפה)
   vaultTot?: { opened: number; repaid: number; liquidations: number; interestMu: number; backstopLossMu: number; issuedMu: number; burnedMu: number }; // מוני-חיים + חשבונאות-היצע-כנה (issued−burned = ההיצע שהכספת יצרה)
@@ -1712,6 +1735,38 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const c = consume(); if (c) return c;
       gcOrders(st); // FIX(SETTLE-9 dead-code): ה-events שנבנו-כאן היו void-תמיד — הוסרו (כנות: gc מנקה-מצב, אין-אירועי-סליל)
       return { ok: true, gas, events: [] };
+    }
+    case "forge_issue": {
+      // T25 · THE-DEPTH-FORGE — ההנפקה-הריבונית-המוצהרת (ראה-GAS_TABLE למעלה).
+      // החוק: אוצר-בלבד · נכס-מוכר · תוכנית-אחת-חיה · תקרה-קשיחה-במצב · יומן+אירוע.
+      // זהו המכשיר שהופך את המלאי-הסימולטיבי לנזילות-עובדת על הספר — בגלוי,
+      // בתקרה, ובקריאות-חוזרות (הבעלים: "הדמה הזה יכול להפוך הכל לנזילות אמיתית").
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      const gAsset = String(op.asset ?? "");
+      if (!knownAsset(st, gAsset)) return { ok: false, err: "bad-asset", gas: 0 };
+      const gAmt = op.amount ?? 0;
+      if (!(gAmt > 0)) return { ok: false, err: "bad-amount", gas: 0 };
+      if (!st.forge) {
+        st.forge = { program: FORGE_PROGRAM, sinceH: st.height, issuedMu: {}, capMu: { ...FORGE_CAPS } };
+      }
+      if (st.forge.program !== FORGE_PROGRAM) return { ok: false, err: "program-mismatch", gas: 0 };
+      const gCap = st.forge.capMu[gAsset] ?? 0;
+      const gIssued = st.forge.issuedMu[gAsset] ?? 0;
+      if (gIssued + gAmt > gCap) return { ok: false, err: "forge-cap-exceeded", gas: 0 };
+      pushNonce(st, dedupeKey); st.stats.opsTotal++; // גז-0 — משפחת-הערוצים-הריבוניים
+      addBal(st, issuer, gAsset, gAmt);
+      st.forge.issuedMu[gAsset] = gIssued + gAmt;
+      // [T25] רישום-ההנפקה-בפנקס-המבקר עצמו (auditAdjustments.native) — החותם
+      // מציג "genesis+declared" וההצהרה כאן היא בדיוק ההנפקה-המוצהרת של התוכנית.
+      // אפס-הסתרה: המבקר ירדוף כל-סחיפה-מעבר-להנפקה-המוצהרת (fail-closed).
+      {
+        const adj = (st.auditAdjustments ??= {});
+        adj.native = adj.native ?? {};
+        adj.native[gAsset] = (adj.native[gAsset] ?? 0) + gAmt;
+      }
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "forge_issue", note: `+${gAmt}µ ${gAsset} · ${FORGE_PROGRAM} · ${gIssued + gAmt}/${gCap}µ (declared sovereign issuance)` });
+      pushReserveEvent(st, st.height, "forge", gAmt, `forge_issue ${gAsset} ${FORGE_PROGRAM}`);
+      return { ok: true, gas: 0 };
     }
     case "pool_open": {
       // Roast-71 · POOL-OPEN: פתיחת-בריכה-חדשה-בזמן-ריצה על נכסים-רשומים.

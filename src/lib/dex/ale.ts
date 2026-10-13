@@ -62,8 +62,12 @@ function seedPool(st: DexState, key: string, p: Pool, usdsBudgetMu: number, nowM
   const rOther = usdsIsA ? p.rb : p.ra;
   if (rUsds <= 0 || rOther <= 0) return 0;
   const otherAsset = usdsIsA ? p.b : p.a;
-  const tUsds = bal(st, "treasury", "USDS");
-  const tOther = bal(st, "treasury", otherAsset);
+  // FIX(T25 · pol-respect-locks): bal → avail — הזרעת-POL חייבת-לסגד לנעילות-הערבות
+  // של-פקודות-השומר-החיות על-אותו-מלאי. נמדד-חי (סימולציית-T25, HALT h21201):
+  // מלאי-PHIVE/ENERGY-אמת-ראשון-באוצר (כבשן-הנזילות) חשף-חור-ישן: pol_seed/pol_acquire
+  // חייבו-bal-גולמי ודרדרו-מתחת-לנעילת-אסק-של-פקודת-שומר → negative-balance:maker-base.
+  const tUsds = avail(st, "treasury", "USDS");
+  const tOther = avail(st, "treasury", otherAsset);
   const maxByOther = tOther > 0 ? Math.floor((tOther * rUsds) / rOther) : 0;
   const addUsds = Math.min(usdsBudgetMu, maxByOther);
   if (addUsds < ALE_MIN_SEED || tUsds < addUsds) return 0;
@@ -97,7 +101,7 @@ function acquireOther(st: DexState, p: Pool, usdsWantedMu: number, nowMs: number
   const rIn = usdsIsA ? p.ra : p.rb;   // רזרבת-USDS
   const rOut = usdsIsA ? p.rb : p.ra;  // רזרבת-הצד-השני
   if (rIn <= 0 || rOut <= 0) return 0;
-  const tUsds = bal(st, "treasury", "USDS");
+  const tUsds = avail(st, "treasury", "USDS"); // FIX(T25 · pol-respect-locks) — ראה-seedPool
   const swapIn = Math.min(usdsWantedMu, Math.floor(rIn / 9), tUsds);
   if (swapIn <= 0) return 0;
   const out = Math.floor((rOut * swapIn) / (rIn + swapIn));
