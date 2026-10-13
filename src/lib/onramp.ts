@@ -22,6 +22,16 @@ const RC_OP_COST = 200_000_000; // עלות-op-מדודה (199M) + מרווח �
 const TTL_MS = 10 * 60_000;
 const FALLBACK_ACCOUNTS = ["cashmachine", "haran", "israelnews", "lsa", "macrame", "siq", "wic", "wog", "woq"];
 
+// שכבת-ה-refs (חוק-שם-האחזקות-הציבורי): הספרים שנוחתים בריפו-ציבורי מדברים refs בלבד.
+// שאילתות-השרשרת ממשיכות להשתמש בשמות האמיתיים (הריפו הזה פרטי) — רק הפלט-הציבורי עובר refOf().
+// מיפוי-החוק: worklog 2-d/2-e (ROSTER של Sandbox engine/fleet-participation.mjs).
+const ESTATE_REFS: Record<string, string> = {
+  headcorner: "acct-00", cashmachine: "acct-01", haran: "acct-02", israelnews: "acct-03",
+  lsa: "acct-04", macrame: "acct-05", siq: "acct-06", tov: "acct-07", wic: "acct-08",
+  wog: "acct-09", woq: "acct-10", hcsoldier4: "acct-11", hcsoldier5: "acct-12", hcsoldier6: "acct-13",
+};
+const refOf = (name: string): string => ESTATE_REFS[name] ?? name;
+
 export interface OnrampAccount {
   account: string;
   role: "fleet-soldier" | "relay-head";
@@ -172,14 +182,14 @@ async function readAccounts(names: string[]): Promise<Map<string, OnrampAccount>
     const hp = hiveFactor !== null ? num(a?.vesting_shares) * hiveFactor : null;
     const cap = rcEff !== null ? Math.floor((rcMax ?? 0) / 5 / RC_OP_COST) : 0;
     out.set(names[i], {
-      account: names[i], role, liquidHive, hbd, hp,
+      account: refOf(names[i]), role, liquidHive, hbd, hp,
       hpDetail: hp === null ? "vest-factor-unavailable — לא-מדווח (הגורם-השגוי 1e6 הוסר)" : undefined,
       rcEffective: rcEff, rcMax,
       anchorCapacityPerDay: role === "fleet-soldier" ? cap : 0,
       movableNow: false,
       why: role === "fleet-soldier"
         ? "מפתח-active-לא-מופעל-בדרך-הצי (posting-only לעיגון בלבד) — סריקת-אבק/העברה-דורשת-החלטת-מפעיל+רוטציה"
-        : "אין-WIF-בכספת-כלל — רק-המפעיל-חתם-על-הזזת-headcorner (המספר-החי-במצב-למעלה — ה-9.68-HIVE-היה-מדידה-היסטורית)",
+        : `אין-WIF-בכספת-כלל — רק-המפעיל-חתם-על-הזזת-${refOf(HEAD_ACCOUNT)} (המספר-החי-במצב-למעלה — ה-9.68-HIVE-היה-מדידה-היסטורית)`,
     });
   }
   return out;
@@ -192,7 +202,7 @@ async function readTokens(names: string[]): Promise<OnrampTokenRow[]> {
       { jsonrpc: "2.0", method: "find", params: { contract: "tokens", table: "balances", query: { account: { $in: names } }, limit: 100, offset: 0 }, id: 1 },
     );
     return (r.result ?? [])
-      .map((x) => ({ account: x.account, symbol: x.symbol, balance: num(x.balance), stake: num(x.stake) }))
+      .map((x) => ({ account: refOf(x.account), symbol: x.symbol, balance: num(x.balance), stake: num(x.stake) }))
       .filter((x) => x.balance > 0 || x.stake > 0)
       .sort((x, y) => (y.balance + y.stake) - (x.balance + x.stake))
       .slice(0, 24);
@@ -217,7 +227,7 @@ async function readSteemHead(): Promise<OnrampSummary["steemHead"]> {
     // FIX(Roast-64-c · F16): גורם-חי-חסר → null + "vest-factor-unavailable"
     // (לא-עוד-הגורם-השגוי-הידוע 1e6 שדיווח-SP-חסר ×4); spOwn-מהעזר-המשותף.
     return {
-      account: HEAD_ACCOUNT,
+      account: refOf(HEAD_ACCOUNT),
       steem: num(a.balance),
       sbd: num(a.sbd_balance),
       sp: factor !== null ? vest * factor : null,
@@ -267,7 +277,7 @@ export async function onrampSnapshot(force = false): Promise<OnrampSummary> {
       { what: `עיגון-ריבוני-חינם: ~${totals.anchorCapacityPerDay} אבני-דרך/יום (RC-regen ÷ 200M)`, how: "מופעל-כבר-אוטומטית — THE-MILESTONE מעגן-את-P&L על-Hive" },
     ],
     needsOperator: [
-      { what: "headcorner — HIVE נזיל (מדידה-חיה-במצב-למעלה; 9.68-HIVE-היה-מדידה-היסטורית)", why: "אין-WIF-בכספת — דרוש-מפתח-active-מהמפעיל (או-ערוץ-חתימה-חוץ)" },
+      { what: `${refOf(HEAD_ACCOUNT)} — HIVE נזיל (מדידה-חיה-במצב-למעלה; 9.68-HIVE-היה-מדידה-היסטורית)`, why: "אין-WIF-בכספת — דרוש-מפתח-active-מהמפעיל (או-ערוץ-חתימה-חוץ)" },
       { what: `אבק-HE-בצי (~${totals.swapHive.toFixed(4)} SWAP.HIVE + סטייקים WAIV/LOLZ/WEED/STEM)`, why: "מכירת-HE-דורשת-מפתח-active — מדיניות-הצי: posting-only עד-רוטציית-מפתחות" },
     ],
     note: "קריאה-ציבורית-חסרת-מפתחות-מה-RPC-המקובע — אפס-סודות, אפס-כתיבה. מפת-היכולת-כנה: מה-מניב-עכשיו מול-מה-דורש-החלטת-בעלים. FIX-Roast-64-c: גורם-vests-חסר = null (vest-factor-unavailable) — הגורם-השגוי 1e6 הוסר.",
