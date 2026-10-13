@@ -657,7 +657,7 @@ async function main(): Promise<void> {
     fs.mkdirSync(path.join(PUB, "dex"), { recursive: true });
     fs.writeFileSync(path.join(PUB, "dex", "grid.json"), JSON.stringify(publicDoc));
     execSync('git config user.name "grid-beat[bot]"', { encoding: "utf8", cwd: PUB });
-    execSync('git config user.email "grid-beat[bot]@users.noreply.github.com"', { encoding: "utf8", cwd: PUB });
+    execSync('git config user.email "grid-beat[bot]@agents.roshpinacare-sys"', { encoding: "utf8", cwd: PUB });
     execSync("git add dex/grid.json", { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
     const staged = execSync("git diff --cached --name-only", { encoding: "utf8", cwd: PUB }).trim();
     if (staged) {
@@ -671,7 +671,7 @@ async function main(): Promise<void> {
 
   /* ── המעקה לריפו (הבית הקנוני) ── */
   git('config user.name "grid-beat[bot]"', { allowFail: true });
-  git('config user.email "grid-beat[bot]@users.noreply.github.com"', { allowFail: true });
+  git('config user.email "grid-beat[bot]@agents.roshpinacare-sys"', { allowFail: true });
   git("add -- db/grid-ledger.json db/grid-public.json", { allowFail: true });
   const staged = git("diff --cached --name-only", { allowFail: true });
   if (staged) {
