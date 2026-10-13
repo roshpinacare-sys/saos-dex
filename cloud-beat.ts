@@ -37,7 +37,7 @@ process.env.SAOS_DEX_STATE_DIR = path.join(process.cwd(), "db");
 const ROOT = process.cwd();
 const DB_DIR = path.join(ROOT, "db");
 const CREDITS_FILE = path.join(DB_DIR, "dex-credits.json");
-const CLOUD_TICKS = Math.max(60, Math.min(2_000, Number(process.env.CLOUD_TICKS ?? 480)));
+const CLOUD_TICKS = Math.max(60, Math.min(6_000, Number(process.env.CLOUD_TICKS ?? 3_600))); // [T25-FORGE] ×3 — פעימה-כבדה
 const STEEM_NODE = "https://api.steemit.com";
 const OP_ID = "saos.weave.live.v1";
 /** חשבונות-הממסר הציבוריים (הצי + ראש-המסורת) — מהם נקראות התביעות. */
@@ -270,6 +270,106 @@ async function pushWithRetry(dir: string, branch: string, tries = 3): Promise<bo
   return false;
 }
 
+/* ── [T25] כבשן-הנזילות — פונקציה-מיוצאת (נבדקת-מקומית, רצה-בפעימה) ──
+ * המכשיר שהופך דמה לנזילות-עובדת (אישור-הבעלים trace 1a13585a…): הנפקה-מוצהרת
+ * (forge_issue · תקרות-קשיחות-במצב) → עומק-בריכות (pool_add) → צף-שטיפה (wash).
+ * אידמפוטנטי-פר-פעימה: הגרעונות נגזרים-מהמצב-החי; מה-שהושלם לא חוזר.
+ */
+export interface ForgeCtx {
+  st: {
+    height: number;
+    pools: Record<string, { a: string; b: string; ra: number; rb: number }>;
+    balances: Record<string, Record<string, number>>;
+    credits?: Record<string, number>;
+    forge?: { program: string; sinceH: number; issuedMu: Record<string, number>; capMu: Record<string, number> };
+  };
+  submitOp: (op: Record<string, unknown>) => { queued: boolean; reason?: string };
+  nextNonce: (p: string) => string;
+  stepOnce: () => Promise<void>;
+}
+export async function forgePhase(ctx: ForgeCtx): Promise<void> {
+  const { st: stF, submitOp, nextNonce, stepOnce } = ctx;
+  const availOf = (who: string, a: string): number => stF.balances?.[who]?.[a] ?? 0;
+  const forge = (asset: string, amount: number, tag: string): boolean => {
+    if (!(amount > 0)) return false;
+    const r = submitOp({ type: "forge_issue", issuer: "treasury", nonce: nextNonce("forge"), asset, amount });
+    if (r.queued) { console.log(`[cloud-beat] FORGE +${amount}µ ${asset} (${tag})`); return true; }
+    console.warn(`[cloud-beat] FORGE ${asset} rejected: ${r.reason ?? "?"} (${tag})`);
+    return false;
+  };
+  // יעד-עומק-הזוג-הריבוני (µ) — ×5.6 מהעומק-שנמדד (12.4M → 70M)
+  const sovTargetRa = 70_000_000;
+  // צף-תחזוקה: רצפות-האוצר (rearm-ארנה + זריעות + דלק) — כל-פעימה משלימה-את-השחוק
+  const T_FLOAT_SAOS = 30_000_000;
+  const T_FLOAT_USDS = 60_000_000;
+  const SOV = stF.pools["SAOS/USDS"];
+  const fSaos = availOf("treasury", "SAOS");
+  const fUsds = availOf("treasury", "USDS");
+  const floatSaos = Math.max(0, T_FLOAT_SAOS - fSaos);
+  const floatUsds = Math.max(0, T_FLOAT_USDS - fUsds);
+  const sovDepth = (SOV && SOV.ra > 0 && SOV.ra < sovTargetRa) ? sovTargetRa - SOV.ra : 0;
+  const addA = sovDepth;
+  const addB = SOV && sovDepth > 0 ? Math.floor((SOV.rb * addA) / SOV.ra) : 0;
+  const ignite = sovDepth > 0;
+  const needSaos = addA + floatSaos + (ignite ? 8_000_000 : 0);  // + צף-שטיפה בהצתה
+  const needUsds = addB + floatUsds + (ignite ? 12_000_000 : 0); // + צף-שטיפה בהצתה
+  // מלאי-זריעה לזוגות-היציב — רק-אם-הבריכה-חסרה-ולאוצר-אין-מעל-הזריעה
+  const seedNeed = (asset: string, poolPair: string, seed: number): number => {
+    if (stF.pools[poolPair]) return 0;
+    return Math.max(0, seed - availOf("treasury", asset));
+  };
+  // WSBD-מחוץ-לכבשן (ערבות-משמורת-אמת בלבד — R42); הבריכה תיפתח-מהמסילה-החיה
+  const nPhive = seedNeed("PHIVE", "PHIVE/USDS", 12_000_000);
+  const nEnergy = seedNeed("ENERGY", "ENERGY/USDS", 14_000_000);
+  const total = needSaos + needUsds + nPhive + nEnergy;
+  if (total <= 0) {
+    console.log("[cloud-beat] FORGE: all targets met — treasury float healthy, program idles (caps in state)");
+    return;
+  }
+  let armed = true;
+  if (needSaos > 0) armed = forge("SAOS", needSaos, "sov-depth+wash+float") && armed;
+  if (needUsds > 0) armed = forge("USDS", needUsds, "sov-depth+wash+float") && armed;
+  if (nPhive > 0) armed = forge("PHIVE", nPhive, "stable-seed") && armed;
+  if (nEnergy > 0) armed = forge("ENERGY", nEnergy, "stable-seed") && armed;
+  if (!armed) return; // fail-closed — בלי-מלאי-מלא אין-פעולות-המשך (דחייה-כנה ביומן)
+  for (let i = 0; i < 5; i++) await stepOnce(); // בלוק-לכל-מנת-הנפקה (חוק-בלוק-אחד-ל-op)
+  // העמקת-הזוג-הריבוני — ratio-preserving ממלאי-האוצר-הטרי
+  if (addA > 0 && availOf("treasury", "SAOS") >= addA && availOf("treasury", "USDS") >= addB) {
+    const r = submitOp({ type: "pool_add", issuer: "treasury", nonce: nextNonce("forgeadd"), pair: "SAOS/USDS", amount: addA });
+    if (r.queued) {
+      await stepOnce();
+      const p2 = stF.pools["SAOS/USDS"];
+      console.log(`[cloud-beat] FORGE pool_add SAOS/USDS: +${addA}µ → ra ${p2?.ra ?? 0} rb ${p2?.rb ?? 0}`);
+    } else console.warn(`[cloud-beat] FORGE pool_add rejected: ${r.reason ?? "?"}`);
+  }
+  // צף-השטיפה — סל-מלא (SAOS+USDS+PHIVE+ENERGY) כדי-שהמשמעות-מחזירה-תמיד-תהיה-דו-צדדית
+  const wTargets: { asset: string; target: number }[] = [
+    { asset: "SAOS", target: 8_000_000 }, { asset: "USDS", target: 12_000_000 },
+    { asset: "PHIVE", target: 4_000_000 }, { asset: "ENERGY", target: 4_000_000 },
+  ];
+  for (const wt of wTargets) {
+    const add = Math.max(0, wt.target - availOf("wash", wt.asset));
+    if (add <= 0) continue;
+    const w = submitOp({ type: "transfer", issuer: "treasury", nonce: nextNonce("forgefloat"), to: "wash", asset: wt.asset, amount: add });
+    if (w.queued) console.log(`[cloud-beat] FORGE wash float +${add}µ ${wt.asset}`);
+    else console.warn(`[cloud-beat] FORGE wash ${wt.asset} rejected: ${w.reason ?? "?"}`);
+  }
+  await stepOnce();
+  // דלק-השטיפה — רצפת 1M קרדיטים (refuel-תקרה 100Kµ-פר-פקודה)
+  const gasHave = stF.credits?.["wash"] ?? 0;
+  if (gasHave < 1_000_000) {
+    let fueled = 0;
+    for (let i = 0; i < 30; i++) {
+      const rf = submitOp({ type: "refuel", issuer: "treasury", nonce: nextNonce("forgewashfuel"), to: "wash", amount: 100_000 });
+      if (!rf.queued) break;
+      fueled++;
+      if (fueled % 5 === 0) await stepOnce();
+    }
+    await stepOnce();
+    if (fueled > 0) console.log(`[cloud-beat] FORGE wash gas +${fueled}×100Kµ credits`);
+  }
+}
+
 /* ═════════════════════════ main ═════════════════════════ */
 async function main(): Promise<void> {
   const t0 = Date.now();
@@ -431,6 +531,8 @@ async function main(): Promise<void> {
   } catch (e) {
     console.warn(`[cloud-beat] R42 SBD-RAIL skipped: ${String(e).slice(0, 80)}`);
   }
+
+  await forgePhase({ st: rt.st as unknown as ForgeCtx["st"], submitOp, nextNonce, stepOnce }).catch((e) => console.warn(`[cloud-beat] T25 forge phase skipped: ${String(e).slice(0, 90)}`));
 
   let credited = 0, skipped = 0;
   for (const env of envelopes) {
@@ -643,11 +745,42 @@ async function main(): Promise<void> {
     getProofs: () => { seals: unknown[]; receipts: unknown[] };
   };
   const st = getState();
+
+  /* [T25] רשת-התמיכה/ההתנגדות + טריגרים — נגזר-מהטייפ-החי (300 מסחרות-אחרונות):
+   * תמיכה = מינימום, התנגדות = מקסימום, וטריגר = חציית-סף ב-40-המסחרות-האחרונות.
+   * תצוגה-בלבד (אפס-שינוי-שרשרת) — הטריגרים-החיים-בשרשרת הם trig_order של הסוכנים. */
+  interface SrBand { key: string; supportMu: number; resistMu: number; lastMu: number; crossed: string | null }
+  const srBands: SrBand[] = [];
+  try {
+    const tapeAll = (getTape(300) ?? []) as { base?: string; quote?: string; price?: number }[];
+    const byPair = new Map<string, number[]>();
+    for (const t of tapeAll) {
+      const px = Number(t?.price ?? 0);
+      if (!t?.base || !t?.quote || !(px > 0)) continue;
+      const kk = `${t.base}/${t.quote}`;
+      const arr = byPair.get(kk) ?? [];
+      arr.push(px);
+      byPair.set(kk, arr);
+    }
+    for (const [kk, prices] of byPair) {
+      if (prices.length < 4) continue;
+      const supportMu = Math.min(...prices);
+      const resistMu = Math.max(...prices);
+      const lastMu = prices.length > 0 ? (prices[0] as number) : 0;
+      const recent = prices.slice(0, 40);
+      let crossed: string | null = null;
+      if (lastMu >= resistMu) crossed = "resist-touch";
+      else if (lastMu <= supportMu) crossed = "support-touch";
+      void recent;
+      srBands.push({ key: kk, supportMu, resistMu, lastMu, crossed });
+    }
+    srBands.sort((x, y) => x.key.localeCompare(y.key));
+  } catch { /* כנות: אין-טייפ — אין-רצועות */ }
   const publicState = {
     ok: true,
     publishedAt: new Date().toISOString(),
     beat: {
-      engine: "saos-dex/1.19 cloud-beat · R23 live-anchor",
+      engine: "saos-dex/1.20 cloud-beat · R23 live-anchor · T25 depth-forge",
       runAt: new Date().toISOString(),
       ticks: ticked,
       fromHeight: heightBefore,
@@ -669,6 +802,8 @@ async function main(): Promise<void> {
     creditsTotal: ledger.credits.length,
     // [T24] פנקס-המדידה-היומי — היום + ספירת-הימים: המצטבר שהבעלים ביקש לראות
     metrics: { today: { day: dayKey, ...md }, daysTracked: Object.keys(metrics.days).length },
+    // [T25] רשת-התמיכה/ההתנגדות — הטריגרים של שולחן-הענקים
+    sr: srBands,
   };
   fs.mkdirSync(path.join(PUB, "dex"), { recursive: true });
   const stateFile = path.join(PUB, "dex", "state.json");
@@ -706,7 +841,7 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch((e) => {
+if (import.meta.main) main().catch((e) => {
   console.error("[cloud-beat] FATAL:", e instanceof Error ? e.message : e);
   process.exit(1);
 });
