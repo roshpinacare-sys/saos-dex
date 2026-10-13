@@ -25,6 +25,17 @@ concurrency:
 
 jobs:
   guard:
+    # BILLING-WALL COVENANT (T-77, applied 2026-10-13T22:2xZ — owner-trace 1a1374bc626866c9
+    # "אני רק מקבל באימייל חסימות כל כמה דק"): every private-repo Actions job dies at
+    # startup behind the org spend limit (0 steps ever ran — measured 2026-10-13:
+    # Sandbox 99/100 failures, saos-dex 82/100, all zero-step; each = one red email
+    # per push, all day). A dead runner + push trigger = guaranteed red email flood.
+    # This skip changes ZERO enforcement (the guard could not run anyway); the real
+    # DECISIONS #10 enforcement rides the PUBLIC artery: FleetHQ identity-patrol.yml
+    # scans ALL repos (private included) via API every 30min on free public minutes.
+    # RE-ENABLE: delete the `if: false` line the moment the spend limit is lifted
+    # and a dispatch run completes with real steps.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 7
     steps:
