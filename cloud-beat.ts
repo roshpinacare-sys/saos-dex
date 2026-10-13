@@ -468,30 +468,36 @@ async function main(): Promise<void> {
   try {
     const { poolKey } = await import("./src/lib/dex/kernel");
     const stx = rt.st as unknown as {
-      pools: Record<string, { ra: number; rb: number; a: string; b: string }>;
+      pools: Record<string, { ra: number; rb: number; a: string; b: string; owner?: string }>;
       assets: Record<string, { refPrice?: number }>;
     };
-    const pk = poolKey("WSTEEM", "USDS");
-    const p = stx.pools[pk];
-    const ref = stx.assets["WSTEEM"]?.refPrice ?? 0;
-    if (p && ref > 0 && p.rb > 0) {
+    // [T25 · R26-ALL] סימון-מחדש-ריבוני על כל-בריכה-בבעלות-האוצר (היה: מסדרון-בלבד).
+    // נמדד-חי (run 15:14Z): בריכות-יציב שנפתחו-בשוגג-הפוכים (USDS/WSBD 232µ מול 21.3Mµ;
+    // ENERGY/USDS 173×-מהעוגן) נשאבו-ע"י-הארביטרז' — ה-repeg מיישר-את-המחיר-אל-העוגן
+    // ומחזיר-את-העודף-לאוצר (Σ נשמר, אפס-הטבעה — אותו-חוק R26).
+    const repgged: string[] = [];
+    for (const [key, p] of Object.entries(stx.pools ?? {})) {
+      if (p.owner && p.owner !== "treasury") continue; // בריכת-אזרח — אסור
+      const refA = stx.assets[p.a]?.refPrice ?? 0;
+      const refB = stx.assets[p.b]?.refPrice ?? 0;
+      if (!(refA > 0) || !(refB > 0) || !(p.rb > 0)) continue;
       const mid = Math.floor((p.ra * 1000) / p.rb);
-      const premBps = Math.floor(((mid - ref) * 10_000) / ref);
-      if (Math.abs(premBps) >= 1_000) {
-        const r = submitOp({ type: "pool_repeg", issuer: "treasury", nonce: nextNonce("rpeg"), pair: pk });
-        if (r.queued) {
-          await stepOnce(); // ה-op נכנס-לממפול — בלוק-אחד מבצע
-          const p2 = stx.pools[pk];
-          console.log(`[cloud-beat] R26 pool_repeg ${pk}: mid ${mid}→${Math.floor((p2.ra * 1000) / p2.rb)}µ (anchor ${ref}µ, premium was ${premBps}bps)`);
-        } else {
-          console.warn(`[cloud-beat] R26 pool_repeg rejected: ${r.reason ?? "?"} (mid ${mid}µ vs anchor ${ref}µ)`);
-        }
+      const premBps = Math.floor(((mid - refB / refA * 1000) * 10_000) / (refB / refA * 1000));
+      if (Math.abs(premBps) < 1_000) continue;
+      const r = submitOp({ type: "pool_repeg", issuer: "treasury", nonce: nextNonce("rpeg"), pair: key });
+      if (r.queued) {
+        await stepOnce();
+        const p2 = stx.pools[key];
+        const mid2 = Math.floor((p2.ra * 1000) / p2.rb);
+        repgged.push(`${key} ${mid}→${mid2}µ (${premBps >= 0 ? "+" : ""}${premBps}bps)`);
       } else {
-        console.log(`[cloud-beat] R26 anchor check: ${pk} mid ${mid}µ vs anchor ${ref}µ (${premBps >= 0 ? "+" : ""}${premBps}bps) — within band`);
+        console.warn(`[cloud-beat] R26-ALL repeg ${key} rejected: ${r.reason ?? "?"}`);
       }
     }
+    if (repgged.length > 0) console.log(`[cloud-beat] R26-ALL anchored ${repgged.length} pools: ${repgged.join(" · ")}`);
+    else console.log("[cloud-beat] R26-ALL: all treasury pools within the 1000bps band");
   } catch (e) {
-    console.warn(`[cloud-beat] R26 anchor policy skipped: ${String(e).slice(0, 80)}`);
+    console.warn(`[cloud-beat] R26-ALL anchor policy skipped: ${String(e).slice(0, 80)}`);
   }
 
   /* ── R42 · THE-SBD-RAIL — הגלגל-החיצוני-של-דבר-גורר-דבר ────────────────────
