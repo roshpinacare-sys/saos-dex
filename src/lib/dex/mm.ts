@@ -20,24 +20,14 @@ import { railTick, RAIL_OWNED_POOLS, RAIL_DUST_MU } from "./rail";
 export const MARKETS: { base: Asset; quote: Asset }[] = [
   { base: "SAOS", quote: "USDS" },
   { base: "WSTEEM", quote: "USDS" },
-<<<<<<< Updated upstream
-  // [T24 · THE-STABLE-EXPANSION] זוגות-מול-היציב (אישור-הבעלים, trace 1a1355908…):
-  // WSBD ו-PHIVE ניזונים-מהאורקל-החי (sbd/hive feeds — R23) ולכן הפייר שלהם זז
-  // עם השווקים-הפתוחים — תנודתיות-אמת מול יחידת-החשבון USDS, אפס-אנקור-מזויף.
-  // מלאי-הבסיס מגיע מזריעת-המיקרו (MICRO_SEED — למטה) ממלאי-האוצר-הטבעי-בלבד,
-  // בתקרות-חיים-מצטברות-במצב — אפס-הטבעה, אפס-עומק-פיקטיבי, כנות-מלאה.
-  { base: "WSBD", quote: "USDS" },
-  { base: "PHIVE", quote: "USDS" },
-=======
-  // IGNITION-R1 (2026-10-13 · דרישת-הבעלים: "עוד צמדים מול סטייבייל קוין — עוד
-  // תנודתיות וטריגרים על כלל המערכת"): שלושה-זוגות-חדשים-מול-הסטייבל, ממלאי-אמת
-  // שכבר-קיים (אוצר: WSBD 67k · PHIVE 100k · ENERGY 47.7k — אפס-הטבעה).
-  // המשולש ENERGY/SAOS+SAOS/USDS+ENERGY/USDS יוצר מעגל-ארביטרז' ש-ProtoRev/CoW
-  // רודפים-אותו אוטונומית — עמלות-אמת מכל-מעגל.
+  // [T24 · THE-STABLE-EXPANSION + IGNITION-R1 — איחוד-שני-סוכנים-מקבילים, 2026-10-13]:
+  // זוגות-מול-היציב מהאורקל-החי (T24: sbd/hive feeds — R23) + המשולש-הריבועי של
+  // IGNITION-R1 (ENERGY/SAOS+SAOS/USDS+ENERGY/USDS — מעגל-ארביטרז' ל-ProtoRev/CoW).
+  // המלאי-מזריעה-כנה-ממלאי-האוצר-הטבעי (אפס-הטבעה) — דרך-שתי-מערכות-תחומות:
+  // MICRO_SEED (T24) + שורות-IGNITION (למטה) — שתיהן-תקרות-חיים-במצב.
   { base: "WSBD", quote: "USDS" },
   { base: "PHIVE", quote: "USDS" },
   { base: "ENERGY", quote: "USDS" },
->>>>>>> Stashed changes
 ];
 
 export interface ArenaParams {
@@ -478,7 +468,6 @@ export function arenaTick(
       }
     }
 
-<<<<<<< Updated upstream
     // [T24 · MICRO-SEED] זריעת-המיקרו לזוגות-המול-יציב — שני-שלבים בחלון-16:
     // אוצר→ארנה (השלמת-מלאי-לפי-הצורך-הנמדד) וארנה→חיילים (אספקת-אסקים).
     // אפס-הטבעה — כל-הדרך העברות-של-מלאי-טבעי; התקרות-חיות-במצב (ריסטארט-לא-מאפס).
@@ -504,12 +493,14 @@ export function arenaTick(
         st.microSeedCounts![ms.asset] = used;
         arenaSpare -= want;
         pushOp({ type: "transfer", issuer: "arena", nonce: `microseed-s-${ms.asset}-h${st.height}-${sol}`, to: sol, asset: ms.asset, amount: want });
-=======
-    // ── IGNITION-R1 · שלוש-שורות-אספקה + בריכות-סטייבל חדשות (2026-10-13) ──
+      }
+    }
+
+    // ── IGNITION-R1 · שורות-אספקה + בריכות-סטייבל (2026-10-13 — איחוד-עם-T24) ──
     // דרישת-הבעלים: "להפוך את הדקס לכלי ריבוני עובד — הרבה ווליום, עוד צמדים
     // מול סטייבל, נזילות אמת". הכל-ממלאי-קיים (אפס-הטבעה), תקרות-חיים-במצב
-    // (דפוס Roast-64 — ריסטארט לא מאפס), וסדר-בטוח: שמירת-זריעה באוצר קודמת
-    // לשאיבת-הארנה, והבריכה נזרעת-בדיוק-על-העוגן (refPrice-חי-בעת-הלידה).
+    // (דפוס Roast-64 — ריסטארט לא מאפס). משלים-את-MICRO_SEED (ENERGY-רק-כאן +
+    // קו-בוטים + ניסיון-pool_open-על-העוגן).
     {
       const IGN: Array<{ asset: Asset; key: "wsbd" | "phive" | "energy"; pair: string; tranche: number; life: number; poolUnits: number; soldierSeed: number }> = [
         { asset: "WSBD", key: "wsbd", pair: "USDS/WSBD", tranche: 30_000, life: 40_000, poolUnits: 3_000, soldierSeed: 6_000 },
@@ -562,7 +553,6 @@ export function arenaTick(
             pushOp({ type: "transfer", issuer: "arena", nonce: `ign-ss-${g.key}-${soldier}-h${st.height}`, to: soldier, asset: g.asset, amount: amt });
           }
         }
->>>>>>> Stashed changes
       }
     }
   }
@@ -832,14 +822,10 @@ export function arenaTick(
           // כעת: הגודל נחתך-לכיסוי-האמת (×0.9), אפס-כיסוי → אין-סוואפ — הבוט
           // שותק-בכנות, כמו-סוחר-אמת-שאין-בכיסו-כלום.
           const haveMu = inflightAvail(bot, assetIn as Asset);
-<<<<<<< Updated upstream
-          // [T24 · VOLUME-DIAL] הזרימה-החופשית על בריכות-שאינן-מסילה: 2× — החלק-
-          // המרכזי בהצתת-הנפח (אישור-הבעלים: נפח-ועמלות-אמת על השולחן-שלנו).
-          // חתוך-לכיסוי-אמת (×0.9) נשאר; שני-הכיוונים-מאוזנים (SETTLE-14) נשאר.
-          const wantMu = 30_000 + (tick % 5) * 10_000;
-=======
-          const wantMu = 120_000 + (tick % 5) * 60_000; // IGNITION-R1: סוואפי-בריכה ×8 (היה 15k–35k) = עמלות-AMM-אמת 30bps על-נפח-גדול
->>>>>>> Stashed changes
+          // [T24 · VOLUME-DIAL × IGNITION-R1 — איחוד]: הדיאל-החזק-מנצח (×8) —
+          // החלק-המרכזי בהצתת-הנפח; חתוך-לכיסוי-אמת (×0.9) נשאר; שני-הכיוונים
+          // מאוזנים (SETTLE-14) נשאר. = עמלות-AMM-אמת 30bps על-נפח-גדול.
+          const wantMu = 120_000 + (tick % 5) * 60_000;
           const amt = Math.min(wantMu, Math.floor((haveMu * 9) / 10));
           if (amt > 0) {
             inflightAdd(bot, assetIn as Asset, amt);
