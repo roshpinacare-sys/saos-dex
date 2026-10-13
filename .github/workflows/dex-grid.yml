@@ -112,7 +112,7 @@ jobs:
         run: |
           set -u
           git config user.name "convert-leg[bot]"
-          git config user.email "convert-leg[bot]@users.noreply.github.com"
+          git config user.email "convert-leg[bot]@agents.roshpinacare-sys"
           git add grids/state/convert-plan.json 2>/dev/null || true
           git add grids/state/convert-log.jsonl 2>/dev/null || true
           if git diff --cached --quiet; then
@@ -129,7 +129,7 @@ jobs:
         run: |
           set -u
           git config user.name "liquidity-leg[bot]"
-          git config user.email "liquidity-leg[bot]@users.noreply.github.com"
+          git config user.email "liquidity-leg[bot]@agents.roshpinacare-sys"
           git add grids/state/liquidity-receipt.jsonl grids/state/events.jsonl 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "no liquidity evidence change — clean exit"
