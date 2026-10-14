@@ -115,6 +115,67 @@ t("every verdict carries engine receipt", verdictsHaveEngine);
 /* 13. ה-ledger append-only — אין-קובץ-policy-arm שנוצר סתם */
 t("no accidental arm file created", !m.ownerArmOk());
 
+/* ══ R329 §14 — תיבת-ההילוכים (SAOS-POLICY-GEARS/1): הכביש-הסלול ══ */
+// isolated state3: policy + gears table; the receipt IS the upshift.
+const state3 = join(tmp, "state3");
+mkdirSync(state3, { recursive: true });
+m.setPaths(state3);
+writeFileSync(join(state3, "policy.json"), JSON.stringify(validPolicy));
+const writeGears = (obj) => writeFileSync(join(state3, "policy-gears.json"), typeof obj === "string" ? obj : JSON.stringify(obj, null, 1));
+const gearsTable = (state) => ({
+  protocol: "SAOS-POLICY-GEARS/1",
+  gears: [
+    { gear: 1, require: { greenStreak: 0 },  laneOverrides: { grid: { maxNotionalPerOpSbd: 25,  maxCycleNotionalSbd: 120 } } },
+    { gear: 2, require: { greenStreak: 3 },  laneOverrides: { grid: { maxNotionalPerOpSbd: 50,  maxCycleNotionalSbd: 240 } } },
+    { gear: 3, require: { greenStreak: 6 },  laneOverrides: { grid: { maxNotionalPerOpSbd: 100, maxCycleNotionalSbd: 480 } } },
+  ],
+  state: state ?? { gear: 1, greenStreak: 0, lastVerdict: null, lastKind: null, history: [] },
+});
+const gridIntent = (notionalSbd) => ({ tool: "t", lane: "grid", kind: "limit_order_create", account: "a", notionalSbd, amount: notionalSbd, price: 1 });
+
+/* 14.1 fail-closed: no gear file = gear 1, static caps bind */
+t("gears fail-closed (missing file → gear 1)", m.currentGear().gear === 1 && m.currentGear().why !== null);
+t("missing gears = static caps bind (30 SBD blocked)", m.policyGate(gridIntent(30)).allow === false);
+
+/* 14.2 valid table, gear 1: caps unchanged */
+writeGears(gearsTable());
+t("gear1 baseline: 30 SBD blocked", m.policyGate(gridIntent(30)).allow === false);
+t("gear1 baseline: 20 SBD allowed", m.policyGate(gridIntent(20)).allow === true);
+
+/* 14.3 the receipt IS the upshift — slow up, instant down */
+m.recordLadderReceipt("treasury", "LADDER-ACTED");
+m.recordLadderReceipt("army", "ARMY-ACTED");
+m.recordLadderReceipt("treasury", "LADDER-ACTED");
+t("3 green receipts → streak 3, gear 2", m.currentGear().gear === 2 && m.currentGear().greenStreak === 3);
+t("gear2 re-prices caps: 30 SBD now allowed, 60 blocked", m.policyGate(gridIntent(30)).allow === true && m.policyGate(gridIntent(60)).allow === false);
+
+/* 14.4 red receipt = instant downshift to gear 1 + streak reset */
+m.recordLadderReceipt("army", "ARMY-ACTS-FAILED");
+t("red receipt → gear 1, streak 0", m.currentGear().gear === 1 && m.currentGear().greenStreak === 0);
+t("downshift restores conservative caps: 30 blocked again", m.policyGate(gridIntent(30)).allow === false);
+
+/* 14.5 neutral verdicts neither grow nor reset */
+m.recordLadderReceipt("treasury", "LADDER-ACTED"); // streak 1
+m.recordLadderReceipt("treasury", "LADDER-AT-TARGET");
+t("neutral verdict keeps streak", m.currentGear().greenStreak === 1);
+m.recordLadderReceipt("treasury", "KEYLESS-STASIS");
+t("stasis verdict keeps streak", m.currentGear().greenStreak === 1);
+
+/* 14.6 foreign protocol = inert gearbox (gear 1), road continues */
+writeGears({ protocol: "OTHER/1", gears: [], state: { gear: 3 } });
+t("foreign gears protocol → fail-closed gear 1", m.currentGear().gear === 1 && m.currentGear().why !== null);
+t("inert gearbox = static caps bind", m.policyGate(gridIntent(30)).allow === false);
+
+/* 14.7 ownerGate untouched at top gear: 100 SBD needs no arm (== gate), 120 needs arm */
+writeGears(gearsTable({ gear: 3, greenStreak: 6, lastVerdict: "LADDER-ACTED", lastKind: "treasury", history: [] }));
+t("gear3 reachable from state", m.currentGear().gear === 3);
+t("gear3: 100 SBD allowed (top gear tops out AT owner gate)", m.policyGate(gridIntent(100)).allow === true);
+t("gear3: 120 SBD still needs owner arm (gate intact)", m.policyGate(gridIntent(120)).allow === false && m.policyGate(gridIntent(120)).reasons.join(" ").includes("owner-gate"));
+
+/* 14.8 malformed table = fail-closed */
+writeGears({ protocol: "SAOS-POLICY-GEARS/1", gears: "garbage", state: {} });
+t("malformed gear table → gear 1", m.currentGear().gear === 1);
+
 console.log(`\n═ RESULT: ${passed} passed · ${failed} failed ═`);
 rmSync(tmp, { recursive: true, force: true });
 process.exit(failed === 0 ? 0 : 1);

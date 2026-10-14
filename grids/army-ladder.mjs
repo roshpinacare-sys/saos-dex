@@ -43,7 +43,7 @@ import { createHash } from "node:crypto";
 import { rpcAny, signAndBroadcast, num, dp3 } from "./mover.mjs";
 import { stasisHalt } from "./brake.mjs";
 import { activeAuthorityOk } from "./key-gate.mjs";
-import { policyCycleGate } from "./policy.mjs";
+import { policyCycleGate, recordLadderReceipt } from "./policy.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLAN_PATH = join(HERE, "state", "army-ladder-plan.json");
@@ -310,6 +310,7 @@ async function run(keysFile) {
   receipt.estateOpenOrders = estateOpenOrders;
   receipt.estateLockedSteem = dp3(estateLocked);
   appendFileSync(RECEIPT_PATH, JSON.stringify(receipt) + "\n");
+  try { recordLadderReceipt("army", receipt.verdict); } catch (e) { console.log(`[GEARS] non-blocking: ${String(e?.message ?? e).slice(0, 80)}`); } // R329: gearbox never blocks the road
   writeFileSync(PUBLIC_PATH, JSON.stringify({
     schema: "SAOS-ARMY-LADDER-PUBLIC/1", at: receipt.at, mid: m.mid, source: m.source,
     roster: accounts.length, acted: receipt.results.filter((r) => r.state === "ACTED").length,
