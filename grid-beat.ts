@@ -689,7 +689,7 @@ async function main(): Promise<void> {
   /* ── המעקה לריפו (הבית הקנוני) ── */
   git('config user.name "grid-beat[bot]"', { allowFail: true });
   git('config user.email "grid-beat[bot]@agents.roshpinacare-sys"', { allowFail: true });
-  git("add -- db/grid-ledger.json db/grid-public.json", { allowFail: true });
+  git("add -- db/grid-ledger.json db/grid-public.json grids/state/policy-ledger.jsonl grids/state/policy-arm.json", { allowFail: true }); // DECISIONS #17: policy verdict receipts + owner arm file live in git (auditable)
   const staged = git("diff --cached --name-only", { allowFail: true });
   if (staged) {
     git(`commit -m "grid-beat: ${placed + hivePlaced} placed (steem ${placed} / hive ${hivePlaced}) · ${cancelled + hiveCancelled} cancelled · ${ledger.fills.length} fills counted · ${new Date().toISOString().slice(0, 16)}Z"`, { allowFail: true });
