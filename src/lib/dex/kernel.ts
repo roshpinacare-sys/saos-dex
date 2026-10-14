@@ -429,6 +429,10 @@ export interface DexState {
   botSeedCounts?: Record<string, { usds: number; saos: number; wsbd?: number; phive?: number; energy?: number }>; // FIX(Roast-64): תקרות-זריעת-בוטים-במצב (אותו-עיקרון) · IGNITION-R1
   soldierSeedCounts?: Record<string, { wsteem: number; wsbd?: number; phive?: number; energy?: number }>; // SETTLE-17: קו-אספקת-חיילים במצב (אותו-עיקרון — ריסטארט לא מאפס) · IGNITION-R1
   microSeedCounts?: Record<string, number>; // [T24] תקרות-זריעת-המיקרו לזוגות-המול-יציב (במצב — ריסטארט לא מאפס) · אוחד-עם-IGNITION-R1
+  // SETTLE-19 · תקרת-החיים-של-גשר-מלאי-האסק (בריכה→ארנה, pool_swap+repeg) — במצב
+  // (דפוס-Roast-64: ריסטארט לא מאפס). רשויות: תמונות-ישנות = undefined → הגשר-טרם-זרם.
+  // אפס-הטבעה: הגשר מעביר מלאי-קיים (הבריכה היא ערבות-האוצר-עצמה) — המונה רק תוחם.
+  bridgeCounts?: Record<string, number>;
   // [T25 · THE-DEPTH-FORGE] סל-ההנפקה-הריבונית-המוצהרת: תוכנית-מזוהה + תקרות-קשיחות
   // + מצטבר-מונפק — הכל גלוי במצב-הפומבי (ההפך-מעומק-מוסתר). fail-closed ב-op.
   forge?: { program: string; sinceH: number; issuedMu: Record<string, number>; capMu: Record<string, number> };

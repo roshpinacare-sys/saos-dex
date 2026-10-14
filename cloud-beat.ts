@@ -398,6 +398,32 @@ async function main(): Promise<void> {
   const heightBefore = rt.st.height;
   console.log(`[cloud-beat] chain loaded · height ${heightBefore}`);
 
+  const { submitOp, nextNonce } = chain as unknown as {
+    submitOp: (op: Record<string, unknown>) => { queued: boolean; reason?: string };
+    nextNonce: (p: string) => string;
+  };
+
+  /* ── EXEC-CD-9-completion · THE-PRIMER-FIRE (חיבור-ההצתה-המוכרזת) ──────────
+   * נמדד-חי (h135139 · 2026-10-14): הפריימר הוכרז (EXEC-CD-9), ממומש-בגרעין
+   * (case "primer"), מאושר-מפעיל — ומעולם לא נורה (primerUsed=undefined).
+   * התוצאה-המדודה: כל-הארנה מתה-על-גז (אוצר 14µ · חיילים 0–5µ · בוטים 5–15µ מול
+   * גז-פקודה 60µ) — שומר-הסף (SETTLE-17-c) וכל-מציטי-הספר משותקים; מחזור-
+   * ה-bookgas יבש (אין-שריפת-ספר — אין-מה-למחזר); המזרקה נעולה (meter על
+   * רצפת-8,000 · profit 892µ). ההצתה-החד-פעמית-המוצהרת היא הפריצה-הכנה:
+   * +1Mµ קרדיטים בספליט-קבוע, מגוללת-ביומן, מוצהרת-בביקורת (primerPortion).
+   * אידמפוטנטי-בדחייה — מי-שכבר-נורה מדלג-בכנות. לפני-לופ-הטיקים — כך כל-
+   * הפעימה-עצמה רצה-על-דלק-חי. */
+  try {
+    const stp = rt.st as unknown as { primerUsed?: boolean };
+    if (!stp.primerUsed) {
+      const r = submitOp({ type: "primer", issuer: "treasury", nonce: nextNonce("primer") });
+      if (r.queued) {
+        await stepOnce();
+        console.log("[cloud-beat] THE-PRIMER FIRED: +1,000,000µ credits (arena 300K · bot-a/b/c 150K×3 · treasury 150K · operator 100K) — book arena re-primed");
+      } else console.warn(`[cloud-beat] primer rejected: ${r.reason ?? "?"}`);
+    } else console.log("[cloud-beat] primer already fired — idempotent skip");
+  } catch (e) { console.warn(`[cloud-beat] primer phase skipped: ${String(e).slice(0, 80)}`); }
+
   // פיד-האורקל: רענון-מחירים חי לפני-הטיקים + בכל-~120 טיקים
   await oracleTickOnce().catch(() => {});
   let ticked = 0;
@@ -451,11 +477,6 @@ async function main(): Promise<void> {
     const f = await (pp as unknown as { extFeeds: (force?: boolean) => Promise<Record<string, number>> }).extFeeds(true);
     feeds = f ?? {};
   } catch (e) { console.warn(`[cloud-beat] extFeeds unavailable: ${String(e).slice(0, 60)}`); }
-
-  const { submitOp, nextNonce } = chain as unknown as {
-    submitOp: (op: Record<string, unknown>) => { queued: boolean; reason?: string };
-    nextNonce: (p: string) => string;
-  };
 
   /* ── R26 · מדיניות-עוגן-ברירה (standing anchor policy) ──────────────────────
    * אחרי-הטיקים: אם בריכת-המסדרון (USDS/WSTEEM) סוטה-מהעוגן-האורקלי בלמעלה-מ-10%
