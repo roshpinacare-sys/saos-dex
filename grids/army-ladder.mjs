@@ -288,7 +288,8 @@ async function run(keysFile) {
               : ["limit_order_create", { owner: account, orderid: a.leg.orderId, amount_to_sell: `${(a.leg.sizeSteem * a.leg.priceSbd).toFixed(3)} SBD`, min_to_receive: `${a.leg.sizeSteem.toFixed(3)} STEEM`, fill_or_kill: false, expiration: exp }];
             const r = await signAndBroadcast(wif, [op]);
             executed.push({ ...a, txid: r.txid, block: r.block }); anyExecuted = true;
-            await altRpc("condenser_api.get_transaction", [r.txid]); // קריאה-אחרי-כתיבה
+            // קריאה-אחרי-כתיבה — נכשל-כנה בתוך-הרשומה-עצמה, לעולם לא שורה-כפולה (R323-תיקון-ביקורת-עצמית)
+            try { await altRpc("condenser_api.get_transaction", [r.txid]); } catch (pv) { executed[executed.length - 1].postVerify = String(pv?.message ?? pv).slice(0, 80); }
           }
         } catch (e) {
           executed.push({ ...a, error: String(e?.message ?? e).slice(0, 120) });
