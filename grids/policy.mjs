@@ -212,6 +212,16 @@ export function recordLadderReceipt(kind, verdict) {
     }
     st.lastVerdict = v; st.lastKind = k; st.at = new Date().toISOString();
     st.history = [{ at: st.at, kind: k, verdict: v, gear: st.gear, greenStreak: st.greenStreak }, ...(st.history || [])].slice(0, 20);
+    // R330: kelly snapshot — the expectancy governor is measured at receipt time and published
+    // in the git state, so every probe/beat sees it without recomputing (2-core economy).
+    try {
+      const krow = g.table.gears.find((x) => x.gear === st.gear);
+      const kbase = krow?.laneOverrides?.grid?.maxNotionalPerOpSbd ?? null;
+      if (g.table.kelly && typeof kbase === "number") {
+        const kres = performanceCap({ baseGearCap: kbase, receiptPaths: g.table.kelly.receipts.map((f) => join(STATE_DIR, f)), params: g.table.kelly });
+        st.kelly = { mode: kres.mode, cap: kres.cap, gearCap: kbase, informative: kres.stats?.informative ?? 0, minBeats: kres.stats?.minBeats ?? null, at: st.at };
+      }
+    } catch (_) { /* kelly snapshot never blocks the receipt write */ }
     const j = JSON.parse(readFileSync(GEARS_PATH(), "utf8"));
     j.state = st; j.at = st.at;
     writeFileSync(GEARS_PATH(), JSON.stringify(j, null, 1) + "\n");
