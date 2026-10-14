@@ -424,6 +424,33 @@ async function main(): Promise<void> {
     } else console.log("[cloud-beat] primer already fired — idempotent skip");
   } catch (e) { console.warn(`[cloud-beat] primer phase skipped: ${String(e).slice(0, 80)}`); }
 
+  /* ── SETTLE-19-c · רזרבת-הדלק-ההפוכה (fuel-reversal) ─────────────────────
+   * נמדד-חי (run 38568088488: הפריימר-נשחק-בריצה-אחת; run 38569794882: 3,894
+   * דחיות-גז, הגשר-משותק): גז-האוצר הוא הפקק-החוזר-של-ספר-ה-סרוו. בזמן-זאת
+   * השטיפה מחזיקה 1.87Mµ-קרדיטים-עומדים (הצף-המסחרי-שלה אבק — הסוואפים-שלה
+   * נדחים-bad-quote) — הון-דלק-מת. החוק: כשהאוצר מתחת-לרצפת-ספר-הסרוו (500Kµ)
+   * והשטיפה מעל-רצפת-ה-1M שלה — המחזור-ההפוך: השטיפה מעירה-את-האוצר (עד
+   * 5×REFUEL_CAP=500Kµ לפעימה). העברה-טהורה (אפס-הטבעה, Σ נשמר, מגולל-ביומן);
+   * הדלק חוזר-לשטיפה מהעמלות שהיא-עצמה מייצרת (מד-העמלות → מזרקה). לפני-
+   * לופ-הטיקים — כך-הסרוו-ושומר-הסף רצים-על-דלק-חי מהבלוק-הראשון. */
+  try {
+    const stf = rt.st as unknown as { credits?: Record<string, number> };
+    const tCr = stf.credits?.["treasury"] ?? 0;
+    const wCr = stf.credits?.["wash"] ?? 0;
+    if (tCr < 500_000 && wCr > 1_000_000) {
+      let moved = 0;
+      for (let i = 0; i < 5; i++) {
+        const need = Math.min(500_000 - (stf.credits?.["treasury"] ?? 0), (stf.credits?.["wash"] ?? 0) - 1_000_000, 100_000);
+        if (need <= 0) break;
+        const r = submitOp({ type: "refuel", issuer: "wash", nonce: nextNonce("washfuel"), to: "treasury", amount: need });
+        if (!r.queued) { console.warn(`[cloud-beat] fuel-reversal rejected: ${r.reason ?? "?"}`); break; }
+        moved += need;
+        await stepOnce();
+      }
+      if (moved > 0) console.log(`[cloud-beat] SETTLE-19-c fuel-reversal: wash→treasury +${moved}µ credits (wash floor 1M intact — idle reserve re-armed the book lane)`);
+    }
+  } catch (e) { console.warn(`[cloud-beat] fuel-reversal skipped: ${String(e).slice(0, 80)}`); }
+
   // פיד-האורקל: רענון-מחירים חי לפני-הטיקים + בכל-~120 טיקים
   await oracleTickOnce().catch(() => {});
   let ticked = 0;
