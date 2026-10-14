@@ -140,6 +140,7 @@ export type OpKind = keyof typeof GAS_TABLE;
 export const FEE_BPS = 30; // עמלי-30bps כמו-הבריכה-הילידית (dex-facts)
 export const TREASURY_CUT_PCT = 30; // 30% מהעמלה → אוצר (רווח-מונוטוני, grid98)
 export const REFUEL_CAP = 100_000; // תקרת-עירוי-פר-פקודה — גם-אם-האוצר נחטף, הנזק מגודל
+export const WASH_FLOOR = 800_000; // DAM-OPEN (2026-10-15): רצפת-רזרבת-השטיפה-כחוק-ממומש (היתה-הערת-תיעוד-בלבד) — 80% מהרזרבה-העומדת-נשמרים-לנצח; הסטייה-מ-1M-הדוקטרינרית (998,600µ בפועל) מובאת-לאשרור-בעלים
 export const FUEL_ASK_MIN = 2_000; // FIX(roast-81): סף-בקשה-מועילה — מתחת-לזה (אבק-גז) לא-מבקשים-עירוי
 // FIX(roast-79 · fuel-death-spiral): הבוטים נכנסו-לסולם-הממנים — נמדדו-חי כמחזיקי-
 // הרזרבה-האמתיים (bot-a 924k · bot-b 420k · bot-c 309k — 1.65M מג'נזיס שלא-נשרף)
@@ -1591,6 +1592,14 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (!rTo || rTo === issuer || !(rAmt > 0)) return { ok: false, err: "bad-refuel", gas: 0 };
       if (rAmt > REFUEL_CAP) return { ok: false, err: "refuel-exceeds-cap", gas: 0 };
       if ((st.credits[issuer] ?? 0) < rAmt) return { ok: false, err: "insufficient-credits", gas: 0 };
+      // DAM-OPEN (2026-10-15 · הסכר-נפתח): הדוקטרינה (SETTLE-19-c) קבעה רצפת-1M לשטיפה
+      // בהערת-תיעוד בלבד — עכשיו היא חוק-ממומש. wash עומד על 998,600µ (0.14% מתחת
+ // לרצפה-המתועדת — שארית-היסטורית), הצי מת בגז (60+ דחיות-בלוק), ואין-מקור-חוקי
+ // להחזיר את השטיפה ל-1M (mint_fuel מוגבל לעמלות-שנמדדו — סגר-עצמי).
+ // החלטת-בעלים ("פתח את הסכר"): רצפה-ממומשת של 800,000µ — 80% מהרזרבה
+ // נשמרים-לנצח בקוד; כל-שקל שיישאב מיומן-וגלוי; הסטייה-מה-1M-המתועד מובאת
+ // לאשרור-בעלים בדוח. אם-השאיבה-יורדת-מתחת-לרצפה → דחייה-כנה.
+      if (issuer === "wash" && (st.credits.wash ?? 0) - rAmt < WASH_FLOOR) return { ok: false, err: "wash-floor", gas: 0 };
       pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — כמו relay
       st.credits[issuer] = (st.credits[issuer] ?? 0) - rAmt;
       st.credits[rTo] = (st.credits[rTo] ?? 0) + rAmt;

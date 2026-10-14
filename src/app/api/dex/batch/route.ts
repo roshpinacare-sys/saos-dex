@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { nextNonce, submitOp } from "@/lib/dex/chain";
-import { BATCH_MAX_OPS, type Op } from "@/lib/dex/kernel";
+import { BATCH_MAX_OPS, FUEL_FUNDERS, type Op } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
 import { operatorAuth } from "@/lib/operator-auth";
 
@@ -10,9 +10,13 @@ export const dynamic = "force-dynamic";
  * POST /api/dex/batch {issuer?, ops: [op, ...]} → op batch (הכל-או-כלום).
  * שימוש-הדגמה: המרה-דו-קפיצתית (WSTEEM→SAOS→USDS) — אם-קפיצה-2 נכשלת במגן
  * ה-minOut, קפיצה-1 מבוטלת-אף-היא. אין-ביצוע-חלקי. תתי-ops מקבלים nonces
- * מיוצרים-כאן וחייבים-אותו-issuer (הזהות-נאכפת-בגרעין). עומק-1 (אין-מקוננים). */
+ * מיוצרים-כאן וחייבים-אותו-issuer (הזהות-נאכפת-בגרעין). עומק-1 (אין-מקוננים).
+ * DAM-OPEN (2026-10-15): הדלת-הייתה-מיושנת — הגרעין (הסמכות) מכיר-ב-FUEL_FUNDERS
+ * כממני-דלק (SETTLE-19-c: wash = רזרבת-הדלק-העומדת), אבל-הדלת-חסמה-אותם-כאן
+ * ("bad-issuer") → הסכר-היה-סגור-בטעות. עכשיו: הדלת-מיישרת-קו-עם-הגרעין
+ * (איחוד-הרשימות) — כל-op עדיין-נאכף-במלואו-בגרעין (funder-only, תקרות, רצפות). */
 
-const ISSUERS = new Set(["operator", "treasury", "arena", "portfolio-b"]);
+const ISSUERS = new Set<string>([...FUEL_FUNDERS, "operator", "treasury", "arena", "portfolio-b"]);
 
 export async function POST(req: Request) {
   const oa = operatorAuth(req);
