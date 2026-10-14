@@ -1,0 +1,37 @@
+{
+  "protocol": "SAOS-ARMY-LADDER-PLAN/1",
+  "sealedAt": "2026-10-14T00:55:00Z",
+  "sealedBy": "zai-agent R323 (main orchestrator) · owner mandate: DEX-activation (DECISIONS #12 IGNITION-R1 trace 1a135534c391ddbd + policy-money-layer DECISIONS #17 trace 1a137c5876e963e9)",
+  "source": "measured live 2026-10-14T00:3xZ via condenser_api.get_accounts: hcsoldier6 1.000 STEEM/0.000 SBD · hcsoldier4 0.400/0.081 · israelnews 0.235/0.120 · tov 0.209/0.145 · hcsoldier5 0.200/0.090 · haran/lsa/macrame 0.010/0.120 · wic/wog/woq 0.010/0.100 · cashmachine 0.010/0.065 · keys: ROT2_FLEET_KEYS → 24 live keys across these 12 accounts (active+posting, measured R324-EXAMINE-FIX run 38486823267)",
+  "rationale": {
+    "roster": "all 12 ROT2-resolved fleet accounts; roster order IS the hyper-grid order: fueled accounts take the tightest edges (indices 0-4), dust accounts (0.010 STEEM < 0.15 fuel reserve) land in honest FUEL-STASIS until refueled — presence, not pretense",
+    "hyperGrid": "account-i prices its level-1 sell at mid×(1+edge+i×stagger): edge 150bps (the treasury ladder's proven level-1 edge) + 40bps stagger → the army paints a depth ladder across ~5 levels (150/190/230/270/310bps) instead of stacking at level-1 — depth presence without new capital",
+    "sbdToLiquidity": "reinvestBuyLegs=true with minSbdForBuyLeg=1.0: the buy side lights up per-account only from SBD accumulated on-chain from fills (measured today: max 0.145 SBD — honest: the buy side wakes when the sells fill; no invented liquidity)",
+    "estateCap": "Σ-open ≤ 3.0 STEEM estate-wide (limited-capital mandate R323) on top of the per-account canary caps ≤0.3/leg ≤0.6/open — 12× the old single-trader fill surface with ≤5× the old estate exposure",
+    "honesty": "this plan creates maker presence and measured fills, not promised volume; VERIFIED-VS-CHAIN (volume-verify.mjs) reports every txid and every fill_order from chain, and the ledger keeps marking what the chain says vs what the receipts claim"
+  },
+  "traders": [
+    { "account": "hcsoldier4" },
+    { "account": "hcsoldier6" },
+    { "account": "israelnews" },
+    { "account": "tov" },
+    { "account": "hcsoldier5" },
+    { "account": "haran" },
+    { "account": "lsa" },
+    { "account": "macrame" },
+    { "account": "wic" },
+    { "account": "wog" },
+    { "account": "woq" },
+    { "account": "cashmachine" }
+  ],
+  "maxPerLegSteem": 0.15,
+  "maxOpenSteem": 0.3,
+  "estateMaxOpenSteem": 3.0,
+  "edgeBps": 150,
+  "staggerBps": 40,
+  "expiryDays": 7,
+  "anchorMid": 0.1034,
+  "reinvestBuyLegs": true,
+  "minSbdForBuyLeg": 1.0,
+  "sellLegs": [{}, {}]
+}
