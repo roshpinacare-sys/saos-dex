@@ -32,6 +32,7 @@ import { createHash } from "node:crypto";
 import { rpcAny, signAndBroadcast, num, dp3 } from "./mover.mjs";
 import { stasisHalt } from "./brake.mjs";
 import { activeAuthorityOk } from "./key-gate.mjs";
+import { recordLadderReceipt } from "./policy.mjs"; // R329: the receipt IS the upshift — gearbox fed at verdict time
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLAN_PATH = join(HERE, "state", "treasury-ladder-plan.json");
@@ -228,6 +229,7 @@ async function run(keysFile) {
   receipt.verdict = executed.length ? "LADDER-ACTED" : (actions.length ? "ACTS-FAILED" : "LADDER-AT-TARGET");
   appendFileSync(RECEIPT_PATH, JSON.stringify(receipt) + "\n");
   writeFileSync(PUBLIC_PATH, JSON.stringify({ schema: "SAOS-TREASURY-LADDER-PUBLIC/1", at: receipt.at, trader, mid: m.mid, source: m.source, openOrders: liveOrders.length, acted: executed.filter(e => e.txid).length, verdict: receipt.verdict }, null, 1) + "\n");
+  try { recordLadderReceipt("treasury", receipt.verdict); } catch (e) { console.log(`[GEARS] non-blocking: ${String(e?.message ?? e).slice(0, 80)}`); } // R329: gearbox never blocks the road
   console.log(`[ladder] verdict=${receipt.verdict} · mid=${m.mid} (${m.source}) · actions=${actions.length} · executed=${executed.filter(e => e.txid).length}`);
 }
 

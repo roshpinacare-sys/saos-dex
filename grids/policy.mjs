@@ -22,7 +22,7 @@
 // rateMode="observe": מדידה-כנה לפני-אכיפה (דוקטרינת STASIS-עובר-מדורג) — WOULD-HALT
 // נרשם ביומן ובקונסולה, הפעולה עוברת. המעבר observe→enforce = שדה-אחד, owner-gated.
 
-import { existsSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -37,10 +37,12 @@ export function setPaths(stateDir) {
 export const POLICY_PATH = () => join(STATE_DIR, "policy.json");
 export const LEDGER_PATH = () => join(STATE_DIR, "policy-ledger.jsonl");
 export const ARM_PATH = () => join(STATE_DIR, "policy-arm.json");
+export const GEARS_PATH = () => join(STATE_DIR, "policy-gears.json");
 
 export const POLICY_PROTOCOL = "SAOS-POLICY-ENGINE/1";
 export const ARM_PROTOCOL = "SAOS-POLICY-ARM/1";
 export const VERDICT_PROTOCOL = "SAOS-POLICY-VERDICT/1";
+export const GEARS_PROTOCOL = "SAOS-POLICY-GEARS/1";
 
 /** טעינת-הפוליסה — fail-closed: כל-תקלת-קריאה/פרוטוקול-זר = haltAll. */
 export function loadPolicy() {
@@ -103,6 +105,83 @@ export function ownerArmOk() {
   }
 }
 
+// ── R329 התיבת-ההילוכים (the paved road): gears change ONLY from accumulated
+// ladder receipts — never from deposits, never from an arm file, never from a
+// prompt. The TABLE lives in git (policy-gears.json); this code only reads it.
+// Fail-closed: unreadable table / unknown protocol / malformed state = gear 1.
+// Re-read on EVERY call (same discipline as loadPolicy) — the file is small,
+// and a stale cache would betray a fresh git-written table.
+function loadGears() {
+  try {
+    const j = JSON.parse(readFileSync(GEARS_PATH(), "utf8"));
+    if (j.protocol !== GEARS_PROTOCOL) return { ok: false, table: null, state: null, why: `protocol '${j.protocol ?? "?"}' != ${GEARS_PROTOCOL}` };
+    const gears = Array.isArray(j.gears) ? j.gears : null;
+    if (!gears || gears.length === 0 || gears.some((g) => !g || typeof g !== "object" || typeof g.gear !== "number" || !g.require || typeof g.require.greenStreak !== "number" || !g.laneOverrides || typeof g.laneOverrides !== "object")) {
+      return { ok: false, table: null, state: null, why: "malformed gear table" };
+    }
+    const st = j.state && typeof j.state === "object" ? j.state : {};
+    const cur = gears.find((g) => g.gear === st.gear) || gears.find((g) => g.require.greenStreak === 0) || gears[0];
+    return { ok: true, table: { gears }, state: { gear: cur.gear, greenStreak: Number.isFinite(st.greenStreak) && st.greenStreak >= 0 ? st.greenStreak : 0, lastVerdict: st.lastVerdict ?? null, lastKind: st.lastKind ?? null, history: Array.isArray(st.history) ? st.history.slice(0, 20) : [] }, why: null };
+  } catch (e) { return { ok: false, table: null, state: null, why: String(e?.message ?? e).slice(0, 120) }; }
+}
+
+/** הילוך-פעיל לפי-הטבלה (fail-closed = ילוך-1 הכי-שמרני). */
+export function currentGear() {
+  const g = loadGears();
+  if (!g.ok) return { gear: 1, greenStreak: 0, why: g.why };
+  return { gear: g.state.gear, greenStreak: g.state.greenStreak, lastVerdict: g.state.lastVerdict, why: null };
+}
+
+/** יישום-ההילוך על-תצורת-מסילה — הרחבות-הטבלה בלבד; הקוד אינו-ממציא-תקרות. */
+export function applyGear(laneName, laneCfg) {
+  const base = laneCfg && typeof laneCfg === "object" ? laneCfg : {};
+  const g = loadGears();
+  if (!g.ok) return base; // fail-closed = static caps from policy.json (gear 1 equals them anyway)
+  const row = g.table.gears.find((x) => x.gear === g.state.gear);
+  const ov = row?.laneOverrides?.[String(laneName)];
+  if (!ov || typeof ov !== "object") return base;
+  return { ...base, ...ov };
+}
+
+/**
+ * R329: ladder-receipt driven gearbox — הקבלה-היא-ההילוך.
+ * verdict containing ACTED (LADDER-ACTED / ARMY-ACTED) = green: streak++
+ * verdict containing ACTS-FAILED or POLICY-HALTED = instant reset: streak=0, gear=1
+ * neutral (AT-TARGET / STASIS / anything else) = no change
+ * Upshift when streak >= next gear's require.greenStreak (one gear per receipt, top = table end).
+ * Writer errors NEVER throw — a broken gearbox must not stall the road; it falls back to gear 1.
+ */
+export function recordLadderReceipt(kind, verdict) {
+  const v = String(verdict ?? "");
+  const k = String(kind ?? "ladder");
+  const green = /ACTED/.test(v) && !/FAILED|HALTED/.test(v);
+  const red = /FAILED|HALTED/.test(v);
+  try {
+    const g = loadGears();
+    if (!g.ok) { console.log(`[GEARS] inert: ${g.why ?? "unavailable"} — gear stays 1`); return { moved: false, gear: 1, greenStreak: 0 }; }
+    const st = g.state;
+    const before = { gear: st.gear, greenStreak: st.greenStreak };
+    if (red) { st.greenStreak = 0; st.gear = 1; }
+    else if (green) {
+      st.greenStreak += 1;
+      const sorted = [...g.table.gears].sort((a, b) => a.require.greenStreak - b.require.greenStreak);
+      const next = sorted.find((row) => row.require.greenStreak > 0 && st.greenStreak >= row.require.greenStreak && row.gear > st.gear);
+      if (next) st.gear = next.gear;
+    }
+    st.lastVerdict = v; st.lastKind = k; st.at = new Date().toISOString();
+    st.history = [{ at: st.at, kind: k, verdict: v, gear: st.gear, greenStreak: st.greenStreak }, ...(st.history || [])].slice(0, 20);
+    const j = JSON.parse(readFileSync(GEARS_PATH(), "utf8"));
+    j.state = st; j.at = st.at;
+    writeFileSync(GEARS_PATH(), JSON.stringify(j, null, 1) + "\n");
+    const moved = st.gear !== before.gear;
+    console.log(`[GEARS] ${k} ${v} → gear=${st.gear} streak=${st.greenStreak}${moved ? ` UPSHIFT ${before.gear}→${st.gear}` : red ? " (reset)" : ""}`);
+    return { moved, gear: st.gear, greenStreak: st.greenStreak };
+  } catch (e) {
+    console.log(`[GEARS] record failed (road continues, gear falls back conservative): ${String(e?.message ?? e).slice(0, 120)}`);
+    return { moved: false, gear: 1, greenStreak: 0, err: String(e?.message ?? e).slice(0, 120) };
+  }
+}
+
 function finish(intent, at, verdict, reasons) {
   const rec = {
     protocol: VERDICT_PROTOCOL,
@@ -139,10 +218,11 @@ export function policyGate(intent) {
   if (lp.haltAll) return finish(intent, at, "HALT", [lp.reason]);
   const p = lp.policy;
 
-  const laneCfg = p.lanes?.[intent.lane];
-  if (!laneCfg || typeof laneCfg !== "object") {
+  const laneCfgBase = p.lanes?.[intent.lane];
+  if (!laneCfgBase || typeof laneCfgBase !== "object") {
     return finish(intent, at, "HALT", [`unknown lane '${intent.lane}' — fail-closed`]);
   }
+  const laneCfg = applyGear(intent.lane, laneCfgBase); // R329 gearbox: table-driven cap re-pricing, fail-closed to gear 1
   const kinds = Array.isArray(laneCfg.kinds) ? laneCfg.kinds.map(String) : [];
   if (kinds.length && !kinds.includes(intent.kind)) {
     return finish(intent, at, "HALT", [`kind '${intent.kind}' not in allowlist of lane '${intent.lane}'`]);
