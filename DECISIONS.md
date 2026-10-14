@@ -37,3 +37,20 @@
 - כל-מצב-קנוני חי-בגיט (ריפו+Actions). הסנדבוקס = מאיץ-חולף בלבד.
 - כל-שירות-סנדבוקס חייב **self-heal-מהגיט**: clone-if-missing → prisma → עוגן-ראיות → עלייה. הוכח-חי: המנוע-הוקם-מהגיט-בלבד (h53462-עוגן-reposnap → h53494+ טייפ-17tps); dex-daemon v2 עושה-זאת-אוטומטית.
 - אכיפה-ומודעות-עצמית רצות-ב-Actions-ציבוריים (דקות-חינם, שורדים-מחיקת-סנדבוקס): identity-patrol + self-book (מלאי-מלא+חדשנות+יכולות) + operator-routing (טענה-למפעיל=טענה-לריבונות).
+
+## החלטה #17 · SAOS-POLICY-ENGINE/1 — שכבת-הכסף: תקרות-הון, קצב, רשימות-היתר, שער-בעלים (2026-10-14 · trace 1a137c5876e963e9)
+
+**המדידה שהציתה:** הבעלים הביא את דפוס agentic-wallet (PolicyEngine: spending limits · rate limits · program allowlists · multi-agent isolation · swarm consensus) ושאל: סנדבוקסים של OpenHands או פוליסות של agentic-wallet? התשובה נמדדה כבר ב-#16 (Pulse 2be277a3): שכבת-הריצה חזקה (ריפוי-עצמי-מוכח-חי), שכבת-הכסף היא החוליה. הפער-המדוד: brake.mjs הוא שער-בינארי (עוצר/מרשה מסילות) — אין-תקרות-מספריות; grid-params החתים מדיד (לכל-פעולה ~4 SBD, למחזור ~12 SBD) אבל דבר לא אכף אותו; הסטוריה מדדה סופות-ביטולים (29-ביטולים-בריצה 6d6c169; fires>64).
+
+**ההחלטה — מנוע-פוליסות עם 5 שכבות (grids/policy.mjs):**
+1. **סכמת-כוונה (SAOS-INTENT/1)** — כוונה-פגומה/חסרה = HALT, אף-ניחוש לא נחתם.
+2. **תקרת-הוצאה לכל-פעולה** (maxNotionalPerOpSbd=25, מדיד-בסיס ~4) + **תקרת-מחזור** (120/96-ops) — רענון-הגריד הוא כוונה-אטומית אחת (grid_cycle_refresh): HALT ⇒ אפס-ביטולים ואפס-הצבות, הסולם-נוגע-שלם.
+3. **מגבלות-קצב מה-ledger** — הקצב נמדד מקבלות-הפסיקה בגיט (policy-ledger.jsonl, append-only, מפורסם-ע"י-ה-beats), לא מזיכרון-תהליך — שורד-מחיקת-סנדבוקס (חוק #14). rateMode=observe תחילה (דוקטרינת-מעבר-מדורג של-STASIS): מדידה-כנה לפני-אכיפה; המעבר enforce = שדה-אחד owner-gated.
+4. **שער-הבעלים (ownerGate.notionalSbd=100)** — פעולה מעל התקרה דורשת grids/state/policy-arm.json {protocol:'SAOS-POLICY-ARM/1',armed:true} — **ה-Multisig של-המציאות-חסרת-המפתחות**: חתימת-הבעלים היא קובץ-בגיט, מבוקר בהיסטוריה.
+5. **רשימות-היתר קשיחות** — מסילה-לא-מוכרת/סוג-פעולה-זר למסילה = HALT (fail-closed, כמו הבלם).
+
+**סדר-האכיפה המדוד (הגנה-לעומק):** STASIS (הבלם-הריבוני) → POLICY (תקרות-מספריות) → key-gate (רשות-חיה) → book-law (Z-80). נחתך ב-6 נקודות-חתימה: grid-beat.ts רגל-STEEM (שער-מחזור) · רגל-HIVE (שער-מחזור) · mover.mjs ×4 (reprice-ask/reprice-bid/plan-ask/plan-bid — כל-כוונה-לפני-חתימה).
+
+**מיפוי-ההשראה למציאות:** spending limits ✓ (שכבות 2) · rate limits ✓ (שכבה 3, מהגיט) · program allowlists ✓ (שכבה 5) · multisig/swarm-consensus → שווה-ערך-חסר-מפתחות (שכבה 4: קובץ-arm של-הבעלים בגיט) · multi-agent wallet isolation → קיים-מדוד (מסילות-נפרדות ל-mover/grid-beat/convert + stagedLanes של-STASIS). OpenHands/SWE-agent: שכבת-הריצה נמדדה-חזקה (#16) — דפוס-ה-ACI/הסנדבוקס שלהן ממתין למשימת-חומת-המשימות; AgentConnect: רישום-הסוכנים קיים (agents/registry.json + claims-book + operator-routing).
+
+**הוכחה:** selftest 29/29-ירוק (policy-selftest.mjs: fail-closed ×3, תקרות ×4, שער-בעלים ×5, מסילות-זרות ×2, סכמה ×4, קצב ×3, observe ×2, קבלות ×3) · brake-regression-ירוק · typecheck-0. קבלות: grids/policy.mjs · grids/state/policy.json · grids/policy-selftest.mjs · grid-beat.ts · grids/mover.mjs.
