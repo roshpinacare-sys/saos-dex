@@ -224,11 +224,18 @@ const MICRO_SEED: { asset: Asset; perSoldier: number; perSoldierCap: number; fle
  * מאחורי-LP-נעול. החוק: האוצר קונה מהבריכה-שלו-עצמו (pool_swap — Σ נשמר, מחיר-בריכה)
  * מנת-זריעה מתוחמת, מישר-את-הבריכה-בחזרה-לעוגן (pool_repeg — כלי-R26-הריבוני),
  * ומנתב ארנה→חיילים דרך קו-SETTLE-17 הקיים (התקרות-הפר-חייל שלו שלמות). אפס-הטבעה
- * · אפס-pool_rmw · תקרת-חיים-במצב (דפוס-Roast-64) · משמעת-ריקון-הבריכה (לעולם לא
- * נוטלים מעבר-ל-guard) · כל-הדרך מגוללת-ביומן הגרעין. */
+ * · אפס-pool_rmw · משמעת-ריקון-הבריכה (לעולם לא נוטלים מעבר-ל-guard) · הכל מגולל
+ * ביומן-הגרעין.
+ * SETTLE-19-b (סרוו · נמדד-חי-בהפעלה-הראשונה, run 38568088488): תקרת-חיים-חד-
+ * פעמית (2Mµ) הוסתה-בריצה-אחת ע"י מילויים-אמת (1,166 fills) — השוק סחר, האסקים
+ * נאכלו, והצד-התרוקן-שוב. זו-לא-תקלה — זו-כלכלת-שוק: מלאי-אסק נצרך-בהמשך.
+ * הטיפול: הגשר-הוא **סרוו** ולא-זריעה — זורם-רק-את-המחסור-החי-של-הצי
+ * (Σמלאי-אסק-חופשי של-החיילים-והארנה-מעל-הרצפה מול-יעד-חימוש-מלא), נח-כשהצי-חמוש
+ * (כנות — אותו-דפוס של MICRO-SEED), חוזר-לזרום-כשהמילויים-שחקו-את-המלאי. bridgeCounts
+ * נשאר-מונה-טלמטריה-מונוטוני (בלי-תקרה — ה-guard-של-הבריכה הוא-הגבול-האמת). */
 const BRIDGE_TRANCHE_USDS = 10_000;        // מנת-חלון (16-טיק) במונחי-עלות: ~160Kµ WSTEEM במחיר-בריכה החי
 const BRIDGE_WINDOW_CAP_WSTEEM = 200_000;  // מגן-חלון: הפלט-לא-יחרוג (בריכה-זולה-במיוחד → מנה-חצויה)
-const BRIDGE_LIFETIME_WSTEEM = 2_000_000;  // תקרת-חיים: חימוש-4-חיילים + מחזורי-השלמה
+const BRIDGE_FLEET_ARM_TARGET = SOLDIER_SEED_TARGET_WSTEEM * 4; // יעד-החימוש: הצי-כולו (4-חיילים) ב-2-רמות-אסק
 const BRIDGE_POOL_GUARD_WSTEEM = 4_000_000; // משמעת-הבריכה: צד-ה-WSTEEM לעולם לא יורד מתחת
 const bridgeUsed = (st: DexState): number => st.bridgeCounts?.wsteem ?? 0;
 const bridgeAdd = (st: DexState, mu: number): void => {
@@ -541,10 +548,14 @@ export function arenaTick(
       const rearmExhausted = rearmCounts(st).wsteem >= REARM_LIFETIME_WSTEEM;
       const arenaBelowFloor = avail(st, "arena", "WSTEEM") < REARM_FLOOR_WSTEEM;
       if (poolW && arenaBelowFloor && rearmExhausted) {
-        const capLeft = BRIDGE_LIFETIME_WSTEEM - bridgeUsed(st);
+        // SETTLE-19-b · הסרוו: מלאי-האסק-החופשי-של-הצי (חיילים + עודף-הארנה-מעל-הרצפה)
+        // מול-יעד-החימוש — זרימה-רק-את-המחסור-האמת; נח-כשהצי-חמוש.
+        const fleetAskInv = soldiers.reduce((s, sol) => s + avail(st, sol, "WSTEEM"), 0)
+          + Math.max(0, avail(st, "arena", "WSTEEM") - REARM_FLOOR_WSTEEM);
+        const shortfall = Math.max(0, BRIDGE_FLEET_ARM_TARGET - fleetAskInv);
         // משמעות-הבריכה: צד-ה-WSTEEM (p.a=USDS ⇒ rb; ההפוך ⇒ ra) לעולם לא יורד מתחת-ל-guard
         const poolWsteem = poolW.a === "WSTEEM" ? poolW.ra : poolW.rb;
-        if (capLeft > 0 && poolWsteem >= BRIDGE_POOL_GUARD_WSTEEM) {
+        if (shortfall > 0 && poolWsteem >= BRIDGE_POOL_GUARD_WSTEEM) {
           // גודל-דטרמיניסטי-קבוע: מנת-USDS קבועה; הפלט-נגזר-מ-quoteOut (אותו-מתמטיקת-
           // גרעין, עמלה-דינמית-כלולה) וההעברה-מנותבת-בגודל-הפלט-המדויק — אפס-שאריות.
           // מגן-חלון: אם-הפלט-חורג-מתקרת-החלון (בריכה-זולה-במיוחד) — מנה-אחת-וציטוט-חוזר.
@@ -552,7 +563,7 @@ export function arenaTick(
           const quoted = q1 && q1.out > BRIDGE_WINDOW_CAP_WSTEEM
             ? quoteOut(poolW, "USDS", Math.floor(BRIDGE_TRANCHE_USDS / 2))?.out ?? 0
             : q1?.out ?? 0;
-          const out = Math.min(quoted, capLeft); // תקרת-החיים-נאכפת-על-הפלט-עצמו
+          const out = Math.min(quoted, shortfall); // הסרוו: רק-המחסור-האמת; השאריות-נשארות-באוצר (השומר-מנצל)
           if (out > 0 && avail(st, "treasury", "USDS") >= BRIDGE_TRANCHE_USDS) {
             pushOp({ type: "pool_swap", issuer: "treasury", nonce: `bridge-swap-h${st.height}`, pair: "USDS/WSTEEM", assetIn: "USDS", amount: BRIDGE_TRANCHE_USDS });
             // מישור-העוגן באותו-חלון — הסוואפ הופך-את-הבריכה-יקרה-מהעוגן; ה-repeg
