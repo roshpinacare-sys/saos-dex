@@ -176,6 +176,123 @@ t("gear3: 120 SBD still needs owner arm (gate intact)", m.policyGate(gridIntent(
 writeGears({ protocol: "SAOS-POLICY-GEARS/1", gears: "garbage", state: {} });
 t("malformed gear table → gear 1", m.currentGear().gear === 1);
 
+/* ══ R330 §15 — מסנן-הקלי (SAOS-KELLY-CAP/1, DECISIONS #18): תוחלת-ממומשת מתמחרת-את-המהירות ══ */
+// isolated state4: policy + gears table WITH kelly; beats come from synthetic git-format receipts.
+const { performanceCap, calculatePerformanceCap, kellyStats, extractBeats, resetKellyCache } = await import("./alpha-performance-math.mjs");
+const state4 = join(tmp, "state4");
+mkdirSync(state4, { recursive: true });
+m.setPaths(state4);
+writeFileSync(join(state4, "policy.json"), JSON.stringify(validPolicy));
+const writeGears4 = (state, kelly) => writeFileSync(join(state4, "policy-gears.json"), JSON.stringify({
+  protocol: "SAOS-POLICY-GEARS/1",
+  gears: [
+    { gear: 1, require: { greenStreak: 0 },  laneOverrides: { grid: { maxNotionalPerOpSbd: 25,  maxCycleNotionalSbd: 120 } } },
+    { gear: 2, require: { greenStreak: 6 },  laneOverrides: { grid: { maxNotionalPerOpSbd: 50,  maxCycleNotionalSbd: 240 } } },
+    { gear: 3, require: { greenStreak: 12 }, laneOverrides: { grid: { maxNotionalPerOpSbd: 100, maxCycleNotionalSbd: 480 } } },
+  ],
+  ...(kelly === undefined ? {} : { kelly }),
+  state: state ?? { gear: 1, greenStreak: 0, lastVerdict: null, lastKind: null, history: [] },
+}, null, 1));
+const writeReceipts = (name, lines) => { writeFileSync(join(state4, name), lines.map((l) => JSON.stringify(l)).join("\n") + (lines.length ? "\n" : "")); resetKellyCache(); };
+
+const kellyOn = {
+  enabled: true, receipts: ["t.jsonl", "a.jsonl"],
+  minBeats: 10, probationFactor: 0.5, halfKelly: 0.5, maxFraction: 0.25, minFraction: 0.01, scale: 4, fallbackCapSbd: 25, epsSbd: 0.000001,
+};
+// treasury-format receipt (single trader) / army-format receipt (results roster)
+const tRec = (at, sbd) => ({ schema: "SAOS-TREASURY-LADDER-RECEIPT/1", at, trader: "hcsoldier4", traderSbd: sbd, verdict: "LADDER-ACTED" });
+const aRec = (at, roster) => ({ schema: "SAOS-ARMY-LADDER-RECEIPT/1", at, results: roster.map(([account, sbd]) => ({ account, state: "ACTED", traderSbd: sbd })), verdict: "ARMY-ACTED" });
+
+/* 15.1 kelly block missing from table = inert throttle (table caps stand) */
+writeGears4(undefined, undefined);
+writeReceipts("t.jsonl", []); writeReceipts("a.jsonl", []);
+t("kelly missing = inert: gear1 caps unchanged (20 allowed)", m.policyGate(gridIntent(20)).allow === true);
+t("kelly missing = inert: 30 still blocked by table", m.policyGate(gridIntent(30)).allow === false);
+t("kelly missing = currentGear reports no kelly", m.currentGear().kelly === null);
+
+/* 15.2 disabled kelly = inert */
+writeGears4(undefined, { ...kellyOn, enabled: false });
+t("kelly disabled = inert", m.policyGate(gridIntent(20)).allow === true && m.currentGear().kelly === null);
+
+/* 15.3 no receipts at all = probation (no data = measured suspicion, half cap) */
+writeGears4(undefined, kellyOn);
+t("no receipts → probation: gear1 25→12 (20 blocked)", m.policyGate(gridIntent(20)).allow === false);
+t("no receipts → probation: small intents still flow (10 allowed)", m.policyGate(gridIntent(10)).allow === true);
+t("probation halt carries kelly-cap note", m.policyGate(gridIntent(20)).reasons.join(" ").includes("kelly-cap"));
+t("currentGear reports probation", m.currentGear().kelly?.mode === "probation");
+
+/* 15.4 probation at gear 2: 50 → 25 */
+writeGears4({ gear: 2, greenStreak: 6, lastVerdict: "LADDER-ACTED", lastKind: "treasury", history: [] }, kellyOn);
+t("probation gear2: 30 blocked (25 cap)", m.policyGate(gridIntent(30)).allow === false);
+t("probation gear2: cycle re-priced too (cycle 240→120: intent 200 blocked)", m.policyCycleGate({ tool: "t", account: "a", opsEst: 5, notionalSbdUpper: 200 }).allow === false);
+
+/* 15.5 young sample < minBeats = probation even with rising SBD */
+writeReceipts("t.jsonl", [tRec("2026-10-14T01:00:00Z", 0.05), tRec("2026-10-14T02:00:00Z", 0.08), tRec("2026-10-14T03:00:00Z", 0.12)]);
+t("3 informative beats < 10 = probation (30 blocked at gear2)", m.policyGate(gridIntent(30)).allow === false);
+
+/* 15.6 full sample, perfect expectancy = exactly the table cap, never above (winRate=1 → safe=0.25 → ×4=1.0) */
+const rising = Array.from({ length: 12 }, (_, i) => tRec(new Date(Date.parse("2026-10-14T00:00:00Z") + (i + 1) * 3600_000).toISOString(), (0.05 + i * 0.01).toFixed(3) * 1));
+writeReceipts("t.jsonl", rising);
+t("12 rising fills → kelly full cap: 30 allowed at gear2", m.policyGate(gridIntent(30)).allow === true);
+t("kelly never exceeds the table (60 blocked at gear2)", m.policyGate(gridIntent(60)).allow === false);
+t("kelly mode reported by currentGear", m.currentGear().kelly?.mode === "kelly" && m.currentGear().kelly?.cap === 50);
+
+/* 15.7 mediocre expectancy throttles: 6 wins +0.01 / 4 losses -0.01 → winRate 0.6, WLR 1, kelly 0.2, safe 0.1 → cap 50×0.4=20 */
+const mixed = [];
+for (let i = 0; i < 7; i++) mixed.push(tRec(new Date(Date.parse("2026-10-14T00:00:00Z") + (i + 1) * 3600_000).toISOString(), 0.05 + (i + 1) * 0.01));
+for (let i = 0; i < 4; i++) mixed.push(tRec(new Date(Date.parse("2026-10-14T09:00:00Z") + (i + 1) * 3600_000).toISOString(), 0.12 - (i + 1) * 0.01));
+writeReceipts("t.jsonl", mixed);
+t("mediocre expectancy: 30 blocked (cap 20)", m.policyGate(gridIntent(30)).allow === false);
+t("mediocre expectancy: 15 allowed", m.policyGate(gridIntent(15)).allow === true);
+const mixedStats = kellyStats(extractBeats([join(state4, "t.jsonl")]).beats, kellyOn);
+t("mediocre stats honest: winRate=0.6 sampled=true", mixedStats.sampled === true && Math.abs(mixedStats.winRate - 0.6) < 1e-9 && mixedStats.totalBeats === 10);
+
+/* 15.8 all-loss sample → negative kelly → floor shadow (safe=0.01 → cap 50×0.04=2; canary legs flow, exposure dies) */
+const falling = Array.from({ length: 11 }, (_, i) => tRec(new Date(Date.parse("2026-10-14T00:00:00Z") + (i + 1) * 3600_000).toISOString(), 0.5 - (i + 1) * 0.03));
+writeReceipts("t.jsonl", falling);
+t("all-loss: 5 blocked", m.policyGate(gridIntent(5)).allow === false);
+t("all-loss: 1 SBD allowed (maker alive to measure recovery)", m.policyGate(gridIntent(1)).allow === true);
+
+/* 15.9 idle beats (no fill) excluded from the sample, counted in total */
+const idle = rising.concat(Array.from({ length: 15 }, (_, i) => tRec(new Date(Date.parse("2026-10-14T13:00:00Z") + (i + 1) * 60_000).toISOString(), (0.05 + 11 * 0.01).toFixed(3) * 1)));
+writeReceipts("t.jsonl", idle);
+t("idle beats excluded: still full cap (30 allowed)", m.policyGate(gridIntent(30)).allow === true);
+const idleExt = extractBeats([join(state4, "t.jsonl")]);
+t("idle beats counted in total, not in informative", idleExt.beats.length === 26 && idleExt.informative === 11);
+
+/* 15.10 army-format roster receipts feed per-account beats too */
+writeReceipts("t.jsonl", rising);
+const armySeries = [];
+for (let i = 0; i < 11; i++) armySeries.push(aRec(new Date(Date.parse("2026-10-14T00:00:00Z") + (i + 1) * 1800_000).toISOString(), [["israelnews", 0.12 + i * 0.005], ["static-acct", 0.156]]));
+writeReceipts("a.jsonl", armySeries);
+t("army roster beats merge into the sample (30 allowed)", m.policyGate(gridIntent(30)).allow === true);
+const merged = extractBeats([join(state4, "t.jsonl"), join(state4, "a.jsonl")]);
+t("merged beats: treasury 11 + army israelnews 10 (static excluded from informative)", merged.beats.length >= 21 && merged.informative === 21);
+
+/* 15.11 corrupt receipt lines are skipped honestly (probation, not crash) */
+writeFileSync(join(state4, "t.jsonl"), "{ torn line\nnot json at all\n");
+writeReceipts("a.jsonl", []);
+resetKellyCache();
+t("corrupt receipts → probation (30 blocked at gear2)", m.policyGate(gridIntent(30)).allow === false);
+
+/* 15.12 metrics-fault mode: malformed paths → floor min(base, 25) */
+const fault = performanceCap({ baseGearCap: 50, receiptPaths: "not-an-array" });
+t("metrics-fault: mode=fault, cap=min(50,25)=25", fault.mode === "metrics-fault" && fault.cap === 25);
+t("calculatePerformanceCap parity: fault path returns 25", calculatePerformanceCap("/nonexistent/path.jsonl", 100) === 25);
+t("calculatePerformanceCap parity: rising sample at base 100 stays ≤ 100", (() => { writeReceipts("t.jsonl", rising); const c = calculatePerformanceCap(join(state4, "t.jsonl"), 100); return typeof c === "number" && c <= 100 && c >= 25; })());
+t("invalid baseGearCap → fallback floor", performanceCap({ baseGearCap: 0, receiptPaths: [] }).mode === "invalid-base");
+
+/* 15.13 ownerGate intact under kelly: top gear + perfect stats → cap 100; 120 still needs the arm */
+writeGears4({ gear: 3, greenStreak: 12, lastVerdict: "LADDER-ACTED", lastKind: "treasury", history: [] }, kellyOn);
+writeReceipts("t.jsonl", rising); writeReceipts("a.jsonl", []);
+t("gear3 + full expectancy: 100 allowed (tops AT the gate)", m.policyGate(gridIntent(100)).allow === true);
+t("gear3 + kelly: 120 still blocked by owner-gate (gate intact)", m.policyGate(gridIntent(120)).reasons.join(" ").includes("owner-gate"));
+
+/* 15.14 sanitizeParams: broken fields fall to decision defaults (code invents nothing) */
+const { sanitizeParams: sp } = await import("./alpha-performance-math.mjs");
+const bad = sp({ minBeats: -5, probationFactor: 7, halfKelly: "x", scale: 0 });
+t("broken params fall to defaults (minBeats=10, probation=0.5)", bad.minBeats === 10 && bad.probationFactor === 0.5 && bad.halfKelly === 0.5 && bad.scale === 4);
+
 console.log(`\n═ RESULT: ${passed} passed · ${failed} failed ═`);
 rmSync(tmp, { recursive: true, force: true });
 process.exit(failed === 0 ? 0 : 1);

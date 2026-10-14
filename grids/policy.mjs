@@ -25,6 +25,7 @@
 import { existsSync, readFileSync, appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { performanceCap } from "./alpha-performance-math.mjs"; // R330: kelly prices the speed by measured expectancy — can only tighten, never loosen (DECISIONS #18)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 let STATE_DIR = join(HERE, "state");
@@ -121,15 +122,56 @@ function loadGears() {
     }
     const st = j.state && typeof j.state === "object" ? j.state : {};
     const cur = gears.find((g) => g.gear === st.gear) || gears.find((g) => g.require.greenStreak === 0) || gears[0];
-    return { ok: true, table: { gears }, state: { gear: cur.gear, greenStreak: Number.isFinite(st.greenStreak) && st.greenStreak >= 0 ? st.greenStreak : 0, lastVerdict: st.lastVerdict ?? null, lastKind: st.lastKind ?? null, history: Array.isArray(st.history) ? st.history.slice(0, 20) : [] }, why: null };
+    return { ok: true, table: { gears, kelly: loadKelly(j) }, state: { gear: cur.gear, greenStreak: Number.isFinite(st.greenStreak) && st.greenStreak >= 0 ? st.greenStreak : 0, lastVerdict: st.lastVerdict ?? null, lastKind: st.lastKind ?? null, history: Array.isArray(st.history) ? st.history.slice(0, 20) : [] }, why: null };
   } catch (e) { return { ok: false, table: null, state: null, why: String(e?.message ?? e).slice(0, 120) }; }
+}
+
+/** R330: חסימת-הקלי מהטבלה — חסרה/שבורה/מנוטרלת = מצמץ-אינרטי (תקרות-הטבלה עומדות; כשל-מצמץ לעולם-לא-עוצר-את-הכביש). */
+function loadKelly(j) {
+  const k = j && typeof j === "object" ? j.kelly : null;
+  if (!k || typeof k !== "object" || Array.isArray(k)) return null;
+  if (k.enabled !== true) return null;
+  const receipts = Array.isArray(k.receipts) ? k.receipts.filter((f) => typeof f === "string" && f.trim()).map(String) : [];
+  if (!receipts.length) return null;
+  return { ...k, receipts };
+}
+
+/** R330: המצמץ — min(תקרת-ההילוך, קלי) על-תקרות-הכסף בלבד; תקרות-קצב/ops אינן-נוגעות. */
+function kellyThrottle(caps, kelly) {
+  if (!kelly) return caps;
+  try {
+    const baseCap = caps && typeof caps === "object" ? caps.maxNotionalPerOpSbd : null;
+    if (!(typeof baseCap === "number" && Number.isFinite(baseCap) && baseCap > 0)) return caps;
+    const res = performanceCap({ baseGearCap: baseCap, receiptPaths: kelly.receipts.map((f) => join(STATE_DIR, f)), params: kelly });
+    const cap = Math.max(0, Math.min(baseCap, res.cap));
+    if (!(cap < baseCap)) return caps; // תוחלת-מלאה = הטבלה-כולה; אין-צורך-בהערה
+    const factor = baseCap > 0 ? cap / baseCap : 1;
+    const out = { ...caps, maxNotionalPerOpSbd: cap };
+    if (typeof caps.maxCycleNotionalSbd === "number" && Number.isFinite(caps.maxCycleNotionalSbd)) {
+      out.maxCycleNotionalSbd = Math.max(1, Math.floor(caps.maxCycleNotionalSbd * factor + 1e-9)); // 1e-9: floor-רעש-נקודה-צפה
+    }
+    out.kellyNote = `kelly-cap: gear cap ${baseCap}→${cap} SBD (mode=${res.mode}; ${res.why})`;
+    return out;
+  } catch (_) {
+    return caps; // throttle failure never stalls the road — the other layers hold
+  }
 }
 
 /** הילוך-פעיל לפי-הטבלה (fail-closed = ילוך-1 הכי-שמרני). */
 export function currentGear() {
   const g = loadGears();
   if (!g.ok) return { gear: 1, greenStreak: 0, why: g.why };
-  return { gear: g.state.gear, greenStreak: g.state.greenStreak, lastVerdict: g.state.lastVerdict, why: null };
+  const row = g.table.gears.find((x) => x.gear === g.state.gear);
+  const baseCap = row?.laneOverrides?.grid?.maxNotionalPerOpSbd ?? null;
+  let kelly = null;
+  if (g.table.kelly && typeof baseCap === "number") {
+    try {
+      const res = performanceCap({ baseGearCap: baseCap, receiptPaths: g.table.kelly.receipts.map((f) => join(STATE_DIR, f)), params: g.table.kelly });
+      kelly = { enabled: true, mode: res.mode, cap: res.cap, gearCap: baseCap, informative: res.stats?.informative ?? 0, minBeats: res.stats?.minBeats ?? null };
+    } catch (_) { kelly = { enabled: true, mode: "fault" };
+    }
+  }
+  return { gear: g.state.gear, greenStreak: g.state.greenStreak, lastVerdict: g.state.lastVerdict, kelly, why: null };
 }
 
 /** יישום-ההילוך על-תצורת-מסילה — הרחבות-הטבלה בלבד; הקוד אינו-ממציא-תקרות. */
@@ -140,7 +182,7 @@ export function applyGear(laneName, laneCfg) {
   const row = g.table.gears.find((x) => x.gear === g.state.gear);
   const ov = row?.laneOverrides?.[String(laneName)];
   if (!ov || typeof ov !== "object") return base;
-  return { ...base, ...ov };
+  return kellyThrottle({ ...base, ...ov }, g.table.kelly); // R330: expectancy-priced speed — kelly can only tighten the table row, never loosen it
 }
 
 /**
@@ -260,7 +302,11 @@ export function policyGate(intent) {
     }
   }
 
-  if (reasons.length) return finish(intent, at, "HALT", reasons);
+  if (reasons.length) {
+    // R330 receipt-law: a cap-halt under a kelly-throttled lane carries the expectancy evidence
+    if (typeof laneCfg.kellyNote === "string" && laneCfg.kellyNote) reasons.push(laneCfg.kellyNote);
+    return finish(intent, at, "HALT", reasons);
+  }
   return finish(intent, at, "ALLOW", []);
 }
 
