@@ -5,7 +5,7 @@ import { canon, sha256 } from "@/lib/dex/canonical";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// saos-dex /api/dex/desk-ledger (R347) — עוגן-הקבלות של הספר-הריבוני
+// saos-dex /api/dex/desk-ledger (R350) — עוגן-הקבלות של הספר-הריבוני
 // ============================================================================
 // הגשר החוקי היחיד מחדר-הישיבות (saos-desk) אל הריבונות-הכלכלית — דוקטרינת
 // exec34: ההון דרך ה-ledger שלנו, לא דרך ברוקר. הקונסולה של saos-desk שולחת
