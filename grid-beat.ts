@@ -32,6 +32,7 @@ import path from "path";
  * האחרונה-שלא-מוקשה בקוד (עד-כה רק שער-workflow). החוק-המעוגן ב-Domain/steem:
  * כל-חותם שואל את-הבלם בטרם-חתימה — fail-closed, קריאה-טרייה בכל-ריצה. */
 import { stasisHalt } from "./grids/brake.mjs";
+import { policyCycleGate } from "./grids/policy.mjs"; // DECISIONS #17 · SAOS-POLICY-ENGINE/1 (agentic-wallet pattern, owner trace 1a137c5876e963e9)
 /* 9-c (2026-10-11) · שער-המפתח: אימות שה-WIF גוזר בדיוק את רשות-ה-active החיה לפני-כל-שידור.
  * המדידה-החיה (twin run 38144052862 · 2026-10-11T13:39Z): WIF-ישן בכספת (רוטציית-בעלים
  * last_owner_update 2026-10-08T17:29:09Z) → 18 שידורים-נדונים ("broadcast answered without id")
@@ -244,6 +245,18 @@ async function main(): Promise<void> {
    * active=true → חוסם-כנה (no-op בריא) עם הסיבה-מפורסמת בגלוי. */
   if (stasisHalt("grid-beat:steem")) blocker.push("STASIS capital brake active (owner directive 2026-10-04): signing lanes halt — see grids/state/STASIS.json");
 
+  /* POLICY-ENGINE (SAOS-POLICY-ENGINE/1, DECISIONS #17) · שער-מחזור אטומי — דפוס agentic-wallet:
+   * כל-הרענון (ביטולים+הצבות) = כוונה-אחת. HALT ⇒ blocker ⇒ אפס-ביטולים ואפס-הצבות
+   * (הסולם נשאר נוגע-שלם — אין-מצב-ביניים). תקרות מדודות מ-grid-params (לכל-פעולה ~4 SBD,
+   * למחזור ~12 SBD) עם מרווח ×6–×10. fail-closed: פוליסה-חסרה/זרה = עצירה. */
+  const polAmt = (s: string): number => parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) || 0;
+  const polSteemReturned = snap.openOrders.filter((o) => o.sell.includes("STEEM")).reduce((s, o) => s + polAmt(o.sell), 0);
+  const polSbdReturned = snap.openOrders.filter((o) => o.sell.includes("SBD")).reduce((s, o) => s + polAmt(o.sell), 0);
+  const polNotionalUpper = Math.max(0, snap.balances.steem + polSteemReturned - LIVE_MIN_KEEP_STEEM) * LIVE_COMMIT_PCT * (parity ?? 0)
+    + Math.max(0, snap.balances.sbd + polSbdReturned) * LIVE_COMMIT_PCT;
+  const polGate = policyCycleGate({ tool: "grid-beat:steem", lane: "grid", account: ACCOUNT, opsEst: snap.openOrders.length + LIVE_ASK_LEVELS + LIVE_BID_LEVELS, notionalSbdUpper: polNotionalUpper, chain: "steem" });
+  if (!polGate.allow) blocker.push(`POLICY-HALT (steem leg): ${polGate.reasons.join(" ; ")} — atomic refresh skipped, ladder untouched`);
+
   /* 9-c · שער-המפתח (fail-closed לפני-כל-שידור): WIF שאינו גוזר את רשות-ה-active החיה
    * = חסימה-כנה עם הסיבה. המדידה-החיה (run 38144052862): בלי-השער הזה 18 שידורים-נדונים
    * יצאו לשרשרת וכולם נדחו — והרץ פרסם ARMED-STABLE. עתה: אפס-שידורים + verdict-אמת.
@@ -444,6 +457,10 @@ async function main(): Promise<void> {
       if (Math.abs(devBps) > HIVE_PARITY_BAND_BPS) hiveBlocker.push(`hive book mid deviates ${devBps}bps from external parity: refusing to trade a broken market`);
     }
 
+    /* POLICY-ENGINE (SAOS-POLICY-ENGINE/1, DECISIONS #17) · שער-מחזור גם על רגל-ה-HIVE —
+     * אותו-חוק, אותו-fail-closed; HALT ⇒ hiveBlocker ⇒ אפס-חתימות ברגל-ה-HIVE. */
+    const hivePgate = policyCycleGate({ tool: "grid-beat:hive", lane: "grid", account: ACCOUNT, opsEst: hs.openOrders.length + HIVE_ASK_LEVELS_LIVE + HIVE_BID_LEVELS_LIVE, notionalSbdUpper: (hs.balances.hive * (hiveParity ?? 0) + hs.balances.hbd) * HIVE_COMMIT_PCT, chain: "hive" });
+    if (!hivePgate.allow) hiveBlocker.push(`POLICY-HALT (hive leg): ${hivePgate.reasons.join(" ; ")} — atomic refresh skipped`);
     if (hiveArmed && hiveParity && hs.book.bestBid && hs.book.bestAsk && hs.rc.ok && hiveBlocker.length === 0) {
       /* 9-c · מונה-שידורים גם-כאן — כנות זהה לרגל-ה-STEEM */
       let hbcAttempted = 0, hbcFailed = 0;

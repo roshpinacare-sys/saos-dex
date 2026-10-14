@@ -37,6 +37,7 @@ import { ripemd160 } from "@noble/hashes/ripemd160";
 import steem from "steem";
 import { appendEvent } from "./events.mjs";
 import { stasisHalt } from "./brake.mjs"; // owner directive 2026-10-04: think-before-sign — the signer obeys the brake
+import { policyGate } from "./policy.mjs"; // DECISIONS #17 · SAOS-POLICY-ENGINE/1 — every intent checked before signing
 import { normBook, crossAudit } from "./book-law.mjs"; // Z-80: חוק-הספר — אף-חתימה לא חוצה את הספר-החי
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -297,7 +298,9 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
       const id = nextId();
       if (dryRun) evidence.placed.push({ id, side: "ask", sell: `${sell.toFixed(3)} STEEM`, receive: `${recv.toFixed(3)} SBD`, price: px, dryRun: true });
       else {
-        try {
+        const pol = policyGate({ tool: "mover", lane: "grid", kind: "limit_order_create", account: ACCOUNT, amount: Number(sell), price: px, notionalSbd: Number(recv), orderid: id, meta: { side: "ask", phase: "reprice" } });
+        if (!pol.allow) evidence.placed.push({ id, side: "ask", blocked: `POLICY-HALT: ${pol.reasons.join("; ")}` });
+        else try {
           const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${sell.toFixed(3)} STEEM`, min_to_receive: `${recv.toFixed(3)} SBD`, fill_or_kill: false, expiration: new Date(rexp * 1000).toISOString().slice(0, 19) }]]);
           evidence.placed.push({ id, side: "ask", sell: `${sell.toFixed(3)} STEEM`, receive: `${recv.toFixed(3)} SBD`, price: px, txid: r.txid, block: r.block });
         } catch (e) { evidence.placed.push({ id, side: "ask", error: String(e.message ?? e).slice(0, 80) }); }
@@ -313,7 +316,9 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
       const id = nextId();
       if (dryRun) evidence.placed.push({ id, side: "bid", sell: `${spend.toFixed(3)} SBD`, receive: `${recv.toFixed(3)} STEEM`, price: px, dryRun: true });
       else {
-        try {
+        const pol = policyGate({ tool: "mover", lane: "grid", kind: "limit_order_create", account: ACCOUNT, amount: Number(spend), price: px, notionalSbd: Number(spend), orderid: id, meta: { side: "bid", phase: "reprice" } });
+        if (!pol.allow) evidence.placed.push({ id, side: "bid", blocked: `POLICY-HALT: ${pol.reasons.join("; ")}` });
+        else try {
           const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${spend.toFixed(3)} SBD`, min_to_receive: `${recv.toFixed(3)} STEEM`, fill_or_kill: false, expiration: new Date(rexp * 1000).toISOString().slice(0, 19) }]]);
           evidence.placed.push({ id, side: "bid", sell: `${spend.toFixed(3)} SBD`, receive: `${recv.toFixed(3)} STEEM`, price: px, txid: r.txid, block: r.block });
         } catch (e) { evidence.placed.push({ id, side: "bid", error: String(e.message ?? e).slice(0, 80) }); }
@@ -408,6 +413,10 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
     if (sell <= 0 || recv <= 0) continue;
     const id = nextId();
     if (dryRun) { evidence.placed.push({ id, side: "ask", sell: `${sell.toFixed(3)} STEEM`, receive: `${recv.toFixed(3)} SBD`, price: px, dryRun: true }); continue; }
+    {
+      const pol = policyGate({ tool: "mover", lane: "grid", kind: "limit_order_create", account: ACCOUNT, amount: Number(sell), price: px, notionalSbd: Number(recv), orderid: id, meta: { side: "ask", phase: "plan" } });
+      if (!pol.allow) { evidence.placed.push({ id, level: a.level, side: "ask", blocked: `POLICY-HALT: ${pol.reasons.join("; ")}` }); continue; }
+    }
     try {
       const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${sell.toFixed(3)} STEEM`, min_to_receive: `${recv.toFixed(3)} SBD`, fill_or_kill: false, expiration: new Date(expiry * 1000).toISOString().slice(0, 19) }]]);
       evidence.placed.push({ id, side: "ask", sell: `${sell.toFixed(3)} STEEM`, receive: `${recv.toFixed(3)} SBD`, price: px, txid: r.txid, block: r.block });
@@ -428,6 +437,10 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
     if (spend <= 0 || recv <= 0) continue;
     const id = nextId();
     if (dryRun) { evidence.placed.push({ id, side: "bid", sell: `${spend.toFixed(3)} SBD`, receive: `${recv.toFixed(3)} STEEM`, price: px, dryRun: true }); continue; }
+    {
+      const pol = policyGate({ tool: "mover", lane: "grid", kind: "limit_order_create", account: ACCOUNT, amount: Number(spend), price: px, notionalSbd: Number(spend), orderid: id, meta: { side: "bid", phase: "plan" } });
+      if (!pol.allow) { evidence.placed.push({ id, level: b.level, side: "bid", blocked: `POLICY-HALT: ${pol.reasons.join("; ")}` }); continue; }
+    }
     try {
       const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${spend.toFixed(3)} SBD`, min_to_receive: `${recv.toFixed(3)} STEEM`, fill_or_kill: false, expiration: new Date(expiry * 1000).toISOString().slice(0, 19) }]]);
       evidence.placed.push({ id, side: "bid", sell: `${spend.toFixed(3)} SBD`, receive: `${recv.toFixed(3)} STEEM`, price: px, txid: r.txid, block: r.block });

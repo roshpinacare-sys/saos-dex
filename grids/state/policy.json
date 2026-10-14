@@ -1,0 +1,45 @@
+{
+  "protocol": "SAOS-POLICY-ENGINE/1",
+  "since": "2026-10-14T00:30:00Z",
+  "authority": "owner directive 2026-10-14 IM trace 1a137c5876e963e9 (agentic-wallet PolicyEngine pattern: spending limits + rate limits + program allowlists + owner gate) · DECISIONS #17 saos-dex",
+  "mode": "enforce",
+  "rateMode": "observe",
+  "lanes": {
+    "grid": {
+      "kinds": ["grid_cycle_refresh", "limit_order_create", "limit_order_cancel"],
+      "maxNotionalPerOpSbd": 25,
+      "maxCycleNotionalSbd": 120,
+      "maxOpsPerCycle": 96,
+      "maxOpsPerHour": 400
+    },
+    "general": {
+      "kinds": ["convert", "agent_swap", "transfer"],
+      "maxNotionalPerOpSbd": 25,
+      "maxCycleNotionalSbd": 120,
+      "maxOpsPerCycle": 24,
+      "maxOpsPerHour": 48
+    },
+    "delegations": {
+      "kinds": ["delegate_vesting_shares"],
+      "maxNotionalPerOpSbd": 1000000,
+      "maxCycleNotionalSbd": 1000000,
+      "maxOpsPerCycle": 24,
+      "maxOpsPerHour": 48,
+      "note": "vesting shares are not SBD-notional — the huge cap = notional check skipped by design; ops caps still bind"
+    },
+    "claims": {
+      "kinds": ["claim_rewards"],
+      "maxNotionalPerOpSbd": 1000000,
+      "maxCycleNotionalSbd": 1000000,
+      "maxOpsPerCycle": 96,
+      "maxOpsPerHour": 96,
+      "note": "claims harvest, no capital outflow — ops caps bind only"
+    }
+  },
+  "ownerGate": {
+    "notionalSbd": 100,
+    "armFile": "policy-arm.json",
+    "note": "per-op notional above threshold requires grids/state/policy-arm.json {protocol:'SAOS-POLICY-ARM/1', armed:true} — the keyless multisig-equivalent: the owner's signature is a file in the repo, auditable in git history"
+  },
+  "measuredBasis": "grid-params sealed 2026-10-11 (inventory 130.656 STEEM / 0.528 SBD, commitPct 0.85, 3x3 levels): per-op ~4 SBD, cycle ~12 SBD, ~12 ops/cycle. Caps = 6-10x headroom over the sealed measurement. rateMode=observe until measured policy-ledger receipts justify the enforce flip (owner-gated, one field)."
+}
