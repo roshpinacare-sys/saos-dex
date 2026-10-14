@@ -27,7 +27,7 @@ import type { DexState } from "./kernel";
 import {
   RESERVE_VAULT, RESERVE_STREAK, RESERVE_SWEEP_PCT, RESERVE_SWEEP_CAP,
   RESERVE_MIN_SWEEP, RESERVE_REAL_PCT, RESERVE_REAL_CAP, RESERVE_REAL_DEPTH_BPS,
-  RESERVE_PHASES, ROUTER_USDS_FLOOR, REV_FLOOR,
+  RESERVE_PHASES, ROUTER_USDS_FLOOR, REV_FLOOR, avail, chargeFree,
   reserveMeasure, pushReserveEvent,
 } from "./kernel";
 import { getPool } from "./amm";
@@ -74,22 +74,24 @@ export function ladderTick(st: DexState, h: number, nowMs: number): void {
   // (2) סחיבה: עודף-אוצר-מעל-כל-הרצפות (גם-רצפת-הראוטר וגם-רצפת-הרווח) → כספת-העתודה.
   //     אפס-נגיעה ב-treasuryProfit/feeMeter (משטר-העמלות של settle (d) נשאר-שלם):
   //     הסחיבה היא העברת-יתרה-אמת בין-חשבונות — הראוטר ימצא-פחות-יתרה וידלג-בכנות.
-  const tBal = st.balances["treasury"] ?? (st.balances["treasury"] = {});
-  const treasuryUsds = tBal.USDS ?? 0;
+  //     T37-c: העודף-נמדד מול-**avail** (יתרה−נעילות) והחיוב-דרך-chargeFree —
+  //     הנעילות בכירות; סחיבה-שהייתה-חודרת-לשטח-נעול = honest-skip (נמדד-חי h151812).
+  const treasuryAvail = avail(st, "treasury", "USDS");
   const surplus = Math.min(
-    Math.max(0, treasuryUsds - ROUTER_USDS_FLOOR),
+    Math.max(0, treasuryAvail - ROUTER_USDS_FLOOR),
     Math.max(0, st.treasuryProfit - REV_FLOOR),
   );
   const sweep = Math.min(Math.floor((surplus * RESERVE_SWEEP_PCT) / 100), RESERVE_SWEEP_CAP);
   let sweptThis = 0;
-  if (sweep >= RESERVE_MIN_SWEEP) {
-    tBal.USDS = treasuryUsds - sweep;
+  if (sweep >= RESERVE_MIN_SWEEP && chargeFree(st, "treasury", "USDS", sweep)) {
     const rvBal = st.balances[RESERVE_VAULT] ?? (st.balances[RESERVE_VAULT] = {});
     rvBal.USDS = (rvBal.USDS ?? 0) + sweep;
     r.sweptMu += sweep;
     sweptThis = sweep;
     pushReserveEvent(st, h, "sweep", sweep, `treasury surplus → reserve-vault (${sweep}µ, ${RESERVE_SWEEP_PCT}% of surplus above all floors)`);
     st.journal.push({ h, t: nowMs, soldier: "treasury", action: "reserve_sweep", profitMu: sweep, note: `sweep ${sweep}µ USDS → reserve-vault (backing ladder fed by real surplus)` });
+  } else if (sweep >= RESERVE_MIN_SWEEP) {
+    st.journal.push({ h, t: nowMs, soldier: "treasury", action: "reserve_sweep_skipped", profitMu: 0, note: `treasury avail below sweep ${sweep}µ — honest skip (T37-c: locks are senior)` });
   }
 
   // (3) המרה-אמת: חלק-מהסחיבה → נכסי-דלת (WTRX) דרך הבריכה-האמת — מוגבל-עומק-שוק.

@@ -18,7 +18,12 @@ const t = (name, ok) => {
   if (ok) pass++; else { fail++; process.exitCode = 1; }
 };
 
-const DEPS = ["brake.mjs", "validate-params.mjs", "key-gate.mjs", "mover.mjs", "book-law.mjs", "events.mjs"];
+const DEPS = ["brake.mjs", "validate-params.mjs", "key-gate.mjs", "mover.mjs", "book-law.mjs", "events.mjs",
+  // T37-f: מנגנון-ה-copy-של-ה-selftest היה-חסר-את-שרשרת-התלויות-שנוספה-אחר-כך —
+  // mover.mjs:40 מייבא ./policy.mjs (DECISIONS #17) שמייבא ./alpha-performance-math.mjs
+  // (R330) — העותק-בטמפ קרס ERR_MODULE_NOT_FOUND לפני-כל-וקטור (נמדד-חי).
+  // העותק-מושלם-עכשיו: אותו-קוד-בדיוק בתוך-החול.
+  "policy.mjs", "alpha-performance-math.mjs"];
 
 function sandbox() {
   const root = mkdtempSync(join(tmpdir(), "liquidity-selftest-"));
@@ -33,6 +38,11 @@ function sandbox() {
     reason: "selftest staged brake", since: "2026-10-11T00:00:00Z",
     stagedLanes: { allow: ["grid"], reason: "selftest", since: "2026-10-11T00:00:00Z" },
   }, null, 2));
+  // T37-f: המדיניות-החיה מלווה-את-החול — policyGate (שנקרא-בנתיב-החתימה של
+  // mover.mjs) הוא-fail-closed: בלי-policy.json בחול כל-החתימות HALT והוקטורים
+  // של-ביצוע-אמת נכשלים. אותו-קובץ-מדיניות-בדיוק (החוק-האמיתי, לא-חיקוי) —
+  // האינטנטים-של-ה-selftest (grid/limit_order_create · ~2.8 SBD ל-op) מתחת-לכל-התקרות.
+  writeFileSync(join(root, "grids", "state", "policy.json"), read(join(REPO, "grids", "state", "policy.json")));
   return root;
 }
 const read = (p) => { if (!existsSync(p)) throw new Error(`missing selftest dep: ${p}`); return readFileSync(p, "utf8"); };
