@@ -145,9 +145,46 @@ export const FUEL_ASK_MIN = 2_000; // FIX(roast-81): סף-בקשה-מועילה 
 // הרזרבה-האמתיים (bot-a 924k · bot-b 420k · bot-c 309k — 1.65M מג'נזיס שלא-נשרף)
 // בזמן-שהסולם-הישן (אוצר 8µ · ארנה 25.9k · מפעיל 2k) היה-מת-מבנית. העברה-טהורה
 // בלבד (אפס-הטבעה) — Σcredits נשמר, רק-הלוגיסטיקה חיה. הסדר-בפועל נקבע-ב-funderFor.
-export const FUEL_FUNDERS = ["treasury", "arena", "bot-a", "bot-b", "bot-c", "operator", "wash"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor") + הבוטים (מחזיקי-רזרבה) + המפעיל-האנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון, SETTLE-5) + השטיפה (SETTLE-19-c · רזרבת-הדלק-העומדת — ממומנת-מראש; המושך-ממנה-מחויב-ברצפת-ה-1M שלה בקריאה — העברה-טהורה, Σ נשמר)
+export const FUEL_FUNDERS = ["treasury", "arena", "bot-a", "bot-b", "bot-c", "operator", "wash", "sweeper", "rail", "bot-e"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor") + הבוטים (מחזיקי-רזרבה) + המפעיל-האנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון, SETTLE-5) + השטיפה (SETTLE-19-c · רזרבת-הדלק-העומדת — ממומנת-מראש; המושך-ממנה-מחויב-ברצפת-ה-1M שלה בקריאה — העברה-טהורה, Σ נשמר) + T37-d: הסורק/המסילה/בוט-התרגיל (רזרבות-עומדות — זורמות-רק-דרך-reserveFunderAfford: על-צד-האסק-המת בלבד, רצפות-מסלול-שלמות)
 export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter≥8000 להרמה — המטבע לא ירעיב-אותו
 export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
+
+/* ── T37-d · סרוו-עומק-הספר (book-depth servo) ──────────────────────────────
+ * נמדד-חי (h155706 · 2026-10-14): הספר-הריבוני USDS/WSTEEM מת-צד-אחד שוב
+ * (bestAsk=0 · asks=[] בעוד bids חיים) — והפעם השורש-אינו-מלאי: הצי מחזיק
+ * 1.03M WSTEEM (מעל-יעד-החימוש 640K — הסרוו-הישן-ישן על shortfall=0) והארנה
+ * 461K (מעל-רצפת-ה-300K). מה שמת הוא **הגז**: soldiers 5/5/5/10µ · אוצר 14µ
+ * מול-גז-פקודה 60µ — ה-asks נאכלים-במילויים (fill צורך את המייקר-הישן) וההצבה-
+ * מחדש דורשת-גז-שאיננו; ה-bids שורדים כי-הם-עדיין-בטווח-הריקוט. המוות-המנעול:
+ * הכנסה (מטר-על-רצפת-8000 · profit 439µ) → אין-מזרקה → אין-סולם → אין-אסקים →
+ * אין-מילויים → אין-הכנסה. בזמן-הזה רזרבות-עומדות-חוקיות: sweeper 37,200µ ·
+ * rail 11,000µ · bot-e 9,860µ — מחוץ-ל-FUNDER_ORDER-הישן ולכן-מתות-בזמן-שהספר-מת.
+ * החוק: הרזרבות-העומדות הן **אמבולנס-הספר** — זורמות למציבי-הספר רק-כשצד-האסק
+ * של-השוק-הריבוני מת (בדיקת-עומק-אמת על-המצב, לא על טענה), ברצפות-מסלול
+ * שלמות (הסורק/המסילה/בוט-התרגיל שומרים-על-צף-העבודה-שלהם), ונחות-ברגע-שהספר
+ * חוזר-לחיות — הכלכלה-הרגילה (מילויים→מטר→מזרקה→סולם) מקבלת-בחזרה. העברה-
+ * טהורה בלבד (אפס-הטבעה, Σcredits נשמר) — אותו-משפט-refuel-קיים, רק-הסדר-הזרימה
+ * נעשה-חי-לפי-עומק-הספר. */
+export const RESERVE_FUNDERS: readonly FuelFunder[] = ["sweeper", "rail", "bot-e"];
+export const RESERVE_FUNDERS_FLOOR: Record<string, number> = {
+  sweeper: 10_000, // צף-עבודה לסריקות-הזיכויים
+  rail: 8_000,     // צף-עבודה למסילת-הרצפה
+  "bot-e": 5_000,  // צף-עבודה לבוט-התרגיל
+};
+/** בדיקת-עומק-אמת: צד-האסק של השוק-הריבוני (USDS/WSTEEM — שוק-A43) חי אם קיימת
+ * פקודת-מכירה-חיה אחת לפחות. מדידה-על-המצב-הקנוני — לא על mirror ולא על טענה. */
+export function bookAskAlive(st: DexState): boolean {
+  return st.orders.some((o) => o.live && o.side === "sell" && o.base === "WSTEEM" && o.quote === "USDS");
+}
+/** יכולת-מימון-של-רזרבה-עומדת: אפס כשהספר-חי (הרזרבה-אינה-סובסידיה-קבועה),
+ * מעל-רצפת-המסלול בלבד כשצד-האסק-מת. הגרעין נשאר-האוכף (refuel: FUEL_FUNDERS +
+ * REFUEL_CAP); הרצפות-כאן-הן-המדיניות-הקרנלית של-האמבולנס. */
+export function reserveFunderAfford(st: DexState, who: FuelFunder): number {
+  if (!(RESERVE_FUNDERS as readonly string[]).includes(who)) return 0;
+  if (bookAskAlive(st)) return 0;
+  const floor = RESERVE_FUNDERS_FLOOR[who] ?? 0;
+  return Math.max(0, (st.credits[who] ?? 0) - floor);
+}
 
 // ── T25 · THE-DEPTH-FORGE: תקרות-התוכנית (µ). תקרה-קשיחה-במצב — כל-חריגה נדחית
 // בדלת-ה-op. התוכנית מזוהה-בשם; שינוי-תקרות = תוכנית-חדשה-חדשת-שם (רצף-ביקורתי).
@@ -590,6 +627,26 @@ export function addBal(st: DexState, who: string, a: string, d: number): void {
   if (FORBIDDEN_KEYS.has(who) || FORBIDDEN_KEYS.has(a)) throw new Error("forbidden-state-key");
   const b = (st.balances[who] = st.balances[who] ?? {});
   b[a] = (b[a] ?? 0) + d;
+}
+
+/** T37-c · משמעת-חיוב-קרנלית: החיוב-הדיסקרטי מכבד את רצפת-הנעילות.
+ * נמדד-חי (h151812 · T36): האוצר נכנס ל-HALT עם avail=−3049 — פקודה #688838
+ * נעלה 1,003,213µ בכנות-בשעתה, ואז החיובים-הדיסקרטיים (trg-161 + burn/ve_fund
+ * של-הראוטר) חתכו את היתרה מתחת לשטח-הנעול → נעילת-פנטום → HALT-בכנות.
+ * השורש: שכבת-ה-ops ממושמעת (transfer/pay/wrap/repeg בודקות avail) אבל
+ * מחזורי-התחזוקה מחוץ-לשכבת-ה-ops (economy.ts router burn/ve_fund/reserve-slice,
+ * ladder.ts reserve-sweep) מחייבים במוטציות-גולמיות שנבדקות-מול-היתרה-הגולמית
+ * ופולשות לשטח-נעול. החוק: חיוב-דיסקרטי (שאינו סליקה-של-נעילה-עצמית) עובר
+ * דרך-chargeFree בלבד — avail הוא הגבול-האמת; מחזיר false בכנות (honest-skip,
+ * אפס-נגיעה-במצב) כשהחיוב היה-חודר לשטח-נעול. הסליקה-החוקית-של-כסף-נעול
+ * (fill/cow/settle — מוציאה את הנעילה-עצמה ומשחררת-אותה-באותו-op) אינה נוגעת:
+ * addBal נשאר השער-הגולמי לנתיבי-ההתיישבות. */
+export function chargeFree(st: DexState, who: string, a: string, amt: number): boolean {
+  if (!Number.isSafeInteger(amt) || amt <= 0) return false;
+  if (FORBIDDEN_KEYS.has(who) || FORBIDDEN_KEYS.has(a)) throw new Error("forbidden-state-key");
+  if (avail(st, who, a) < amt) return false;
+  addBal(st, who, a, -amt);
+  return true;
 }
 export function addLock(st: DexState, who: string, a: string, d: number): void {
   // FIX(Roast-65-a · HIGH-1): addLock היה-השער-היחיד-בלי-בדיקת-שלם (addBal כבר-היה-גדור) —

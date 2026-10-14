@@ -270,6 +270,51 @@ async function pushWithRetry(dir: string, branch: string, tries = 3): Promise<bo
   return false;
 }
 
+/* ── T37-e · קבלת-כשל-פורנזית (forensics-on-failure) ────────────────────────
+ * נמדד-חי (T36 · ה-HALT של-h151812): הריצה-הכושלת לא דחפה דבר ל-git — ה-op
+ * המדויק-שחתך את היתרה היה בלתי-ניתן-לשחזור (הפורנזיקה נאלצה לנחש מהיומן).
+ * השורש: דחיפת-הקבלות חיה-רק בסוף-ריצה-מוצלחת; HALT-אתחול/FATAL מתים בלי
+ * לדחוף — בדיוק-הריצות-הכושלות הן-הראיות-היקרות.
+ * החוק: כל-נתיב-כשל דוחף קבלת-כשל (best-effort — לעולם לא מסתיר את קוד-היציאה
+ * האמיתי): גובה · סיבת-ההעצה · זנב-היומן (סוגי-ה-op האמיתיים!) · הדחיות-האחרונות
+ * · מפת-הקרדיטים · stateRoot. היומן-כבר-חי-במצב — זה רק מנוע-הדחיפה-שלו.
+ */
+async function pushFailureReceipt(reason: string, snap?: { halted?: boolean; haltReason?: string | null; st?: unknown }): Promise<void> {
+  try {
+    const st = (snap?.st ?? {}) as {
+      height?: number; journal?: { h: number; t: number; soldier: string; action: string; note: string }[];
+      credits?: Record<string, number>; stateRoot?: string; treasuryProfit?: number; feeMeter?: number;
+      stats?: { rejectedLast?: unknown };
+    };
+    const receipt = {
+      ok: false,
+      reason,
+      halted: snap?.halted ?? null,
+      haltReason: snap?.haltReason ?? null,
+      height: st.height ?? null,
+      stateRoot: st.stateRoot ?? null,
+      treasuryProfit: st.treasuryProfit ?? null,
+      feeMeter: st.feeMeter ?? null,
+      credits: st.credits ?? null,
+      rejectedLast: st.stats?.rejectedLast ?? null,
+      journalTail: (st.journal ?? []).slice(-40),
+      at: new Date().toISOString(),
+    };
+    fs.writeFileSync(path.join(ROOT, "db", "failure-receipt.json"), JSON.stringify(receipt, null, 1));
+    execSync('git config user.name "dex-beat[bot]"', { encoding: "utf8", cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    execSync('git config user.email "dex-beat[bot]@agents.roshpinacare-sys"', { encoding: "utf8", cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    execSync("git add db/failure-receipt.json", { encoding: "utf8", cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const staged = execSync("git diff --cached --name-only", { encoding: "utf8", cwd: ROOT }).trim();
+    if (staged) {
+      execSync(`git commit -m "failure-receipt: ${reason.slice(0, 80).replace(/[,\"\`]/g, " ")} · h${st.height ?? "?"}"`, { encoding: "utf8", cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+      const ok = await pushWithRetry(ROOT, "main");
+      console.log(`[cloud-beat] failure receipt ${ok ? "pushed" : "PUSH FAILED (local only — next run overwrites)"}`);
+    }
+  } catch (e) {
+    console.warn(`[cloud-beat] failure-receipt push skipped: ${String(e).slice(0, 80)}`);
+  }
+}
+
 /* ── [T25] כבשן-הנזילות — פונקציה-מיוצאת (נבדקת-מקומית, רצה-בפעימה) ──
  * המכשיר שהופך דמה לנזילות-עובדת (אישור-הבעלים trace 1a13585a…): הנפקה-מוצהרת
  * (forge_issue · תקרות-קשיחות-במצב) → עומק-בריכות (pool_add) → צף-שטיפה (wash).
@@ -391,6 +436,8 @@ async function main(): Promise<void> {
   };
   await waitLoad();
   if (rt.halted) {
+    // T37-e: גם-HALT-אתחול דוחף קבלת-כשל (הראיה-היקרה) — ואז יוצא כנה.
+    await pushFailureReceipt(`boot-halt: ${rt.haltReason ?? "?"}`, { halted: rt.halted, haltReason: rt.haltReason, st: (rt as unknown as { st?: unknown }).st });
     console.error(`[cloud-beat] chain HALTED — refusing to advance. reason: ${rt.haltReason ?? "?"}`);
     process.exit(1);
   }
@@ -897,7 +944,10 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-if (import.meta.main) main().catch((e) => {
-  console.error("[cloud-beat] FATAL:", e instanceof Error ? e.message : e);
+if (import.meta.main) main().catch(async (e) => {
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error("[cloud-beat] FATAL:", msg);
+  // T37-e: FATAL דוחף קבלת-כשל לפני-היציאה — הפורנזיקה של-הריצה-הכושלת חיה-ב-git.
+  await pushFailureReceipt(`fatal: ${msg.slice(0, 120)}`).catch(() => {});
   process.exit(1);
 });

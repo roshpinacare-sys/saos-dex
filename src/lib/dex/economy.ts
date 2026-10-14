@@ -20,7 +20,7 @@
  * הטריגרים הם גובה-בלוקים טהורים → ריפליי דטרמיניסטי, השורש נשאר אמת.
  */
 import type { DexState } from "./kernel";
-import { MINT_FUEL_CAP } from "./kernel"; // EXEC-CD-9 · אותו-גבול-נזק למחזור-פר-טיק
+import { MINT_FUEL_CAP, chargeFree, avail } from "./kernel"; // EXEC-CD-9 · אותו-גבול-נזק למחזור-פר-טיק · T37-c: החיוב-הדיסקרטי-מכבד-נעילות
 import { getPool } from "./amm";
 import { aleTick } from "./ale";
 import { launchpadTick } from "./launchpad";
@@ -126,7 +126,10 @@ function revenueCycle(st: DexState, h: number, nowMs: number): void {
     }
   }
   const aux = Math.max(0, (st.revAux?.protorevMu ?? 0) + (st.revAux?.launchpadMu ?? 0));
-  const treasuryUsds = st.balances["treasury"]?.["USDS"] ?? 0;
+  // T37-c · משמעדת-חיוב: התקציב-הריבוני-של-הראוטר נגזר מ-**avail** (יתרה−נעילות)
+  // ולא מהיתרה-הגולמית — הנעילות בכירות; הראוטר שורף רק עודף-אמת.
+  // נמדד-חי (h151812): היתרה-הגולמית הסתירה-נעילת-פנטום → HALT.
+  const treasuryUsds = avail(st, "treasury", "USDS");
   const usableProfit = Math.max(0, st.treasuryProfit - REV_FLOOR);
   const usableBalance = Math.max(0, treasuryUsds - ROUTER_USDS_FLOOR);
   const take = Math.min(usableProfit + aux, usableBalance);
@@ -143,30 +146,30 @@ function revenueCycle(st: DexState, h: number, nowMs: number): void {
     // אותם מיתרת האוצר — USDS-פנטום הוזרם לרזרבות בכל מחזור (Σbalances+Σpools גדל
     // יש-מאין; ענף ה-ve ניכה כחוק, ענף ה-burn לא). התיקון fail-closed: מנכים מהאוצר
     // רק כשיש לו באמת, אחרת skip-כנה מתועד ביומן (בלי לבטל את ענף ה-ve).
-    const tBalB = st.balances["treasury"] ?? (st.balances["treasury"] = {});
-    if ((tBalB.USDS ?? 0) >= burnUsds) {
-      const out = swapReserves(pool.rb, pool.ra, burnUsds); // USDS→SAOS מתמטיקת-בריכה
-      if (out > 0) {
-        tBalB.USDS = (tBalB.USDS ?? 0) - burnUsds; // הכסף האמיתי יוצא מהאוצר — שימור-כספים
-        pool.rb += burnUsds;
-        pool.ra -= out;
-        pool.swaps++;
-        // השמדה-אמת: ה-SAOS שנקנה לא מגיע-לאף-ארנק — ΣSAOS במצב יורד
-        st.burnedSaos = (st.burnedSaos ?? 0) + out;
-        st.journal.push({ h, t: nowMs, soldier: "router", action: "burn", profitMu: out, note: `burn ${out}µ SAOS (${burnUsds}µ USDS from fees)` });
-      }
+    // T37-c: ציטוט-מוקדם ואז-חיוב-דרך-chargeFree — avail (יתרה−נעילות) הוא הגבול-
+    // האמת; פולשות-לשטח-נעול או-אפס-תפוקה = honest-skip (אפס-נגיעה-במצב, אטומי).
+    const out = swapReserves(pool.rb, pool.ra, burnUsds); // USDS→SAOS מתמטיקת-בריכה
+    if (out > 0 && chargeFree(st, "treasury", "USDS", burnUsds)) {
+      pool.rb += burnUsds;
+      pool.ra -= out;
+      pool.swaps++;
+      // השמדה-אמת: ה-SAOS שנקנה לא מגיע-לאף-ארנק — ΣSAOS במצב יורד
+      st.burnedSaos = (st.burnedSaos ?? 0) + out;
+      st.journal.push({ h, t: nowMs, soldier: "router", action: "burn", profitMu: out, note: `burn ${out}µ SAOS (${burnUsds}µ USDS from fees)` });
     } else {
-      st.journal.push({ h, t: nowMs, soldier: "router", action: "burn_skipped", profitMu: 0, note: `treasury USDS below burn ${burnUsds}µ — honest skip (fail-closed, audit fix)` });
+      const why = out > 0 ? `treasury avail below burn ${burnUsds}µ (T37-c: locks are senior)` : `pool swap returned 0 at cost ${burnUsds}µ`;
+      st.journal.push({ h, t: nowMs, soldier: "router", action: "burn_skipped", profitMu: 0, note: `${why} — honest skip` });
     }
   }
   if (veUsds > 0) {
-    const tBal = st.balances["treasury"] ?? (st.balances["treasury"] = {});
-    if ((tBal.USDS ?? 0) >= veUsds) {
-      tBal.USDS = (tBal.USDS ?? 0) - veUsds;
+    // T37-c: החיוב-דרך-chargeFree — פולשות-לשטח-נעול = honest-skip מגולל.
+    if (chargeFree(st, "treasury", "USDS", veUsds)) {
       const pot = st.balances[VE_POT] ?? (st.balances[VE_POT] = {});
       pot.USDS = (pot.USDS ?? 0) + veUsds;
       vePaidThis = veUsds;
       st.journal.push({ h, t: nowMs, soldier: "router", action: "ve_fund", profitMu: veUsds, note: `ve pot +${veUsds}µ USDS` });
+    } else {
+      st.journal.push({ h, t: nowMs, soldier: "router", action: "ve_fund_skipped", profitMu: 0, note: `treasury avail below ve ${veUsds}µ — honest skip (T37-c: locks are senior)` });
     }
   }
   // צריכת-המדידה: revAux-ראשון (protorev → launchpad, סדר-קנוני), ואז-רווח-העמלות
@@ -222,14 +225,15 @@ function revenueCycle(st: DexState, h: number, nowMs: number): void {
   {
     const reserveSlice = Math.floor((take * RESERVE_ROUTER_PCT) / 100);
     if (reserveSlice > 0) {
-      const tBal = st.balances["treasury"] ?? (st.balances["treasury"] = {});
-      if ((tBal.USDS ?? 0) >= reserveSlice) {
-        tBal.USDS = (tBal.USDS ?? 0) - reserveSlice;
+      // T37-c: החיוב-דרך-chargeFree — אותו-משפט-כנות.
+      if (chargeFree(st, "treasury", "USDS", reserveSlice)) {
         const rvBal = st.balances[RESERVE_VAULT] ?? (st.balances[RESERVE_VAULT] = {});
         rvBal.USDS = (rvBal.USDS ?? 0) + reserveSlice;
         st.reserve = st.reserve ?? { phase: 0, sinceH: h, streak: 0, streakTarget: 0, lastH: 0, sweptMu: 0, routerSlicedMu: 0, realSwappedMu: 0, migrated: true, redeemWindowH: 0, redeemWindowMu: 0, redeemMu: 0, events: [] };
         st.reserve.routerSlicedMu += reserveSlice;
         pushReserveEvent(st, h, "router_slice", reserveSlice, `${reserveSlice}µ from router cycle → reserve-vault (${RESERVE_ROUTER_PCT}% — maintenance feeds the backing ladder)`);
+      } else {
+        st.journal.push({ h, t: nowMs, soldier: "router", action: "router_slice_skipped", profitMu: 0, note: `treasury avail below slice ${reserveSlice}µ — honest skip (T37-c: locks are senior)` });
       }
     }
   }

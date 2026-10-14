@@ -12,7 +12,7 @@
  * (שורד-תמונות-מצב; רשויות-ישנות = undefined → 0-כנה).
  */
 import type { DexState, Op, Asset } from "./kernel";
-import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDER, funderAfford, poolKey, avail, notional, maxNonceSuffix, nonceExists } from "./kernel";
+import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDER, funderAfford, RESERVE_FUNDERS, reserveFunderAfford, poolKey, avail, notional, maxNonceSuffix, nonceExists } from "./kernel";
 import { sortBook } from "./book";
 import { poolMid, poolMidFor, getPool, quoteOut } from "./amm";
 import { railTick, RAIL_OWNED_POOLS, RAIL_DUST_MU } from "./rail";
@@ -480,6 +480,19 @@ export function arenaTick(
           if (f === ag) continue;
           const afford = funderAfford(st, f) - (fuelBudget.get(f) ?? 0);
           if (afford >= Math.min(need, FUEL_ASK_MIN)) { funder = f; amt = Math.min(need, afford, REFUEL_FAIRNESS_CAP); break; }
+        }
+        // T37-d · סרוו-עומק-הספר: כשהסולם-הראשי-מת (נמדד-חי h155706: אוצר 14µ ·
+        // operator 1,860 < FUEL_ASK_MIN · מטר-על-רצפת · profit 439µ — המוות-המנעול
+        // אין-אסקים→אין-מילויים→אין-הכנסה) — הרזרבות-העומדות (sweeper/rail/bot-e)
+        // נכנסות כ-**אמבולנס-הספר**: זורמות רק-כשצד-האסק-של-השוק-הריבוני-מת
+        // (bookAskAlive — מדידת-מצב-אמת), ברצפות-מסלול-שלמות (reserveFunderAfford),
+        // ונחות-ברגע-שהספר-חוזר-לחיות. העברה-טהורה (אפס-הטבעה) — אותו-משפט-refuel.
+        if (!funder) {
+          for (const f of RESERVE_FUNDERS) {
+            if (f === ag) continue;
+            const afford = reserveFunderAfford(st, f) - (fuelBudget.get(f) ?? 0);
+            if (afford >= Math.min(need, FUEL_ASK_MIN)) { funder = f; amt = Math.min(need, afford, REFUEL_FAIRNESS_CAP); break; }
+          }
         }
         if (!funder || amt <= 0) continue;
         fuelBudget.set(funder, (fuelBudget.get(funder) ?? 0) + amt);
