@@ -1,7 +1,7 @@
 {
  "protocol": "SAOS-POLICY-GEARS/1",
- "at": "2026-10-14T13:45:03.718Z",
- "authority": "DECISIONS #14 ECONOMIC-INVERSION (owner trace 1a13a61125233131: paved road, high speed, no worries) + DECISIONS #12 velocity law",
+ "at": "2026-10-14T14:40:00Z",
+ "authority": "DECISIONS #14 ECONOMIC-INVERSION (owner trace 1a13a61125233131: paved road, high speed, no worries) + DECISIONS #12 velocity law + DECISIONS #18 KELLY-CAP (owner trace 1a13acb997251019: pure mathematical efficiency on the paved road)",
  "law": [
   "the gearbox is BOOK-LAW-DRIVEN: gears change only from accumulated ladder receipts — never from deposits, never from an arm file, never from a prompt",
   "the table lives in git (this file); the CODE only reads the table — it invents no caps",
@@ -9,7 +9,9 @@
   "upshift is SLOW (green streak of measured receipts), downshift is INSTANT (any ACTS-FAILED/POLICY-HALTED verdict resets streak and gear to 1)",
   "neutral verdicts (AT-TARGET / STASIS sleeps) neither grow nor reset the streak",
   "scope honesty: the gears re-price the policy.json lane caps (per-op / cycle notional) — the army estate capital cap (estateCapSteem) is a different axis (capital exposure) and stays at its canary law until its own measured ladder is earned",
-  "ownerGate is untouched: any per-op notional above the gate still requires the arm file — the top gear tops out AT the gate, never past it"
+  "ownerGate is untouched: any per-op notional above the gate still requires the arm file — the top gear tops out AT the gate, never past it",
+  "R330 KELLY-CAP: gears earn speed from RELIABILITY (green streaks); the kelly filter prices speed from MEASURED EXPECTANCY (realized SBD deltas per trader, read from the git receipts) — effective cap = min(gear row, kelly); kelly can only TIGHTEN the table row, never loosen, never exceed it",
+  "kelly fail-safes: < minBeats informative fills = hard probation (half cap, owner law); unreadable metrics = floor 25; broken/disabled kelly block = inert (table caps stand, road never stalls); idle beats (no fill) carry no edge information and stay out of the sample; maker-only law means a negative-edge shadow costs exposure, not burned money — the maker stays alive to measure recovery"
  ],
  "gears": [
   {
@@ -49,6 +51,21 @@
    }
   }
  ],
+ "kelly": {
+  "enabled": true,
+  "receipts": [
+   "treasury-receipts.jsonl",
+   "army-receipts.jsonl"
+  ],
+  "minBeats": 10,
+  "probationFactor": 0.5,
+  "halfKelly": 0.5,
+  "maxFraction": 0.25,
+  "minFraction": 0.01,
+  "scale": 4,
+  "fallbackCapSbd": 25,
+  "epsSbd": 1e-06
+ },
  "state": {
   "gear": 1,
   "greenStreak": 1,
