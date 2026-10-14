@@ -343,6 +343,51 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
     console.error(`[saos-dex][ALERT] ESCROW MISMATCH BEYOND DUST ON LOAD (preserved, not silently rewritten — Roast-65-a HIGH-4): ${preserved.join(" · ")}`);
     pushReceipt(rt, "escrow-preserved", { preserved, at: Date.now() });
   }
+  // ── FIX(T36 · escrow-phantom-trim): חותך-ערבות-פנטום-בטעינה ──
+  // נמדד-חי (run 38579784203 · h151812 · trace 1a13ab785610d611): פקודה-חיה-אחת
+  // של-האוצר נועלה 1,003,213µ מול-יתרה 1,000,164µ (avail=−3049) — ההצבה-הייתה
+  // חוקית-בשעתה (השומר-מודד-מול-ה-avail-האמיתי) ויתרת-הארנק נחתכה-אחרי-ההצבה
+  // (חיוב-שלא-מכבד-נעילות-קודמות; משמעת-החיוב-הקרנלית=T37-בתור). הביקורת-בחותם
+  // עוצרת-בכנות (HALT) — אך-המצב-המפורסם-נושא-את-הפנטום, וכל-טעינה-הייתה-חותמת
+  // שוב-על-לדגר-שבור. החוק: אם-avail<0 ולבעלים-יש-פקודות-חיות-משלו — הנעילה
+  // פנטום שמאחוריו-לא-היה-כסף-מעולם: פקודות-הבעלים-עצמו מבוטלות-דטרמיניסטית
+  // (הנעילה-הגדולה-ראשונה; שובר-שוויון: seq-עולה) עד-ש-avail≥0. אפס-המצאת-
+  // כסף — הפקודה-מבוטלת ולא-היתרה-מנופחת. אם-גם-אחרי-מיצוי-פקודות-הבעלים
+  // עדיין-שלילי — לא-נוגעים (נעילות-תוכניות-DCA/טריגר/CoW) — הביקורת-תיתן-את-
+  // פסק-הדין. אידמפוטנטי: טעינה-שנייה על-מצב-נקי היא-no-op.
+  {
+    const trims: string[] = [];
+    const liveByOwner = new Map<string, typeof rt.st.orders>();
+    for (const o of rt.st.orders) {
+      if (!o.live) continue;
+      let bucket = liveByOwner.get(o.owner);
+      if (!bucket) { bucket = []; liveByOwner.set(o.owner, bucket); }
+      bucket.push(o);
+    }
+    for (const [who, wallet] of Object.entries(rt.st.balances)) {
+      for (const [a, v] of Object.entries(wallet)) {
+        let deficit = v - (rt.st.locked[who]?.[a] ?? 0);
+        if (deficit >= 0) continue;
+        const own = (liveByOwner.get(who) ?? [])
+          .filter((o) => (o.side === "sell" ? o.base : o.quote) === a)
+          .sort((x, y) => (y.lockMu ?? 0) - (x.lockMu ?? 0) || x.seq - y.seq);
+        for (const o of own) {
+          if (deficit >= 0) break;
+          const released = typeof o.lockMu === "number" && o.lockMu > 0 ? o.lockMu : 0;
+          o.live = false;
+          o.lockMu = 0;
+          const lk = (rt.st.locked[who] = rt.st.locked[who] ?? {});
+          lk[a] = (lk[a] ?? 0) - released;
+          deficit += released;
+          trims.push(`${who}.${a}:order#${o.seq} voided (released ${released}µ phantom lock)`);
+        }
+      }
+    }
+    if (trims.length > 0) {
+      console.error(`[saos-dex][ALERT] ESCROW-PHANTOM TRIM ON LOAD (T36): ${trims.join(" · ")}`);
+      pushReceipt(rt, "escrow-trim", { trimmed: trims, atH: rt.st.height, at: Date.now() });
+    }
+  }
   // ── FIX(Roast-65 · drift-declaration): הצהרת-סחיפה-היסטורית — מוצהר-ולא-מוסתר ──
   // אחרי-טעינה-מאומתת (stateRoot===DB) ופיוס-הערבויות: אם ביקורת-השימור נכשלת,
   // הפערים מוצהרים-פעם-אחת בתוך-המצב-הקנוני (auditAdjustments) עם-מספרים-מדויקים
