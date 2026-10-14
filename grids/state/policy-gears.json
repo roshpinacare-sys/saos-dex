@@ -1,20 +1,68 @@
 {
-  "protocol": "SAOS-POLICY-GEARS/1",
-  "at": "2026-10-14T13:40:00Z",
-  "authority": "DECISIONS #14 ECONOMIC-INVERSION (owner trace 1a13a61125233131: paved road, high speed, no worries) + DECISIONS #12 velocity law",
-  "law": [
-    "the gearbox is BOOK-LAW-DRIVEN: gears change only from accumulated ladder receipts — never from deposits, never from an arm file, never from a prompt",
-    "the table lives in git (this file); the CODE only reads the table — it invents no caps",
-    "fail-closed: unreadable gear file, unknown protocol, or malformed state = gear 1 (the most conservative row)",
-    "upshift is SLOW (green streak of measured receipts), downshift is INSTANT (any ACTS-FAILED/POLICY-HALTED verdict resets streak and gear to 1)",
-    "neutral verdicts (AT-TARGET / STASIS sleeps) neither grow nor reset the streak",
-    "scope honesty: the gears re-price the policy.json lane caps (per-op / cycle notional) — the army estate capital cap (estateCapSteem) is a different axis (capital exposure) and stays at its canary law until its own measured ladder is earned",
-    "ownerGate is untouched: any per-op notional above the gate still requires the arm file — the top gear tops out AT the gate, never past it"
+ "protocol": "SAOS-POLICY-GEARS/1",
+ "at": "2026-10-14T13:45:03.718Z",
+ "authority": "DECISIONS #14 ECONOMIC-INVERSION (owner trace 1a13a61125233131: paved road, high speed, no worries) + DECISIONS #12 velocity law",
+ "law": [
+  "the gearbox is BOOK-LAW-DRIVEN: gears change only from accumulated ladder receipts — never from deposits, never from an arm file, never from a prompt",
+  "the table lives in git (this file); the CODE only reads the table — it invents no caps",
+  "fail-closed: unreadable gear file, unknown protocol, or malformed state = gear 1 (the most conservative row)",
+  "upshift is SLOW (green streak of measured receipts), downshift is INSTANT (any ACTS-FAILED/POLICY-HALTED verdict resets streak and gear to 1)",
+  "neutral verdicts (AT-TARGET / STASIS sleeps) neither grow nor reset the streak",
+  "scope honesty: the gears re-price the policy.json lane caps (per-op / cycle notional) — the army estate capital cap (estateCapSteem) is a different axis (capital exposure) and stays at its canary law until its own measured ladder is earned",
+  "ownerGate is untouched: any per-op notional above the gate still requires the arm file — the top gear tops out AT the gate, never past it"
+ ],
+ "gears": [
+  {
+   "gear": 1,
+   "require": {
+    "greenStreak": 0
+   },
+   "laneOverrides": {
+    "grid": {
+     "maxNotionalPerOpSbd": 25,
+     "maxCycleNotionalSbd": 120
+    }
+   }
+  },
+  {
+   "gear": 2,
+   "require": {
+    "greenStreak": 6
+   },
+   "laneOverrides": {
+    "grid": {
+     "maxNotionalPerOpSbd": 50,
+     "maxCycleNotionalSbd": 240
+    }
+   }
+  },
+  {
+   "gear": 3,
+   "require": {
+    "greenStreak": 12
+   },
+   "laneOverrides": {
+    "grid": {
+     "maxNotionalPerOpSbd": 100,
+     "maxCycleNotionalSbd": 480
+    }
+   }
+  }
+ ],
+ "state": {
+  "gear": 1,
+  "greenStreak": 1,
+  "lastVerdict": "LADDER-ACTED",
+  "lastKind": "treasury",
+  "history": [
+   {
+    "at": "2026-10-14T13:45:03.718Z",
+    "kind": "treasury",
+    "verdict": "LADDER-ACTED",
+    "gear": 1,
+    "greenStreak": 1
+   }
   ],
-  "gears": [
-    { "gear": 1, "require": { "greenStreak": 0 },  "laneOverrides": { "grid": { "maxNotionalPerOpSbd": 25,  "maxCycleNotionalSbd": 120 } } },
-    { "gear": 2, "require": { "greenStreak": 6 },  "laneOverrides": { "grid": { "maxNotionalPerOpSbd": 50,  "maxCycleNotionalSbd": 240 } } },
-    { "gear": 3, "require": { "greenStreak": 12 }, "laneOverrides": { "grid": { "maxNotionalPerOpSbd": 100, "maxCycleNotionalSbd": 480 } } }
-  ],
-  "state": { "gear": 1, "greenStreak": 0, "lastVerdict": null, "lastKind": null, "at": null, "history": [] }
+  "at": "2026-10-14T13:45:03.718Z"
+ }
 }
