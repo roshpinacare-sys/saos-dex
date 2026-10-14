@@ -14,7 +14,7 @@
 import type { DexState, Op, Asset } from "./kernel";
 import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDER, funderAfford, poolKey, avail, notional, maxNonceSuffix, nonceExists } from "./kernel";
 import { sortBook } from "./book";
-import { poolMid, poolMidFor, getPool } from "./amm";
+import { poolMid, poolMidFor, getPool, quoteOut } from "./amm";
 import { railTick, RAIL_OWNED_POOLS, RAIL_DUST_MU } from "./rail";
 
 export const MARKETS: { base: Asset; quote: Asset }[] = [
@@ -215,6 +215,26 @@ const MICRO_SEED: { asset: Asset; perSoldier: number; perSoldierCap: number; fle
   { asset: "WSBD", perSoldier: 20_000, perSoldierCap: 40_000, fleetCap: 300_000 }, // [T25] מסילת-SBD-אמת — דל-וכנה
   { asset: "PHIVE", perSoldier: 300_000, perSoldierCap: 450_000, fleetCap: 2_000_000 }, // [T25-FORGE] ×50
 ];
+
+/* ── SETTLE-19 (גשר-מלאי-האסק · בריכה→ארנה) ── נמדד-חי (h135139 · 2026-10-14):
+ * כל-קווי-מלאי-ה-WSTEEM יבשים בבת-אחת: rearm מותש (1M/1M — גבול-אמת: הסטוק-הטבעי),
+ * העטיפה-החיצונית יבשה (STEEM-חי 124.5Kµ מתחת-לגיבוי ה-1M — אין-גירעון-חוקי-לעטיפה;
+ * SBD מגובה-מלא 18,643µ), pool_rmw אסור-אוצר-לנצח (חוק-ג'נזיס FIX-3a) — והספר ריק
+ * לגמרי (0 bids · 0 asks — A43 אדום) בזמן-שהבריכה (100% אוצר) מחזיקה 11.8M WSTEEM
+ * מאחורי-LP-נעול. החוק: האוצר קונה מהבריכה-שלו-עצמו (pool_swap — Σ נשמר, מחיר-בריכה)
+ * מנת-זריעה מתוחמת, מישר-את-הבריכה-בחזרה-לעוגן (pool_repeg — כלי-R26-הריבוני),
+ * ומנתב ארנה→חיילים דרך קו-SETTLE-17 הקיים (התקרות-הפר-חייל שלו שלמות). אפס-הטבעה
+ * · אפס-pool_rmw · תקרת-חיים-במצב (דפוס-Roast-64) · משמעת-ריקון-הבריכה (לעולם לא
+ * נוטלים מעבר-ל-guard) · כל-הדרך מגוללת-ביומן הגרעין. */
+const BRIDGE_TRANCHE_USDS = 10_000;        // מנת-חלון (16-טיק) במונחי-עלות: ~160Kµ WSTEEM במחיר-בריכה החי
+const BRIDGE_WINDOW_CAP_WSTEEM = 200_000;  // מגן-חלון: הפלט-לא-יחרוג (בריכה-זולה-במיוחד → מנה-חצויה)
+const BRIDGE_LIFETIME_WSTEEM = 2_000_000;  // תקרת-חיים: חימוש-4-חיילים + מחזורי-השלמה
+const BRIDGE_POOL_GUARD_WSTEEM = 4_000_000; // משמעת-הבריכה: צד-ה-WSTEEM לעולם לא יורד מתחת
+const bridgeUsed = (st: DexState): number => st.bridgeCounts?.wsteem ?? 0;
+const bridgeAdd = (st: DexState, mu: number): void => {
+  st.bridgeCounts ??= {};
+  st.bridgeCounts.wsteem = (st.bridgeCounts.wsteem ?? 0) + mu;
+};
 const microSeedCounts = (st: DexState, asset: string): number => {
   st.microSeedCounts ??= {};
   return (st.microSeedCounts[asset] ??= 0);
@@ -507,6 +527,41 @@ export function arenaTick(
       if (amt > 0) {
         sc.wsteem += amt;
         pushOp({ type: "transfer", issuer: "arena", nonce: `swseed-h${st.height}-${soldier}`, to: soldier, asset: "WSTEEM", amount: amt });
+      }
+    }
+
+    // ── SETTLE-19: גשר-מלאי-האסק — בריכה→ארנה (המקור-החוקי-האחרון-שנשאר) ──
+    // באותו-חלון-16: קודם-הגשר ממלא-את-הארנה, אחר-כך קו-SETTLE-17 (למעלה) מזרים-
+    // לחיילים. שלושת-ה-ops נדחפים-בטיק-זה ומתבצעים-בבלוקים-עוקבים (חוק-בלוק-אחד-ל-op);
+    // הגדלים נגזרים-דטרמיניסטית-ממצב-הקריאה (quoteOut — אותו-מתמטיקה שהגרעין יבצע,
+    // עמלה-כלולה) וההעברה מנותבת-בגודל-הפלט-המחושב בדיוק — אפס-שאריות-אבק.
+    // דחייה-כלשהי בגרעין (גז-חסר עד-הפריימר, וכו') = ניסיון-חוזר-בחלון-הבא — כנות.
+    {
+      const poolW = getPool(st, "USDS/WSTEEM");
+      const rearmExhausted = rearmCounts(st).wsteem >= REARM_LIFETIME_WSTEEM;
+      const arenaBelowFloor = avail(st, "arena", "WSTEEM") < REARM_FLOOR_WSTEEM;
+      if (poolW && arenaBelowFloor && rearmExhausted) {
+        const capLeft = BRIDGE_LIFETIME_WSTEEM - bridgeUsed(st);
+        // משמעות-הבריכה: צד-ה-WSTEEM (p.a=USDS ⇒ rb; ההפוך ⇒ ra) לעולם לא יורד מתחת-ל-guard
+        const poolWsteem = poolW.a === "WSTEEM" ? poolW.ra : poolW.rb;
+        if (capLeft > 0 && poolWsteem >= BRIDGE_POOL_GUARD_WSTEEM) {
+          // גודל-דטרמיניסטי-קבוע: מנת-USDS קבועה; הפלט-נגזר-מ-quoteOut (אותו-מתמטיקת-
+          // גרעין, עמלה-דינמית-כלולה) וההעברה-מנותבת-בגודל-הפלט-המדויק — אפס-שאריות.
+          // מגן-חלון: אם-הפלט-חורג-מתקרת-החלון (בריכה-זולה-במיוחד) — מנה-אחת-וציטוט-חוזר.
+          const q1 = quoteOut(poolW, "USDS", BRIDGE_TRANCHE_USDS);
+          const quoted = q1 && q1.out > BRIDGE_WINDOW_CAP_WSTEEM
+            ? quoteOut(poolW, "USDS", Math.floor(BRIDGE_TRANCHE_USDS / 2))?.out ?? 0
+            : q1?.out ?? 0;
+          const out = Math.min(quoted, capLeft); // תקרת-החיים-נאכפת-על-הפלט-עצמו
+          if (out > 0 && avail(st, "treasury", "USDS") >= BRIDGE_TRANCHE_USDS) {
+            pushOp({ type: "pool_swap", issuer: "treasury", nonce: `bridge-swap-h${st.height}`, pair: "USDS/WSTEEM", assetIn: "USDS", amount: BRIDGE_TRANCHE_USDS });
+            // מישור-העוגן באותו-חלון — הסוואפ הופך-את-הבריכה-יקרה-מהעוגן; ה-repeg
+            // (אפס-גז, Σ נשמר) מחזיר-את-העודף-לאוצר ומחזיר-את-ה-mid אל-העוגן (R26).
+            pushOp({ type: "pool_repeg", issuer: "treasury", nonce: `bridge-repeg-h${st.height}`, pair: "USDS/WSTEEM" });
+            pushOp({ type: "transfer", issuer: "treasury", nonce: `bridge-w-h${st.height}`, to: "arena", asset: "WSTEEM", amount: out });
+            bridgeAdd(st, out);
+          }
+        }
       }
     }
 
