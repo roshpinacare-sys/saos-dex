@@ -64,3 +64,26 @@ model ArenaJournal {
   @@index([soldier])
   @@index([createdAt])
 }
+
+// ─── הספר-הריבוני של השולחן (R347 — רשומות-DeFi מ-saos-desk) ──────────────────
+// הגשר החוקי היחיד מחדר-הישיבות אל הריבונות-הכלכלית (דוקטרינת exec34):
+// כל פסיקת-עמדה של saos-desk מגיעה כרשומה חתומה SAOS-DEX-LEDGER/1
+// (deposit · escrow_lock · settle · withdraw — שלמים-בלבד, prevSig-chain).
+// הקבלה היא עוגן: כל רשומה מאומתת-עצמאית (sig8 על canonical-ללא-החתימה);
+// רציפות-השרשרת מדווחת כנה ואינה וטו (הקונסולה היא שרשרת-האם).
+
+model DeskLedgerReceipt {
+  id        String   @id @default(cuid())
+  seq       Int
+  kind      String // deposit | escrow_lock | settle | withdraw
+  symbol    String?
+  positionId String?
+  payload   String // canonical JSON של הרשומה החתומה כפי שהתקבלה
+  sig       String   @unique
+  prevSig   String?
+  verified  Boolean // sig8 אומת מול ה-payload בעת-הקבלה
+  createdAt DateTime @default(now())
+
+  @@index([kind])
+  @@index([createdAt])
+}
