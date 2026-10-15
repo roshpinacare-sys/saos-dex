@@ -42,7 +42,7 @@ export async function POST(req: Request) {
   if (rec.schema !== SCHEMA) {
     return NextResponse.json({ ok: false, message: `סכימה לא מוכרת: ${String(rec.schema)} — נדרש ${SCHEMA}.` }, { status: 400 });
   }
-  const { sig, ...rest } = rec as { sig?: string };
+  const { sig, ...rest } = rec as { sig?: string } & Record<string, unknown>;
   if (typeof sig !== "string" || sig.length !== 8) {
     return NextResponse.json({ ok: false, message: "חתימה חסרה/פגומה — fail-closed." }, { status: 400 });
   }
