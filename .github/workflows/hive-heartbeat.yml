@@ -28,6 +28,7 @@ jobs:
       - name: verify custody + sign heartbeat (secret never printed)
         env:
           HIVE_POSTING_WIF: ${{ secrets.HIVE_POSTING_WIF }}
+          HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
         run: bun scripts/hive-heartbeat-sign.ts
       - name: emit signed tx (public material only)
         run: |
