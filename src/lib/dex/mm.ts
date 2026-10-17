@@ -56,6 +56,17 @@ export const DEFAULT_PARAMS: ArenaParams = {
 
 export interface SoldierRT { nonceSeq: number; fills: number; takes: number; }
 
+/* ── [T25 · THE-WASH] מכונת-השטיפה — NEUTRALIZED (audit wave-0, 2026-10-17) ──
+ * W0.3 (אישור-בעלים, גל-0 של הביקורת): מכונת-השטיפה מנוטרלת. היא סחרור
+ * עצמי (בוט מול הספר של עצמו) שייצר נפח-מדומה — בדיוק-המה שהביקורת קבעה
+ * "טענת-נזילות ללא-נזילות". הקוד נשמר (היסטוריה + ריפליי-אמת), אך
+ * washTick יוצא-מוקדם ואפס-פעולות. הפעלה-מחדש: לא בהחלטת-קוד — רק
+ * החלטת-בעלים מתועדת + מלאי-צף אמיתי + תווית "volume=synthetic" בכל
+ * דשבורד שמציג אותה. השער: WASH_ENABLED — קבוע-קומפילציה, דטרמיניסטי,
+ * ריפליי-בטוח (אותו-זרע ⇒ אותו-ספר משנת-הנטרול והלאה).
+ */
+export const WASH_ENABLED = false;
+
 /* ── [T25 · THE-WASH] מכונת-השטיפה — המסחרור-המהיר של הצף-הדל ──────────────
  * אישור-הבעלים (trace 1a13585a…): "יש לנו כסף דל איך נוכל להשתמש בו ולהעביר
  * אותו בדקס מהר כדי לייצר נזילות" + "הרצה כבדה ושטיפה". העיקרון הפיזיקלי:
@@ -71,6 +82,7 @@ const WASH_FRAC_DEN = 1_000; // 1.2% מהרזרבה-בנכס-הכניסה
 const WASH_CAP_PER_TRADE = 2_500_000;
 const WASH_ROTATE = 3;
 export function washTick(st: DexState, tick: number, mIdx: number, base: string, quote: string, pushOp: PushOp): void {
+  if (!WASH_ENABLED) return; // W0.3 · audit wave-0: neutralized — zero ops, replay-deterministic
   const pk = poolKey(base, quote);
   const p = getPool(st, pk);
   if (!p || p.ra <= 0 || p.rb <= 0) return;
