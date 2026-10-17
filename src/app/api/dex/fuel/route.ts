@@ -32,18 +32,14 @@ export async function POST(req: Request) {
   if (amt <= 0) return NextResponse.json({ ok: true, note: `ל-${to} כבר יש ${have}µ credits — אין-צורך` });
   let funder: FuelFunder | null = funderFor(st, amt, to);
   if (!funder) {
-    // סולם-חירום (conservation-true): כל-סוכן-חי עם-מספיק-קרדיטים, העשיר-ביותר-ראשון.
-    // שמות-מטוהרים (agent_purge) נשללים-לעד. העברה-טהורה — Σcredits נשמר מעצמו.
-    // FIX(agent-9 · t10): הגרעין דוחה מנפיק-שאינו-FUEL_FUNDERS ("funder-only") —
-    // סולם-החירום נצמד-לחוק-הגרעין: מועמדים-מממנים-חוקיים-בלבד (type-guard narrowing),
-    // אחרת-הריצה-הייתה-נכשלת-בזמן-ריצה גם-אם-הטיפוס-היה-עובר.
-    const DEAD = new Set(["soldier-1", "soldier-2", "soldier-3", "soldier-4"]);
+    // סולם-חירום (conservation-true): רק-ממני-דלק-חוקיים (FUEL_FUNDERS — הגרעין
+    // דוחה כל-מנפיק-אחר "funder-only", ולכן-הסולם-חייב-להישאר-בתוך-הרשימה-הקנונית),
+    // העשיר-ביותר-ראשון. שמות-מטוהרים (agent_purge) וחיילים-מתים נשללים-ממילא —
+    // מחוץ-לרשימה. העברה-טהורה — Σcredits נשמר מעצמו.
     const rich = Object.entries(st.credits ?? {})
-      .filter(([n, c]) => n !== to && !DEAD.has(n) && Number(c) >= amt)
-      .sort((a, b) => Number(b[1]) - Number(a[1]))
-      .map(([n]) => n)
-      .find((n): n is FuelFunder => (FUEL_FUNDERS as readonly string[]).includes(n));
-    funder = rich ?? null;
+      .filter(([n, c]) => (FUEL_FUNDERS as readonly string[]).includes(n) && n !== to && Number(c) >= amt)
+      .sort((a, b) => Number(b[1]) - Number(a[1]))[0];
+    funder = (rich?.[0] as FuelFunder) ?? null;
   }
   if (!funder) return NextResponse.json({ ok: false, error: "no-funder (הסולם יבש — המזרקה תמלא כשעמלות-אמת יימדדו)" }, { status: 200 });
   const r = submitOp({ type: "refuel", issuer: funder, nonce: nextNonce("rf"), to, amount: amt });
