@@ -17,7 +17,7 @@ const KEEPER = "/home/z/audit/saos-dex/deploy/dex-beat-keeper.sh";
 const LOG = "/tmp/dex-beat-service.log";
 
 let running = false;
-let lastBeat: { startedAt: string; finishedAt?: string; rc?: number | null; tail?: string } | null = null;
+let lastBeat: { startedAt: string; finishedAt?: string; rc?: number | null; tail?: string[] } | null = null;
 let nextFireAt = "";
 
 function log(line: string) {
