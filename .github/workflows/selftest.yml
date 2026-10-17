@@ -1,0 +1,97 @@
+# DEX-SELFTEST — verified offline selftest battery (agent-9 · task 4-b · 2026-10-17)
+# ADDITIVE workflow: runs ONLY commands verified green locally by agent-9 on a clean
+# clone (bun 1.3.14 + node v24): 15 grid/mission node selftests, 6 bun kernel
+# selftests/harness gates, markets bun test (29 tests / 3,008 expect()).
+#
+# Quota honesty (Pulse/runbooks/quota-dead.md): private-repo free minutes are
+# exhausted — these runs may queue until quota returns or on public forks.
+# This workflow is fail-closed: any verified-test failure fails the check loudly.
+#
+# NOT included here, with reasons (measured, not assumed):
+#  · harness/invariant-fuzzer.ts --fixture — KNOWN-FAIL: pre-existing credit-audit
+#    drift (settle.ts L79 Σcredits+gas−feeMinted ≠ genesis after battery ops atop
+#    the live snapshot); committed proof-pack already recorded verdict FAIL on
+#    2026-10-10. Runs as a NON-BLOCKING step below so the drift stays visible.
+#  · harness/mutation-test.ts — baseline FAIL for the same reason (needs the
+#    fuzzer/audit fix first); too heavy to gate on while red.
+#  · scripts/chaos-test.ts — FATAL without real relay .env signing keys.
+#  · chaos2-engine.ts / chaos3-stack.ts / redteam-probes / jepsen-http / slo-probe /
+#    insider-suite / proof-runner / anchor-continuity / sovereign-gateway — require
+#    the live engine (:3010) / mother platform (:3000) / runtime state/ or LLM keys.
+name: dex-selftest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dex-selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DATABASE_URL: file:${{ github.workspace }}/db/dex.db
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: prisma generate
+        run: bunx prisma generate
+
+      - name: typecheck (tsc --noEmit)
+        run: bun run typecheck
+
+      - name: grids + mission offline selftests (node, 15 files)
+        run: |
+          set -euo pipefail
+          node grids/run.mjs --selftest
+          node grids/book-law-selftest.mjs
+          node grids/brake-selftest.mjs
+          node grids/params-selftest.mjs
+          node grids/liquidity-selftest.mjs
+          node grids/arb-selftest.mjs
+          node grids/peg-selftest.mjs
+          node grids/observe-selftest.mjs
+          node grids/policy-selftest.mjs
+          node grids/supremacy-selftest.mjs
+          node grids/community-selftest.mjs
+          node grids/curate-selftest.mjs
+          node grids/llm/llm-selftest.mjs
+          node grids/validate-params.mjs grids/state/grid-params.json
+          node mission/selftest.mjs
+
+      - name: kernel selftests + harness gates (bun, in-process)
+        run: |
+          set -euo pipefail
+          bun run scripts/t37-laws-selftest.ts
+          bun run scripts/peg-selftest.ts
+          bun run scripts/t15-truthgate-selftest.ts
+          bun harness/bmc.ts
+          bun harness/maker-kernel-test.ts
+          bun harness/pool-fuel-test.ts
+
+      - name: markets test suite (bun test — 29 tests / 3,008 assertions)
+        working-directory: markets
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile
+          bun test
+
+      - name: invariant fuzzer (fixture mode) — KNOWN-FAIL, non-blocking visibility
+        continue-on-error: true
+        run: bun harness/invariant-fuzzer.ts --fixture
