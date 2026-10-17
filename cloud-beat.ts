@@ -24,6 +24,7 @@ import { createHash } from "crypto";
 import { WASH_ENABLED } from "./src/lib/dex/mm"; import { WASH_FLOOR } from "./src/lib/dex/kernel"; // W0.3-followup: wash gates live in the engine
 import { secp256k1 } from "@noble/curves/secp256k1";
 import bs58 from "bs58";
+import { envelopeToKernelOp } from "./src/lib/dex/envelope";
 
 /* ── סביבה לפני-כל-ייבוא-של-המנוע (db.ts מאמת בטעינת-מודול) ──
  * בכוח-ולא-ב-??=: סביבת-אם (סנדבוקס) מזריקה לפעמים DATABASE_URL של-עצמה
@@ -773,39 +774,75 @@ async function main(): Promise<void> {
    * אותו-מודל-האמון כמו-הזיכויים: המעטפה חתומה-saos1 (החתימה מכסה את
    * כל-השדות), הלב מתרגם אותה ל-op מקומי בשם הבעלים u:<addr>. השרשרת
    * עצמה אוכפת יתרה/נאמנות/תקרת-פקודות — דחייה היא תשובה כנה, לא-שקט. */
-  let ordered = 0, cancelled = 0;
+  let ordered = 0, cancelled = 0, transferred = 0, registered = 0;
+  /* ── המתרגם הקנוני (envelope.ts) — סגירת לולאת-המשתמש ──────────────────
+   * עד-היום הלב קיפל רק dex.order/dex.cancel — בזמן שה-wallet הציבורי מחתים
+   * dex.offer {cur,units,price} · token.transfer {symbol,to,amount} · wallet.create.
+   * פקודות משתמש חתומות נבלעו בשקט (נמדד). מעתה: כל הסוגים מתורגמים אחיד ל-op-גרעין:
+   *   · dex.offer → order sell SAOS/<cur> (החוזה-הוותיק של ה-wallet, units=µ)
+   *   · dex.order → החוזה-המוסדי המלא (base/quote/side, אדם→µ)
+   *   · dex.cancel → orderId או offerId — שני השמות בשטח מקבלים אותה משמעות
+   *   · token.transfer → transfer של נכס-ידוע-גרעין (µ)
+   *   · wallet.create → אישור-קיום כנה: אין רישום-פקטיבי; חשבון-גרעין חי
+   *     מהזיכוי/הפעולה הראשונה (R33, self-serve)
+   * סוגים לא-ידועים נשארים פתוחים — לא נסגרים כמעובדים (מהדורה-עתידית עשויה
+   * להבין). אימות-החתימה קודם-לתרגום; השרשרת עצמה אוכפת יתרה/נאמנות/דלק —
+   * דחיית-בלוק היא תשובה כנה והתביעה נשארת פתוחה לפעימה-הבאה. */
+  const { knownAsset } = await import("./src/lib/dex/kernel");
+  const stK = rt.st as unknown as Parameters<typeof knownAsset>[0];
+  const stx = rt.st as unknown as {
+    nonces: string[]; orders: { id: number; owner: string; live: boolean }[];
+    balances: Record<string, Record<string, number>>;
+  };
   for (const env of envelopes) {
-    if (env?.k !== "dex.order" && env?.k !== "dex.cancel") continue;
+    const envK = String(env?.k ?? "");
+    if (envK !== "dex.order" && envK !== "dex.offer" && envK !== "dex.cancel" && envK !== "token.transfer" && envK !== "wallet.create") continue;
     if (typeof env.id !== "string" || ledger.processedIds[env.id]) continue;
     if (!verifyEnvelope(env)) { ledger.processedIds[String(env.id)] = 1; continue; }
+    const t = envelopeToKernelOp(env);
+    if (!t.ok) { console.warn(`[cloud-beat] envelope ${String(env.id).slice(0, 10)} (${envK}) not translatable: ${t.reason}`); continue; }
     const issuer = `u:${String(env.by).toLowerCase()}`; // R33 · canonical-account — אותו חוק-קטנות של הזיכוי
-    if (env.k === "dex.order") {
-      const base = String(env.base ?? "").toUpperCase();
-      const quote = String(env.quote ?? "").toUpperCase();
-      const side = env.side === "buy" ? "buy" : env.side === "sell" ? "sell" : "";
-      const price = Math.round(Number(env.price ?? 0) * 1000);   // מחיר-אדם → µ-ציטוט ליחידת-בסיס
-      const amount = Math.round(Number(env.amount ?? 0) * 1000); // כמות-אדם → µ-בסיס
-      const r = submitOp({ type: "order", issuer, nonce: String(env.id), base, quote, side, price, amount });
-      if (r.queued) {
-        await stepOnce();
-        // R33 · order-landed-proof: התור מקבל, הבלוק יכול-לדחות (insufficient-credits
-        // / bad-params / cap-24-orders). דחייה שנרשמת-כמעובדת = פקודת-משתמש
-        // נבלעת-בשקט. עתה: ה-nonce נדחף-לחלון רק-כשה-op בוצע — בדיקת-חברות
-        // ב-st.nonces היא ההוכחה שהפקודה-באמת-הוצבה; אחרת התביעה נשארת-פתוחה
-        // לפעימה-הבאה (המפקיד מקבל refuel-דלק מהזיכוי, אז-הניסיון-החוזר יעבור).
-        const landed = ((rt.st as unknown as { nonces: string[] }).nonces ?? []).includes(`${issuer}:${String(env.id)}`);
-        if (landed) { ordered++; console.log(`[cloud-beat] order ${side} ${amount}µ ${base} @${price}µ ${quote} ← ${issuer.slice(0, 18)}…`); }
-        else { console.warn(`[cloud-beat] order ${String(env.id).slice(0, 10)} REJECTED IN BLOCK (likely insufficient-credits/bad-params) — left open for retry`); skipped++; continue; }
-      } else { console.warn(`[cloud-beat] order ${String(env.id).slice(0, 10)} rejected: ${r.reason}`); }
+    if (t.kind === "ack") {
+      // wallet.create: אין op-גרעין — נסגר פעם-אחת בכנות (החשבון נולד מהפעולה הראשונה).
+      ledger.processedIds[String(env.id)] = 1; registered++; continue;
+    }
+    // שער-נכסים: זוג/נכס לא-ידוע-גרעין יידחה-בכל-פעימה לנצח — נסגר בכנות עם סיבה.
+    if (t.kind === "order" && !(knownAsset(stK, t.op.base) && knownAsset(stK, t.op.quote))) {
+      console.warn(`[cloud-beat] order ${String(env.id).slice(0, 10)}: unknown asset pair ${t.op.base}/${t.op.quote} — closing honestly (no retry spam)`);
+      ledger.processedIds[String(env.id)] = 1; continue;
+    }
+    if (t.kind === "transfer" && !knownAsset(stK, t.op.asset)) {
+      console.warn(`[cloud-beat] transfer ${String(env.id).slice(0, 10)}: unknown asset ${t.op.asset} — closing honestly`);
+      ledger.processedIds[String(env.id)] = 1; continue;
+    }
+    // dex.cancel על פקודה שאינה חיה עוד תחת הבעלים — אין מה לבטל; נסגר בכנות.
+    if (t.kind === "cancel" && !stx.orders.find((o) => o.live && o.id === t.op.orderId && o.owner === issuer)) {
+      console.warn(`[cloud-beat] cancel ${String(env.id).slice(0, 10)}: order #${t.op.orderId} not live under ${issuer.slice(0, 18)}… — nothing to cancel (closing honestly)`);
+      ledger.processedIds[String(env.id)] = 1; continue;
+    }
+    const op = { ...t.op, issuer, nonce: String(env.id) } as Record<string, unknown>;
+    const balBefore = t.kind === "transfer" ? (stx.balances[String(t.op.to)]?.[String(t.op.asset)] ?? 0) : 0;
+    const r = submitOp(op);
+    if (!r.queued) { console.warn(`[cloud-beat] ${envK} ${String(env.id).slice(0, 10)} rejected by queue: ${r.reason}`); continue; }
+    await stepOnce();
+    // R33 · landed-proof (אותו חוזה של הזיכויים): התור מקבל, הבלוק יכול-לדחות —
+    // רק נחיתה-אמיתית נרשמת-כמעובדת; דחייה כנה משאירה את התביעה לפעימה-הבאה.
+    if (t.kind === "order") {
+      const landed = (stx.nonces ?? []).includes(`${issuer}:${String(env.id)}`);
+      if (landed) { ordered++; console.log(`[cloud-beat] order ${t.op.side} ${t.op.amount}µ ${t.op.base} @${t.op.price}µ ${t.op.quote} ← ${issuer.slice(0, 18)}…`); }
+      else { console.warn(`[cloud-beat] order ${String(env.id).slice(0, 10)} REJECTED IN BLOCK (likely insufficient-credits/bad-params) — left open for retry`); skipped++; continue; }
+    } else if (t.kind === "cancel") {
+      const landed = !stx.orders.find((o) => o.live && o.id === t.op.orderId && o.owner === issuer);
+      if (landed) { cancelled++; console.log(`[cloud-beat] cancel #${t.op.orderId} ← ${issuer.slice(0, 18)}…`); }
+      else { console.warn(`[cloud-beat] cancel ${String(env.id).slice(0, 10)} did NOT land — left open for retry`); skipped++; continue; }
     } else {
-      const orderId = Number(env.orderId ?? 0);
-      const r = submitOp({ type: "cancel", issuer, nonce: String(env.id), orderId });
-      if (r.queued) { cancelled++; await stepOnce(); console.log(`[cloud-beat] cancel #${orderId} ← ${issuer.slice(0, 18)}…`); }
-      else console.warn(`[cloud-beat] cancel ${String(env.id).slice(0, 10)} rejected: ${r.reason}`);
+      const landed = (stx.balances[String(t.op.to)]?.[String(t.op.asset)] ?? 0) - balBefore >= Number(t.op.amount);
+      if (landed) { transferred++; console.log(`[cloud-beat] transfer ${t.op.amount}µ ${t.op.asset} → ${String(t.op.to).slice(0, 18)}…`); }
+      else { console.warn(`[cloud-beat] transfer ${String(env.id).slice(0, 10)} did NOT land (bal ${balBefore}→${stx.balances[String(t.op.to)]?.[String(t.op.asset)] ?? 0}) — left open for retry`); skipped++; continue; }
     }
     ledger.processedIds[String(env.id)] = 1;
   }
-  if (ordered || cancelled) saveLedger(ledger);
+  if (ordered || cancelled || transferred || registered) saveLedger(ledger);
 
   forceFlush();
 
