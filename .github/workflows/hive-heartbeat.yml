@@ -1,0 +1,39 @@
+# hive-heartbeat — treasury custody on HIVE, executed fail-closed.
+# Owner order 2026-10-17: "יש מפתחות שhive לא בדקת מספיק ... תמשיך ודחוף"
+# + standing treasury-signing authorization ("אתה יכול לחתום בקופה").
+# The runner holds HIVE_POSTING_WIF as a GitHub secret (write-only, never
+# readable). The job: derive pub → verify == LIVE chain posting authority
+# (fail-closed) → sign ONE posting-only custom_json heartbeat (zero value) →
+# emit the SIGNED tx (public material) as an artifact for our own public relay
+# to transport. The secret itself never leaves the runner; the chain is judge.
+name: hive-heartbeat
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: hive-heartbeat
+  cancel-in-progress: false
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: install (frozen lockfile)
+        run: bun install --frozen-lockfile
+      - name: verify custody + sign heartbeat (secret never printed)
+        env:
+          HIVE_POSTING_WIF: ${{ secrets.HIVE_POSTING_WIF }}
+        run: bun scripts/hive-heartbeat-sign.ts
+      - name: emit signed tx (public material only)
+        run: |
+          echo "signature-artifact-bytes: $(wc -c < signed-tx.b64)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-tx
+          path: signed-tx.b64
+          retention-days: 3
