@@ -417,6 +417,14 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
           details.push(`${row.asset}=${d > 0 ? "+" : ""}${d}`);
         }
       }
+      if (!pre.credits.ok) {
+        // OWNER-MANDATE 2026-10-17 · הצהרת-עידן-דלק: הג'נזיס נולד-מחדש בלי-החיילים
+        // (פקודת-בעלים: סוכנים-סינתטיים-חסרי-מפתח סולקו) — פער-בסיס-הדלק מוצהר-פעם-אחת
+        // במצב-הקנוני (creditsMu) עם-המספרים-המדויקים; סחיפה-חדשה-מעבר-להצהרה = HALT.
+        const dC = pre.credits.sum + pre.credits.gasUsed - pre.credits.minted - pre.credits.expected;
+        adj.creditsMu = (adj.creditsMu ?? 0) + dC;
+        details.push(`credits+=${dC > 0 ? "+" : ""}${dC} (credits-law era gap — soldier-genesis baseline, declared)`);
+      }
       if (!pre.fees.ok) {
         // הצהרה-על-ההיסטוריה — FIX(3-a · D1 · sign-lineage-coherence): הזהות-המתוקנת
         // היא pools === meter+profit+minted+spent (עמלות-שהראוטר-צרך זרמו-לבריכות —
@@ -566,7 +574,9 @@ async function seal(rt: ChainRT, blockRoot: string): Promise<void> {
   // FIX(Roast-65-a · LOW-9): תווית-אמת — אין-מפתחות ואין-חתימות במערכת-כולה.
   // אלו ארבעה-רישומי-ג'ורנל (attest) מאותו-תהליך-שכתב-את-השורש-עצמו — הד-פנימי,
   // לא "קוורום" ולא חתימות. נשמרים-כראית-יומן-בלבד (הערה-כנה גם-ב-note של הרישום).
-  for (const s of ["soldier-1", "soldier-2", "soldier-3", "soldier-4"]) {
+  // OWNER-MANDATE 2026-10-17: עדי-החותם = סוכני-מערכת אמתיים (החיילים-הסינתטיים סולקו —
+  // עדים-רפאים מחשבונות-שנמחקו זה שקר-פרסומי)
+  for (const s of ["treasury", "operator", "arena"]) {
     rt.mempool.push({ type: "attest", issuer: s, nonce: sysNonce(st, `att-${s}`), claim: root.slice(0, 16) });
   }
   rt.blockHashes = [];
@@ -1236,7 +1246,9 @@ export function getLiveState(): DexState {
 export function getArena() {
   const rt = ensureChain();
   const st = rt.st;
-  const soldiers = ["soldier-1", "soldier-2", "soldier-3", "soldier-4"];
+  // OWNER-MANDATE 2026-10-17: החיילים-הסינתטיים סולקו מהשרשרת (agent_purge) —
+  // המבנה נשמר לתאימות-UI; הרשימה ריקה בכנות — אין-חיילים, אין-הצגה-שדופה.
+  const soldiers: string[] = [];
   return {
     params: rt.params,
     dbOk: rt.dbOk,

@@ -72,12 +72,15 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
   const errors: string[] = [];
   const negatives: string[] = [];
 
-  // (a) קרדיטים: אפס-הטבעה-שאינה-מגובה-עמלות — Σcredits + gasUsed − feeMinted === ג'נזיס
+  // (a) קרדיטים: אפס-הטבעה-שאינה-מגובה-עמלות — Σcredits + gasUsed − feeMinted === ג'נזיס + מוצהר
   // (THE-FOUNTAIN: הטבעת-דלק מותרת-רק-מגובה-עמלות-מדודות; feeMinted הוא-הרישום-המצטבר)
+  // OWNER-MANDATE 2026-10-17 · creditsMu: הצהרת-עידן (ג'נזיס-החיילים 28M ← 20M) + ניכויי-קרדיטים
+  // של-agent_purge — הכל מוצהר-במצב-הקנוני, לא-מוסתר; סחיפה-חדשה-מעבר-להצהרה = HALT.
   const minted = st.feeMinted ?? 0;
+  const declaredCredits = st.auditAdjustments?.creditsMu ?? 0;
   const creditSum = Object.values(st.credits).reduce((s, v) => s + v, 0);
-  const creditsOk = creditSum + st.gasUsed - minted === totals.credits;
-  if (!creditsOk) errors.push(`credits: Σ${creditSum}+gas${st.gasUsed}−minted${minted} ≠ genesis ${totals.credits}`);
+  const creditsOk = creditSum + st.gasUsed - minted === totals.credits + declaredCredits;
+  if (!creditsOk) errors.push(`credits: Σ${creditSum}+gas${st.gasUsed}−minted${minted} ≠ genesis${totals.credits}+declared${declaredCredits}`);
 
   // (b) נכסים: Σbalances + Σpool-reserves + backing-עטוף === ג'נזיס (לכל-נכס)
   const liveAssets: Record<string, number> = {};
@@ -364,7 +367,8 @@ export function runExam(st: DexState): ExamReport {
   const preExam = clone(st);
   const fair = fairPrice(preExam, "SAOS", "USDS") || 2_500;
   const prices = { fair, bid: Math.floor((fair * 9_900) / 10_000), ask: Math.floor((fair * 10_100) / 10_000) };
-  const agents = ["soldier-1", "soldier-2", "soldier-3", "soldier-4", "bot-a", "bot-b", "bot-c"];
+  // OWNER-MANDATE 2026-10-17: החיילים-הסינתטיים סולקו — המבחן רץ על סוכני-מערכת אמתיים
+  const agents = ["operator", "arena", "bot-a", "bot-b", "bot-c"];
   const run1 = agents.map((a) => runCurriculum(preExam, a, prices, totals));
   const run2 = agents.map((a) => runCurriculum(preExam, a, prices, totals)); // עצמאי-לחלוטין
   const roots1 = run1.map((r) => r.finalRoot);
@@ -698,7 +702,7 @@ export function runwayCheck(
   }
   const blocks = burnPerHeight > 0 ? totalCredits / burnPerHeight : Number.POSITIVE_INFINITY;
   const hours = (blocks * TICK_MS_EST) / 3_600_000;
-  const names = agents ?? ["soldier-1", "soldier-2", "soldier-3", "soldier-4", "bot-a", "bot-b", "bot-c"];
+  const names = agents ?? ["treasury", "operator", "arena", "bot-a", "bot-b", "bot-c", "bot-e", "rail"];
   // הנחת-מניות-שוות (כנות: שריפה-אנדוגנית — מי-שפעיל-שורף-יותר; מדד-גס-לצורך-הצגה)
   const share = names.length > 0 ? hours / names.length : 0;
   const perAgent = names.map((a) => ({

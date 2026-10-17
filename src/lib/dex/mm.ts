@@ -419,7 +419,12 @@ export function arenaTick(
   rt: Map<string, SoldierRT>,
   pushOp: PushOp,
 ): void {
-  const soldiers = ["soldier-1", "soldier-2", "soldier-3", "soldier-4"];
+  // ── OWNER-MANDATE 2026-10-17 · החיילים הסינתטיים סולקו ───────────────────
+  // soldier-1..4 נמחקו מהשרשרת (agent_purge — פקודת-בעלים: אין-מפתחות, אין-שליטה,
+  // מתים). הרוסטר-ריק — כל-קווי-האספקה-לחיילים להלן נהיים נו-אופ טבעיים.
+  // עושי-הספר האמתיים: סוכני-המערכת (הארנה העמוקה + הבוטים).
+  const soldiers: string[] = [];
+  const makers = ["arena", "bot-a", "bot-b", "bot-c"];
 
   // עמדת-הייצוב (סליקה): מנעול-בריכה + חגורת-סולם — לפני-הזרימה-החופשית
   pegkeeperTick(st, tick, pushOp);
@@ -749,12 +754,12 @@ export function arenaTick(
     }
 
     if (params.enabled) {
-      for (const soldier of soldiers) {
-        // FIX(SETTLE-7): שער-הפסד — חייל-מתחת-לרצפת-הון לא מציב-פקודות-חדשות (רק-מנקה)
-        const starving = soldierEquity(st, soldier, fair) < SOLDIER_EQUITY_FLOOR;
-        const sk = skewShiftBps(st, soldier, m.base, params);
+      for (const agent of makers) {
+        // FIX(SETTLE-7): שער-הפסד — מייקר-מתחת-לרצפת-הון לא מציב-פקודות-חדשות (רק-מנקה)
+        const starving = soldierEquity(st, agent, fair) < SOLDIER_EQUITY_FLOOR;
+        const sk = skewShiftBps(st, agent, m.base, params);
         // ריקוט: בטל ציטוטים שסטו מעל הרף
-        const mine = st.orders.filter((o) => o.live && o.owner === soldier && o.base === m.base && o.quote === m.quote);
+        const mine = st.orders.filter((o) => o.live && o.owner === agent && o.base === m.base && o.quote === m.quote);
         const desired = new Map<number, { side: "buy" | "sell"; px: number }>();
         for (let lvl = 1; lvl <= params.levels; lvl++) {
           const off = params.spreadBps / 2 + (lvl - 1) * params.stepBps;
@@ -772,7 +777,7 @@ export function arenaTick(
           const stillGood = d && d.side === o.side &&
             Math.abs(((fair - o.price) / fair) * 10_000) <= params.requoteBps + params.spreadBps;
           if (!stillGood) {
-            if (o.live) submit(rt, st, soldier, { type: "cancel", orderId: o.id }, pushOp);
+            if (o.live) submit(rt, st, agent, { type: "cancel", orderId: o.id }, pushOp);
           } else {
             desired.delete(o.price);
           }
@@ -795,7 +800,7 @@ export function arenaTick(
           // המלא, מעל-רצפת-אבק RAIL_DUST_MU). אפס-הטבעה, אפס-זיוף: הצעה-קטנה-ממלאי
           // אמת היא הצעה-חיה-אמת; משמעת-הערבות/הספרד/הריקוט כולן נשמרות לאיתן.
           // הכיוון-השני מרוויח-אותו-ריפוי (bestBid=0 על SAOS/USDS נמדד-חי באותו-סנפּשׁוט).
-          const budget = inflightAvail(soldier, lockAsset);
+          const budget = inflightAvail(agent, lockAsset);
           const fullLock = d.side === "sell" ? fullSize : notional(d.px, fullSize);
           let size = fullSize;
           if (budget < fullLock) {
@@ -809,8 +814,8 @@ export function arenaTick(
           // FIX(R45 · inflight-escrow): הבדיקה מנכה-את-הנעילות-שכבר-נדחפה-בטיק-הזה —
           // סדרת-פקודות-של-אותו-חייל לא-מתחרה-עוד-על-אותה-יתרה-מתה.
           if (lockMu <= 0 || lockMu > budget) continue;
-          inflightAdd(soldier, lockAsset, lockMu);
-          submit(rt, st, soldier, {
+          inflightAdd(agent, lockAsset, lockMu);
+          submit(rt, st, agent, {
             type: "order", base: m.base, quote: m.quote, side: d.side,
             price: d.px, amount: size,
           }, pushOp);
@@ -821,7 +826,9 @@ export function arenaTick(
 
     // טייק-מסתובב: רק-אם-השוליים מכסים עמלה+רווח-מינ'
     if (params.enabled) {
-      const taker = soldiers[tick % soldiers.length]!;
+      // טייק-מסתובב על סוכני-המערכת (החיילים-הסינתטיים סולקו — OWNER-MANDATE 2026-10-17)
+      const takers = ["arena", "bot-a", "bot-b", "bot-c", "bot-e"];
+      const taker = takers[tick % takers.length]!;
       const bids = sortBook(st, m.base, m.quote, "buy");
       const asks = sortBook(st, m.base, m.quote, "sell");
       const bestAsk = asks.find((o) => o.owner !== taker);

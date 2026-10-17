@@ -117,8 +117,10 @@ export function replayScript(): { op: Op; at: number }[] {
     const mk = (o: Omit<Op, "issuer" | "nonce">, issuer: string, tag: string): void => {
       out.push({ op: { ...o, issuer, nonce: `d${b}-${tag}` } as Op, at: T0 + b * 3000 });
     };
-    mk({ type: "order", base: "SAOS", quote: "USDS", side: "buy", price: bidPx, amount: 15_000 }, `soldier-${(b % 4) + 1}`, "b");
-    mk({ type: "order", base: "SAOS", quote: "USDS", side: "sell", price: askPx, amount: 15_000 }, `soldier-${((b + 1) % 4) + 1}`, "s");
+    // OWNER-MANDATE 2026-10-17: היה soldier-N — החיילים-הסינתטיים סולקו;
+    // סוכני-מערכת אמתיים עם יתרות-ג'נזיס אמת (operator/arena)
+    mk({ type: "order", base: "SAOS", quote: "USDS", side: "buy", price: bidPx, amount: 15_000 }, "operator", "b");
+    mk({ type: "order", base: "SAOS", quote: "USDS", side: "sell", price: askPx, amount: 15_000 }, "arena", "s");
     mk({ type: "fill", base: "SAOS", quote: "USDS", side: "buy", amount: 15_000, market: true }, "operator", "f");
     mk({ type: "fill", base: "SAOS", quote: "USDS", side: "sell", amount: 15_000, market: true }, "operator", "g");
     mk({ type: "pool_swap", pair: "SAOS/USDS", assetIn: "USDS", amount: 2_000 }, "bot-a", "p");

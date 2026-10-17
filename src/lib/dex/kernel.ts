@@ -118,6 +118,14 @@ export const GAS_TABLE = {
   // דגם-PRIMER: הנפקה-גלויה-נגד-תוכנית-מזוהה-ותקרות-קשיחות-במצב (st.forge) —
   // ההפך-מהעומק-המזויף: הכל ביומן, באירועים, ובמצב-הפומבי. אוצר-בלבד · גז-0.
   forge_issue: 0,
+  // ── OWNER-MANDATE 2026-10-17 · THE-PURGE — סילוק-סוכני-ספר סינתטיים ──
+  // פקודת-בעלים חיה (IM): "soldier-1 soldier-2 soldier-3 אולי גם 4 — אין לנו
+  // מפתחות, הם מתים, צריך להעיף אותם, אין לנו שליטה בהם באמת". ה-op מסלק
+  // סוכן-ספר מהמצב-הקנוני: ביטול-פקודות-חיות (שחרור-נעילה מדויק כמו cancel_all),
+  // זיקוק-עמדות (ve/lend/חיסכון), ושריפת-אמת של כל-היתרות (דפוס-economy.burn —
+  // Σ יורד בגלוי; הכסף-המומצא יוצא מהמחזור לנצח). אוצר-בלבד · גז-0 · fail-closed
+  // על כל-חוב-פתוח · דטרמיניסטי לריפליי מלא · הכל ביומן.
+  agent_purge: 0,
   // ── Task 80 · THE-VAULT (כספת-ההלוואות — שלב 2 בשעון נתיב הכסף) ──
   vault_open: 80,     // שאיבת USDS נגד בטחונות WSTEEM (CDP מינימלי, יחס 250%)
   vault_repay: 60,    // פירעון + שחרור בטחונות (הריבית → אוצר)
@@ -454,6 +462,7 @@ export interface DexState {
     native?: Record<string, number>;   // נכס → (live−genesis) היסטורי מוצהר
     lp?: Record<string, number>;       // מפתח-בריכה → הפרש-implied מוצהר
     feesSpentMu?: number;              // עמלות-שנצרכו-טרם-שדה-feesSpentMu (חתימה)
+    creditsMu?: number;                // OWNER-MANDATE 2026-10-17 · הצהרת-עידן-דלק (ג'נזיס-28M ← 20M) + ניכויי-קרדיטים של agent_purge
   };
   // FIX(Roast-68 · pol-retro-mint): דגל-הגירה-חד-פעמי — הפנטום-הג'נזיס (implied>0)
   // הוטבע-כעמדת-POL-אמת-בידי-האוצר; מאז: implied=0-לנצח והביקורת-מחמירה-מיד-בחותם.
@@ -748,9 +757,17 @@ export function launchVq(st: DexState, l: Launch): number {
 
 // ─── ג'נזיס ─────────────────────────────────────────────────────────────────
 export const GENESIS_ACCOUNTS = [
-  "treasury", "operator", "arena", "soldier-1", "soldier-2", "soldier-3", "soldier-4",
-  "bot-a", "bot-b", "bot-c",
+  "treasury", "operator", "arena", "bot-a", "bot-b", "bot-c",
 ] as const;
+
+// ── OWNER-MANDATE 2026-10-17 · הג'נזיס נולד-מחדש בלי חיילים ──────────────────
+// soldier-1..4 נמחקו מזרע-הג'נזיס לנצח (פקודת-בעלים: אין-מפתחות, אין-שליטה,
+// מתים — מוסרים). חשבונות-המערכת החיים מוגנים מפני agent_purge — העוגנים
+// שאסור-לעולם שהטיהור יגיע-אליהם.
+export const PROTECTED_AGENTS = new Set<string>([
+  "treasury", "operator", "arena", "bot-a", "bot-b", "bot-c", "bot-e", "rail",
+  VE_VAULT, VE_POT, SAVE_POT, LEND_POT, RESERVE_VAULT,
+]);
 
 export function genesisState(): DexState {
   const st: DexState = {
@@ -787,10 +804,8 @@ export function genesisState(): DexState {
     treasury:   { SAOS: 6_000_000, USDS: 8_000_000, STEEM: 1_000_000, WSTEEM: 316_000, ENERGY: 40_000, WSBD: 50_000, PHIVE: 100_000 },
     operator:   { SAOS: 2_000_000, USDS: 5_000_000, STEEM: 1_000_000 },
     arena:      { USDS: 20_000_000, SAOS: 8_000_000 },
-    "soldier-1": { SAOS: 1_200_000, USDS: 3_000_000 },
-    "soldier-2": { SAOS: 1_200_000, USDS: 3_000_000 },
-    "soldier-3": { SAOS: 1_200_000, USDS: 3_000_000 },
-    "soldier-4": { SAOS: 1_200_000, USDS: 3_000_000 },
+    // OWNER-MANDATE 2026-10-17: זרע-החיילים (soldier-1..4 × 1.2M-SAOS + 3M-USDS)
+    // נמחק — סוכני-ספר סינתטיים חסרי-מפתח וחסרי-שליטה-בעלים לא נולדים עוד.
     "bot-a": { SAOS: 400_000, USDS: 1_000_000 },
     "bot-b": { WSTEEM: 500_000, USDS: 500_000 },
     "bot-c": { ENERGY: 100_000, SAOS: 100_000 },
@@ -1841,6 +1856,139 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       }
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "forge_issue", note: `+${gAmt}µ ${gAsset} · ${FORGE_PROGRAM} · ${gIssued + gAmt}/${gCap}µ (declared sovereign issuance)` });
       pushReserveEvent(st, st.height, "forge", gAmt, `forge_issue ${gAsset} ${FORGE_PROGRAM}`);
+      return { ok: true, gas: 0 };
+    }
+    case "agent_purge": {
+      // ── OWNER-MANDATE 2026-10-17 · THE-PURGE ──────────────────────────────
+      // סילוק-סוכן-ספר מהמצב-הקנוני — פקודת-בעלים חיה (ראה-GAS_TABLE למעלה).
+      // סדר-הפעולות דטרמיניסטי לריפליי: שערים → ביטול-פקודות (שחרור-נעילה
+      // מדויק כמו cancel_all) → זיקוק-ve → זיקוק-lend → זיקוק-חיסכון → שריפת-
+      // יתרות → מחיקת-מפות → קבלת-יומן. כל-שריפה נרשמת גם במונה-הקנוני
+      // st.burnedSaos (ל-SAOS) — אותו-חוק-שריפה של economy.burn.
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      const victim = String(op.to ?? "").toLowerCase();
+      if (!victim) return { ok: false, err: "agent-required", gas: 0 };
+      if (victim === issuer) return { ok: false, err: "cannot-purge-treasury", gas: 0 };
+      if (PROTECTED_AGENTS.has(victim)) return { ok: false, err: "protected-agent", gas: 0 };
+      // שערי-חוב fail-closed — לא מוחקים חובות ולא מטילים אותם על הפרוטוקול
+      const lsP = lendState(st);
+      const posP = lsP.positions[victim];
+      if (posP) for (const bP of Object.values(posP.b)) if (bP.mu + bP.int > 0) return { ok: false, err: "agent-has-lend-debt", gas: 0 };
+      const vltP = st.vaults?.[victim];
+      if (vltP && vltP.debtMu + (vltP.intMu ?? 0) > 0) return { ok: false, err: "agent-has-vault-debt", gas: 0 };
+      // תוכניות-חיות (dca/trig/cow) מחזיקות-נעילות מחוץ-לספר — נדחה לפני-מוטציה
+      if (Object.values(st.dca ?? {}).some((p) => (p as { owner?: string }).owner === victim))
+        return { ok: false, err: "agent-has-live-dca", gas: 0 };
+      if (Object.values(st.trig ?? {}).some((p) => (p as { owner?: string }).owner === victim))
+        return { ok: false, err: "agent-has-live-trig", gas: 0 };
+      if ((st.cow ?? []).some((o) => o.owner === victim)) return { ok: false, err: "agent-has-live-cow", gas: 0 };
+      // שער-נעילות-שיוריות: אחרי-שחרור-הפקודות לא נשארת שום-נעילה שאינה פקודה-חיה
+      const preLocks = st.locked?.[victim] ?? {};
+      const orderHeld: Record<string, number> = {};
+      for (const o of st.orders) {
+        if (!o.live || o.owner !== victim) continue;
+        const rem = o.amount - o.filled;
+        const held = typeof o.lockMu === "number" && o.lockMu >= 0 ? o.lockMu : (o.side === "sell" ? rem : notional(o.price, rem));
+        const a = o.side === "sell" ? o.base : o.quote;
+        orderHeld[a] = (orderHeld[a] ?? 0) + held;
+      }
+      for (const [a, lock] of Object.entries(preLocks)) {
+        if (lock - (orderHeld[a] ?? 0) > 0) return { ok: false, err: "agent-has-residual-locks", gas: 0 };
+      }
+      pushNonce(st, dedupeKey); st.stats.opsTotal++; // גז-0 — משפחת-הערוצים-הריבוניים
+      // (1) ביטול-כל-הפקודות-החיות + שחרור-נעילה (אותו-ברזל של cancel_all)
+      const targets = st.orders.filter((o) => o.live && o.owner === victim).sort((a, b) => a.id - b.id);
+      for (const o of targets) {
+        const rem = o.amount - o.filled;
+        const held = typeof o.lockMu === "number" && o.lockMu >= 0 ? o.lockMu : (o.side === "sell" ? rem : notional(o.price, rem));
+        o.lockMu = 0;
+        addLock(st, o.owner, o.side === "sell" ? o.base : o.quote, -held);
+        invariant(lockedOf(st, o.owner, o.side === "sell" ? o.base : o.quote) >= 0, "escrow-underflow:agent_purge");
+        o.live = false;
+      }
+      if (targets.length > 0) st.orders = st.orders.filter((o) => o.live);
+      const burned: Record<string, number> = {};
+      const ensureAdj = (): NonNullable<DexState["auditAdjustments"]> => {
+        st.auditAdjustments = st.auditAdjustments ?? {
+          note: "agent_purge self-declared burns/credit removal (owner mandate 2026-10-17 — declared, not hidden)",
+          atH: st.height, native: {},
+        };
+        return st.auditAdjustments;
+      };
+      const burnMu = (a: string, mu: number): void => {
+        if (mu <= 0) return;
+        burned[a] = (burned[a] ?? 0) + mu;
+        if (a === "SAOS") { st.burnedSaos = (st.burnedSaos ?? 0) + mu; return; } // מונה-השריפה-הקנוני — הביקורת מנכה אותו מעצמה
+        const adj = ensureAdj();
+        if (a.startsWith("W") && a.length > 1) {
+          // נכס-עטוף: שריפה = פדיון-גיבוי (אותו-חוק של wrap_burn) — ה-backing יורד,
+          // והנכס-הטבעי-המקביל נשרף-מוצהר (הוא נספר בשורת-הטבעי דרך-ה-backing).
+          const native = a.slice(1);
+          st.backing = { ...(st.backing ?? {}) };
+          st.backing[a] = (st.backing[a] ?? 0) - mu;
+          adj.native = { ...(adj.native ?? {}) };
+          adj.native[native] = (adj.native[native] ?? 0) - mu;
+          return;
+        }
+        // נכס-טבעי: שריפה-מוצהרת-עצמית אטומית (מונע HALT-בחותם — השריפה מוצהרת בתוך-ה-op)
+        adj.native = { ...(adj.native ?? {}) };
+        adj.native[a] = (adj.native[a] ?? 0) - mu;
+      };
+      // (2) עמדת-ve: ה-SAOS-הנעול ב-VE_VAULT נשרף (אין בעלים אמת)
+      const vePos = st.ve?.[victim];
+      if (vePos) {
+        addBal(st, VE_VAULT, "SAOS", -vePos.amt);
+        burnMu("SAOS", vePos.amt);
+        const votes = { ...(st.veVotes ?? {}) }; delete votes[victim]; st.veVotes = votes;
+        const veMap = { ...(st.ve ?? {}) }; delete veMap[victim]; st.ve = veMap;
+      }
+      // (3) אספקות-lend: מוחזרות-מ-LEND_POT ונשרפות (חוב-פתוח נדחה מעלה)
+      if (posP) {
+        const ls = lendState(st);
+        const pos = ls.positions[victim]!;
+        const markets = { ...ls.markets };
+        let suppliesTotal = 0;
+        for (const [a, sp] of Object.entries(pos.s)) {
+          const take = sp.mu + sp.earned;
+          addBal(st, LEND_POT, a, -take);
+          burnMu(a, take);
+          const m = markets[a]!;
+          markets[a] = { ...m, sMu: m.sMu - sp.mu, sEarnedMu: Math.max(0, m.sEarnedMu - sp.earned), lastH: st.height };
+          suppliesTotal += sp.mu;
+        }
+        const pMaps = { ...ls.positions }; delete pMaps[victim];
+        st.lend = { ...ls, markets, positions: pMaps, totals: { ...ls.totals, suppliesMu: ls.totals.suppliesMu - suppliesTotal } };
+      }
+      // (4) חיסכון: הקרן-שנפקדה נשרפת מ-save-pot ו-potMu מתואם (החלוקה-לחוסכים-החיים נשארת מדויקת)
+      const svP = st.savings?.positions?.[victim];
+      if (svP && st.savings) {
+        addBal(st, SAVE_POT, "USDS", -(svP.mu + svP.owedMu));
+        burnMu("USDS", svP.mu + svP.owedMu);
+        const q = { ...st.savings.positions }; delete q[victim];
+        st.savings = { ...st.savings, positions: q, potMu: st.savings.potMu - svP.mu };
+      }
+      // (5) שריפת-כל-היתרות (השער-למעלה מבטיח: אין-נעילות-שיוריות) ומחיקת-החשבון
+      const wb = { ...(st.balances[victim] ?? {}) };
+      for (const a of Object.keys(wb)) {
+        const tot = bal(st, victim, a);
+        if (tot > 0) { addBal(st, victim, a, -tot); burnMu(a, tot); }
+      }
+      delete st.balances[victim];
+      if (st.locked) { const l = { ...st.locked }; delete l[victim]; st.locked = l; }
+      const purgedCredits = st.credits[victim] ?? 0;
+      const cr = { ...st.credits }; delete cr[victim]; st.credits = cr;
+      if (purgedCredits > 0) {
+        // חוק-הדלק (µ-מדויק): הקרדיטים-שנמחקו מוצהרים-במקביל — Σcredits+gas−minted נשאר מדויק
+        const adj = ensureAdj();
+        adj.creditsMu = (adj.creditsMu ?? 0) - purgedCredits;
+      }
+      if (st.faucetAt?.[victim] !== undefined) { const f = { ...st.faucetAt }; delete f[victim]; st.faucetAt = f; }
+      if (st.bondUserH?.[victim] !== undefined) { const bU = { ...st.bondUserH }; delete bU[victim]; st.bondUserH = bU; }
+      if (st.soldierSeedCounts?.[victim]) { const sS = { ...st.soldierSeedCounts }; delete sS[victim]; st.soldierSeedCounts = sS; }
+      st.journal.push({
+        h: st.height, t: nowMs, soldier: issuer, action: "agent_purge",
+        note: `purged ${victim}: ${targets.length} orders canceled · burned ${Object.entries(burned).map(([a, mu]) => `${mu}µ ${a}`).join(" + ") || "0"}${vePos ? ` · ve ${vePos.amt}µ SAOS` : ""}${posP ? " · lend supplies forfeited" : ""} — keyless synthetic book-agent removed by owner mandate (no keys, no control, dead weight)`,
+      });
       return { ok: true, gas: 0 };
     }
     case "pool_open": {

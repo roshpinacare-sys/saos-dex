@@ -67,8 +67,10 @@ async function main(): Promise<void> {
   if (st.lend?.markets?.USDS?.sMu !== TR_SUPPLY) { console.error("[market-door] treasury supply not applied"); process.exit(4); }
   console.log(`[market-door] h${st.height} · treasury supplied ${TR_SUPPLY}µ USDS · pool ${st.lend.markets.USDS.sMu}µ`);
 
-  /* ── 2) soldier-1 בטחונות-אמת מהיתרה-הפנויה-בלבד ── */
-  const S1 = "soldier-1";
+  /* ── 2) הלווה בטחונות-אמת מהיתרה-הפנויה-בלבד ──
+     OWNER-MANDATE 2026-10-17: היה soldier-1 — החיילים-הסינתטיים סולקו (אין-מפתחות, אין-שליטה);
+     הארנה: מחזיקת-ה-WSTEEM-האמתי במצב-החי. */
+  const S1 = "arena";
   const s1Free = (st.balances[S1]?.WSTEEM ?? 0) - (st.locked?.[S1]?.WSTEEM ?? 0);
   const S1_COL = Math.min(60_000, Math.floor(s1Free * 0.9));
   if (S1_COL < 20_000) { console.error(`[market-door] soldier-1 free WSTEEM too low (${s1Free}µ) — refusing`); process.exit(4); }

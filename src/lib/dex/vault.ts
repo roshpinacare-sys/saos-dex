@@ -24,7 +24,7 @@ import {
   vaultColValueMu, vaultRateBps, vaultEffDebtMu,
 } from "./kernel";
 
-const DEMO_AGENT = "soldier-4";        // עושה-השוק עם עודף-הבטחונות הגדול (דוזות-מסילה)
+const DEMO_AGENT = "arena";           // OWNER-MANDATE 2026-10-17: היה soldier-4 (סולק) — הארנה: עודף-הבטחונות-האמתי (WSTEEM-עומק)
 const DEMO_EVERY = 40;                 // בדיקה כל-40-טיקים (קדנצת-סוכנים)
 /* FIX(R47 · scale-truth): התקרה-הישנה (100,000µ) שאבה-2,160µ בלבד — ריבית-יום
  * שלמה עליה (floor(2160×500×5760/10⁴×2.1M))=0 — עיגול-השלמים מאפס-את-הזרימה
