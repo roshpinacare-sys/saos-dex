@@ -1,0 +1,59 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# CADDYFILE.PUBLIC · חשיפה-ציבורית מאובטחת לדקס (agent-9 wave-3, 2026-10-17)
+# ───────────────────────────────────────────────────────────────────────────
+# עקרון: הציבור מקבל קריאה-בלבד. כל-מוטציה (הזמנות/ברז/ביטול/סטלמנט) לא
+# נחשפת לאינטרנט כלל — רק ל-localhost (הקונסולה של המפעיל).
+# שכבות-הגנה (מלבד-שכבות-האפליקציה שנשארות fail-closed):
+#   1. GET-בלבד באתר הציבורי (כל POST/PUT/DELETE = 405 לפני-שהגיע לאפליקציה)
+#   2. רשימת-נתיבים לבנה — רק endpoints קריאה; כל השאר 404
+#   3. אין פרוקסי-דינמי, אין XTransformPort ציבורי, אין reverse_proxy לבקשת-משתמש
+#      (הלקח מ-Roast-63 — הפאטץ' הקנוני 5928011c נשמר כאן ומוחמר)
+#   4. כותרות-אבטחה + גוף-מוגבל
+#   5. הערה-כנה: rate-limit מתקדם דורש פלאגין/edge — ה-method+path הלבנים כאן
+#      מצמצמים את פני-ההתקפה; לפני-עומס-אמת הוסף rate_limit
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── אתר-ציבורי · קריאה-בלבד ──────────────────────────────────────────────
+http://:8082 {
+	encode zstd gzip
+
+	@bad_method not method GET HEAD
+	@safe_paths path /saos-dex/api/health /saos-dex/api/dex/state /saos-dex/api/dex/klines /saos-dex/api/dex/metrics /saos-dex/api/dex/markets /saos-dex/api/dex/trades /saos-dex/api/dex/wallets /saos-dex/api/dex/proofs /saos-dex/api/dex/price-proof /saos-dex/static/* /saos-dex/_next/*
+
+	handle {
+		respond 404
+	}
+
+	handle @safe_paths {
+		respond @bad_method 405
+		reverse_proxy 127.0.0.1:3010
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	request_body {
+		max_size 64KB
+	}
+}
+
+# ── אתר-מפעיל · localhost-בלבד (לא נגיש מהאינטרנט) ─────────────────────
+http://127.0.0.1:8081 {
+	# הפאטץ' הקנוני Roast-63: פרוקסי-פנימי עם רשימה-לבנה — 3010/3003 בלבד
+	@xform expression `{query.XTransformPort} == "3010" || {query.XTransformPort} == "3003"`
+	handle @xform {
+		reverse_proxy localhost:{query.XTransformPort}
+	}
+	@bad_xform expression `{query.XTransformPort} != "" && {query.XTransformPort} != "3010" && {query.XTransformPort} != "3003"`
+	handle @bad_xform {
+		respond 403
+	}
+	handle {
+		reverse_proxy localhost:3000
+	}
+}
