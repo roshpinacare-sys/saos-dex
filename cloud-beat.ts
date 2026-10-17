@@ -533,7 +533,7 @@ async function main(): Promise<void> {
         pulled += amt;
         await stepOnce();
       }
-      console.log(`[cloud-beat] GAS-RECOVERY: wash→treasury +${pulled}µ credits (above the 800,000µ owner floor; zero-mint, Σ conserved)`);
+      console.log(`[cloud-beat] GAS-RECOVERY: wash→treasury +${pulled}µ credits (floor=${WASH_FLOOR}µ per DAM-RELEASE 2026-10-17 owner ratification; zero-mint, Σ conserved)`);
     } else {
       console.log("[cloud-beat] GAS-RECOVERY: wash reserve already at owner floor — nothing legally pullable");
     }
