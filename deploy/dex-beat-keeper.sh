@@ -13,22 +13,28 @@ if ! git pull --ff-only -q origin main 2>/dev/null; then
   exit 0
 fi
 
-# 2) evidence schema must exist (Roast-65) before the kernel boots
+# 2) dependencies (a fresh clone has no node_modules — measured W1.4: the beat
+#    died silently in a fresh clone because bun cloud-beat.ts couldn't import)
+if [ ! -d node_modules ]; then
+  bun install --frozen-lockfile >/dev/null 2>&1 || bun install >/dev/null 2>&1 || { echo "[dex-beat-keeper] bun install failed — skipping beat"; exit 0; }
+fi
+
+# 3) evidence schema must exist (Roast-65) before the kernel boots
 export DATABASE_URL="file:$PWD/db/dex.db"
 if ! bunx prisma db push --skip-generate >/dev/null 2>&1; then
   echo "[dex-beat-keeper] prisma push failed — skipping beat (fail-closed boot will refuse anyway)"
   exit 0
 fi
 
-# 3) the beat: deterministic ticks + claims + commit (kernel self-gates the rest)
+# 4) the beat: deterministic ticks + claims + commit (kernel self-gates the rest)
 export GIT_AUTHOR_NAME="dex-beat[bot]"
 export GIT_AUTHOR_EMAIL="dex-beat[bot]@agents.roshpinacare-sys"
 export GIT_COMMITTER_NAME="dex-beat[bot]"
 export GIT_COMMITTER_EMAIL="dex-beat[bot]@agents.roshpinacare-sys"
 bun cloud-beat.ts 2>&1 | tail -4
-BEAT_RC=$?
+BEAT_RC=${PIPESTATUS[0]}   # the beat's own rc — tail's rc lies (measured W1.4)
 
-# 4) push churn FF-only; on contention, rebase favoring incoming (the chain home
+# 5) push churn FF-only; on contention, rebase favoring incoming (the chain home
 #    is canonical) and retry once — same law as the engine's beat-keeper
 if ! git push -q origin main 2>/dev/null; then
   git pull --rebase -q -X theirs origin main 2>/dev/null || exit 0
