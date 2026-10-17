@@ -16,7 +16,7 @@ fi
 # 1.5) standby guard (W1.4 cloud-twin law): if a fresh beat already landed
 #      (<10min) the cloud twin (saos-runtime dex-beat.yml) or a sibling writer
 #      is alive — this layer honestly stands down. git-only check, no API.
-LAST=$(git log -1 --format=%ct 2>/dev/null || echo 0)
+LAST=$(git log -1 --format=%ct --author=dex-beat 2>/dev/null || echo 0)
 NOW=$(date +%s)
 if [ $((NOW - LAST)) -lt 600 ]; then
   echo "[dex-beat-keeper] fresh beat exists ($(( (NOW-LAST)/60 ))min old) — standby skip (cloud-first law)"
