@@ -18,6 +18,7 @@
  * (כתובות-הצבא) — USDS הוא זכות-פדיון מתועדת, לא-טענת-גשר-נטול-אמון.
  */
 import { execSync } from "child_process";
+import { readFileSync } from "node:fs";
 import fs from "fs";
 import path from "path";
 import { createHash } from "crypto";
@@ -892,6 +893,16 @@ async function main(): Promise<void> {
   // [T24] פנקס-המדידה-היומי נכלל בשרשרת — הנפח/העמלות/המילויים של כל יום שורדים ב-git
   const chainFiles = ["db/state-snapshot.json", "db/tape.jsonl", "db/dex-credits.json", "db/rail-lifetime.json", "db/dex-metrics.json", "db/sweep-ledger.json", "db/flow24.json"];
   for (const f of chainFiles) git(`add -- ${f}`, { allowFail: true });
+  /* [W1.5 agent-zai] pre-commit integrity gate — measured 17.10 (a6d7806 repair):
+   * conflict markers once reached db/state-snapshot.json and red-x4 the beat for
+   * 4.5h before diagnosis. Law: the boot arbiter must parse BEFORE we commit it.
+   * Fail-closed: refuse the chain commit, keep the tree honest, exit 2. */
+  try {
+    JSON.parse(readFileSync("db/state-snapshot.json", "utf8"));
+  } catch (gateErr) {
+    console.error(`[cloud-beat] INTEGRITY-GATE: db/state-snapshot.json unparseable (${String(gateErr).slice(0, 140)}) — chain commit REFUSED (fail-closed, W1.5)`);
+    process.exit(2);
+  }
   let chainPushed = false;
   const staged = git("diff --cached --name-only", { allowFail: true });
   if (staged) {

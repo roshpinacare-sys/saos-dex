@@ -78,4 +78,15 @@ Bun.serve({
 });
 
 log("dex-beat-service up (R71 hourly :53 cadence; keeper=" + KEEPER + ")");
-armNext();
+// [W1.5] double-arm guard — measured 17.10 20:53:00.011Z: bun --hot re-evaluates
+// this module on file change (BOOTSTRAP overwrite) while the OLD timer chain
+// keeps living on the process, so two keepers fired in the same millisecond.
+// Law: ONE scheduler per process. globalThis survives hot reload; module state
+// does not. A new module instance attaches to nothing and leaves the arm alone.
+const G = globalThis as typeof globalThis & { __dexBeatArmed?: boolean };
+if (!G.__dexBeatArmed) {
+  G.__dexBeatArmed = true;
+  armNext();
+} else {
+  log("scheduler already armed on this process (hot-reload) — not re-arming");
+}

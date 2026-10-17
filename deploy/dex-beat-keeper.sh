@@ -7,10 +7,25 @@
 set -u
 cd /home/z/audit/saos-dex || exit 1
 
+# 0) one beat at a time — any caller, any layer (measured 17.10 20:53:00.011Z:
+#    hot-reload double-arm fired two keepers in the same millisecond and the
+#    git index.lock race made one "pull failed" honestly skip a clock slot)
+exec 9>/tmp/dex-beat-keeper.lock
+flock -n 9 || { echo "[dex-beat-keeper] another keeper holds the lock — honest skip"; exit 0; }
+
 # 1) the home is the repo — start from canonical state, never a stale tree
 if ! git pull --ff-only -q origin main 2>/dev/null; then
   echo "[dex-beat-keeper] pull failed — skipping beat (honest, no force)"
   exit 0
+fi
+
+# 1.2) integrity gate (W1.5; measured a6d7806-class outage 17.10 17:31→20:00Z:
+#      conflict markers reached db/state-snapshot.json and red-x4 the beat for
+#      4.5h before any diagnosis). Law: the boot arbiter must parse BEFORE we
+#      spend a beat. Fail-closed + attach the evidence of the last writer.
+if ! bun -e "JSON.parse(require('node:fs').readFileSync('db/state-snapshot.json','utf8'))" >/dev/null 2>&1; then
+  echo "[dex-beat-keeper] INTEGRITY-GATE FAIL: db/state-snapshot.json unparseable — beat refused (fail-closed). last commit touching it: $(git log -1 --format='%h %ad %s' --date=iso -- db/state-snapshot.json)"
+  exit 2
 fi
 
 # 1.5) standby guard (W1.4 cloud-twin law): if a fresh beat already landed
