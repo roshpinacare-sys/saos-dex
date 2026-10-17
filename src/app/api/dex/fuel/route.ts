@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ensureChain, submitOp, nextNonce } from "@/lib/dex/chain";
-import { funderFor, REFUEL_CAP } from "@/lib/dex/kernel";
+import { funderFor, REFUEL_CAP, FUEL_FUNDERS, type FuelFunder } from "@/lib/dex/kernel";
 import { consoleGuard } from "@/lib/dex/guard";
 import { operatorAuth } from "@/lib/operator-auth";
 
@@ -30,15 +30,20 @@ export async function POST(req: Request) {
   const want = Math.floor(Number(body.amount) || 1_000);
   const amt = Math.min(Math.max(0, want - have), REFUEL_CAP);
   if (amt <= 0) return NextResponse.json({ ok: true, note: `ל-${to} כבר יש ${have}µ credits — אין-צורך` });
-  let funder = funderFor(st, amt, to);
+  let funder: FuelFunder | null = funderFor(st, amt, to);
   if (!funder) {
     // סולם-חירום (conservation-true): כל-סוכן-חי עם-מספיק-קרדיטים, העשיר-ביותר-ראשון.
     // שמות-מטוהרים (agent_purge) נשללים-לעד. העברה-טהורה — Σcredits נשמר מעצמו.
+    // FIX(agent-9 · t10): הגרעין דוחה מנפיק-שאינו-FUEL_FUNDERS ("funder-only") —
+    // סולם-החירום נצמד-לחוק-הגרעין: מועמדים-מממנים-חוקיים-בלבד (type-guard narrowing),
+    // אחרת-הריצה-הייתה-נכשלת-בזמן-ריצה גם-אם-הטיפוס-היה-עובר.
     const DEAD = new Set(["soldier-1", "soldier-2", "soldier-3", "soldier-4"]);
     const rich = Object.entries(st.credits ?? {})
       .filter(([n, c]) => n !== to && !DEAD.has(n) && Number(c) >= amt)
-      .sort((a, b) => Number(b[1]) - Number(a[1]))[0];
-    funder = rich?.[0] ?? null;
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .map(([n]) => n)
+      .find((n): n is FuelFunder => (FUEL_FUNDERS as readonly string[]).includes(n));
+    funder = rich ?? null;
   }
   if (!funder) return NextResponse.json({ ok: false, error: "no-funder (הסולם יבש — המזרקה תמלא כשעמלות-אמת יימדדו)" }, { status: 200 });
   const r = submitOp({ type: "refuel", issuer: funder, nonce: nextNonce("rf"), to, amount: amt });
