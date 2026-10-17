@@ -21,6 +21,7 @@ import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { createHash } from "crypto";
+import { WASH_ENABLED } from "./src/lib/dex/mm"; import { WASH_FLOOR } from "./src/lib/dex/kernel"; // W0.3-followup: wash gates live in the engine
 import { secp256k1 } from "@noble/curves/secp256k1";
 import bs58 from "bs58";
 
@@ -387,6 +388,12 @@ export async function forgePhase(ctx: ForgeCtx): Promise<void> {
       console.log(`[cloud-beat] FORGE pool_add SAOS/USDS: +${addA}µ → ra ${p2?.ra ?? 0} rb ${p2?.rb ?? 0}`);
     } else console.warn(`[cloud-beat] FORGE pool_add rejected: ${r.reason ?? "?"}`);
   }
+  // צף-השטיפה — W0.3-followup (2026-10-17, owner-approved wave-0): מנוטר עם-המנוע.
+  // WASH_ENABLED=false ⇒ אפס-הזרמת-צף/דלק לארנק-wash — אחרת-הביט בונה מצבור-מלאי
+  // מזויף על-הספרים למכונה-שכבר-לא-סוחרת. החזרת-ההזרמה = אותו-שער בלבד
+  // (WASH_ENABLED=true) + החלטת-בעלים מתועדת + תווית volume=synthetic.
+  if (!WASH_ENABLED) console.log("[cloud-beat] wash disabled (W0.3) — no float/gas provisioning, no synthetic depth");
+  if (WASH_ENABLED) {
   // צף-השטיפה — סל-מלא (SAOS+USDS+PHIVE+ENERGY) כדי-שהמשמעות-מחזירה-תמיד-תהיה-דו-צדדית
   const wTargets: { asset: string; target: number }[] = [
     { asset: "SAOS", target: 8_000_000 }, { asset: "USDS", target: 12_000_000 },
@@ -413,6 +420,7 @@ export async function forgePhase(ctx: ForgeCtx): Promise<void> {
     await stepOnce();
     if (fueled > 0) console.log(`[cloud-beat] FORGE wash gas +${fueled}×100Kµ credits`);
   }
+  } // W0.3-followup: end WASH_ENABLED guard
 }
 
 /* ═════════════════════════ main ═════════════════════════ */
@@ -497,6 +505,38 @@ async function main(): Promise<void> {
       if (moved > 0) console.log(`[cloud-beat] SETTLE-19-c fuel-reversal: wash→treasury +${moved}µ credits (wash floor 1M intact — idle reserve re-armed the book lane)`);
     }
   } catch (e) { console.warn(`[cloud-beat] fuel-reversal skipped: ${String(e).slice(0, 80)}`); }
+
+  // W0.3-followup · GAS-RECOVERY runs HERE — before the tick loop (measured 2026-10-17:
+  // forgePhase ran post-ticks, so 120 ticks executed with a 22µ treasury: 100% op rejection.
+  if (!WASH_ENABLED) {
+    console.log("[cloud-beat] wash disabled (W0.3) — no float/gas provisioning, no synthetic depth");
+    // W0.3-followup · GAS-RECOVERY (2026-10-17): the dead machine's reserve is
+    // strangling the whole book — measured 2026-10-17: Σcredits=1,008,792µ of
+    // which wash held 995,900µ (98.7%); treasury=22µ, arena=20µ → every book op
+    // rejected insufficient-credits (60+ rejections/block, dex-beat commits
+    // literally say "0 credits"). This pulls ONLY the legally-pullable band
+    // (credits above WASH_FLOOR — the DAM-OPEN 800,000µ owner law of 2026-10-15
+    // is respected to the µ; any deviation below the floor stays an owner
+    // ratification, per the dam law's own wording). Pure refuel ops: zero-mint,
+    // Σcredits conserved, journaled per-op. The fleet's own FUEL_FUNDERS
+    // machinery takes it from there.
+    const washCr = (rt.st as unknown as { credits?: Record<string, number> }).credits?.["wash"] ?? 0;
+    const pullable = Math.max(0, washCr - WASH_FLOOR);
+    if (pullable > 0) {
+      let pulled = 0;
+      for (let i = 0; i < 40 && pulled < pullable; i++) {
+        const amt = Math.min(100_000, pullable - pulled, ((rt.st as unknown as { credits?: Record<string, number> }).credits?.["wash"] ?? 0) - WASH_FLOOR);
+        if (amt <= 0) break;
+        const r = submitOp({ type: "refuel", issuer: "wash", nonce: nextNonce("washrecall"), to: "treasury", amount: amt });
+        if (!r.queued) { console.warn(`[cloud-beat] gas-recovery refuel rejected: ${r.reason ?? "?"}`); break; }
+        pulled += amt;
+        await stepOnce();
+      }
+      console.log(`[cloud-beat] GAS-RECOVERY: wash→treasury +${pulled}µ credits (above the 800,000µ owner floor; zero-mint, Σ conserved)`);
+    } else {
+      console.log("[cloud-beat] GAS-RECOVERY: wash reserve already at owner floor — nothing legally pullable");
+    }
+  }
 
   // פיד-האורקל: רענון-מחירים חי לפני-הטיקים + בכל-~120 טיקים
   await oracleTickOnce().catch(() => {});
