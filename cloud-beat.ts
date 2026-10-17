@@ -897,8 +897,10 @@ async function main(): Promise<void> {
    * conflict markers once reached db/state-snapshot.json and red-x4 the beat for
    * 4.5h before diagnosis. Law: the boot arbiter must parse BEFORE we commit it.
    * Fail-closed: refuse the chain commit, keep the tree honest, exit 2. */
+  let sumCredits = -1;
   try {
-    JSON.parse(readFileSync("db/state-snapshot.json", "utf8"));
+    const snap = JSON.parse(readFileSync("db/state-snapshot.json", "utf8")) as { credits?: Record<string, number> };
+    sumCredits = Object.values(snap.credits ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
   } catch (gateErr) {
     console.error(`[cloud-beat] INTEGRITY-GATE: db/state-snapshot.json unparseable (${String(gateErr).slice(0, 140)}) — chain commit REFUSED (fail-closed, W1.5)`);
     process.exit(2);
@@ -906,7 +908,10 @@ async function main(): Promise<void> {
   let chainPushed = false;
   const staged = git("diff --cached --name-only", { allowFail: true });
   if (staged) {
-    const msg = `dex-beat: ${new Date().toISOString().slice(0, 19)}Z · h${heightBefore}→h${heightAfter} · ${credited} credits · ${ticked} ticks`;
+    /* [W1.6] honest beat label — '0 credits' was claims-credited-THIS-beat, read
+     * by the owner (and by agents) as the economy being empty. The label now
+     * reports both: claims this run AND the real Σ balance from the snapshot. */
+    const msg = `dex-beat: ${new Date().toISOString().slice(0, 19)}Z · h${heightBefore}→h${heightAfter} · claimed${credited} · Σ${sumCredits} credits · ${ticked} ticks`;
     git(`commit -m "${msg}"`, { allowFail: true });
     chainPushed = await pushWithRetry(ROOT, "main");
     if (!chainPushed) {
@@ -1022,7 +1027,7 @@ async function main(): Promise<void> {
   execSync("git add dex/state.json dex/credits.json dex/world.json dex/relay.json dex/agent.json dex/fleet.json dex/portfolio.json dex/bridge.json dex/onramp.json dex/showcase.json dex/mirror-stub.json", { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
   const stagedPub = execSync("git diff --cached --name-only", { encoding: "utf8", cwd: PUB }).trim();
   if (stagedPub) {
-    execSync(`git commit -m "dex-beat: h${heightAfter} · ${credited} credits · ${new Date().toISOString().slice(0, 16)}Z"`, { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
+    execSync(`git commit -m "dex-beat: h${heightAfter} · claimed${credited} · Σ${sumCredits} credits · ${new Date().toISOString().slice(0, 16)}Z"`, { encoding: "utf8", cwd: PUB, stdio: ["ignore", "pipe", "pipe"] });
     const ok = await pushWithRetry(PUB, "main");
     console.log(`[cloud-beat] public state ${ok ? "published" : "PUSH FAILED (will retry next beat)"}`);
   } else {
