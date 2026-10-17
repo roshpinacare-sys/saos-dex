@@ -4,6 +4,6 @@
   "private": true,
   "description": "[agent-zai/W1.3] canonical local pacer for the SAOS-DEX chain — hourly :53, runs /home/z/audit/dex-beat-keeper.sh (FF-pull, deterministic beat, machine churn as dex-beat[bot], FF-only push). Mini-service so the sandbox supervisor keeps it alive; a bare nohup loop was reaped twice (04:40Z, 05:10Z).",
   "scripts": {
-    "dev": "bun --hot index.ts"
+    "dev": "flock -n /tmp/dex-beat-service.instance.lock bun --hot index.ts"
   }
 }

@@ -12,6 +12,16 @@
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
+// [W1.6] cross-process single-instance law — measured 23:18Z: THREE `bun --hot
+// index.ts` schedulers fired at :53 in parallel (two 20:07 zombies that survived
+// the audit wipe — processes outlive deleted files — plus the 21:04 relaunch that
+// silently LOST the port bind but kept its timers; the old-code zombie served
+// /health, so BOOTSTRAP's health-check blessed the wrong owner). The in-process
+// globalThis guard (W1.5) cannot see across processes; the OS lockfile can.
+// flock -n here (held for process lifetime via package.json dev script) + PID
+// in every boot log = one clock owner, ever. A second instance exits 0 quietly
+// by DESIGN — losing the race honestly is correct; duplicating the clock is not.
+
 const PORT = 3044;
 const KEEPER = "/home/z/audit/saos-dex/deploy/dex-beat-keeper.sh";
 const LOG = "/tmp/dex-beat-service.log";
@@ -77,7 +87,7 @@ Bun.serve({
   },
 });
 
-log("dex-beat-service up (R71 hourly :53 cadence; keeper=" + KEEPER + ")");
+log(`dex-beat-service up pid=${process.pid} (R71 hourly :53 cadence; keeper=${KEEPER})`);
 // [W1.5] double-arm guard — measured 17.10 20:53:00.011Z: bun --hot re-evaluates
 // this module on file change (BOOTSTRAP overwrite) while the OLD timer chain
 // keeps living on the process, so two keepers fired in the same millisecond.
