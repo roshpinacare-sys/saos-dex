@@ -94,7 +94,9 @@ export async function POST(req: Request) {
       }
     }
   }
-  const EXAM_AGENTS = ["soldier-1", "soldier-2", "soldier-3", "soldier-4", "bot-a", "bot-b", "bot-c"] as const;
+  // FIX(roster-drift 2026-10-17): soldier-1..4 טוהרו (OWNER-MANDATE agent_purge) —
+  // הרוסטר-החי-היום: חיילי-הכלכלה האמיתיים (אותן-זהויות בצי-כולו).
+  const EXAM_AGENTS = ["yarden", "tamar", "shachar", "aluf", "erez", "gal", "bot-a", "bot-b", "bot-c"] as const;
   for (const ag of EXAM_AGENTS) {
     const c = st.credits[ag] ?? 0;
     if (c < 8_000) {
