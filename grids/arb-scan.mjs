@@ -575,7 +575,13 @@ gatherFeeds.__emptyFallback = () => ({
 /* ── CLI: node grids/arb-scan.mjs [--selftest] ────────────────────────────── */
 if (process.argv[1] && process.argv[1].endsWith("arb-scan.mjs")) {
   if (process.argv.includes("--selftest")) {
-    await import("./arb-selftest.mjs");
+    // W2 (2026-10-18): NOT awaited — awaiting here deadlocks the ESM graph
+    // (measured, node 22+24: arb-scan suspends at this top-level await while
+    // arb-selftest statically imports arb-scan → child's evaluation blocks on
+    // the parent's unfinished evaluation → "unsettled top-level await" exit 13,
+    // zero output). Fired import: this module's evaluation completes first,
+    // then the selftest evaluates and exits the process with the gate verdict.
+    import("./arb-selftest.mjs");
   } else {
     try {
       const { at, entries, ledger, sources } = await runArbScan();
