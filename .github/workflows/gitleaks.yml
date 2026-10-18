@@ -4,8 +4,13 @@ name: gitleaks-secret-scan
 # מצב: רץ-מיד, ללא סודות, ללא גישה חוץ. כישלון = push נעצר.
 # NOTE (2026-10-01): org-wide coverage task 11 — pinned binary variant
 # (gitleaks-action@v2 fails silently on PRIVATE rails; direct binary is the
-# Defi/Domain-canonical approach). CI is currently red org-wide due to
-# Actions minutes exhaustion since 09-20 — owner-level billing fix pending.
+# Defi/Domain-canonical approach).
+# FIX (2026-10-18 · wave-19.3): the old script died under `set -e` BEFORE any
+# evidence was printed — gitleaks exits 1 BOTH on findings AND on scan errors
+# (e.g. "failed to scan Git repository: stderr is not empty"), so a 9-streak red
+# carried zero visibility. New order = scan→evidence→eval (the fleet's order law):
+# the true exit code, the stderr tail, and redacted finding rows land in the log
+# BEFORE the step fails. Red with no evidence is now structurally impossible.
 
 on:
   push:
@@ -23,11 +28,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: gitleaks (direct pinned binary)
+      - name: gitleaks (direct pinned binary, evidence-before-eval)
         run: |
-          set -euo pipefail
-          curl -sSL -o /tmp/gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz
-          tar -xzf /tmp/gl.tgz -C /tmp gitleaks
-          /tmp/gitleaks detect --source . --report-format json --report-path /tmp/gl-report.json --redact --no-banner --log-level error
-          COUNT=$(python3 -c "import json;print(len(json.load(open('/tmp/gl-report.json'))))" 2>/dev/null || echo "0")
+          set -uo pipefail
+          curl -sSL -o /tmp/gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz || { echo "CURL-FAIL rc=$?"; exit 1; }
+          tar -xzf /tmp/gl.tgz -C /tmp gitleaks || { echo "TAR-FAIL rc=$?"; exit 1; }
+          /tmp/gitleaks version
+          /tmp/gitleaks detect --source . --report-format json --report-path /tmp/gl-report.json --redact --no-banner --log-level error 2>/tmp/gl-stderr.txt
+          CODE=$?
+          echo "gitleaks exit: ${CODE}"
+          if [ -s /tmp/gl-stderr.txt ]; then
+            echo "--- gitleaks stderr (the real reason, last 10 lines) ---"
+            tail -10 /tmp/gl-stderr.txt
+          fi
+          COUNT=$(python3 -c "import json;print(len(json.load(open('/tmp/gl-report.json'))))" 2>/dev/null || echo "no-report")
           echo "gitleaks findings: ${COUNT}"
+          if [ "${COUNT}" != "0" ] && [ "${COUNT}" != "no-report" ]; then
+            echo "--- redacted finding rows (RuleID | file:line | commit) — values never printed ---"
+            python3 -c "import json;[print(x.get('RuleID'),'|',x.get('File'),':'+str(x.get('StartLine')),'|',(x.get('Commit') or '')[:8]) for x in json.load(open('/tmp/gl-report.json'))]"
+          fi
+          exit ${CODE}
