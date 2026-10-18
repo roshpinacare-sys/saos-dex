@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-18T02:31:17.938Z · 146 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-18T02:32:49.296Z · 147 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -8,6 +8,7 @@
 | `scripts/batch-run.ts` | * |
 | `scripts/broadcast-pending.ts` | broadcast-pending.ts — Task 3-b · מהדר-חבילות-עסקה-חתומות-וממתינות (EVM/SOL) |
 | `scripts/build-static.mjs` | * |
+| `scripts/builder/evolve.mjs` | !/usr/bin/env node |
 | `scripts/chaos-test.ts` | scripts/chaos-test.ts — מבחן-כאוס מבוקר (Controlled Chaos Testing) · SAOS-DEX |
 | `scripts/chaos2-engine.ts` | * |
 | `scripts/chaos3-stack.ts` | * |
