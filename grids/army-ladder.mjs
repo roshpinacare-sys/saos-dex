@@ -163,6 +163,25 @@ export function myKnownOrderIds(plan) {
   return ids;
 }
 
+/* ── הטיה-מה-arb (W4): סולם-הצבא נושם עם-ה-arb של-ה-DEX (owner: "ארביטרז' על המחיר") ──
+ * קורא את counter-grid-plan.json (הפלט-השעתי של arb-grid) — אם-טרי (<90 דק') ותקין —
+ * מחזיר tilt ∈ [-0.25,+0.25]: חיוב = הספר כבד-ביד → רגלי-מכירה גדולות-יותר (עד-cap),
+ * קנייה קטנה-יותר. אפס-קובץ/ישן/שבור → 0 (סולם-סימטרי כתמיד). fail-open לחלוטין. */
+export function computeArbTilt(planObj, nowMs = Date.now()) {
+  try {
+    if (!planObj || planObj.ok !== true) return 0;
+    const age = nowMs - new Date(planObj.nowIso).getTime();
+    if (!Number.isFinite(age) || age < 0 || age > 90 * 60_000) return 0;
+    const bid = num(planObj?.bias?.bidShare);
+    if (!(bid >= 0 && bid <= 1)) return 0;
+    return Math.max(-0.25, Math.min(0.25, (bid - 0.5) * 0.5));
+  } catch { return 0; }
+}
+export function readArbTilt() {
+  try { return computeArbTilt(JSON.parse(readFileSync(join(HERE, "state", "counter-grid-plan.json"), "utf8"))); }
+  catch { return 0; }
+}
+
 /* ── תכנון-רגליים לחשבון (היפר-גריד: stagger לפי-אינדקס-החשבון) ─────────────────── */
 export function planAccountLegs({ plan, account, accountIndex, mid, traderSteem, traderSbd, lockedSteem }) {
   const t = plan.traders.find((x) => x.account === account) || {};
@@ -170,6 +189,7 @@ export function planAccountLegs({ plan, account, accountIndex, mid, traderSteem,
   const openCap = t.maxOpenSteem != null ? num(t.maxOpenSteem) : num(plan.maxOpenSteem);
   const edge = num(plan.edgeBps) + num(plan.staggerBps) * accountIndex; // היפר-גריד
   const estateCap = plan.estateMaxOpenSteem != null ? num(plan.estateMaxOpenSteem) : CAPS.estateMaxOpenSteem;
+  const tilt = num(plan.__arbTilt || 0); // W4: הטיה-מה-arb — fail-open, תחום [-0.25,+0.25]
   const estateLocked = num(plan.__estateLockedSteem || 0);
   const estateRoom = Math.max(0, estateCap - estateLocked);
   let budget = Math.min(openCap, Math.max(0, (traderSteem + lockedSteem) - FUEL_RESERVE_STEEM), estateRoom);
@@ -177,7 +197,7 @@ export function planAccountLegs({ plan, account, accountIndex, mid, traderSteem,
   for (const [j, leg] of (t.sellLegs || [{}, {}]).entries()) {
     if (j >= CAPS.maxLegs) break;
     if (budget < 0.05) break;
-    const size = Math.min(per, budget, num(leg?.sizeSteem) || per);
+    const size = Math.min(per * (1 + tilt), budget, num(leg?.sizeSteem) || per * (1 + tilt)); // tilt>0 → אסקים-גדולים (עד-cap; גם-ברירת-המחדל נושמת)
     const price = mid * (1 + (edge / 10000) * (j + 1));
     legs.push({ legId: `sell-${j + 1}`, side: "sell", sizeSteem: dp3(size), priceSbd: Number(price.toFixed(6)), edgeBps: Math.round(edge * (j + 1)) });
     budget -= size;
@@ -187,7 +207,7 @@ export function planAccountLegs({ plan, account, accountIndex, mid, traderSteem,
   const minSbd = num(plan.minSbdForBuyLeg) > 0 ? num(plan.minSbdForBuyLeg) : 1.0;
   if (buyOn && traderSbd >= minSbd) {
     const buyPrice = mid * (1 - edge / 10000);
-    legs.push({ legId: "buy-1", side: "buy", sizeSteem: dp3(Math.min(per, (traderSbd * 0.9) / buyPrice)), priceSbd: Number(buyPrice.toFixed(6)), edgeBps: Math.round(edge) });
+    legs.push({ legId: "buy-1", side: "buy", sizeSteem: dp3(Math.max(0, Math.min(per, (traderSbd * 0.9) / buyPrice)) * (1 - tilt)), priceSbd: Number(buyPrice.toFixed(6)), edgeBps: Math.round(edge) });
   }
   return legs;
 }
@@ -212,6 +232,7 @@ export function diffOrders({ liveOrders, targetLegs, knownIds, priceTolBps = 50 
 async function run(keysFile) {
   if (!existsSync(PLAN_PATH)) { console.log("[army] plan missing — fail-closed"); process.exit(1); }
   const plan = JSON.parse(readFileSync(PLAN_PATH, "utf8"));
+  plan.__arbTilt = readArbTilt(); // W4: הסולם נושם עם-ה-arb (fail-open)
   const v = validatePlan(plan);
   if (!v.ok) { console.log(`[army] plan REJECTED: ${v.reason}`); process.exit(1); }
   if (stasisHalt("army-ladder")) { console.log("[army] STASIS/lane-gate active — capital lanes obey (fail-closed)"); process.exit(0); }
@@ -342,6 +363,9 @@ export async function selftest() {
   assert(!validatePlan({ ...basePlan, maxPerLegSteem: 2.0 }).ok, "per-leg cap enforced (W2: cap 1.0)");
   assert(!validatePlan({ ...basePlan, maxOpenSteem: 3.0 }).ok, "open cap enforced (W2: cap 2.0)");
   assert(!validatePlan({ ...basePlan, estateMaxOpenSteem: 40.0 }).ok, "estate cap enforced (W2: cap 30.0)");
+  assert(validatePlan({ ...basePlan, maxPerLegSteem: 1.0 }).ok, "per-leg cap allows exactly 1.0 (W4 raise)");
+  assert(validatePlan({ ...basePlan, maxOpenSteem: 2.0 }).ok, "open cap allows exactly 2.0 (W4 raise)");
+  assert(validatePlan({ ...basePlan, estateMaxOpenSteem: 30.0 }).ok, "estate cap allows exactly 30 (W4 raise)");
   assert(!validatePlan({ ...basePlan, edgeBps: 30 }).ok, "min edge enforced");
   assert(!validatePlan({ ...basePlan, staggerBps: -5 }).ok, "negative stagger refused");
   assert(!validatePlan({ ...basePlan, expiryDays: 30 }).ok, "expiry ceiling enforced");
@@ -374,6 +398,22 @@ export async function selftest() {
 
   const estate = planAccountLegs({ plan: { ...basePlan, __estateLockedSteem: 2.95 }, account: "hcsoldier6", accountIndex: 0, mid: 0.103, traderSteem: 1.0, traderSbd: 0, lockedSteem: 0 });
   assert(estate.length === 0, "estate cap nearly full → no new legs (limited-capital law)");
+
+  // W4 — arb-tilt vectors (fail-open law)
+  const NOW = 1_800_000_000_000;
+  assert(computeArbTilt({ ok: true, nowIso: new Date(NOW).toISOString(), bias: { bidShare: 0.538 } }, NOW) > 0, "bid-heavy book → positive tilt (asks up)");
+  assert(computeArbTilt({ ok: true, nowIso: new Date(NOW).toISOString(), bias: { bidShare: 0.2 } }, NOW) < 0, "ask-heavy book → negative tilt (asks down)");
+  assert(computeArbTilt({ ok: true, nowIso: new Date(NOW - 91 * 60_000).toISOString(), bias: { bidShare: 0.9 } }, NOW) === 0, "stale plan (>90min) → tilt 0 (fail-open)");
+  assert(computeArbTilt({ ok: false, nowIso: new Date(NOW).toISOString(), bias: { bidShare: 0.9 } }, NOW) === 0, "plan not-ok → tilt 0");
+  assert(computeArbTilt({ ok: true, nowIso: new Date(NOW).toISOString(), bias: { bidShare: 2.0 } }, NOW) === 0, "impossible bidShare → tilt 0");
+  assert(computeArbTilt(null, NOW) === 0, "null plan → tilt 0");
+  const tiltUp = computeArbTilt({ ok: true, nowIso: new Date(NOW).toISOString(), bias: { bidShare: 0.9 } }, NOW); // +0.2
+  const legT = planAccountLegs({ plan: { ...basePlan, __arbTilt: tiltUp }, account: "hcsoldier6", accountIndex: 0, mid: 0.103, traderSteem: 5.0, traderSbd: 0, lockedSteem: 0 });
+  const leg0 = planAccountLegs({ plan: { ...basePlan }, account: "hcsoldier6", accountIndex: 0, mid: 0.103, traderSteem: 5.0, traderSbd: 0, lockedSteem: 0 });
+  assert(legT[0].sizeSteem > leg0[0].sizeSteem, "positive tilt → bigger sell legs (within caps)");
+  assert(legT[0].sizeSteem <= 1.0 + 1e-9, "tilt never exceeds code per-leg cap");
+  const sym = planAccountLegs({ plan: { ...basePlan, __arbTilt: 0 }, account: "hcsoldier6", accountIndex: 0, mid: 0.103, traderSteem: 5.0, traderSbd: 0, lockedSteem: 0 });
+  assert(sym[0].sizeSteem === leg0[0].sizeSteem, "tilt 0 → symmetric ladder unchanged");
 
   const d = diffOrders({ liveOrders: [{ orderid: oid, real_price: "0.100000" }], targetLegs: [{ legId: "sell-1", orderId: oid, priceSbd: 0.11 }], knownIds: new Set([oid]) });
   assert(d.some((a) => a.action === "replace"), "stale price → replace");
