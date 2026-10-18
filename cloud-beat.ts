@@ -542,8 +542,21 @@ async function main(): Promise<void> {
 
   // פיד-האורקל: רענון-מחירים חי לפני-הטיקים + בכל-~120 טיקים
   await oracleTickOnce().catch(() => {});
+  /* [W2 (2026-10-18) · owner directive "ודא שהמערכת לא תנטרל את עצמה מהחיובים/פעולות שלה"]
+   * ECON-STASIS — שובר-רצפה כלכלי. מדידה: wash הושחר חוקית ל-0 (DAM-RELEASE W1.3,
+   * אשרור-בעלים "כן תמשיך שחרר"), treasury=0, Σ=15,963µ ושורפת ~420µ/שעה → ~38 שעות-ריצה
+   * ואז דחיות insufficient-credits מציפות את הביט (מחלת-ה-Σ0 המדודה 2026-10-17).
+   * החוק החדש: מתחת לרצפה — העבודה המחויבת-גז (הטיקים) נעצרת כנה, הביט ממשיך לחייב-שרשרת
+   * (commit+label+receipts) ומדגל לבעלים. הפיך בקבוע אחד; לא נוגע ב-WASH_FLOOR ששוחרר. */
+  const ECON_STASIS_FLOOR = 5_000; // µ — ≈12 שעות-ריצה בקצב-השריפה הנמדד; הרמה/הורדה = מילת-בעלים
+  const liveSumCredits = Object.values((rt.st as unknown as { credits?: Record<string, number> }).credits ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
+  let econStasis = false;
+  if (liveSumCredits < ECON_STASIS_FLOOR) {
+    econStasis = true;
+    console.error(`[cloud-beat] ECON-STASIS: Σ credits ${liveSumCredits}µ < floor ${ECON_STASIS_FLOOR}µ — billed work SKIPPED this beat (owner flag: fuel floor reached; mint_fuel/recycle policy decision pending) — chain bookkeeping stays alive, honestly`);
+  }
   let ticked = 0;
-  for (let i = 0; i < CLOUD_TICKS; i++) {
+  if (!econStasis) for (let i = 0; i < CLOUD_TICKS; i++) {
     await stepOnce();
     ticked++;
     if (rt.halted) {
@@ -899,8 +912,12 @@ async function main(): Promise<void> {
    * Fail-closed: refuse the chain commit, keep the tree honest, exit 2. */
   let sumCredits = -1;
   try {
-    const snap = JSON.parse(readFileSync("db/state-snapshot.json", "utf8")) as { credits?: Record<string, number> };
-    sumCredits = Object.values(snap.credits ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
+    const snap = JSON.parse(readFileSync("db/state-snapshot.json", "utf8")) as { credits?: Record<string, number>; state?: { credits?: Record<string, number> } };
+    /* W2-fix (measured 2026-10-18): the snapshot nests credits under `state` — the
+     * W1.6 label read the top level and reported Σ0 while the real Σ was ~16Kµ
+     * (same mis-path I made locally minutes earlier — the "empty economy" was a
+     * read-path artifact, not famine). Both shapes accepted, nested wins. */
+    sumCredits = Object.values(snap.state?.credits ?? snap.credits ?? {}).reduce((a, b) => a + (Number(b) || 0), 0);
   } catch (gateErr) {
     console.error(`[cloud-beat] INTEGRITY-GATE: db/state-snapshot.json unparseable (${String(gateErr).slice(0, 140)}) — chain commit REFUSED (fail-closed, W1.5)`);
     process.exit(2);
