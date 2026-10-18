@@ -34,36 +34,41 @@ async function main() {
   try { await db.$disconnect(); } catch { /* already gone */ }
 
   if (snapH <= localMax) {
-    // [W4-E fork-gap, agent-z9 2026-10-18] EQUAL-HEIGHT FORK — measured today:
-    // the cloud twin (memory-chain, its dex.db writes never landed) and the local
-    // keeper both built h501765 with different stateRoots; the boot integrity
-    // gate refused (fail-closed, correct) and the chain bricked. Signal (git-only):
-    // the commit that last wrote the canonical snapshot did NOT include db/dex.db
-    // → the snapshot-writer had zero durable db evidence → any local evidence at
-    // the same height is a dead fork branch by definition. Law unchanged: the
-    // git-committed snapshot IS canonical; archive the fork (never delete), fresh
-    // DB, corroboration-birth does bounded acceptance — identical to stale-tip.
+    // [W4-E2 fork-signal, agent-z9 2026-10-18 · refined] EQUAL-HEIGHT FORK —
+    // measured today: the cloud twin and the local keeper both built h501765 with
+    // DIFFERENT stateRoots (oracle-env divergence), boot gate refused, chain bricked.
+    // Signal: the exact one the boot gate uses — stateRoot(snapshot) vs the root
+    // signed in the local DB header at the snapshot height. Mismatch at equal
+    // height = fork: the git-committed snapshot IS canonical (cloud-first law);
+    // archive the local fork branch (never delete), fresh DB, corroboration-birth
+    // accepts the canonical line (bounded trust). Equal + matching roots = the
+    // healthy continuous line — no rebirth, no churn. (W4-E1's writer-has-db
+    // signal is superseded: db/*.db is gitignored BY DESIGN, so the writer never
+    // carries it in a commit and that signal would fire hourly.)
     if (snapH === localMax) {
-      const { execSync } = require("node:child_process");
-      let writerHasDb = null;
       try {
-        const c = execSync("git log -1 --format=%H -- db/state-snapshot.json", { encoding: "utf8" }).trim();
-        if (c) {
-          const files = execSync(`git diff-tree --no-commit-id --name-only -r ${c}`, { encoding: "utf8" });
-          writerHasDb = files.split("\n").includes("db/dex.db");
+        const { stateRoot } = require("../src/lib/dex/kernel.ts");
+        const hdr = await db.blockHeader.findUnique({ where: { height: snapH }, select: { stateRoot: true } });
+        if (hdr?.stateRoot) {
+          const claimed = stateRoot(snap.state);
+          if (claimed !== hdr.stateRoot) {
+            const stamp2 = new Date().toISOString().replace(/[:.]/g, "-");
+            const arch2 = `db/dex.db.pre-fork-${stamp2}`;
+            let archived2 = "no-local-db-file";
+            try {
+              fs.renameSync("db/dex.db", arch2);
+              archived2 = `archived fork tip h${localMax} (${count} headers, root ${hdr.stateRoot.slice(0, 10)}...) -> ${arch2}`;
+            } catch (e) {
+              if (e.code !== "ENOENT") { console.log(`fork archive failed (${e.message}) — refusing rebirth, human decision`); return; }
+            }
+            console.log(`REBIRTH: fork-at-tip — snapshot h${snapH} root ${String(claimed).slice(0, 10)}... != local evidence root ${hdr.stateRoot.slice(0, 10)}... — ${archived2}; fresh DB born, corroboration-birth will accept the canonical line (bounded trust)`);
+            return;
+          }
+          console.log(`healthy line (snapshot h${snapH} root == local header root) — no rebirth`);
+          return;
         }
-      } catch { writerHasDb = null; }
-      if (writerHasDb === false) {
-        const stamp2 = new Date().toISOString().replace(/[:.]/g, "-");
-        const arch2 = `db/dex.db.pre-fork-${stamp2}`;
-        let archived2 = "no-local-db-file";
-        try {
-          fs.renameSync("db/dex.db", arch2);
-          archived2 = `archived fork tip h${localMax} (${count} headers) -> ${arch2}`;
-        } catch (e) {
-          if (e.code !== "ENOENT") { console.log(`fork archive failed (${e.message}) — refusing rebirth, human decision`); return; }
-        }
-        console.log(`REBIRTH: fork-at-tip — snapshot h${snapH} (writer committed NO dex.db evidence) ≠ local evidence h${localMax} — ${archived2}; fresh DB born, corroboration-birth will accept the canonical line (bounded trust)`);
+      } catch (e) {
+        console.log(`fork-check unavailable (${String(e).slice(0, 80)}) — falling through, human decision`);
         return;
       }
     }
