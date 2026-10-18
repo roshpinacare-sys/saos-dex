@@ -1,0 +1,39 @@
+{
+  "schema": "SAOS-BUILDQUEUE/1",
+  "updatedAt": "2026-10-18T02:40:00Z",
+  "authority": "owner directive 2026-10-18: 'אני רוצה בניה שיפור וכו תמיד ולא רק בדיקות' + 'שיפור שמישות של הכל'",
+  "law": [
+    "one task per run, stateless round-robin by UTC hour",
+    "every output passes the W1.5 integrity gate before commit",
+    "zero keys, zero vaults, zero secrets — product/docs/metrics only",
+    "NO-OP is honest and preferred over fabricated work"
+  ],
+  "order": [
+    "build-status",
+    "freshness-report",
+    "tools-index",
+    "ui-audit"
+  ],
+  "tasks": {
+    "build-status": {
+      "title": "תדריך-מוצר חי",
+      "target": "docs/BUILD-STATUS.md",
+      "why": "owner reads today's real economy (Σ credits, feeMeter, army verdict, pools) straight from the chain snapshot"
+    },
+    "freshness-report": {
+      "title": "דוח-טריות",
+      "target": "docs/FRESHNESS.md",
+      "why": "owner asked 'מה סגור מוגבל לא מעודכן' — this answers it continuously for every metric file"
+    },
+    "tools-index": {
+      "title": "מפת-כלים חיה",
+      "target": "docs/TOOLS-INDEX.md",
+      "why": "owner asked 'שיפור שמישות של הכל' — every tool in the repo discoverable with its purpose"
+    },
+    "ui-audit": {
+      "title": "סקירת-מוצר",
+      "target": "docs/UI-AUDIT.md",
+      "why": "product level: find TODO/placeholder rot in the interface before the owner does"
+    }
+  }
+}
