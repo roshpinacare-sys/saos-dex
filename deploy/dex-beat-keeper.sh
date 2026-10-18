@@ -51,6 +51,26 @@ if ! bunx prisma db push --skip-generate >/dev/null 2>&1; then
   exit 0
 fi
 
+# 3.5) stale-tip rebirth law (W2.0; measured 17.10 23:53Z: the local twin ADOPTED
+#      the cloud-advanced canonical snapshot (h452425) while its own evidence tail
+#      stopped at h436101 — loadSnapshot demanded LOCAL corroboration for a height
+#      the local DB had never seen, priorCount=3609>0 so corroboration-birth was
+#      unreachable, and the twin bricked itself after every wipe/outage.
+#      Law: the git-committed snapshot IS the canonical truth (cloud-first); when
+#      it is strictly ahead of the local evidence tail, the local tail is a dead
+#      branch — ARCHIVED (never deleted), a fresh empty DB is born, and the chain's
+#      own corroboration-birth doctrine (Roast-65/Z-22) does the honest bounded
+#      acceptance. Strict guards: snapshot must be git-CLEAN (came from origin,
+#      not a hand-edit) and local tip must be strictly BEHIND the snapshot.
+#      (logic lives in deploy/rebirth-check.cjs — quotable, reviewable, tested)
+if [ -f db/state-snapshot.json ] && [ -z "$(git status --porcelain -- db/state-snapshot.json)" ]; then
+  REBIRTH=$(DATABASE_URL="file:$PWD/db/dex.db" bun deploy/rebirth-check.cjs || echo "rebirth-check failed")
+  echo "[dex-beat-keeper] 3.5 rebirth-check: $REBIRTH"
+  if echo "$REBIRTH" | grep -q "REBIRTH:"; then
+    bunx prisma db push --skip-generate >/dev/null 2>&1 || { echo "[dex-beat-keeper] rebirth push failed — skipping beat"; exit 0; }
+  fi
+fi
+
 # 4) the beat: deterministic ticks + claims + commit (kernel self-gates the rest)
 export GIT_AUTHOR_NAME="dex-beat[bot]"
 export GIT_AUTHOR_EMAIL="dex-beat[bot]@agents.roshpinacare-sys"
@@ -66,3 +86,4 @@ if ! git push -q origin main 2>/dev/null; then
   git push -q origin main 2>/dev/null || exit 0
 fi
 echo "[dex-beat-keeper] beat done rc=$BEAT_RC $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+exit "$BEAT_RC"   # W2.0 honesty: the service's lastBeat.rc must tell the truth (a halted chain is not a clean beat)
