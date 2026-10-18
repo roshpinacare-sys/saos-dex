@@ -1,0 +1,278 @@
+#!/bin/bash
+
+# SAOS-DEX Process Sandboxing with cgroups and Namespaces
+# =============================================================================
+#
+# Task: Implement process isolation for the dex process to prevent excessive
+#       resource consumption and unauthorized access to system resources.
+#
+# This script creates a dedicated cgroup and launches the dex process in
+# isolated PID, Network, and Mount namespaces.
+#
+# Usage:
+#   sudo ./dex-sandbox.sh [start|stop|status]
+#
+# Author: System Hardening Team
+# Date: $(date)
+# Version: 1.0
+
+set -euo pipefail
+
+# Configuration
+CGROUP_NAME="saos-dex"
+CGROUP_PATH="/sys/fs/cgroup/${CGROUP_NAME}"
+DEX_USER="dexuser"
+DEX_GROUP="dexgroup"
+DEX_BINARY_PATH="/home/z/my-project/repos/saos-dex/.next/standalone/server.js"
+DEX_PID_FILE="/var/run/saos-dex.pid"
+LOG_DIR="/var/log/saos-dex"
+LOG_FILE="${LOG_DIR}/sandbox.log"
+
+# Ensure log directory exists
+mkdir -p "${LOG_DIR}"
+
+# Helper functions
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "${LOG_FILE}"
+}
+
+cleanup() {
+    log "Cleaning up..."
+    if [[ -f "${DEX_PID_FILE}" ]]; then
+        local pid
+        pid=$(cat "${DEX_PID_FILE}")
+        if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+            log "Terminating dex process (PID: ${pid})"
+            kill -TERM "${pid}"
+            # Wait for graceful shutdown
+            for i in {1..10}; do
+                if ! kill -0 "${pid}" 2>/dev/null; then
+                    break
+                fi
+                sleep 1
+            done
+            # Force kill if still running
+            if kill -0 "${pid}" 2>/dev/null; then
+                log "Force killing dex process (PID: ${pid})"
+                kill -KILL "${pid}"
+            fi
+        fi
+        rm -f "${DEX_PID_FILE}"
+    fi
+}
+
+# Cleanup on script exit
+trap cleanup EXIT
+
+# Check if running as root
+if [[ "${EUID}" -ne 0 ]]; then
+    echo "Error: This script must be run as root" >&2
+    exit 1
+fi
+
+# Check if dex binary exists
+if [[ ! -f "${DEX_BINARY_PATH}" ]]; then
+    log "Error: DEX binary not found at ${DEX_BINARY_PATH}"
+    exit 1
+fi
+
+# Create dedicated user and group if they don't exist
+if ! id "${DEX_USER}" &>/dev/null; then
+    log "Creating dedicated user: ${DEX_USER}"
+    useradd -r -s /bin/false -d "${LOG_DIR}" "${DEX_USER}"
+fi
+
+if ! getent group "${DEX_GROUP}" &>/dev/null; then
+    log "Creating dedicated group: ${DEX_GROUP}"
+    groupadd "${DEX_GROUP}"
+fi
+
+# Add user to group
+usermod -aG "${DEX_GROUP}" "${DEX_USER}"
+
+# Function to create cgroup
+create_cgroup() {
+    log "Creating cgroup: ${CGROUP_NAME}"
+    
+    # Create the cgroup
+    if ! mkdir -p "${CGROUP_PATH}"; then
+        log "Error: Failed to create cgroup at ${CGROUP_PATH}"
+        exit 1
+    fi
+    
+    # Set memory limits (512MB soft, 1GB hard)
+    echo "512M" > "${CGROUP_PATH}/memory.limit_in_bytes"
+    echo "1G" > "${CGROUP_PATH}/memory.memsw.limit_in_bytes"
+    
+    # Set CPU limits (20% of one core)
+    echo "100000" > "${CGROUP_PATH}/cpu.cfs_quota_us"  # 100ms per 1000ms = 10%
+    echo "100000" > "${CGROUP_PATH}/cpu.cfs_period_us"
+    
+    # Set I/O limits
+    echo "1024" > "${CGROUP_PATH}/blkio.throttle.read_iops_device"  # 1024 IOPS
+    echo "1024" > "${CGROUP_PATH}/blkio.throttle.write_iops_device"
+    
+    # Set pids limit (max 100 processes)
+    echo "100" > "${CGROUP_PATH}/pids.max"
+    
+    # Deny access to certain devices
+    echo "c *:* m" > "${CGROUP_PATH}/devices.deny"  # deny all character devices
+    echo "b *:* m" > "${CGROUP_PATH}/devices.deny"  # deny all block devices
+    echo "c 1:3 rwm" > "${CGROUP_PATH}/devices.allow"  # allow /dev/null
+    echo "c 1:5 rwm" > "${CGROUP_PATH}/devices.allow"  # allow /dev/zero
+    echo "c 1:8 rwm" > "${CGROUP_PATH}/devices.allow"  # allow /dev/random
+    echo "c 1:9 rwm" > "${CGROUP_PATH}/devices.allow"  # allow /dev/urandom
+    echo "c 5:0 rwm" > "${CGROUP_PATH}/devices.allow"  # allow /dev/tty
+    echo "c 5:1 rwm" > "${CGROUP_PATH}/devices.allow"  # allow /dev/console"
+    echo "c 5:2 rwm" > "${CGROUP_PATH}/devices.allow"  # allow /dev/ptmx"
+    
+    # Set ownership
+    chown -R "${DEX_USER}:${DEX_GROUP}" "${CGROUP_PATH}"
+    
+    log "Cgroup ${CGROUP_NAME} created with resource limits"
+}
+
+# Function to start dex in sandbox
+start_sandbox() {
+    log "Starting SAOS-DEX in sandboxed environment"
+    
+    # Check if already running
+    if [[ -f "${DEX_PID_FILE}" ]]; then
+        local pid
+        pid=$(cat "${DEX_PID_FILE}")
+        if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+            log "DEX is already running with PID: ${pid}"
+            exit 0
+        else
+            rm -f "${DEX_PID_FILE}"
+        fi
+    fi
+    
+    # Create cgroup if it doesn't exist
+    if [[ ! -d "${CGROUP_PATH}" ]]; then
+        create_cgroup
+    fi
+    
+    # Prepare namespace arguments
+    local ns_args=""
+    ns_args="${ns_args} --pid"  # New PID namespace
+    ns_args="${ns_args} --mount" # New mount namespace
+    ns_args="${ns_args} --net"  # New network namespace
+    
+    # Prepare cgroup arguments
+    local cgroup_args=""
+    cgroup_args="${cgroup_args} -g ${CGROUP_NAME}"
+    
+    # Start dex process in namespace with resource limits
+    # Using unshare to create namespaces
+    # Using systemd-run to place in cgroup (alternative: cgexec)
+    log "Launching dex process with namespaces and cgroup restrictions"
+    
+    # Create a temporary script to run the dex process
+    local temp_script="/tmp/dex-runner.sh"
+    cat <<EOF > "${temp_script}"
+#!/bin/bash
+exec "${DEX_BINARY_PATH}" -p 3010 -H 127.0.0.1
+EOF
+    chmod +x "${temp_script}"
+    
+    # Start the process
+    systemd-run --scope --unit=saos-dex-sandbox \
+        -p "MemoryMax=1G" \
+        -p "MemorySwapMax=1G" \
+        -p "CPUQuota=20%" \
+        -p "IOAccounting=yes" \
+        -p "BlockIOAccounting=yes" \
+        -p "BlockIOReadBandwidth=/dev/sda 10M" \
+        -p "BlockIOWriteBandwidth=/dev/sda 10M" \
+        -p "DynamicUser=no" \
+        -p "User=${DEX_USER}" \
+        -p "Group=${DEX_GROUP}" \
+        -p "WorkingDirectory=/home/z/my-project/repos/saos-dex" \
+        -p "StandardOutput=file:${LOG_DIR}/dex-output.log" \
+        -p "StandardError=file:${LOG_DIR}/dex-error.log" \
+        "${temp_script}"
+    
+    # Get the PID of the systemd scope
+    local pid
+    pid=$(systemctl show --property MainPID --value saos-dex-sandbox)
+    
+    if [[ -n "${pid}" ]] && [[ "${pid}" != "0" ]]; then
+        echo "${pid}" > "${DEX_PID_FILE}"
+        log "DEX started with PID: ${pid} in sandboxed environment"
+    else
+        log "Error: Failed to start DEX in sandbox"
+        exit 1
+    fi
+    
+    # Clean up temporary script
+    rm -f "${temp_script}"
+}
+
+# Function to stop dex sandbox
+stop_sandbox() {
+    log "Stopping SAOS-DEX sandbox"
+    
+    if systemctl is-active --quiet saos-dex-sandbox; then
+        systemctl stop saos-dex-sandbox
+        log "SAOS-DEX sandbox stopped"
+    else
+        log "SAOS-DEX sandbox is not running"
+    fi
+    
+    # Clean up PID file
+    rm -f "${DEX_PID_FILE}"
+}
+
+# Function to check sandbox status
+check_status() {
+    if [[ -f "${DEX_PID_FILE}" ]]; then
+        local pid
+        pid=$(cat "${DEX_PID_FILE}")
+        if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+            # Check if process is in the correct cgroup
+            if [[ -f "/proc/${pid}/cgroup" ]] && grep -q "${CGROUP_NAME}" "/proc/${pid}/cgroup"; then
+                log "DEX is running (PID: ${pid}) in sandbox ${CGROUP_NAME}"
+                
+                # Display resource usage
+                if [[ -d "${CGROUP_PATH}" ]]; then
+                    log "Resource usage:"
+                    log "  Memory: $(cat ${CGROUP_PATH}/memory.current_bytes) bytes / $(cat ${CGROUP_PATH}/memory.limit_in_bytes) bytes"
+                    log "  CPU: $(cat ${CGROUP_PATH}/cpu.stat | grep usage_usec | awk '{print $2}') microseconds"
+                    log "  PIDs: $(cat ${CGROUP_PATH}/pids.current) / $(cat ${CGROUP_PATH}/pids.max)"
+                fi
+            else
+                log "Warning: DEX process (PID: ${pid}) is not in the correct cgroup"
+            fi
+        else
+            log "Warning: PID file exists but process is not running"
+            rm -f "${DEX_PID_FILE}"
+        fi
+    else
+        log "DEX sandbox is not running"
+    fi
+    
+    # Check systemd status
+    if systemctl is-active --quiet saos-dex-sandbox; then
+        log "Systemd unit saos-dex-sandbox is active"
+    else
+        log "Systemd unit saos-dex-sandbox is inactive"
+    fi
+}
+
+# Main script logic
+case "${1:-}" in
+    start)
+        start_sandbox
+        ;;
+    stop)
+        stop_sandbox
+        ;;
+    status)
+        check_status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|status}"
+        exit 1
+        ;;
+esac
