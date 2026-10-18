@@ -73,8 +73,8 @@
 
 ## W9-DELTA · הגל-השני (2026-10-18, 6 הצעות-שהגיעו-אחרי-הפרסום)
 
-- **כיסוי-מלא**: 7-ההצעות-החדשות-נקראו-כולן-במלואן-על-ידי-zai-code (W9 — 6-בגל-הראשון + cmvefklm-שהגיעה-במהלך-השיפוט-עצמו). מעתה **47/47-משופטים** (40-באינדקס-המקורי + 7-בדלתא-זו; cmvdxs6w-עומק-W7). אפס-הצעות-מחוץ-למפה.
-- **תבנית-הגל**: ה-7-כולן-ממשפחות-החוסמים-הידועות — תלותי-פנטזיה (winston/prom-client/`@prometheus/client`), מודלי-Prisma-דמיוניים, ו-capture-על-placeholder-שלעולם-לא-יורה. אפס-דליפות-סוד-חדשות בגל-זה.
+- **כיסוי-מלא**: 9-ההצעות-החדשות-נקראו-כולן-במלואן-על-ידי-zai-code (W9 — התור-צמח-במהלך-השיפוט-עצמו: 45→49). מעתה **49/49-משופטים** (40-באינדקס-המקורי + 9-בדלתא-זו; cmvdxs6w-עומק-W7). אפס-הצעות-מחוץ-למפה.
+- **תבנית-הגל**: ה-9-כולן-ממשפחות-החוסמים-הידועות — תלותי-פנטזיה (winston/prom-client/`@prometheus/client`), מודלי-Prisma-דמיוניים, ו-capture-על-placeholder-שלעולם-לא-יורה. אפס-דליפות-סוד-חדשות בגל-זה.
 
 | תיקייה | יעד | רעיון | חוסמים (מאומתים) | פסק |
 |---|---|---|---|---|
@@ -85,5 +85,7 @@
 | cmvef1d7 | src/lib/db.ts | מונה-Prometheus-לשגיאות-DB | winston+prom-client-חסרים → **import-של-db.ts-מלבנה-את-כל-המנוע** (db.ts-מיובא-בכל-route); ה-"תיקונים" (Roast-68/R16-a·m7) **כבר-חיים** ב-db.ts-האמיתי — הדלתא-האמיתית-היא-רק-התלות-הפנטזית; file-logging-ברגל-אפמרלית; הדבקה-מלאה-על-קובץ-חי | REJECT-AS-WRITTEN |
 | cmvefe91 | src/app/api (monitor) | ניטור-API-ודוח-חודשי | `@prometheus/client`-**שם-חבילה-שאינו-קיים** (האמיתי: prom-client) + winston; db.apiLog+db.monthlyReport-מדומיינים; capture-על-`NextResponse.next()`-placeholder-שלעולם-לא-יורה (מחלת-cmvdkvpg); 4xx-יחיד-מתויג-"High error rate"-שקרית; setInterval-חודשי-בלי-מחזור-חיים | REJECT-AS-WRITTEN |
 | cmvefklm | src/middleware.ts | ניטור-התנהגותי-ל-DEX (sandwich/front-run/reentrancy) | `@prometheus/client`-**בפעם-השלישית** (חבילה-שאינה-קיימת); `await req.json()`-בתוך-middleware **צורך-את-גוף-הבקשה → כל-swap/order-נשבר** (בלי-clone); `getCurrentPrice()`-מחזיר-**1.0 קבוע** (מוק-גלוי — sandwich/front-run-מחושבים-מול-מחיר-פיקטיבי); החלפה-מלאה-של-EXEC-CD-44; Map-התנהגותי-ללא-ניקוי (זליגת-זיכרון); middleware.ts-מייצא-GET-/metrics-שלעולם-לא-יושג | REJECT-AS-WRITTEN |
+| cmvefr4b | src/lib (wrapper) | ניטור-התנהגותי-בעטיפת-handler | **הטובה-בגל — ארכיטקטורת-עטיפה נכונה, מקמפלת, בלי-deps-פנטזיים**; אבל: regex-ה-SQLi-פוגע-ב-URL-לגיטימי (`;`/`*`/`..`/מילות-מפתח-בפרמטרים → סיווג-שקרי); bot-תמים-מסווג-"injection-attempt"; UA+IP-ללוג-לכל-דגל; שער-הניקוי `%100`-רשלני | REJECT-AS-WRITTEN (מועמד-השדרוג-הראשון-ל-EWF) |
+| cmvefxhq | src/lib/db.ts | Sentry-לשגיאות-DB | `@sentry/node`-חסר → **import-brick-של-כל-המנוע**; צורת-log-config-של-Prisma-שגויה (`error:`-בתוך-PrismaClientOptions — שגיאת-קומפילציה + excess-property `target`); `Sentry.init`-**אחרי**-ה-throw-של-fail-closed → ההתראות-מאבדות-בשקט (מוות-בלתי-נראה); ה-guard-מוחלש-מ-dex.db-ספציפי-ל-**כל-.db-שהוא** (נסיגה-מול-Roast-68-החי); תוכן-db.ts-בשם-קובץ-זר → הדבקה-לפי-שם = שני-`export const db` | REJECT-AS-WRITTEN |
 
 - **ראוי-לציון**: cmveei30-ו-cmveeogv-מצטרפים-למשפחת-"החלפה-במקום-עטיפה" (סה"כ-עתה 8-מהתור); cmveeogv-הוא-הבלתי-נסבל-מכולם — היה-ממית-כל-POST-אם-היה-מודבק.
