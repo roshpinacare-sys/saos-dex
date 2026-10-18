@@ -73,8 +73,8 @@
 
 ## W9-DELTA · הגל-השני (2026-10-18, 6 הצעות-שהגיעו-אחרי-הפרסום)
 
-- **כיסוי-מלא**: 6-ההצעות-החדשות-נקראו-כולן-במלואן-על-ידי-zai-code (W9). מעתה **46/46-מדדים-משופטים** (40-באינדקס-המקורי + 6-בדלתא-זו; cmvdxs6w-עומק-W7). אפס-הצעות-מחוץ-למפה.
-- **תבנית-הגל**: ה-6-כולן-ממשפחות-החוסמים-הידועות — תלותי-פנטזיה (winston/prom-client/`@prometheus/client`), מודלי-Prisma-דמיוניים, ו-capture-על-placeholder-שלעולם-לא-יורה. אפס-דליפות-סוד-חדשות בגל-זה.
+- **כיסוי-מלא**: 7-ההצעות-החדשות-נקראו-כולן-במלואן-על-ידי-zai-code (W9 — 6-בגל-הראשון + cmvefklm-שהגיעה-במהלך-השיפוט-עצמו). מעתה **47/47-משופטים** (40-באינדקס-המקורי + 7-בדלתא-זו; cmvdxs6w-עומק-W7). אפס-הצעות-מחוץ-למפה.
+- **תבנית-הגל**: ה-7-כולן-ממשפחות-החוסמים-הידועות — תלותי-פנטזיה (winston/prom-client/`@prometheus/client`), מודלי-Prisma-דמיוניים, ו-capture-על-placeholder-שלעולם-לא-יורה. אפס-דליפות-סוד-חדשות בגל-זה.
 
 | תיקייה | יעד | רעיון | חוסמים (מאומתים) | פסק |
 |---|---|---|---|---|
@@ -84,5 +84,6 @@
 | cmveeogv | src/middleware.ts | סינון-תקיפות-ידועות (SQLi/XSS/SSRF) | **`req.text()`-ללא-await` → צריכת-גוף-הבקשה → כל-POST/PUT/PATCH-נשבר** (והסריקה-בודקת-`[object Promise]`); regex-ה-SSRF-פוגע-ב-x-forwarded-for-פנימי (10./172.16-31./192.168.) → 403-המוני-ברגלי-ענן; `\b--\b`-פוגע-ב-tokens-base64url-ב-Authorization → 403-למאומתים; סריקת-כל-ה-headers-כולל-מחרוזות-אימות | REJECT-AS-WRITTEN |
 | cmvef1d7 | src/lib/db.ts | מונה-Prometheus-לשגיאות-DB | winston+prom-client-חסרים → **import-של-db.ts-מלבנה-את-כל-המנוע** (db.ts-מיובא-בכל-route); ה-"תיקונים" (Roast-68/R16-a·m7) **כבר-חיים** ב-db.ts-האמיתי — הדלתא-האמיתית-היא-רק-התלות-הפנטזית; file-logging-ברגל-אפמרלית; הדבקה-מלאה-על-קובץ-חי | REJECT-AS-WRITTEN |
 | cmvefe91 | src/app/api (monitor) | ניטור-API-ודוח-חודשי | `@prometheus/client`-**שם-חבילה-שאינו-קיים** (האמיתי: prom-client) + winston; db.apiLog+db.monthlyReport-מדומיינים; capture-על-`NextResponse.next()`-placeholder-שלעולם-לא-יורה (מחלת-cmvdkvpg); 4xx-יחיד-מתויג-"High error rate"-שקרית; setInterval-חודשי-בלי-מחזור-חיים | REJECT-AS-WRITTEN |
+| cmvefklm | src/middleware.ts | ניטור-התנהגותי-ל-DEX (sandwich/front-run/reentrancy) | `@prometheus/client`-**בפעם-השלישית** (חבילה-שאינה-קיימת); `await req.json()`-בתוך-middleware **צורך-את-גוף-הבקשה → כל-swap/order-נשבר** (בלי-clone); `getCurrentPrice()`-מחזיר-**1.0 קבוע** (מוק-גלוי — sandwich/front-run-מחושבים-מול-מחיר-פיקטיבי); החלפה-מלאה-של-EXEC-CD-44; Map-התנהגותי-ללא-ניקוי (זליגת-זיכרון); middleware.ts-מייצא-GET-/metrics-שלעולם-לא-יושג | REJECT-AS-WRITTEN |
 
-- **ראוי-לציון**: cmveei30-ו-cmveeogv-מצטרפים-למשפחת-"החלפה-במקום-עטיפה" (סה"כ-עתה 7-מהתור); cmveeogv-הוא-הבלתי-נסבל-מכולם — היה-ממית-כל-POST-אם-היה-מודבק.
+- **ראוי-לציון**: cmveei30-ו-cmveeogv-מצטרפים-למשפחת-"החלפה-במקום-עטיפה" (סה"כ-עתה 8-מהתור); cmveeogv-הוא-הבלתי-נסבל-מכולם — היה-ממית-כל-POST-אם-היה-מודבק.
