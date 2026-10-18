@@ -12,17 +12,26 @@
 | REJECT-AS-WRITTEN | 32 |
 | נשפט-לעומק-ב-W7 | 1 (cmvdxs6w) |
 
+
+## W10 · אשרור-הבעלים ("מאשר", 2026-10-18) — מהתור-אל-הקוד-החי
+
+- **הבעלים אישר** את תור-האשרורים. מומש-בשני-commit-ים-מאומתים-tsc=0:
+  · **e1d1eda9** — db-scope-guard: cmvdxs6w-הגרסה-המתוקנת (POST-למקלט-הקונסולה, env-gated, sha256, fail-open) + cmvdww18 (מודול-`src/lib/dex/alert.ts`-נכתב: לוג-מבני + ledger-JSONL + מדודה + תקרת-גודל). ה-throw-נשאר-בלתי-מותנה: **ההגנה-fail-closed, ההתראות-fail-open**.
+  · **9cb44214** — middleware: ליבת-EXEC-CD-44-מילה-במילה + cmvdn0tb (לוג-429-מבני) + cmvdkj2e (התראה-מוקדמת-מדודה, ציבורי-בלבד — תיקון-ספי-הסף-מ-W8-a) + cmvdo3gm (IDS-מותנה-env-כבוי-ברירת-מחדל; matcher-ה-proxy-הכפול-שוחזר; גימום-trackers). cmvdlfbq/cmvdi78i — נבלעו-ולא-נערמו (מערכות-כפולות/חלשות-מדוד).
+- **מקלט-ההתראות קם-בקונסולה**: `POST /api/alerts` (W10) — צורה-מחמירה (שדות-זרים-נדחים-400), מדידת-קצב 10/דק׳/IP, דדופיקציה-דקה, ledger-`db/alerts.jsonl`-עם-תקרה. **כנות: לא-מאומת** — למנוע-אין-סוד-משותף (חוק-אפס-הסודות); מסומן-כך-בפאנל.
+- הלולאה-החיה-נסגרת: guard-יורה → מודול-מקומי-מתעד → קונסולה-רואה. אפס-סודות, אפס-מוקים.
+
 ## הטבלה-המלאה
 
 | תיקייה | יעד | רעיון | חוסמים (מאומתים) | פסק |
 |---|---|---|---|---|
 | cmvdg33u | src/lib/db.ts (+RBAC) | wrapper-RBAC ל-Prisma | tsc: 9×TS1005/1128; catch-על-unknown; spread-מאבד-prototype; PrismaClient-שני | REJECT-AS-WRITTEN |
 | cmvdj3bn | src/middleware.ts | לוג-winston | winston-לא-מותקן; fs-ב-Edge; מוחק-את-ה-rate-limit-החי (EXEC-CD-44) | REJECT-AS-WRITTEN |
-| cmvdkj2e | src/middleware.ts | התראה-על-תנועה-חשודה | קריסה-על-מערך-ריק; setInterval-טופ-לבל; חייב-merge-ולא-החלפה | ENDORSE-WITH-FIXES |
+| cmvdkj2e | src/middleware.ts | התראה-על-תנועה-חשודה | קריסה-על-מערך-ריק; setInterval-טופ-לבל; חייב-merge-ולא-החלפה | ENDORSE-WITH-FIXES → נבלע-בהרכב (9cb44214): התראה-מוקדמת-מדודה-100/דק׳-לציבורי-בלבד |
 | cmvdr25d | src/middleware.ts | winston+prom-client | deps-חסרים; Edge-לא-תואם; bucket.push-חסר (429-לא-נאכף); סטטוס-תמיד-200 | REJECT-AS-WRITTEN |
 | cmvd7w43 | src/instrumentation.ts | — | שכפול-byte-של-הקובץ-החי; no-op | ENDORSE |
 | cmvd6si1 | src/instrumentation.ts | cache-WIF-קצר-טווח | cache-WIF-ב-Map-גלובלי (הרחבת-שטח-סוד); מוות-שקט-בלי-WIFs | REJECT-AS-WRITTEN |
-| cmvdxs6w | saos-dex src/lib/db.ts | התראת-guard | נשפט-לעומק-W7 (4 חוסמים; גרסה-מתוקנת-מוצעת) | REJECT-AS-WRITTEN · W7 |
+| cmvdxs6w | saos-dex src/lib/db.ts | התראת-guard | נשפט-לעומק-W7 (4 חוסמים; גרסה-מתוקנת-מוצעת) | REJECT-AS-WRITTEN · W7 → **אושר-על-ידי-הבעלים ומומש** (e1d1eda9): הגרסה-המתוקנת-חיה |
 | cmvdq26s | src/middleware.ts | סריקה+חסימת-IP | tsc-אומת: host.match-תחביר; buckets-לא-מוצהר; חוסם-/api/dex/showcase-לגיטימי; קורופציה-"při" | REJECT-AS-WRITTEN |
 | cmvdpcn2 | src/middleware.ts | לוג-אבטחה-מובנה | filter-על-IterableIterator (TS2339+TypeError); מוחק-matcher; לוג-כל-ה-query-strings | REJECT-AS-WRITTEN |
 | cmvdik4k | route/lib חדש | IDS-עם-DB | models-לא-קיימים ב-Prisma; הכל-בקובץ-אחד; toggles-ללא-auth | REJECT-AS-WRITTEN |
@@ -33,11 +42,11 @@
 | cmvdkp9b | api/dex route | מעקב-סף-לכל-נקודה | date-fns-חסר; models-חסרים; GET-לא-מאומת-שופך-IPs | REJECT-AS-WRITTEN |
 | cmvdfwov | deploy/ | cgroups+namespaces | cgroup-v1-על-מארח-v2; `memory.current_bytes`-לא-קיים; systemd-run-סינכרוני; EXIT-הורג-את-השרת-שהוקם | REJECT-AS-WRITTEN |
 | cmvdv3t4 | src/lib/db.ts | התראת-guard-מרכזית | import-מודול-לא-קיים; **payload-נושא-DATABASE_URL-גולמי** (דליפה, מנוגד-ל-R16-a·m7-שלו-עצמו) | REJECT-AS-WRITTEN |
-| cmvdi78i | src/lib/dex | IDS-בזיכרון | מקמפל; addFailedAttempt-אף-פעם-לא-נקרא (אבטחה-למראית-עין); GET-לא-מאומת | ENDORSE-WITH-FIXES |
+| cmvdi78i | src/lib/dex | IDS-בזיכרון | מקמפל; addFailedAttempt-אף-פעם-לא-נקרא (אבטחה-למראית-עין); GET-לא-מאומת | ENDORSE-WITH-FIXES → נבלע-ב-cmvdo3gm, לא-נערם (XFF-ראשון-ניתן-לזיוף-נגד-קונבנציית-הקצה-האחרון; setInterval-ב-Edge) |
 | cmvdl266 | src/lib logging | audit-log-עם-טרנזקציות | uuid-חסר; db.auditLog-חסר; **מתמיד-כל-ה-headers-כולל-Authorization** (דליפת-סוד); ReadableStream.toString | REJECT-AS-WRITTEN |
 | cmvdk5x1 | src/lib/dex | אנומליות+ack | db.anomalyEvent-חסר; DDL-של-TIMESTAMPTZ/JSONB-על-**SQLite**; setInterval-טופ-לבל | REJECT-AS-WRITTEN |
 | cmvdmuf6 | src/lib/dex | AccessMonitor-סינגלטון | db.accessAttempt-חסר (החוסם-היחיד); דוח-any | REJECT-AS-WRITTEN (רעיון-מאושר) |
-| cmvdn0tb | src/middleware.ts | לוג-429-כ-JSON | מקמפל; עותק-מהימן; רק-matcher-ה-proxy שנפל | ENDORSE-WITH-FIXES |
+| cmvdn0tb | src/middleware.ts | לוג-429-כ-JSON | מקמפל; עותק-מהימן; רק-matcher-ה-proxy שנפל | ENDORSE-WITH-FIXES → נבלע-בהרכב (9cb44214): logUnauthorizedAccess-על-כל-429 |
 | cmvdl8jh | src/middleware.ts | threat+apiLog | db.apiLog-חסר; req.ip-הוסר-ב-Next-15/16; התראות-ל-placeholder-קשיח (הוצאת-מידע) | REJECT-AS-WRITTEN |
 | cmvdg9ji | src/lib/dex | AccessMonitor-מדורג | **new PrismaClient חשוף-עוקף-את-guard-Roast-68** (וקטור-הנזק-עצמו); db.accessLog-חסר; appendFileSync-סינכרוני-לכל-בקשה | REJECT-AS-WRITTEN |
 | cmvdw017 | api/dex/agent | לוג-אנומליה-לפני-agent | import-prisma-שלא-קיים (החי-הוא-db); Agent-model-חסר; אין-operatorAuth; שם-מבטיח-sentry/prometheus-ואין | REJECT-AS-WRITTEN |
@@ -47,14 +56,14 @@
 | cmvd4adr | api/dex/swap | validator-ללא-zod | ה-validator-נקי-אך-**מחזיר-"Swap executed successfully"-מדומה** בלי-לגעת ב-getQuote/submitOp → רגרסיה-קטסטרופלית-לבורסה-החיה | REJECT-AS-WRITTEN (ה-validator-בנפרד-מאושר) |
 | cmvdaos6 | src/lib/db.ts | allowlist-env | זריקה-עם-**ערך-WIF-גולמי-בהודעה** (דליפת-סוד); דורש-SAOS_DEX_STATE_DIR-שאינו-מוגדר-בענן | REJECT-AS-WRITTEN |
 | cmvdj9rv | src/middleware.ts | access-log+patterns | db.accessLog-חסר; `!!authHeader`-מסמיך-הכל → **401-לכל-ה-API-הציבורי** | REJECT-AS-WRITTEN |
-| cmvdww18 | src/lib/db.ts | התראת-guard-מודולרית | רק-`import("./dex/alert")`-שטרם-נוצר; אין-דליפה; שומר-על-fail-closed | ENDORSE-WITH-FIXES |
-| cmvdlfbq | src/middleware.ts | סריקה+bruteforce-מעל-הקיים | matcher `:pat`-מכסה-מקטע-אחד (צריך `:path*`); סף-סריקה-עלול-לחסום-מכות-UI-לגיטימיות; אחרת-עטיפה-נכונה | ENDORSE-WITH-FIXES |
+| cmvdww18 | src/lib/db.ts | התראת-guard-מודולרית | רק-`import("./dex/alert")`-שטרם-נוצר; אין-דליפה; שומר-על-fail-closed | ENDORSE-WITH-FIXES → **יושם** (e1d1eda9): המודול-החסר-נכתב (src/lib/dex/alert.ts — לוג-מבני+ledger-JSONL+מדודה) |
+| cmvdlfbq | src/middleware.ts | סריקה+bruteforce-מעל-הקיים | matcher `:pat`-מכסה-מקטע-אחד (צריך `:path*`); סף-סריקה-עלול-לחסום-מכות-UI-לגיטימיות; אחרת-עטיפה-נכונה | ENDORSE-WITH-FIXES → נבלע-ב-cmvdo3gm, לא-נערם (מערכת-זיהוי-כפולה-על-אותם-יעדים) |
 | cmvdbegu | src/lib/db.ts | RBAC-Proxy | בודק-props-טופ-לבל: כל-`db.<model>.find*/create*`-**עוקף**-את-הבדיקה; `$transaction`-נדחה-שלא-לצורך | REJECT-AS-WRITTEN |
 | cmvdz1f2 | src/lib logger | logger-winston+uuid | שני-deps-חסרים; ערך-מועט | REJECT-AS-WRITTEN |
 | cmvd9o1o | src/lib/db.ts | מרחב-env-מותר | זורק-על-כל-env-מחוץ-ל-6-מותרים — PATH/HOME-תמיד-קיימים → **boot-תמיד-נכשל** | REJECT-AS-WRITTEN |
 | cmve03yr | src/middleware.ts | IDS+Prometheus-מותנה-env | winston+prom-client (Edge); geo-jump-מת (`updateIpHistory(ip, ip)`); באג-קדימות-gauge; מוחק-matcher | REJECT-AS-WRITTEN (הרעיון-בין-הטובים) |
 | cmvdb7zm | deploy/ | cgroups-v1-עברית | **bash -n נכשל: מרכאה-לא-מאוזנת (EOF 227)**; waitEOF-פגום; `"50%"`-ב-cpu.cfs_quota_us; heredoc-שבור | REJECT-AS-WRITTEN |
-| cmvdo3gm | src/middleware.ts | IDS/IPS-מותנה-env | מקמפל; שומר-על-ה-rate-limit-מילה-במילה; IDS-כבוי-כברירת-מחדל (כנה); נדרש: matcher-proxy+ספי-סף; tracker-לא-חסום-זיכרון-כשמופעל | ENDORSE-WITH-FIXES |
+| cmvdo3gm | src/middleware.ts | IDS/IPS-מותנה-env | מקמפל; שומר-על-ה-rate-limit-מילה-במילה; IDS-כבוי-כברירת-מחדל (כנה); נדרש: matcher-proxy+ספי-סף; tracker-לא-חסום-זיכרון-כשמופעל | ENDORSE-WITH-FIXES → **יושם** (9cb44214): matcher-ה-proxy-שוחזר + trimTracker-לכל-ה-trackers (תיקוני-W8-a) |
 | cmvdkvpg | src/lib/dex route | monitor-עם-ציד-תשובה | db.apiLog-חסר; Proxy-לא-רואה-body (תמיד-ריק); updateMany-לפי-חלון-שנייה-**דורס-שורות-אחיות**; responseTime~0; "auth"-הוא-הערה | REJECT-AS-WRITTEN |
 
 ## שלושת-המעמיקים-הבאים (המלצת-המשפט)
