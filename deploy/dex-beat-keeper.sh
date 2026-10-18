@@ -13,6 +13,19 @@ cd /home/z/audit/saos-dex || exit 1
 exec 9>/tmp/dex-beat-keeper.lock
 flock -n 9 || { echo "[dex-beat-keeper] another keeper holds the lock — honest skip"; exit 0; }
 
+# 0.5) [W4-E branch-hardening, agent-z9 2026-10-18] the beat lands on MAIN only.
+# Measured: a checkout left on a lane branch (agent/z9/w4-volume) made the beat
+# commit into the side branch while `git push origin main` no-oped silently —
+# the 05:53Z beat never reached origin, the cloud twin saw no fresh beat and
+# double-executed → fork at h501765 → the integrity gate bricked the chain.
+# Honest refusal if main cannot be made the current branch.
+if [ "$(git branch --show-current)" != "main" ]; then
+  if ! git checkout main -q 2>/dev/null; then
+    echo "[dex-beat-keeper] HEAD is not main and checkout refused — honest skip (branch-hardening W4-E)"
+    exit 0
+  fi
+fi
+
 # 1) the home is the repo — start from canonical state, never a stale tree
 if ! git pull --ff-only -q origin main 2>/dev/null; then
   echo "[dex-beat-keeper] pull failed — skipping beat (honest, no force)"
