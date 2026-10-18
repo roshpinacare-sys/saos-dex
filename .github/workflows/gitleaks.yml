@@ -11,6 +11,16 @@ name: gitleaks-secret-scan
 # carried zero visibility. New order = scan→evidence→eval (the fleet's order law):
 # the true exit code, the stderr tail, and redacted finding rows land in the log
 # BEFORE the step fails. Red with no evidence is now structurally impossible.
+#
+# KNOWN FINDING (classified 2026-10-18, wave-19.3): the lane flags exactly ONE
+# finding — generic-api-key in agent/vault/recovery-meta-2026-09-12.json:3 at
+# commit dc70edc6 (2026-09-12, R11 KEYS-ACCESS generation). The fleet's own
+# later commit 8103d76 classified it CRITICAL-R11-KEY-BROADCAST ("הסיסמה הוצבה
+# לצד המעטפת"), removed it from HEAD, and preserved history by law (אפס
+# force-push). The red is therefore TRUE and stays until the OWNER decides:
+# (1) rotate/retire the 09-12 generation (red line: owner lane), then optionally
+# (2) baseline or history-surgery per owner order. This lane is an
+# evidence-carrying alarm, not a broken check.
 
 on:
   push:
