@@ -70,3 +70,19 @@
 3. לוגים-שבולעים-headers/body-גולמיים — מנוגד-לחוק-אפס-הסודות.
 4. מוקים-מזויפים ("Swap executed successfully") — נגד-דוקטרינת-אפס-המוקים.
 5. שמות-יעד-שאינם-תואמים-תוכן — מסוכן-בהדבקה-לפי-שם.
+
+## W9-DELTA · הגל-השני (2026-10-18, 6 הצעות-שהגיעו-אחרי-הפרסום)
+
+- **כיסוי-מלא**: 6-ההצעות-החדשות-נקראו-כולן-במלואן-על-ידי-zai-code (W9). מעתה **46/46-מדדים-משופטים** (40-באינדקס-המקורי + 6-בדלתא-זו; cmvdxs6w-עומק-W7). אפס-הצעות-מחוץ-למפה.
+- **תבנית-הגל**: ה-6-כולן-ממשפחות-החוסמים-הידועות — תלותי-פנטזיה (winston/prom-client/`@prometheus/client`), מודלי-Prisma-דמיוניים, ו-capture-על-placeholder-שלעולם-לא-יורה. אפס-דליפות-סוד-חדשות בגל-זה.
+
+| תיקייה | יעד | רעיון | חוסמים (מאומתים) | פסק |
+|---|---|---|---|---|
+| cmvee7v2 | src/lib (exporter) | יצוא-אירועי-אבטחה (syslog/CEF/webhook) | 3-מודלי-פנטזיה (securityExportTarget/History/securityEvent); **סודות-plaintext-ב-DB** (`auth.value`-משורשר-ללא-הצפנה); Basic-auth-מקודד-ערך-יחיד (ללא user:pass); Prisma+Buffer-ב-Edge-אם-מחובר-כ-middleware → לבנה; setTimeout-retry-אובד-במחזור-תהליך | REJECT-AS-WRITTEN |
+| cmveeblf | src/lib (monitor) | ניטור-התנהגותי-ל-DEX (front-run/sandwich) | **לבנת-קומפילציה מתועדת**: `logger`-ו-`prometheus`-מוגדרים-פעמיים (import-בראש + export const-בזנב → TS2300); winston+prom-client-חסרים; `@/lib/logging`+`@/lib/metrics`-לא-קיימים; statusCode=200-מזויף-לפני-התשובה-האמיתית; סף-3-בקשות/5-שנ'-מדגיש-מכות-UI | REJECT-AS-WRITTEN |
+| cmveei30 | src/middleware.ts | מגבלת-קצב-עם-ציון-חריגות | **החלפה-מלאה של EXEC-CD-44-החי** (לא-עטיפה); avgRate-מתמקסס-ב-100 (חלון-חתוך-ל-100-רשומות) ו-firstSeen-אף-פעם-לא-מתאפס → ציוני-חריגות-מטפסים-ללקוחות-ותיקים-לגיטימיים; regex-ה-traversal `../../`-בלא-החמקה (מוגבל-לפרמטרי-שאילתה); regex-ה-suspicious-פוגע-בפרמטרי-DEX-לגיטימיים (update/drop/exec) | REJECT-AS-WRITTEN |
+| cmveeogv | src/middleware.ts | סינון-תקיפות-ידועות (SQLi/XSS/SSRF) | **`req.text()`-ללא-await` → צריכת-גוף-הבקשה → כל-POST/PUT/PATCH-נשבר** (והסריקה-בודקת-`[object Promise]`); regex-ה-SSRF-פוגע-ב-x-forwarded-for-פנימי (10./172.16-31./192.168.) → 403-המוני-ברגלי-ענן; `\b--\b`-פוגע-ב-tokens-base64url-ב-Authorization → 403-למאומתים; סריקת-כל-ה-headers-כולל-מחרוזות-אימות | REJECT-AS-WRITTEN |
+| cmvef1d7 | src/lib/db.ts | מונה-Prometheus-לשגיאות-DB | winston+prom-client-חסרים → **import-של-db.ts-מלבנה-את-כל-המנוע** (db.ts-מיובא-בכל-route); ה-"תיקונים" (Roast-68/R16-a·m7) **כבר-חיים** ב-db.ts-האמיתי — הדלתא-האמיתית-היא-רק-התלות-הפנטזית; file-logging-ברגל-אפמרלית; הדבקה-מלאה-על-קובץ-חי | REJECT-AS-WRITTEN |
+| cmvefe91 | src/app/api (monitor) | ניטור-API-ודוח-חודשי | `@prometheus/client`-**שם-חבילה-שאינו-קיים** (האמיתי: prom-client) + winston; db.apiLog+db.monthlyReport-מדומיינים; capture-על-`NextResponse.next()`-placeholder-שלעולם-לא-יורה (מחלת-cmvdkvpg); 4xx-יחיד-מתויג-"High error rate"-שקרית; setInterval-חודשי-בלי-מחזור-חיים | REJECT-AS-WRITTEN |
+
+- **ראוי-לציון**: cmveei30-ו-cmveeogv-מצטרפים-למשפחת-"החלפה-במקום-עטיפה" (סה"כ-עתה 7-מהתור); cmveeogv-הוא-הבלתי-נסבל-מכולם — היה-ממית-כל-POST-אם-היה-מודבק.
