@@ -92,7 +92,10 @@ export function middleware(req: NextRequest): NextResponse {
 }
 
 // ייצוא לשימוש בקוד אחר
-export { getSecureKey, purgeAllKeys, ALLOWED_KEYS };
+// (getSecureKey / purgeAllKeys are already exported at their declarations —
+// re-exporting them again made HEAD typecheck FAIL: TS2323/TS2484, measured by
+// the fleet artery 2026-10-18T02:12Z; only the non-function export remains here)
+export { ALLOWED_KEYS };
 
 // דוגמה לשימוש ב-instrumentation.ts
 export async function register() {
