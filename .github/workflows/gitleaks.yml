@@ -34,8 +34,8 @@ jobs:
           curl -sSL -o /tmp/gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz || { echo "CURL-FAIL rc=$?"; exit 1; }
           tar -xzf /tmp/gl.tgz -C /tmp gitleaks || { echo "TAR-FAIL rc=$?"; exit 1; }
           /tmp/gitleaks version
-          /tmp/gitleaks detect --source . --report-format json --report-path /tmp/gl-report.json --redact --no-banner --log-level error 2>/tmp/gl-stderr.txt
-          CODE=$?
+          CODE=0
+          /tmp/gitleaks detect --source . --report-format json --report-path /tmp/gl-report.json --redact --no-banner --log-level error 2>/tmp/gl-stderr.txt || CODE=$?
           echo "gitleaks exit: ${CODE}"
           if [ -s /tmp/gl-stderr.txt ]; then
             echo "--- gitleaks stderr (the real reason, last 10 lines) ---"
