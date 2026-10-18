@@ -69,14 +69,20 @@ async function altRpc(method, params) {
   throw new Error(`all-alt-nodes-failed · ${errs.join(" | ")}`);
 }
 
-/* ── תקרות-קשיחות (קנרית-לנצח; שינוי = מילת-בעלים + קומיט-מתועד) ─────────────────── */
+/* ── תקרות-קשיחות (שינוי = מילת-בעלים + קומיט-מתועד) ────────────────────────────── */
+/* W2-RAISE (2026-10-18, מילת-בעלים מפורשת — owner instruction: "כל-החשבונות מעורבים
+ * בכמה-שיותר עוצמה" + אישור-downpower-1000-SP להזרמת-דלק): התקרות-הקנריות של R323
+ * (0.3/0.6/3.0) היו-מתוכננות-להון-אבק-שנמדד-אז (חשבונות-ב-0.010-STEEM). עם-הזרמת-הדלק
+ * (fleet-fuel) וה-downpower הן-היו-הופכות-לחסם-מלאכותי. ההרמה-מדורגת: תקרות-הקוד-נותנות
+ * תקרה-אמיתית, ותקרות-התוכנית (army-ladder-plan.json) נשארות-החסם-החי-המתוכנן-לפי-דלק
+ * שנחת-בפועל. חוקי-הברזל-לא-נגעו: maker-only · kill-law 5% · expiry ≤ 28 · אידמפוטנטיות. */
 export const CAPS = {
-  maxPerLegSteem: 0.3,   // לכל-חשבון — אותה-קנרית של treasury-ladder
-  maxOpenSteem: 0.6,     // לכל-חשבון
+  maxPerLegSteem: 1.0,   // לכל-חשבון (היה 0.3 — קנרית R323; W2-raise לפי-מילת-בעלים)
+  maxOpenSteem: 2.0,     // לכל-חשבון (היה 0.6)
   maxKillMidMovePct: 5,
   maxLegs: 2,
   maxTraders: 13,        // חוק-הצי
-  estateMaxOpenSteem: 3.0, // תקרת-אחוזה (הון-מוגבל — מילת-הבעלים R323)
+  estateMaxOpenSteem: 30.0, // תקרת-אחוזה (היתה 3.0 — R323; W2-raise לפי-מילת-בעלים)
 };
 export const FORBIDDEN_TRADERS = new Set(["headcorner", "cornerstone"]);
 const FUEL_RESERVE_STEEM = 0.1; // דלק-החזקה לכל-חשבון (דפוס-הבית מ-treasury-ladder)
@@ -333,9 +339,9 @@ export async function selftest() {
   assert(!validatePlan({ protocol: "OTHER/1" }).ok, "foreign protocol refused");
   assert(!validatePlan({ ...basePlan, traders: [{ account: "headcorner" }] }).ok, "owner-keyed trader refused (custody boundary)");
   assert(!validatePlan({ ...basePlan, traders: [{ account: "hcsoldier4" }, { account: "hcsoldier4" }] }).ok, "duplicate trader refused");
-  assert(!validatePlan({ ...basePlan, maxPerLegSteem: 0.5 }).ok, "per-leg cap enforced");
-  assert(!validatePlan({ ...basePlan, maxOpenSteem: 0.9 }).ok, "open cap enforced");
-  assert(!validatePlan({ ...basePlan, estateMaxOpenSteem: 5.0 }).ok, "estate cap enforced");
+  assert(!validatePlan({ ...basePlan, maxPerLegSteem: 2.0 }).ok, "per-leg cap enforced (W2: cap 1.0)");
+  assert(!validatePlan({ ...basePlan, maxOpenSteem: 3.0 }).ok, "open cap enforced (W2: cap 2.0)");
+  assert(!validatePlan({ ...basePlan, estateMaxOpenSteem: 40.0 }).ok, "estate cap enforced (W2: cap 30.0)");
   assert(!validatePlan({ ...basePlan, edgeBps: 30 }).ok, "min edge enforced");
   assert(!validatePlan({ ...basePlan, staggerBps: -5 }).ok, "negative stagger refused");
   assert(!validatePlan({ ...basePlan, expiryDays: 30 }).ok, "expiry ceiling enforced");

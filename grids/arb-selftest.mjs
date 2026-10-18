@@ -695,6 +695,11 @@ async function main() {
     console.error(JSON.stringify(failures, null, 2));
     process.exit(1);
   }
+  // W2 (2026-10-18): explicit clean exit — a lingering handle (keep-alive socket etc.)
+  // turned a green selftest into node's "unsettled top-level await" exit 13 (measured
+  // live: `node grids/arb-scan.mjs --selftest` → RC 13 on an identical-to-main tree),
+  // which would fail-closed any CI selftest gate. Same pattern as the fail branch.
+  process.exit(0);
 }
 
 main().catch((e) => {
