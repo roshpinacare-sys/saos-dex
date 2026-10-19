@@ -394,22 +394,29 @@ async function runLane(lane, keys, receipt) {
         }
         throw e;
       }
-      const stNow = await escrowStateOf(lane.from, escrowId).catch(() => null);
-      // W12b נמדד-חי (ריצת 02:05Z): אחרי-שחרור-מלא השרשרת מוחקת-את-אובייקט-ה-escrow
-      // לגמרי — get_escrow מחזיר null (לא "יתרה-אפס" כמו-שהניח-התיקון-הראשון).
-      // null אחרי-שידור-שחרור = השחרור נצרך — מאמתים-סופית-שה-release tx עצמו על-השרשרת.
-      if (stNow && planLegsFromState(stNow).complete) {
-        console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK (balance zero) — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
-        return { ok: true, txid: r.txid, readback: true };
+      // W12d: readback-ממתין — ה-release דורש-בלוק-עד-שניים-להיחתם; קריאה-בודדת-מיד-אחרי-
+      // השידור תופסת-מצב-טרם-בלוק (נמדד-חי ריצת 02:16Z: כל-הרגליים-ירוקות, ה-release-על-
+      // השרשרת, וה-verdict-עדיין-זרק). לולאה: ממתינים-ל-null (האובייקט-נצרך) או-ליתרה-אפס.
+      let readback = null; // null = still waiting | "complete" | "gone" | "funded"
+      for (let i = 0; i < 8; i++) {
+        await sleep(2500);
+        const stNow = await escrowStateOf(lane.from, escrowId).catch(() => "err");
+        if (stNow === "err") continue;
+        if (!stNow) { readback = "gone"; break; }
+        if (planLegsFromState(stNow).complete) { readback = "complete"; break; }
       }
-      if (!stNow) {
+      if (readback === "gone") {
         const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
         const onChain = !!tx?.operations?.some(([t]) => t === "escrow_release");
         if (!onChain) throw new Error(`release broadcast ${r.txid} and the escrow object vanished, but the release tx is NOT on chain (fail-closed)`);
         console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK (escrow object consumed by the chain) — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
         return { ok: true, txid: r.txid, readback: true, consumed: "escrow-object-removed-after-release" };
       }
-      throw new Error(`release broadcast ${r.txid} but chain-state still shows a funded escrow (fail-closed)`);
+      if (readback === "complete") {
+        console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK (balance zero) — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
+        return { ok: true, txid: r.txid, readback: true };
+      }
+      throw new Error(`release broadcast ${r.txid} but chain-state still shows a funded escrow after 20s (fail-closed)`);
     });
   }
 
