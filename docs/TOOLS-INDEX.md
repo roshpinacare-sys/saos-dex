@@ -103,6 +103,7 @@
 | `grids/supremacy-selftest.mjs` | SUPREMACY-SELFTEST — אינווריאנטות-ברזל של מנוע-העליונות (שער-CI) |
 | `grids/treasury-ladder.mjs` | TREASURY-LADDER — מסילת-הכנסה של-האוצר על-הספר הציבורי (R16-b · owner trace 1a12defa203993 |
 | `grids/truth-gate.mjs` | TRUTH-GATE — שער-אמת על מילויים (Wave-2 סעיף 1 · מנדט-הבעלים #11 "בורסת-אמת") |
+| `grids/self-deposit.mjs` | SELF-DEPOSIT — מנוע-ההפקדה-העצמית: אין-הפקדות-חוץ · idle→cashmachine פנימי · נתיב-דיבידנד-בעלים $1000/יום מרווח-מדוד (owner directive 2026-10-19 trace 1a1530e43b512305) |
 | `grids/validate-params.mjs` | VALIDATE-PARAMS — שומר-סף-פרמטרי-הגריד (fail-closed; 9-c · 2026-10-11) |
 | `grids/venues/blurt-quote.mjs` | BLURT-QUOTE — רגל-תכנון-בלרט חסרת-מפתחות (Z-87a · BRIDGE · plan-only) |
 | `grids/volume-verify.mjs` | VOLUME-VERIFY — VERIFIED-VS-CHAIN: אמת-מול-שרשרת על-כל-קבלה וכל-מילוי (R323) |
