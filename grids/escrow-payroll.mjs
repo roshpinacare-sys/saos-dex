@@ -408,17 +408,19 @@ async function runLane(lane, keys, receipt) {
         if (planLegsFromState(stNow).complete) { readback = "complete"; break; }
       }
       if (readback === "gone") {
-        // W12f נמדד-חי (ריצת 02:22Z): get_transaction מאונדקס-באיחור — מיד-אחרי-השידור
-        // הוא עלול-להחזיר-404-זמני. חמש-ניסיונות-×3 שנ׳ לפני-פסיקה-כנה.
-        let onChain = false;
-        for (let i = 0; i < 5 && !onChain; i++) {
-          await sleep(3000);
-          const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
-          onChain = !!tx?.operations?.some(([t]) => t === "escrow_release");
-        }
-        if (!onChain) throw new Error(`release broadcast ${r.txid} and the escrow object vanished, but the release tx is NOT on chain after 15s (fail-closed)`);
-        console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK (escrow object consumed by the chain) — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
-        return { ok: true, txid: r.txid, readback: true, consumed: "escrow-object-removed-after-release" };
+        // W12g — סדר-הראיות מתוקן (נמדד-חי ריצות 02:22/02:25Z): ארבעה-מחזורים-מלאים
+        // עלו-על-השרשרת וה-verdict-עדיין-זרק, כי get_transaction תלוי-בפלאגין
+        // account_history — השברירי-ביותר (justyy: _account_history_api assert;
+        // steemit: מתקצר-בעומס). מצב-השרשרת (get_escrow = קונצנזוס-חי) הוא-הראיה:
+        // escrow-מאושר-במלואו-שנעלם = שוחרר — הנתיב-החוקי-היחיד (לא-במחלוקת,
+        // דדליין-רחוק). ה-tx הוא-ראיה-משלימה-מיטבית — חוסרו לעולם לא מכחיש מצב-קונצנזוס.
+        let txEvidence = null;
+        try {
+          const tx = await rpcAny("condenser_api.get_transaction", [r.txid]);
+          txEvidence = !!tx?.operations?.some(([t]) => t === "escrow_release");
+        } catch { txEvidence = null; }
+        console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK (escrow consumed by consensus; tx-evidence=${txEvidence === null ? "state-only" : txEvidence ? "tx-on-chain" : "tx-unindexed"}) — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
+        return { ok: true, txid: r.txid, readback: true, consumed: "escrow-object-removed-after-release", evidence: txEvidence === null ? "state-only" : txEvidence ? "tx-on-chain" : "tx-unindexed" };
       }
       if (readback === "complete") {
         console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK (balance zero) — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
