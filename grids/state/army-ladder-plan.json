@@ -2,7 +2,7 @@
  "protocol": "SAOS-ARMY-LADDER-PLAN/1",
  "sealedAt": "2026-10-14T00:55:00Z",
  "sealedBy": "zai-agent R323 (main orchestrator) · owner mandate: DEX-activation (DECISIONS #12 IGNITION-R1 trace 1a135534c391ddbd + policy-money-layer DECISIONS #17 trace 1a137c5876e963e9)",
- "source": "measured live 2026-10-14T00:3xZ via condenser_api.get_accounts: hcsoldier6 1.000 STEEM/0.000 SBD · hcsoldier4 0.400/0.081 · israelnews 0.235/0.120 · tov 0.209/0.145 · hcsoldier5 0.200/0.090 · haran/lsa/macrame 0.010/0.120 · wic/wog/woq 0.010/0.100 · cashmachine 0.010/0.065 · keys: ROT2_FLEET_KEYS → 24 live keys across these 12 accounts (active+posting, measured R324-EXAMINE-FIX run 38486823267)",
+ "source": "measured live 2026-10-19T02:59Z (run 39194700284 resolve-keys): ROT2_FLEET_KEYS → 26 live keys across 13 accounts (active+posting, chain-verified) — hcsoldier4/hcsoldier5/hcsoldier6/israelnews/tov/haran/lsa/macrame/wic/wog/woq/cashmachine + siq (the 13th keyholder, W12 activation). Book measured 2026-10-19T04:30Z via database_api.find_limit_orders: 41 open orders, 12/12 roster traders 2 legs each, 270.3 STEEM locked estate-wide.",
  "rationale": "W5 raise (owner W13 mandate 2026-10-19: 'כל-הצי באותו-ווליום ככל-הניתן לייצר הרבה-יותר ווליום ורווח ושליטה... כגוף אחד... לשמור על רווחיות'): fleet-fuel target 1.8->6.0 lets each trader run 3.0/leg, 6.0 open; estate 72 = 12×6.0 <= code CAPS 72 (W5). minSbdForBuyLeg 1.0->0.5 — כל-חייל-עם-SBD-ממילויים מציב-גם-בידים. one-body.mjs (W13): עזרה-הדדית-סוחר↔סוחר בכל-מחזור. arb-tilt steers sizes within these caps.",
  "w5Measured": "2026-10-19T02:0xZ: headcorner 644.852 STEEM + 23.669 SBD idle vs fleet-total 7.107 STEEM + 2.032 SBD — the volume ceiling was fuel, not will; W13 opens the body (verified volume 24h before W13: 7.208 STEEM / 23 fills)",
  "traders": [
@@ -41,11 +41,14 @@
   },
   {
    "account": "cashmachine"
+  },
+  {
+   "account": "siq"
   }
  ],
  "maxPerLegSteem": 3.0,
  "maxOpenSteem": 6.0,
- "estateMaxOpenSteem": 72.0,
+ "estateMaxOpenSteem": 78.0,
  "edgeBps": 150,
  "staggerBps": 40,
  "expiryDays": 7,
@@ -56,5 +59,5 @@
   {},
   {}
  ],
- "authority": "owner IM 2026-10-19 W13: 'וודא הפעלה מרבית של כל הצי... יפעלו באותו ווליום ככל הניתן... הרבה יותר ווליום ורווח ושליטה... כגוף אחד ולתמוך ולהעביר בין אחד לשני למילוי... חשוב לשמור על רווחיות' + code CAPS W5-seal 3.0/6.0/72"
+ "authority": "owner IM 2026-10-19 W12/W13: 'וודא הפעלה מרבית של כל הצי... יפעלו באותו ווליום ככל הניתן... הרבה יותר ווליום ורווח ושליטה... כגוף אחד ולתמוך ולהעביר בין אחד לשני למילוי... חשוב לשמור על רווחיות' — W12-raise: roster 12→13 (siq, החייל-ה-13-עם-מפתחות-חיים, נמדד resolve-keys 02:59Z) + estate 72→78 (13×6.0, code CAPS W12-seal 3.0/6.0/78)"
 }

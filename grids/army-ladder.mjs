@@ -83,8 +83,8 @@ export const CAPS = {
   maxOpenSteem: 6.0,     // לכל-חשבון (היה 2.0 W2 — W5-raise אותו-מנדט)
   maxKillMidMovePct: 5,
   maxLegs: 2,
-  maxTraders: 13,        // חוק-הצי
-  estateMaxOpenSteem: 72.0, // תקרת-אחוזה (היתה 30.0 W2 — W5: 12-סוחרים × 6.0; מנדט W13)
+  maxTraders: 13,        // חוק-הצי (W12: 13-חיילים-עם-מפתחות-חיים — resolve-keys מדד 26 מפתחות על-13 חשבונות)
+  estateMaxOpenSteem: 78.0, // תקרת-אחוזה (היתה 72.0 W5 — W12-raise לפי-מנדט-בעלים 2026-10-19 "הפעלה-מרבית-של-כל-הצי": 13-סוחרים × 6.0)
 };
 export const FORBIDDEN_TRADERS = new Set(["headcorner", "cornerstone"]);
 const FUEL_RESERVE_STEEM = 0.1; // דלק-החזקה לכל-חשבון (דפוס-הבית מ-treasury-ladder)
