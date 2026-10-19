@@ -47,6 +47,9 @@ const OP_ID = "saos.weave.live.v1";
 const RELAY_ACCOUNTS = [
   "cashmachine", "headcorner", "haran", "israelnews", "lsa", "macrame",
   "siq", "wic", "wog", "woq", "tov", "ynet",
+  /* Task 23: hcsaosdep01 — זהות-המפעיל-השנייה (נולדה-אמת 2026-10-19, txid 8e444f93…)
+   * — ערוץ-ההפקדות/התביעות של האורגניזם מלבד-ראש-המסורת; מפתחות-בכספת (600). */
+  "hcsaosdep01",
 ];
 /** תקרת-זיכוי-אוטומטי להפקדה בודדת (USDS). מעבר-לזה — המפעיל מזכה דרך השער. */
 const MAX_AUTO_CREDIT_USDS = 250;
