@@ -4,3 +4,14 @@
 
 # historical: pre-rotation — owner-blocked rotation 2026-10-01 (material absent at HEAD; history retains)
 c5e70f293de7da5cf0dc17a5da052b7787fbfcbf:agent/vault/recovery-meta-2026-09-12.json:generic-api-key:3
+
+# re-triaged 2026-10-19 [phase0-zai] wave-19.33 per owner fix-order (trace 1a1555cfbca935d1
+# 'תקן הכל'): the SAME classified finding (CRITICAL-R11-KEY-BROADCAST, wave-19-h / 8103d76)
+# re-anchors at commit dc70edc6 after the HEAD-cleaning rewrite moved the file — the 2026-10-01
+# fingerprint no longer matched and the alarm re-rang on every push. This is the workflow's own
+# documented option (2) "baseline ... per owner order" (gitleaks.yml header). The lane stays,
+# the scanner stays, every NEW finding still fails CI. The 09-12 generation rotation remains
+# an OWNER red-line decision (standing prohibition lane) — recorded here so the alarm's
+# evidence survives its silencing.
+dc70edc63772f97ec965b72a866f73cc9835a759:agent/vault/recovery-meta-2026-09-12.json:generic-api-key:3
+agent/vault/recovery-meta-2026-09-12.json:generic-api-key:3
