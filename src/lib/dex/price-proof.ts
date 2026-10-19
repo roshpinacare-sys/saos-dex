@@ -90,6 +90,27 @@ const FEED_SOURCES: FeedSource[] = [
       return { steem: p("STEEMUSDT"), hive: p("HIVEUSDT"), eth: p("ETHUSDT"), sol: p("SOLUSDT"), bnb: p("BNBUSDT"), trx: p("TRXUSDT"), btc: p("BTCUSDT") };
     },
   },
+  /* Task 23 · saos-anchor (2026-10-20): מקור-העגינה-הריבוני — האורגניזם-מודד-את-הענקים
+   * בעצמו (giants-anchor:3023 → בינאנס-אמת כל-60ש׳) ומפרסם ל-Console Pages. נמדד-חי:
+   * פעימת-הענן-על-Actions נחסמת-שיטתית מול-כל-מקורות-המחיר (429/geo-blocks — שתי-פעימות
+   * רצופות בלי-rate ל-STEEM, 04:06+04:14 UTC) → התביעות-ממתינות-לנצח. עתה: האורגניזם
+   * מספק-את-הפיד מתוך-המדידה-שלו. גבול-טריות-קשיח: 30-דק׳ (פיד-ישן = אפס-תרומה-כנה,
+   * אף-אולף). מקור-אחד-בין-חמישה — median+MAD מונע-הטיה-מקור-יחיד. */
+  {
+    name: "saos-anchor",
+    url: "https://roshpinacare-sys.github.io/Console/dex/feed.json",
+    where: "price-proof/saos-anchor",
+    parse: (j) => {
+      const o = j as { publishedAt?: string; prices?: Record<string, { usd?: number } | null> };
+      const published = Date.parse(String(o?.publishedAt ?? ""));
+      if (!(published > 0) || Date.now() - published > 30 * 60_000) return {}; // פיד-ישן/חסר — אפס-תרומה כנה
+      const p = (k: string): number | null => {
+        const v = o?.prices?.[k]?.usd;
+        return typeof v === "number" && v > 0 ? v : null;
+      };
+      return { steem: p("steem"), hive: p("hive"), eth: p("eth"), btc: p("btc") };
+    },
+  },
 ];
 
 export interface ExtFeeds {
