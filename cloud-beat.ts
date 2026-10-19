@@ -737,7 +737,10 @@ async function main(): Promise<void> {
     // יחידות-השרשרת: 1000µ = 1 יחידה (אותו-קנון של המנוע — fmtAmtMu מחלק-ב-1000)
     const mu = Math.floor(usds * 1_000);
     const r = submitOp({
-      type: "transfer", issuer: "treasury", nonce: nextNonce("cloudcredit"),
+      /* FIX(Task 23 · credit-issuer): היה issuer=treasury — נמדד-חי (04:29Z): transfer(treasury):insufficient-credits
+       * — לאוצר 0-קרדיטי-דלק (השרשרת-כולה ב-ECON-STASIS) והזיכוי נדחה-לנצח גם-עם-יתרת-USDS. המפעיל
+       * מחזיק גם-USDS (12.6Mµ) וגם-דלק (180) — זו-הסמכות-החיה-שמנפיקה-עתה; הפנקס-רושם-את-המנפיק-בגלוי. */
+      type: "transfer", issuer: "operator", nonce: nextNonce("cloudcredit"),
       to, asset: "USDS", amount: mu,
     });
     if (!r.queued) { console.warn(`[cloud-beat] credit op rejected: ${r.reason}`); skipped++; continue; }
