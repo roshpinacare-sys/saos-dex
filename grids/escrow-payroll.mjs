@@ -336,11 +336,22 @@ async function runLane(lane, keys, receipt) {
         }
         throw e;
       }
-      const stNow = await stateAfterBroadcast(lane.from, escrowId);
-      const emptied = stNow ? planLegsFromState(stNow).complete : false;
-      if (!emptied) throw new Error(`release broadcast ${r?.txid ?? "?"} but chain-state never showed the escrow emptied (fail-closed)`);
-      console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
-      return { ok: true, txid: r.txid, readback: true };
+      const stNow = await escrowStateOf(lane.from, escrowId).catch(() => null);
+      // W12b נמדד-חי (ריצת 02:05Z): אחרי-שחרור-מלא השרשרת מוחקת-את-אובייקט-ה-escrow
+      // לגמרי — get_escrow מחזיר null (לא "יתרה-אפס" כמו-שהניח-התיקון-הראשון).
+      // null אחרי-שידור-שחרור = השחרור נצרך — מאמתים-סופית-שה-release tx עצמו על-השרשרת.
+      if (stNow && planLegsFromState(stNow).complete) {
+        console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK (balance zero) — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
+        return { ok: true, txid: r.txid, readback: true };
+      }
+      if (!stNow) {
+        const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
+        const onChain = !!tx?.operations?.some(([t]) => t === "escrow_release");
+        if (!onChain) throw new Error(`release broadcast ${r.txid} and the escrow object vanished, but the release tx is NOT on chain (fail-closed)`);
+        console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK (escrow object consumed by the chain) — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
+        return { ok: true, txid: r.txid, readback: true, consumed: "escrow-object-removed-after-release" };
+      }
+      throw new Error(`release broadcast ${r.txid} but chain-state still shows a funded escrow (fail-closed)`);
     });
   }
 
