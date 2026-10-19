@@ -13,6 +13,7 @@
 import type { DexState, Op, OpResult, TradeEvent } from "./kernel";
 import { addBal, addLock, avail, bal, lockedOf, notional } from "./kernel";
 import { invariant } from "./invariant";
+import { RAIL_DUST_MU } from "./kernel"; // T15-P2 · רצפת-האבק — חוק-הספר-הנקי (מהקרנל — העלה-הנקי)
 
 export interface BookOrder {
   seq: number; id: number; owner: string;
@@ -182,6 +183,19 @@ export function matchBook(
 
     maker.filled += qty;
     if (remaining(maker) <= 0) maker.live = false;
+    // FIX(T15-P2 · dust-retire, 2026-10-19): חוק-האבק נאכף-כעת במנוע-עצמו —
+    // שארית-חיה 0<rem<RAIL_DUST_MU אחרי-מילוי-חלקי אינה-ממשיכה-לשבת-בספר-כרעש:
+    // live=false + שחרור-מד-הנעילה-הנותר-במדויק (האינווריאנטה-Σ-locks נשמרת,
+    // אפס-הטבעה, אפס-מגע-ב-Σcredits). זה-מימוש-החוק-המוצהר-ב-t15-truthgate P2
+    // ("אסור שיהיו פקודות-אבק") שעד-היום-היה-אכוף-רק-בצד-ההצבה (mm.ts) ולא-בצד-המילוי.
+    if (maker.live && remaining(maker) < RAIL_DUST_MU) {
+      maker.live = false;
+      const rel = maker.lockMu;
+      if (rel > 0) {
+        maker.lockMu = 0;
+        addLock(st, maker.owner, maker.side === "sell" ? maker.base : maker.quote, -rel);
+      }
+    }
     takerRem -= qty;
     st.stats.fills++;
     events.push({
@@ -191,6 +205,13 @@ export function matchBook(
   }
 
   // שארית-לימיט נחה בספר — הנעילה-כבר-מדויקת (לא-נוגעים; ה-gas כבר-נחייב למעלה)
+  // FIX(T15-P2 · dust-retire): גם-השארית-הטייקרית-כפופה-לחוק-האבק — שארית-מתחת-
+  // רצפת-האבק אינה-נחה-כפקודה-חיה; הנעילה-שלה-משוחררת-במדויק-בחזרה-למנפיק.
+  if (isLimit && takerRem > 0 && takerRem < RAIL_DUST_MU) {
+    const restLock = side === "sell" ? takerRem : notional(limitPx!, takerRem);
+    if (restLock > 0) addLock(st, op.issuer, side === "sell" ? base : quote, -restLock);
+    takerRem = 0;
+  }
   if (isLimit && takerRem > 0) {
     const seq = st.nextSeq++;
     st.orders.push({

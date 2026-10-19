@@ -47,7 +47,9 @@ console.log("\n══ T1 · batch-אטומי: 2 ציטוטי-postOnly נוחים
   check("batch מתקבל", r.ok, JSON.stringify(r).slice(0, 120));
   check("שתי-הפקודות חיות בספר", liveOrders(st, "operator") === before + 2, `live=${liveOrders(st, "operator")} before=${before}`);
   const gasBurn = 10_000 - credits(st, "operator");
-  check("גז = 2×order (120) — המעטפת אפס", gasBurn === 120, `burned=${gasBurn}`);
+  // TOLL-RECALIBRATION (640cf4fc · 2026-10-17, הנחיית-בעלים): order=1µ (היה 60µ) —
+  // המעטפת batch נשארת אפס-גז; תתי-ה-ops משלמים את התעריף-הקנוני. 2×order = 2µ.
+  check("גז = 2×order (2) — המעטפת אפס", gasBurn === 2, `burned=${gasBurn}`);
 }
 
 console.log("\n══ T2 · postOnly-חוצה בתוך-batch → דחייה-אטומית-מלאה ══");

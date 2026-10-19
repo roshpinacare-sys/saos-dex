@@ -43,7 +43,7 @@ import fs from "fs";
 import path from "path";
 import type { DexState, Op, Asset } from "./kernel";
 import { getPool, quoteOut, poolMidFor } from "./amm";
-import { poolKey, avail } from "./kernel";
+import { poolKey, avail, RAIL_DUST_MU } from "./kernel";
 
 export const RAIL = "rail";
 export const RAIL_MIN_EDGE_BPS = 200; // מתחת-לזה המנה לא משלמת (עמלה+גז+השפעה)
@@ -59,7 +59,10 @@ export const RAIL_OWNED_POOLS = new Set([poolKey("WSTEEM", "USDS")]); // נשל�
  * אבל הדילוג-הוא-רק-מתחת-לרצפת-אבק (300µ — יחס-גז-סביר-של-⅓). תקרת-ההשפעה
  * (25%-מעתודת-הקלט) נשארת-הקובעת-הבלעדית-של-הגודל — והמנות-הקטנות משחקות-את
  * אותו-TWAP-שפשוף-מדוד-בלי-לרסק-בריכה-מיקרו. */
-export const RAIL_DUST_MU = 300;
+// FIX(T15-P2 · 2026-10-19): ההגדרה-עברה-לקרנל (עלה-נקי — קרנל-לא-מייבא-כלום)
+// כדי-שגם-ה-book-יוכל-לאכוף-את-חוק-האבק-בלי-מעגל-ייבוא book→rail→amm→book.
+// כאן-נשאר-רק-רי-אקספורט-לתאימות-עם-כל-הצרכנים-הקיימים (mm/t15/היסטוריה).
+export { RAIL_DUST_MU } from "./kernel";
 
 interface RailMarket {
   id: string;
