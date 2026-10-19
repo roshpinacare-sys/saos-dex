@@ -43,11 +43,13 @@ import { createHash } from "node:crypto";
 import { rpcAny, signAndBroadcast, num, dp3 } from "./mover.mjs";
 import { stasisHalt } from "./brake.mjs";
 import { activeAuthorityOk } from "./key-gate.mjs";
-import { policyCycleGate, recordLadderReceipt } from "./policy.mjs";
+import { policyCycleGate, policyGate, recordLadderReceipt } from "./policy.mjs";
+import { planAid } from "./one-body.mjs"; // W13: עזרה-הדדית — הצבא כגוף אחד
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLAN_PATH = join(HERE, "state", "army-ladder-plan.json");
 const RECEIPT_PATH = join(HERE, "state", "army-receipts.jsonl");
+const AID_RECEIPT_PATH = join(HERE, "state", "one-body-receipts.jsonl"); // W13: עזרה-הדדית
 const PUBLIC_PATH = join(HERE, "state", "army-public.json");
 
 /* קבוצת-צמתים-שנייה (אותו-דפוס בית כמו treasury-ladder — exec-20: מתודות לא שוות בין צמתים) */
@@ -77,12 +79,12 @@ async function altRpc(method, params) {
  * תקרה-אמיתית, ותקרות-התוכנית (army-ladder-plan.json) נשארות-החסם-החי-המתוכנן-לפי-דלק
  * שנחת-בפועל. חוקי-הברזל-לא-נגעו: maker-only · kill-law 5% · expiry ≤ 28 · אידמפוטנטיות. */
 export const CAPS = {
-  maxPerLegSteem: 1.0,   // לכל-חשבון (היה 0.3 — קנרית R323; W2-raise לפי-מילת-בעלים)
-  maxOpenSteem: 2.0,     // לכל-חשבון (היה 0.6)
+  maxPerLegSteem: 3.0,   // לכל-חשבון (היה 1.0 W2 — W5-raise לפי-מנדט-בעלים W13: "כל-הצי באותו-ווליום... הרבה-יותר")
+  maxOpenSteem: 6.0,     // לכל-חשבון (היה 2.0 W2 — W5-raise אותו-מנדט)
   maxKillMidMovePct: 5,
   maxLegs: 2,
   maxTraders: 13,        // חוק-הצי
-  estateMaxOpenSteem: 30.0, // תקרת-אחוזה (היתה 3.0 — R323; W2-raise לפי-מילת-בעלים)
+  estateMaxOpenSteem: 72.0, // תקרת-אחוזה (היתה 30.0 W2 — W5: 12-סוחרים × 6.0; מנדט W13)
 };
 export const FORBIDDEN_TRADERS = new Set(["headcorner", "cornerstone"]);
 const FUEL_RESERVE_STEEM = 0.1; // דלק-החזקה לכל-חשבון (דפוס-הבית מ-treasury-ladder)
@@ -248,16 +250,57 @@ async function run(keysFile) {
   // מדידה-שרשרתית של-כל-החשבונות בקריאה-אחת (get_accounts מקבל מערך)
   let accts = [];
   try { accts = (await rpcAny("condenser_api.get_accounts", [accounts])) || []; } catch { /* נפילה-כנה לפר-חשבון */ }
-  const acctBy = new Map((accts || []).map((a) => [a.name, a]));
 
   const knownIds = myKnownOrderIds(plan);
   const receipt = {
     schema: "SAOS-ARMY-LADDER-RECEIPT/1", at: new Date().toISOString(),
     mid: m.mid, source: m.source, anchorMid: plan.anchorMid ?? null,
-    roster: accounts.length, results: [], executed: [], verdict: null,
+    roster: accounts.length, results: [], executed: [], aid: [], verdict: null,
   };
   let estateLocked = 0;
   let anyExecuted = false, anyActions = false, anyHalt = false;
+
+  /* ── W13 עזרה-הדדית (הצבא-כגוף-אחד): עודף-דלק זורם למחסור לפני-הצבת-רגליים,
+   *    כדי-שהמקבל יציב-רגליים עוד-במחזור-הזה. שער-מפתח + שער-פוליסה (lane general ·
+   *    kind transfer) לכל-רגל; אידמפוטנטי מול-יתרות-חיות; receipt לכל-העברה. ── */
+  try {
+    const aidBalances = (accts || []).map((a) => ({ account: a.name, steem: num(a.balance), sbd: num(a.sbd_balance) }));
+    const aidLegs = planAid({ balances: aidBalances, plan });
+    for (const leg of aidLegs) {
+      const aidRes = { ...leg, state: null };
+      try {
+        const wif = fk?.[leg.from]?.active || "";
+        if (!wif) { aidRes.state = "KEY-STASIS"; receipt.aid.push(aidRes); continue; }
+        const gate = await activeAuthorityOk({ account: leg.from, wif, rpc: rpcAny });
+        if (!gate.ok) { aidRes.state = "KEY-GATE-REFUSED"; aidRes.why = String(gate.reason ?? "").slice(0, 100); receipt.aid.push(aidRes); continue; }
+        // אידמפוטנטיות-חיה: יתרת-התורם נקראת-מחדש רגע-לפני-החתימה (ריצות-מקבילות/מילויים)
+        const fresh = await rpcAny("condenser_api.get_accounts", [[leg.from]]).catch(() => []);
+        const fAcct = (fresh || [])[0];
+        const fBal = fAcct ? num(leg.asset === "STEEM" ? fAcct.balance : fAcct.sbd_balance) : 0;
+        if (fBal < leg.amount) { aidRes.state = "STALE-BALANCE"; aidRes.fresh = fBal; receipt.aid.push(aidRes); continue; }
+        const notional = leg.asset === "STEEM" ? leg.amount * m.mid : leg.amount;
+        const pg = policyGate({ tool: "one-body", lane: "general", kind: "transfer", account: leg.from, opsEst: 1, notionalSbd: notional });
+        if (!pg.allow) { aidRes.state = "POLICY-HALT"; aidRes.why = (pg.reasons || []).join(" ; ").slice(0, 160); anyHalt = true; receipt.aid.push(aidRes); continue; }
+        const r = await signAndBroadcast(wif, [["transfer", {
+          from: leg.from, to: leg.to,
+          amount: `${leg.amount.toFixed(3)} ${leg.asset}`,
+          memo: "saos one-body · W13 owner mandate 2026-10-19 · fleet mutual aid (trader→trader)",
+        }]]);
+        aidRes.txid = r.txid; aidRes.block = r.block; aidRes.state = "AIDED"; anyExecuted = true;
+      } catch (e) { aidRes.state = "AID-FAILED"; aidRes.error = String(e?.message ?? e).slice(0, 120); }
+      receipt.aid.push(aidRes);
+    }
+    if (aidLegs.length) {
+      try { appendFileSync(AID_RECEIPT_PATH, JSON.stringify({ schema: "SAOS-ONE-BODY-AID/1", at: receipt.at, mid: m.mid, legs: receipt.aid }) + "\n"); } catch { /* כנות: קבלה-נפרדת נכשלה — הקבלה-הראשית נושאת-הכל */ }
+      if (receipt.aid.some((a) => a.state === "AIDED")) {
+        // יתרות-טריות לשלב-הסולם — המקבל מציב-רגליים עוד-המחזור-הזה
+        try { accts = (await rpcAny("condenser_api.get_accounts", [accounts])) || []; } catch { /* נפילה-כנה ליתרות-הקודמות */ }
+      }
+    }
+  } catch (aidErr) { receipt.aidError = String(aidErr?.message ?? aidErr).slice(0, 160); } // כנות: העזרה אף-פעם לא מפילה את-הסולם
+
+  // מפת-היתרות נבנית אחרי-שלב-העזרה — המקבל מציב-רגליים מהיתרה-הטרייה (לא-מיושנת)
+  const acctBy = new Map((accts || []).map((a) => [a.name, a]));
 
   for (const [i, account] of accounts.entries()) {
     const res = { account, state: null, actions: [], txids: [] };
@@ -343,6 +386,7 @@ async function run(keysFile) {
     roster: accounts.length, acted: receipt.results.filter((r) => r.state === "ACTED").length,
     stasis: receipt.results.filter((r) => r.state === "FUEL-STASIS" || r.state === "KEY-STASIS").length,
     halted: receipt.results.filter((r) => r.state === "POLICY-HALT" || r.state === "KEY-GATE-REFUSED").length,
+    aided: receipt.aid.filter((a) => a.state === "AIDED").length, // W13: הגוף-האחד
     estateOpenOrders, estateLockedSteem: receipt.estateLockedSteem,
     estateCapSteem: plan.estateMaxOpenSteem ?? CAPS.estateMaxOpenSteem,
     verdict: receipt.verdict,
@@ -360,12 +404,12 @@ export async function selftest() {
   assert(!validatePlan({ protocol: "OTHER/1" }).ok, "foreign protocol refused");
   assert(!validatePlan({ ...basePlan, traders: [{ account: "headcorner" }] }).ok, "owner-keyed trader refused (custody boundary)");
   assert(!validatePlan({ ...basePlan, traders: [{ account: "hcsoldier4" }, { account: "hcsoldier4" }] }).ok, "duplicate trader refused");
-  assert(!validatePlan({ ...basePlan, maxPerLegSteem: 2.0 }).ok, "per-leg cap enforced (W2: cap 1.0)");
-  assert(!validatePlan({ ...basePlan, maxOpenSteem: 3.0 }).ok, "open cap enforced (W2: cap 2.0)");
-  assert(!validatePlan({ ...basePlan, estateMaxOpenSteem: 40.0 }).ok, "estate cap enforced (W2: cap 30.0)");
-  assert(validatePlan({ ...basePlan, maxPerLegSteem: 1.0 }).ok, "per-leg cap allows exactly 1.0 (W4 raise)");
-  assert(validatePlan({ ...basePlan, maxOpenSteem: 2.0 }).ok, "open cap allows exactly 2.0 (W4 raise)");
-  assert(validatePlan({ ...basePlan, estateMaxOpenSteem: 30.0 }).ok, "estate cap allows exactly 30 (W4 raise)");
+  assert(!validatePlan({ ...basePlan, maxPerLegSteem: 4.0 }).ok, "per-leg cap enforced (W5: cap 3.0)");
+  assert(!validatePlan({ ...basePlan, maxOpenSteem: 7.0 }).ok, "open cap enforced (W5: cap 6.0)");
+  assert(!validatePlan({ ...basePlan, estateMaxOpenSteem: 80.0 }).ok, "estate cap enforced (W5: cap 72.0)");
+  assert(validatePlan({ ...basePlan, maxPerLegSteem: 3.0 }).ok, "per-leg cap allows exactly 3.0 (W5 raise)");
+  assert(validatePlan({ ...basePlan, maxOpenSteem: 6.0 }).ok, "open cap allows exactly 6.0 (W5 raise)");
+  assert(validatePlan({ ...basePlan, estateMaxOpenSteem: 72.0 }).ok, "estate cap allows exactly 72 (W5: 12×6.0, owner mandate W13)");
   assert(!validatePlan({ ...basePlan, edgeBps: 30 }).ok, "min edge enforced");
   assert(!validatePlan({ ...basePlan, staggerBps: -5 }).ok, "negative stagger refused");
   assert(!validatePlan({ ...basePlan, expiryDays: 30 }).ok, "expiry ceiling enforced");
@@ -411,7 +455,7 @@ export async function selftest() {
   const legT = planAccountLegs({ plan: { ...basePlan, __arbTilt: tiltUp }, account: "hcsoldier6", accountIndex: 0, mid: 0.103, traderSteem: 5.0, traderSbd: 0, lockedSteem: 0 });
   const leg0 = planAccountLegs({ plan: { ...basePlan }, account: "hcsoldier6", accountIndex: 0, mid: 0.103, traderSteem: 5.0, traderSbd: 0, lockedSteem: 0 });
   assert(legT[0].sizeSteem > leg0[0].sizeSteem, "positive tilt → bigger sell legs (within caps)");
-  assert(legT[0].sizeSteem <= 1.0 + 1e-9, "tilt never exceeds code per-leg cap");
+  assert(legT[0].sizeSteem <= 3.0 + 1e-9, "tilt never exceeds code per-leg cap (W5: 3.0)");
   const sym = planAccountLegs({ plan: { ...basePlan, __arbTilt: 0 }, account: "hcsoldier6", accountIndex: 0, mid: 0.103, traderSteem: 5.0, traderSbd: 0, lockedSteem: 0 });
   assert(sym[0].sizeSteem === leg0[0].sizeSteem, "tilt 0 → symmetric ladder unchanged");
 
@@ -432,7 +476,18 @@ export async function selftest() {
   assert(rota6.length === 2, "hcsoldier6 (1.0 STEEM): two legs within caps");
   assert(rota6.every((l) => l.sizeSteem <= 0.15 + 1e-9), "hcsoldier6 legs respect per-leg cap");
 
-  console.log("SELFTEST PASS: 30/30 vectors (army-ladder)");
+  // W13 — עזרה-הדדית בקנה-מידה-צבאי (הגוף-האחד מול-התקרות-החדשות)
+  const w13Plan = { ...basePlan, maxPerLegSteem: 3.0, maxOpenSteem: 6.0, traders: ["hcsoldier6", "haran", "lsa"].map((a) => ({ account: a })) };
+  const aidW13 = planAid({ balances: [
+    { account: "hcsoldier6", steem: 8.4, sbd: 0.0 }, // עודף 1.8 מעל רצפת 6.6
+    { account: "haran", steem: 0.101, sbd: 0.16 },   // מקבל → 1.5 STEEM → יציב-רגליים המחזור-הזה
+    { account: "lsa", steem: 2.0, sbd: 0.8 },        // ניטרלי
+  ], plan: w13Plan });
+  assert(aidW13.length === 1 && aidW13[0].to === "haran" && Math.abs(aidW13[0].amount - 1.5) < 1e-9, "W13 one-body: surplus fuels the deficit (one good leg)");
+  const topUpLegs = planAccountLegs({ plan: w13Plan, account: "haran", accountIndex: 4, mid: 0.103, traderSteem: 1.6, traderSbd: 0, lockedSteem: 0 }); // אחרי-העזרה: 0.1+1.5
+  assert(topUpLegs.length >= 1 && topUpLegs[0].sizeSteem >= 1.0, "aided trader places a real leg immediately (volume, not survival)");
+
+  console.log("SELFTEST PASS: 37/37 vectors (army-ladder)");
 }
 
 async function main() {

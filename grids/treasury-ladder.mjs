@@ -59,7 +59,10 @@ async function altRpc(method, params) {
 }
 
 /* ── תקרות-קשיחות (קנרית-לנצח — שינוי = מילת-בעלים + קומיט-מתועד) ─────────────── */
-export const CAPS = { maxOpenSteem: 0.6, maxPerLegSteem: 0.3, maxKillMidMovePct: 5, maxLegs: 2 };
+export const CAPS = { maxOpenSteem: 3.0, maxPerLegSteem: 1.5, maxKillMidMovePct: 5, maxLegs: 2 };
+/* W5-raise 2026-10-19 (מנדט-בעלים W13: "כל-הצי באותו-ווליום... הרבה-יותר ווליום ורווח"):
+ * היה 0.6/0.3 (W2). המדידה: hcsoldier4 — סוחר-מסילת-ההכנסה — 9 מילויים/24h, החלק
+ * הפעיל-ביותר בצי, והתקרה היתה החסם-המלאכותי-היחיד שלו. */
 
 const KILL_LAW = (midNow, midAnchor, maxMovePct) =>
   Math.abs(midNow - midAnchor) / midAnchor * 100 > maxMovePct;
@@ -236,12 +239,12 @@ async function run(keysFile) {
 /* ── selftest (אופליין) ────────────────────────────────────────────────────────── */
 export async function selftest() {
   const assert = (c, msg) => { if (!c) { console.error("SELFTEST FAIL:", msg); process.exit(1); } };
-  assert(validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "hcsoldier4", maxPerLegSteem: 0.3, maxOpenSteem: 0.6, edgeBps: 800, expiryDays: 7, sellLegs: [] }).ok, "valid plan accepted");
+  assert(validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "hcsoldier4", maxPerLegSteem: 1.5, maxOpenSteem: 3.0, edgeBps: 800, expiryDays: 7, sellLegs: [] }).ok, "valid plan accepted (W5 caps)");
   assert(!validatePlan({ protocol: "OTHER/1" }).ok, "foreign protocol refused");
-  assert(!validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "headcorner", maxPerLegSteem: 0.3, maxOpenSteem: 0.6, edgeBps: 800, expiryDays: 7 }).ok, "owner-keyed trader refused");
-  assert(!validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "hcsoldier4", maxPerLegSteem: 0.5, maxOpenSteem: 0.6, edgeBps: 800, expiryDays: 7 }).ok, "per-leg cap enforced");
-  assert(!validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "hcsoldier4", maxPerLegSteem: 0.3, maxOpenSteem: 0.9, edgeBps: 800, expiryDays: 7 }).ok, "open cap enforced");
-  assert(!validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "hcsoldier4", maxPerLegSteem: 0.3, maxOpenSteem: 0.6, edgeBps: 30, expiryDays: 7 }).ok, "min edge enforced");
+  assert(!validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "headcorner", maxPerLegSteem: 1.5, maxOpenSteem: 3.0, edgeBps: 800, expiryDays: 7 }).ok, "owner-keyed trader refused");
+  assert(!validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "hcsoldier4", maxPerLegSteem: 2.0, maxOpenSteem: 3.0, edgeBps: 800, expiryDays: 7 }).ok, "per-leg cap enforced (W5: 1.5)");
+  assert(!validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "hcsoldier4", maxPerLegSteem: 1.5, maxOpenSteem: 4.0, edgeBps: 800, expiryDays: 7 }).ok, "open cap enforced (W5: 3.0)");
+  assert(!validatePlan({ protocol: "SAOS-TREASURY-LADDER-PLAN/1", trader: "hcsoldier4", maxPerLegSteem: 1.5, maxOpenSteem: 3.0, edgeBps: 30, expiryDays: 7 }).ok, "min edge enforced");
   assert(KILL_LAW(0.11, 0.10, 5) === true, "kill law fires beyond band");
   assert(KILL_LAW(0.104, 0.10, 5) === false, "kill law silent inside band");
   const legs = planLadder({ plan: { maxPerLegSteem: 0.3, maxOpenSteem: 0.6, edgeBps: 150, sellLegs: [{}, {}] }, mid: 0.1028, traderSteem: 1.0 });
