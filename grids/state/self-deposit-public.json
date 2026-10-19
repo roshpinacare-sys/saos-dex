@@ -1,6 +1,6 @@
 {
  "schema": "SAOS-SELF-DEPOSIT/1",
- "at": "2026-10-19T08:38:18.544Z",
+ "at": "2026-10-19T10:58:08.594Z",
  "authority": "owner directive 2026-10-19 trace 1a1530e43b512305 — אין-הפקדות-חוץ · הריבונות מייצרת ומפקידה בעצמה · דיבידנד-בעלים $1000/יום",
  "mode": "census-only",
  "laws": [
@@ -11,17 +11,17 @@
   "LAW-4 fail-honest",
   "LAW-5 caps-in-code"
  ],
- "mid": 0.102638,
+ "mid": 0.101188,
  "midSource": "order-book",
  "census": {
   "totals": {
-   "steem": 139.199,
-   "sbd": 1.849,
+   "steem": 143.31,
+   "sbd": 1.848,
    "claimSteem": 0,
    "claimSbd": 0
   },
   "fleetRows": 13,
-  "fleetSteem": 139.199
+  "fleetSteem": 143.31
  },
  "dailyProfit": {
   "measuredUsd24h": 0,
@@ -40,6 +40,14 @@
   "at": "2026-10-19T08:30:10.681Z",
   "eraPnlSbd": 0.065776,
   "selfCrosses": 1430
+ },
+ "internalPnl": {
+  "at": "2026-10-19T10:55:45.950Z",
+  "treasuryProfitEverMu": 18393971,
+  "treasuryProfitEverUsd": 18393.97,
+  "fills": 119413,
+  "height": 722115,
+  "source": "grids/internal-pnl.mjs → SAOS-INTERNAL-PNL/1"
  },
  "escalationLadder": [
   {
@@ -107,14 +115,35 @@
   },
   {
    "id": "ESC-10",
-   "name": "עמלות-בריכות-דקס (feeMeter) בהיקף-מלא",
-   "state": "ALIVE — 5 שווקים מול-הסטייבל; scale = sweep velocity + נזילות-פולים",
-   "value": "הכנסה-פרוטוקולית-אמת; נמדדה 106K→171K µ/שעה ב-IGNITION",
-   "evidence": "DECISIONS #12 + sweep-cycle feeMeter"
+   "name": "עמלות-בריכות-דקס (treasuryProfitEver) → P&L-מפורסם",
+   "state": "WIRED-2026-10-19 — גשר internal-pnl.mjs מפרסם-את-הראצ'ט; המנוע-מודד-דלתא-לנתיב-הדיבידנד",
+   "value": "הרווח-האמת-מהמסחר-הפנימי נראה-לבעלים: $18,393.97 מצטבר (ראצ'ט) · 119,413 מילויים אמת",
+   "evidence": "grids/state/internal-pnl.json · kernel.ts:2288 monotonic Σ-harvest"
+  },
+  {
+   "id": "ESC-11",
+   "name": "קציר-עמלות-מתוזמן + מסילת-תשלום-דיבידנד (µ→STEEM→בעלים)",
+   "state": "NEXT — feeMeter 1,479µ ממתין-קציר · הגשר (bridge.ts OUT/withdraw) הוא-המסילה-להמרת-רווח-פנימי-לערך-חוץ",
+   "value": "הקילומטר-האחרון: רווח-מדוד-בפנקס → שחרור-קנברי → משיכה-אמת-לבעלים",
+   "evidence": "db/state-snapshot feeMeterMu · src/lib/dex/bridge.ts withdraw path"
+  },
+  {
+   "id": "ESC-12",
+   "name": "פוטנציאל-רחב-מעבר-ל-STEEM (עורקי-תשתית-מוכחים)",
+   "state": "MAPPED — 4/4 עורקי-ענן חיים (gitlab/supabase/vercel/render אומתו 200) · סריקת-שווקים-ARB מדודה (arb-scan CEX-מול-ספר)",
+   "value": "דרכי-ערך-מעבר-לשרשרת: פריסת-שירותים-מניבים על-העורקים-הקיימים · ARB-אמת בין-venues",
+   "evidence": "state/keys/REGISTRY.json + worklog Task19 key-probe 4/4 · grids/arb-ledger.json"
   }
  ],
  "sweepPlan": {
   "legs": [
+   {
+    "from": "hcsoldier4",
+    "to": "cashmachine",
+    "amountSteem": 2.201,
+    "reason": "self-deposit: idle keeper surplus → sovereign coffer",
+    "asset": "STEEM"
+   },
    {
     "from": "hcsoldier6",
     "to": "cashmachine",
@@ -186,21 +215,25 @@
     "asset": "STEEM"
    }
   ],
-  "beatTotalSteem": 16.906,
+  "beatTotalSteem": 19.107,
   "note": "coffer→traders payroll rides the existing escrow/ladder engines — this engine only consolidates idle into the coffer"
  },
  "censusSnapshot": {
   "totals": {
-   "steem": 139.199,
-   "sbd": 1.849,
+   "steem": 143.31,
+   "sbd": 1.848,
    "claimSteem": 0,
    "claimSbd": 0
   },
-  "at": "2026-10-19T08:38:20.061Z"
+  "at": "2026-10-19T10:58:09.957Z"
  },
  "pnlSnapshot": {
   "eraPnlSbd": 0.065776,
   "at": "2026-10-19T08:30:10.681Z"
+ },
+ "internalPnlSnapshot": {
+  "treasuryProfitEverMu": 18393971,
+  "at": "2026-10-19T10:55:45.950Z"
  },
  "verdict": "PLAN-READY (census-only — no keys injected, honest)"
 }
