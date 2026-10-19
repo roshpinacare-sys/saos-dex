@@ -117,6 +117,12 @@ function stWith(opts: { treasuryBal?: number; treasuryLock?: number; credits?: R
   // ו-11: רצף-האמבולנס — מהמוות-המנעול אל-הספר-החי: הרזרבה זורמת, אסק-נולד, הרזרבה נחה
   // (ה-drill-תפס-את-הפגם-העצמי-הראשון: חייל-בלי-מלאי-WSTEEM — ההצבה-נדחית-escrow;
   // המלאי-הוא-תנאי-האסק, הגז-הוא-תנאי-ההצבה — שניהם-חייבים-לחיות)
+  // חוק-הגז-הנוכחי (THE-REFUEL · df9e42b4 · מדידה-מלאה-מול-הקרנל-ב-2026-10-19):
+  // refuel = אפס-גז (משפחת-הערוצים-הריבוניים relay/wrap/attest/heartbeat — המגן-הוא
+  // מבני: FUEL_FUNDERS+REFUEL_CAP+reserveFunderAfford, לא-מחיר) → האסק-מקבל-את-הסכום
+  // המלא 2,000µ מה-refuel (לא 1,940-שהיה-מקובל-תחת-גז-3%-ישן); אחר-כך הצבת-הפקודה
+  // משלמת-גז-escrow-1µ (order: 1) → יתרה-סופית-מדודה = 1,999µ. הזרימה-חיה,
+  // האינווריאנטה-נשמרת.
   const stFlow = stWith({ orders: [], credits: { sweeper: 37_200 } });
   addBal(stFlow, "soldier-1", "WSTEEM", 10_000); // מלאי-אסק-אמת לחייל
   const flow1 = reserveFunderAfford(stFlow, "sweeper");
@@ -124,7 +130,7 @@ function stWith(opts: { treasuryBal?: number; treasuryLock?: number; credits?: R
   applyOp(stFlow, { type: "order", issuer: "soldier-1", nonce: "o-1", base: "WSTEEM", quote: "USDS", side: "sell", price: 57, amount: 1_000 } as never, 0);
   const bookNowAlive = bookAskAlive(stFlow);
   const flow2 = reserveFunderAfford(stFlow, "sweeper");
-  t("T37-d V11 ambulance lifecycle: flows while dead → book revives → reserve rests", flow1 === 27_200 && stFlow.credits["soldier-1"] === 1_940 && bookNowAlive === true && flow2 === 0);
+  t("T37-d V11 ambulance lifecycle: flows while dead → book revives → reserve rests", flow1 === 27_200 && stFlow.credits["soldier-1"] === 1_999 && bookNowAlive === true && flow2 === 0);
 
   // ו-12: FUEL_FUNDERS — הרזרבות-בשער-המממנים (הטיפוס-עצמו)
   t("T37-d V12 FUEL_FUNDERS admits the standing reserves", (["sweeper", "rail", "bot-e"] as const).every((f) => (FUEL_FUNDERS as readonly string[]).includes(f)));
