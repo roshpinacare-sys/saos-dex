@@ -175,14 +175,17 @@ async function uniquenessRecovered(account, verify) {
   }
 }
 
-/* קריאת-מצב-חוזרת אחרי-שידור (הבלוק הקרוב-ביותר עשוי-להתאחר ~3 שנ׳/בלוק) */
-async function stateAfterBroadcast(from, escrowId, tries = 8) {
+/* קריאת-מצב-ממתינה-לתנאי (W12e): הבלוק הקרוב-ביותר עשוי-להתאחר ~3 שנ׳/בלוק — קריאה-בודדת
+ * תופסת-מצב-טרם-בלוק (נמדד-חי ריצות 02:05-02:19Z). מחכים-עד-שהתנאי-מתקיים במצב-השרשרת:
+ * transfer → קיום · approve → הדגל-הספציפי. null אחרי-המתנה = התנאי-מעולם-לא-התקיים. */
+async function stateAwaiting(from, escrowId, cond, tries = 10) {
   for (let i = 0; i < tries; i++) {
     await sleep(2500);
     try {
       const st = await escrowStateOf(from, escrowId);
-      if (st) return st;
-    } catch { /* קריאה-בודדת נפלה — מנסים-שוב */ }
+      if (st === null) return null; // האובייקט-נעלם (שוחרר/פג) — זה-גם-מצב-סופי
+      if (cond(st)) return st;
+    } catch { continue; }
   }
   return null;
 }
@@ -334,7 +337,7 @@ async function runLane(lane, keys, receipt) {
         }
         throw e;
       }
-      const stNow = await stateAfterBroadcast(lane.from, escrowId);
+      const stNow = await stateAwaiting(lane.from, escrowId, () => true);
       if (!stNow) throw new Error(`transfer broadcast ${r?.txid ?? "?"} but get_escrow never materialized the escrow (fail-closed)`);
       console.log(`escrow-payroll: transfer txid=${r.txid} chain-readback=OK (to_approved=${stNow.to_approved} agent_approved=${stNow.agent_approved})`);
       st = stNow; plan = planLegsFromState(st);
@@ -362,9 +365,8 @@ async function runLane(lane, keys, receipt) {
           }
           throw e;
         }
-        const stNow = await stateAfterBroadcast(lane.from, escrowId);
-        const approved = stNow ? (who === lane.to ? stNow.to_approved === true : stNow.agent_approved === true) : false;
-        if (!approved) throw new Error(`approve(${who}) broadcast ${r?.txid ?? "?"} but chain-state never showed the ratification (fail-closed)`);
+        const stNow = await stateAwaiting(lane.from, escrowId, (s) => (who === lane.to ? s.to_approved === true : s.agent_approved === true));
+        if (!stNow) throw new Error(`approve(${who}) broadcast ${r?.txid ?? "?"} but chain-state never showed the ratification (fail-closed)`);
         console.log(`escrow-payroll: approve(${who}) txid=${r.txid} chain-readback=OK`);
         st = stNow; plan = planLegsFromState(st);
         return { ok: true, txid: r.txid, readback: true };
