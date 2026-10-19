@@ -20,8 +20,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
+
+/* ESC-11 (2026-10-19): guard-כניסה — ה-main-רץ-רק-כשהמודול-הוא-הכניסה-הראשית.
+ * נמדד-חי: ה-import-מ-dividend-sweep.mjs ביצע-את-ה-main-וקרא-process.exit(0)
+ * וקטע-את-סדולת-הדיבידנד. עכשיו: import=הגדרות-בלבד; ריצה-ישירה=התנהגות-מלאה. */
+const IS_MAIN = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const LADDER_FUEL_FLOOR = 8_000; // kernel.ts:176 — אותו-חוק, מועתק-מדויק
@@ -69,30 +74,34 @@ export async function selftest() {
 }
 
 const args = process.argv.slice(2);
-if (args.includes("--selftest")) {
+if (!IS_MAIN) {
+  /* הובא-כמודול — אין-ריצת-main בכלל (נמדד-חי 2026-10-19: import-בלי-guard ביצע-קציר-אמת
+   * 2152µ-וקטע-את-סדולת-הדיבידנד; הקציר-עצמו-היה-לגיטימי-אך-הנתיב-היה-מקרי — מתוקן-מהשורש) */
+} else if (args.includes("--selftest")) {
   try { const r = await selftest(); console.log(JSON.stringify({ selftest: "PASS", ...r })); process.exit(0); }
   catch (e) { console.error(e.message); process.exit(1); }
-}
-const checkOnly = args.includes("--check");
-try {
-  const st = await liveState();
-  if (st.halted) { console.log(JSON.stringify({ action: "SKIP", why: "engine halted — honest sleep" })); process.exit(0); }
-  const plan = planHarvest({ feeMeterMu: st.feeMeterMu });
-  if (plan.action !== "HARVEST" || checkOnly) { console.log(JSON.stringify({ mode: checkOnly ? "CHECK" : "RUN", height: st.height, feeMeterMu: st.feeMeterMu, ...plan })); process.exit(0); }
-  const pid = Number(process.env.SAOS_DEX_PID ?? "") || findEnginePid();
-  const token = pid ? operatorToken(pid) : "";
-  if (!token) { console.log(JSON.stringify({ action: "SKIP", why: "operator token unreachable (H-5 fail-honest)" })); process.exit(0); }
-  const r = await fetch(`http://127.0.0.1:${DEX_PORT}/saos-dex/api/dex/batch`, {
-    method: "POST",
-    headers: { "x-saos-operator": token, "x-saos-dex-console": "1", "content-type": "application/json" },
-    body: JSON.stringify({ issuer: "treasury", ops: [{ type: "harvest", amount: plan.amount, memo: `fee-harvest ${plan.amount}µ @h${st.height} · ESC-11 cadence · ${plan.why}` }] }),
-    signal: AbortSignal.timeout(8000),
-  });
-  const out = await r.json();
-  console.log(JSON.stringify({ mode: "RUN", height: st.height, harvestedMu: plan.amount, treasuryProfitBeforeMu: st.treasuryProfitMu, batch: out }, null, 1));
-} catch (e) {
-  console.log(JSON.stringify({ action: "SKIP", why: `fail-honest: ${String(e?.message ?? e).slice(0, 120)}` }));
-  process.exit(1);
+} else {
+  const checkOnly = args.includes("--check");
+  try {
+    const st = await liveState();
+    if (st.halted) { console.log(JSON.stringify({ action: "SKIP", why: "engine halted — honest sleep" })); process.exit(0); }
+    const plan = planHarvest({ feeMeterMu: st.feeMeterMu });
+    if (plan.action !== "HARVEST" || checkOnly) { console.log(JSON.stringify({ mode: checkOnly ? "CHECK" : "RUN", height: st.height, feeMeterMu: st.feeMeterMu, ...plan })); process.exit(0); }
+    const pid = Number(process.env.SAOS_DEX_PID ?? "") || findEnginePid();
+    const token = pid ? operatorToken(pid) : "";
+    if (!token) { console.log(JSON.stringify({ action: "SKIP", why: "operator token unreachable (H-5 fail-honest)" })); process.exit(0); }
+    const r = await fetch(`http://127.0.0.1:${DEX_PORT}/saos-dex/api/dex/batch`, {
+      method: "POST",
+      headers: { "x-saos-operator": token, "x-saos-dex-console": "1", "content-type": "application/json" },
+      body: JSON.stringify({ issuer: "treasury", ops: [{ type: "harvest", amount: plan.amount, memo: `fee-harvest ${plan.amount}µ @h${st.height} · ESC-11 cadence · ${plan.why}` }] }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const out = await r.json();
+    console.log(JSON.stringify({ mode: "RUN", height: st.height, harvestedMu: plan.amount, treasuryProfitBeforeMu: st.treasuryProfitMu, batch: out }, null, 1));
+  } catch (e) {
+    console.log(JSON.stringify({ action: "SKIP", why: `fail-honest: ${String(e?.message ?? e).slice(0, 120)}` }));
+    process.exit(1);
+  }
 }
 
 function findEnginePid() {
