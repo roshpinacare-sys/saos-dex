@@ -321,6 +321,7 @@ async function run(keysFile) {
       const myIds = new Set([...knownIds.entries()].filter(([, tag]) => tag.startsWith(`${account}:`)).map(([id]) => id));
       const lockedSteem = liveOrders.filter((o) => myIds.has(Number(o.orderid))).reduce((s, o) => s + orderSteemLocked(o), 0); // W12-fix: o.steem לא-קיים-בצמתים-חיים — for_sale+sell_price הוא-האמת
       estateLocked += lockedSteem;
+      plan.__estateLockedSteem = dp3(estateLocked); // W12-fix: התקרה-מחייבת-בתכנון, לא-רק-בדוח — בלי-זה __estateLockedSteem נשאר 0 (היה-מקור-ה-selftest-בלבד)
 
       // חוק-הריגה ברמת-האחוזה: מיד זז מעבר לרצועה → ביטול-כל-שלנו (בכל-החשבונות)
       let actions = [];
