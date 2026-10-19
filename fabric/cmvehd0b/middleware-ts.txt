@@ -1,0 +1,289 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+// ── קונפיגורציה לניתוח התנהגותי ──
+const CONFIG = {
+  // חלוקה למדורות (buckets) לכל נקודת API (בשניות)
+  BUCKET_INTERVAL_MS: 10_000, // 10 שניות
+  
+  // מספר בקשות מקסימלי במדור לפני שנחשב כחריג (סטיית תקן גבוהה)
+  MAX_REQUESTS_PER_BUCKET: 50,
+  
+  // רף ה-z-score לזיהוי חריגות (סטייה מהממוצע)
+  Z_SCORE_THRESHOLD: 3.0,
+  
+  // מספר המדורות לחישוב ממוצע וסטיית תקן
+  BUCKETS_FOR_STATS: 6, // 6 מדורות של 10 שניות = 60 שניות היסטוריה
+  
+  // חסימה הדרגתית (בדקות)
+  BLOCK_DURATION_MINUTES: 5,
+  
+  // נקודות API רגישות לניטור מוגבר
+  SENSITIVE_APIS: ['/api/dex/settle', '/api/dex/transfer', '/api/dex/order'],
+  
+  // רישום ללוג: הצגת פרטים רק עבור חריגות ברמה גבוהה
+  LOG_ONLY_HIGH_SEVERITY: true,
+};
+
+// ── מבני נתונים למעקב התנהגות ──
+interface RequestRecord {
+  timestamp: number;
+  path: string;
+  headers: Record<string, string>;
+}
+
+interface UserBehavior {
+  ip: string;
+  requestHistory: RequestRecord[];
+  buckets: Map<string, number>;
+  stats: {
+    mean: number;
+    stdDev: number;
+  } | null;
+  blockedUntil: number | null;
+  consecutiveAnomalies: number;
+}
+
+const userBehaviors = new Map<string, UserBehavior>();
+
+// ── כלי עזר לחישוב סטיית תקן (z-score) ──
+function calculateZScore(value: number, mean: number, stdDev: number): number {
+  if (stdDev === 0) return 0;
+  return (value - mean) / stdDev;
+}
+
+// ── עדכון סטטיסטיקות עבור משתמש ──
+function updateUserStats(behavior: UserBehavior): void {
+  const now = Date.now();
+  const activeBuckets: number[] = [];
+  
+  // איסוף נתונים מהמדורות האחרונים
+  for (const [bucketKey, count] of behavior.buckets) {
+    const bucketTime = parseInt(bucketKey.split(':')[1]);
+    if (now - bucketTime < CONFIG.BUCKETS_FOR_STATS * CONFIG.BUCKET_INTERVAL_MS) {
+      activeBuckets.push(count);
+    }
+  }
+  
+  if (activeBuckets.length > 1) {
+    const mean = activeBuckets.reduce((a, b) => a + b, 0) / activeBuckets.length;
+    const variance = activeBuckets.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / activeBuckets.length;
+    const stdDev = Math.sqrt(variance);
+    
+    behavior.stats = { mean, stdDev };
+  } else {
+    behavior.stats = null;
+  }
+}
+
+// ── זיהוי חריגות בהתנהגות ──
+function detectAnomaly(behavior: UserBehavior, currentBucketCount: number): boolean {
+  if (!behavior.stats) return false;
+  
+  const { mean, stdDev } = behavior.stats;
+  const zScore = calculateZScore(currentBucketCount, mean, stdDev);
+  
+  return zScore > CONFIG.Z_SCORE_THRESHOLD;
+}
+
+// ── בדיקת דפוסי בקשות חוזרות עם nonce זהה ──
+function checkRepeatedNonce(behavior: UserBehavior, request: NextRequest): boolean {
+  const nonce = request.headers.get('x-nonce');
+  if (!nonce) return false;
+  
+  const now = Date.now();
+  const recentRequests = behavior.requestHistory.filter(
+    req => now - req.timestamp < 60_000 // בדיקת חלון דקה אחרונה
+  );
+  
+  return recentRequests.some(req => req.headers['x-nonce'] === nonce);
+}
+
+// ── בדיקת שינוי פתאומי בדפוסי גישה ──
+function checkBehavioralShift(behavior: UserBehavior): boolean {
+  if (behavior.requestHistory.length < 20) return false; // צובר נתונים ראשוני
+  
+  const now = Date.now();
+  const recentRequests = behavior.requestHistory.filter(
+    req => now - req.timestamp < 300_000 // 5 דקות אחרונות
+  );
+  
+  if (recentRequests.length < 10) return false;
+  
+  // בדיקת ריכוז לנקודות API רגישות
+  const sensitiveApiCount = recentRequests.filter(req => 
+    CONFIG.SENSITIVE_APIS.some(path => req.path.includes(path))
+  ).length;
+  
+  const sensitiveApiRatio = sensitiveApiCount / recentRequests.length;
+  
+  // אם יותר מ-70% מהבקשות האחרונות הן ל-APIs רגישים
+  return sensitiveApiRatio > 0.7;
+}
+
+// ── רישום אירוע חריג ללוג ──
+function logAnomaly(behavior: UserBehavior, reason: string, severity: 'low' | 'medium' | 'high'): void {
+  if (CONFIG.LOG_ONLY_HIGH_SEVERITY && severity !== 'high') return;
+  
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    event: 'behavioral_anomaly',
+    ip: behavior.ip,
+    reason,
+    severity,
+    recentRequests: behavior.requestHistory.slice(-5).map(r => ({
+      path: r.path,
+      time: new Date(r.timestamp).toISOString()
+    }))
+  }));
+}
+
+// ── פונקציית המידלוור הראשית ──
+export async function middleware(request: NextRequest): Promise<NextResponse> {
+  const ip = request.ip || request.headers.get('x-forwarded-for') || 'unknown';
+  const path = request.nextUrl.pathname;
+  
+  // קבלת התנהגות קיימת או יצירת חדשה
+  let behavior = userBehaviors.get(ip);
+  if (!behavior) {
+    behavior = {
+      ip,
+      requestHistory: [],
+      buckets: new Map(),
+      stats: null,
+      blockedUntil: null,
+      consecutiveAnomalies: 0
+    };
+    userBehaviors.set(ip, behavior);
+  }
+  
+  // בדיקת האם ה-IP חסום
+  if (behavior.blockedUntil && Date.now() < behavior.blockedUntil) {
+    return new NextResponse('Access temporarily blocked due to anomalous behavior', { status: 429 });
+  }
+  
+  // יצירת מפתח מדור לפי נתיב וחלון זמן
+  const now = Date.now();
+  const bucketKey = `${path}:${Math.floor(now / CONFIG.BUCKET_INTERVAL_MS)}`;
+  
+  // עדכון היסטוריית בקשות
+  behavior.requestHistory.push({
+    timestamp: now,
+    path,
+    headers: Object.fromEntries(request.headers.entries())
+  });
+  
+  // שמירת רק 100 בקשות אחרונות לצורך ניתוח
+  if (behavior.requestHistory.length > 100) {
+    behavior.requestHistory = behavior.requestHistory.slice(-100);
+  }
+  
+  // עדכון ספירת בקשות במדור
+  const currentCount = (behavior.buckets.get(bucketKey) || 0) + 1;
+  behavior.buckets.set(bucketKey, currentCount);
+  
+  // ניקוי מדורים ישנים
+  for (const [key] of behavior.buckets) {
+    const bucketTime = parseInt(key.split(':')[1]);
+    if (now - bucketTime > CONFIG.BUCKETS_FOR_STATS * CONFIG.BUCKET_INTERVAL_MS) {
+      behavior.buckets.delete(key);
+    }
+  }
+  
+  // עדכון סטטיסטיקות
+  updateUserStats(behavior);
+  
+  // זיהוי חריגות
+  let anomalyDetected = false;
+  let anomalyReason = '';
+  let severity: 'low' | 'medium' | 'high' = 'low';
+  
+  // 1. בדיקת קצב בקשות גבוה
+  if (detectAnomaly(behavior, currentCount)) {
+    anomalyDetected = true;
+    anomalyReason = 'high_request_rate';
+    severity = 'medium';
+    logAnomaly(behavior, 'High request rate detected', severity);
+  }
+  
+  // 2. בדיקת nonce חוזר
+  if (checkRepeatedNonce(behavior, request)) {
+    anomalyDetected = true;
+    anomalyReason = 'repeated_nonce';
+    severity = 'high';
+    logAnomaly(behavior, 'Repeated nonce detected', severity);
+  }
+  
+  // 3. בדיקת שינוי התנהגותי
+  if (checkBehavioralShift(behavior)) {
+    anomalyDetected = true;
+    anomalyReason = 'behavioral_shift';
+    severity = 'medium';
+    logAnomaly(behavior, 'Sudden behavioral shift', severity);
+  }
+  
+  // 4. בדיקת כותרות לא אופייניות
+  const userAgent = request.headers.get('user-agent');
+  if (userAgent && (
+    userAgent.includes('bot') || 
+    userAgent.includes('crawler') || 
+    userAgent.includes('spider')
+  )) {
+    anomalyDetected = true;
+    anomalyReason = 'suspicious_user_agent';
+    severity = 'low';
+    logAnomaly(behavior, 'Suspicious user agent', severity);
+  }
+  
+  // התמודדות עם חריגות
+  if (anomalyDetected) {
+    behavior.consecutiveAnomalies++;
+    
+    // הגברת חסימה בהתאם לחומרת החריגות והחזרות
+    let blockDuration = CONFIG.BLOCK_DURATION_MINUTES * 60_000; // ברירת מחדל
+    
+    if (severity === 'high') {
+      blockDuration *= 2; // חסימה ארוכה יותר לחריגות חמורות
+    }
+    
+    if (behavior.consecutiveAnomalies > 3) {
+      blockDuration *= 2; // הגברת חסימה לחזרות על חריגות
+    }
+    
+    // החלטה על חסימה
+    if (behavior.consecutiveAnomalies >= 2 || severity === 'high') {
+      behavior.blockedUntil = now + blockDuration;
+      
+      // רישום חסימה
+      console.log(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        event: 'ip_blocked',
+        ip: behavior.ip,
+        reason: anomalyReason,
+        blockDurationMs: blockDuration,
+        consecutiveAnomalies: behavior.consecutiveAnomalies
+      }));
+      
+      return new NextResponse('Access temporarily blocked due to anomalous behavior', { 
+        status: 429,
+        headers: {
+          'X-Block-Reason': anomalyReason,
+          'Retry-After': Math.ceil(blockDuration / 1000).toString()
+        }
+      });
+    }
+  } else {
+    // איפוס ספירת חריגות רצופות אם ההתנהגות תקינה
+    behavior.consecutiveAnomalies = 0;
+  }
+  
+  // המשך לבקשה הרגילה אם לא נמצאה חריגה
+  return NextResponse.next();
+}
+
+// ── הגדרת נתיבים להחלת המידלוור ──
+export const config = {
+  matcher: [
+    '/api/dex/:path*',
+    '/api/revive/:path*',
+  ],
+};
