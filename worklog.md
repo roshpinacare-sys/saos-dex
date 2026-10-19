@@ -17,3 +17,19 @@ Stage Summary:
 - הריבונות כבר הוכיחה הפקדה-עצמית על-השרשרת: 131.856 SBD קונברט → ~486 STEEM נזיל באוצר, אפס-כסף-חוץ.
 - מנוע-ההפקדה-העצמית חי ומפורסם: census+plan+dividend-gap בכל-ריצה; ביצוע-שטיפה עם keys-file (fail-closed בלי).
 - נתיב-הדיבידנד מקודד: יעד $1000/יום, קנברי-מדורג, רק מרווח-מדוד, פער-מפורסם בכל-קבלה — כנות מלאה, אף-מספר-מומצא.
+
+---
+Task ID: 23-self-deposit (השלמה — ממצא-מפתח-owner)
+Agent: zai-web session (web-468de1e9 · trace 1a1530e43b512305)
+Task: אימות-מפתח-owner headcorner (המשך-הוראה: "זה צריך להיות המפתח owner של headcorner רק המפתח בלי השם") — חוסם-את-הפעלת 487 STEEM האוצר.
+
+Work Log:
+- תיקון-נתיב-אימות-גיט: pat.env (raw-token שורה-אחת) → עוזר-credential גלובלי (boot/git-cred.sh) — push חוזר-לחיים; safe-push.sh 2 פעמים (rebase על-דחיפות-ענן).
+- מאמת-מפתח-חדש (READ-ONLY, אפס-סודות-בפלט): headcorner.txt = WIF-תקין-מבנית (51 תווים · 0x80 · checksum ✓) → נגזרת-ציבורית STMAcmZdpQ6XLY…
+- סריקת-15-חשבונות-צי (owner/active/posting): אפס-התאמות. owner-החיה של headcorner: STM5aUKyd9LzEN… (threshold 1). אבחנה: המפתח-ישן-מלפני-רוטציית 10-08.
+- REQ-0008 נרשם בערוץ-הריבוני (Pulse state/sovereign-channel/requests.jsonl) ודחוף: Pulse@bbbde4c.
+- קבלת-אימות-סופית למנוע: PLAN-READY · mid 0.102073 · 11 רגליים · 24.2 STEEM · פער $1000 מפורסם.
+
+Stage Summary:
+- saos-dex@f443b5c6+ דחוף (מנוע+CI+חוקה+DECISIONS #22+worklog) · Pulse@bbbde4c דחוף (REQ-0008).
+- הבעלים צריך-לספק את המפתח-הפרטי שנגזרתו STM5aUKyd9LzEN… — עד-אז האוצר (487 STEEM) נשאר-מוכשל-לעובד-הון, והמנוע-העצמי פועל-על-הצי.
