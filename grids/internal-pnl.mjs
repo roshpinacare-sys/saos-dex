@@ -19,10 +19,16 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SNAPSHOT_PATH = join(ROOT, "db", "state-snapshot.json");
+// אותה-קונבנציה של-הקרנל (chain.ts:123): SAOS_DEX_STATE_DIR = עץ-האטימה-החי
+// (המנוע-כותב-שם) · נפילה-אחורה: cwd/db. חוק-טריות: הקובץ-הטרי-מנצח (savedAt).
+const DATA_DIR = process.env.SAOS_DEX_STATE_DIR
+  ? resolve(process.env.SAOS_DEX_STATE_DIR)
+  : join(ROOT, "db");
+const SNAPSHOT_PATH = join(DATA_DIR, "state-snapshot.json");
+const SNAPSHOT_PATH_FALLBACK = join(ROOT, "db", "state-snapshot.json");
 const OUT_PATH = join(ROOT, "grids", "state", "internal-pnl.json");
 const PNL_AUDIT_PATH = join(ROOT, "grids", "state", "pnl-audit.json");
 const CREDITS_PATH = join(ROOT, "db", "dex-credits.json");
@@ -33,27 +39,34 @@ const D = (x, d = 4) => Number(Number(x ?? 0).toFixed(d));
 const nowIso = () => new Date().toISOString();
 
 // ── קריאת-ראיה מגוללת (LAW-3/4): סכימה-נכונה + טריות + מספרים-חוקיים או null ──
-export function readEngineSnapshot(path = SNAPSHOT_PATH, maxAgeMs = MAX_AGE_MS) {
-  try {
-    const raw = JSON.parse(readFileSync(path, "utf8"));
-    if (raw?.version !== 1 || !raw.savedAt || !raw.state) return null;
-    const age = Date.now() - Date.parse(raw.savedAt);
-    if (!(age >= 0) || age > maxAgeMs) return null;
-    const st = raw.state;
-    const ever = st.treasuryProfitEver;
-    if (!Number.isFinite(ever) || ever < 0) return null; // הראצ'ט חייב-להיות-חוקי
-    return {
-      savedAt: raw.savedAt, ageMs: age,
-      height: st.height ?? null, fills: st.stats?.fills ?? null, swaps: st.stats?.swaps ?? null,
-      treasuryProfitEverMu: ever,            // ראצ'ט: Σקציר-עמלות-מונוטוני (רווח-מסחר-אמת מצטבר)
-      treasuryProfitMu: st.treasuryProfit ?? 0,   // יתרה-עובדת (לא מונה)
-      feeMeterMu: st.feeMeter ?? 0,               // עמלות-שנצברו-שטרם-נקצרו
-      feeMintedMu: st.feeMinted ?? 0,             // המזרקה: Σטובע-מעמלות (המענק-לכלכלה — לא-רווח-בעלים)
-      gasFundedMu: st.gasFundedMu ?? 0,           // Σדלק-שמומן-מהעמלות (השקעה-מחדש — לא-רווח-בעלים)
-      creditsTreasuryMu: st.credits?.treasury ?? 0,
-      halted: st.halted ?? null,
-    };
-  } catch { return null; }
+// שני-מועמדים (עץ-אטימה + עץ-עבודה) — הטרי-מנצח (המנוע-וה-twin כותבים-מקומות-שונים).
+export function readEngineSnapshot(path = null, maxAgeMs = MAX_AGE_MS) {
+  const candidates = path ? [path] : [SNAPSHOT_PATH, SNAPSHOT_PATH_FALLBACK];
+  let best = null;
+  for (const p of candidates) {
+    try {
+      const raw = JSON.parse(readFileSync(p, "utf8"));
+      if (raw?.version !== 1 || !raw.savedAt || !raw.state) continue;
+      const age = Date.now() - Date.parse(raw.savedAt);
+      if (!(age >= 0) || age > maxAgeMs) continue;
+      const st = raw.state;
+      const ever = st.treasuryProfitEver;
+      if (!Number.isFinite(ever) || ever < 0) continue; // הראצ'ט חייב-להיות-חוקי
+      const cand = {
+        savedAt: raw.savedAt, ageMs: age, _source: p === SNAPSHOT_PATH ? "sealing-tree" : "work-tree",
+        height: st.height ?? null, fills: st.stats?.fills ?? null, swaps: st.stats?.swaps ?? null,
+        treasuryProfitEverMu: ever,            // ראצ'ט: Σקציר-עמלות-מונוטוני (רווח-מסחר-אמת מצטבר)
+        treasuryProfitMu: st.treasuryProfit ?? 0,   // יתרה-עובדת (לא מונה)
+        feeMeterMu: st.feeMeter ?? 0,               // עמלות-שנצברו-שטרם-נקצרו
+        feeMintedMu: st.feeMinted ?? 0,             // המזרקה: Σטובע-מעמלות (המענק-לכלכלה — לא-רווח-בעלים)
+        gasFundedMu: st.gasFundedMu ?? 0,           // Σדלק-שמומן-מהעמלות (השקעה-מחדש — לא-רווח-בעלים)
+        creditsTreasuryMu: st.credits?.treasury ?? 0,
+        halted: st.halted ?? null,
+      };
+      if (!best || Date.parse(cand.savedAt) > Date.parse(best.savedAt)) best = cand;
+    } catch { continue; }
+  }
+  return best; // אין-מועמד-טרי → null (fail-honest)
 }
 
 // ── ספר-ההפסדים-האמת (מדוד מהמקורות — אפס-אומדנים) ──

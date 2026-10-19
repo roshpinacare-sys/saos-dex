@@ -305,15 +305,15 @@ export function selftest() {
   const cenBig = { at: "t", totals: {}, rows: Array.from({ length: 12 }, (_, i) => ({ account: `s${i}`, state: "OK", steem: 100, sbd: 0, claimSteem: 0, claimSbd: 0 })) };
   const pBig = planSweep(cenBig, 0.104);
   A(pBig.beatTotalSteem <= CAPS.perBeatSteem, "beat total ≤ per-beat cap");
-  // דיבידנד: רווח-אפס → אין-שחרור ואין-הסלמה (LAW-2/3)
-  const lane0 = loadDividendLane();
+  // דיבידנד: רווח-אפס → אין-שחרור ואין-הסלמה (LAW-2/3) — בסיס-דטרמיניסטי (לא-הנתיב-החי)
+  const lane0 = { ...loadDividendLane(), greenStreak: 0, rateUsdPerDay: CAPS.dividend.startRateUsdPerDay, escalations: [] };
   const daily0 = { measuredUsd24h: 0, parts: [] };
   const l0 = advanceDividendLane(lane0, daily0);
   A(l0.pendingReleaseUsd === 0 && l0.greenStreak === 0, "zero profit → zero release, streak reset");
   A(l0.rateUsdPerDay === CAPS.dividend.startRateUsdPerDay, "no escalation on empty day");
   A(l0.gapToTargetUsd === 1000, "honest gap published");
-  // רצף-ירוק 3 → הסלמה ×1.25
-  let lane = loadDividendLane();
+  // רצף-ירוק 3 → הסלמה ×1.25 (בסיס-דטרמיניסטי)
+  let lane = { ...loadDividendLane(), greenStreak: 0, rateUsdPerDay: CAPS.dividend.startRateUsdPerDay, escalations: [] };
   for (let i = 0; i < 3; i++) lane = advanceDividendLane(lane, { measuredUsd24h: 0.5, parts: [] });
   A(lane.greenStreak === 3 && lane.rateUsdPerDay === 1.25, `3 green runs → ×1.25 (got streak=${lane.greenStreak} rate=${lane.rateUsdPerDay})`);
   // שחרור = מינימום(רווח, תקרה)
@@ -386,7 +386,7 @@ export function escalationLadder({ pnl, cen }) {
     { id: "ESC-8", name: "דלגציית SP — תשואה-פסיבית על 2.35M VESTS-האוצר", state: "BLOCKED — owner key (REQ-0007/0008) + החלטת-מטריצה", value: "APR-מדוד ~24% (אומדן-לא-הבטחה) — ההכנסה-הפסיבית-הגדולה-ביותר-הזמינה", evidence: "REQ-0007 SP matrix + headcorner 2,349,020 VESTS delegated" },
     { id: "ESC-9", name: "ARB-מעבר-ל-STEEM: CEX (HTX/binance) מול-הספר-הפנימי", state: "MEASURED — arb-scan live (paperPnl −426 naive / +1.79 strategy); real execution = הכרעת-בעלים על-venue", value: "פוטנציאל-רחב-מעבר-ל-steem: פערים-אמת בין-ה-CEX-לספר-הפנימי", evidence: "grids/arb-ledger.json cumulative + arb-scan.mjs CEX feeds" },
     { id: "ESC-10", name: "עמלות-בריכות-דקס (treasuryProfitEver) → P&L-מפורסם", state: "WIRED-2026-10-19 — גשר internal-pnl.mjs מפרסם-את-הראצ'ט; המנוע-מודד-דלתא-לנתיב-הדיבידנד", value: "הרווח-האמת-מהמסחר-הפנימי נראה-לבעלים: $18,393.97 מצטבר (ראצ'ט) · 119,413 מילויים אמת", evidence: "grids/state/internal-pnl.json · kernel.ts:2288 monotonic Σ-harvest" },
-    { id: "ESC-11", name: "קציר-עמלות-מתוזמן + מסילת-תשלום-דיבידנד (µ→STEEM→בעלים)", state: "NEXT — feeMeter 1,479µ ממתין-קציר · הגשר (bridge.ts OUT/withdraw) הוא-המסילה-להמרת-רווח-פנימי-לערך-חוץ", value: "הקילומטר-האחרון: רווח-מדוד-בפנקס → שחרור-קנברי → משיכה-אמת-לבעלים", evidence: "db/state-snapshot feeMeterMu · src/lib/dex/bridge.ts withdraw path" },
+    { id: "ESC-11", name: "קציר-עמלות-מתוזמן + מסילת-תשלום-דיבידנד (µ→STEEM→בעלים)", state: "HARVEST-SHIPPED-2026-10-19 — fee-harvest.mjs חי (selftest 8/8) · סדולת-גשר-כל-10-דק0027 · קציר-ראשון בנק: 1,497µ→ראצ0027ט · הקבלה-הירוקה-הראשונה: profitUsd24h=$1.497, greenStreak=1 · נותר: מסילת-משיכה-בפועל (bridge OUT → owner)", value: "הקילומטר-האחרון: רווח-מדוד-בפנקס → שחרור-קנברי → משיכה-אמת-לבעלים", evidence: "grids/state/self-deposit-receipts.jsonl 12:06Z · bridge.ts withdraw path" },
     { id: "ESC-12", name: "פוטנציאל-רחב-מעבר-ל-STEEM (עורקי-תשתית-מוכחים)", state: "MAPPED — 4/4 עורקי-ענן חיים (gitlab/supabase/vercel/render אומתו 200) · סריקת-שווקים-ARB מדודה (arb-scan CEX-מול-ספר)", value: "דרכי-ערך-מעבר-לשרשרת: פריסת-שירותים-מניבים על-העורקים-הקיימים · ARB-אמת בין-venues", evidence: "state/keys/REGISTRY.json + worklog Task19 key-probe 4/4 · grids/arb-ledger.json" },
   ];
 }

@@ -105,6 +105,7 @@
 | `grids/truth-gate.mjs` | TRUTH-GATE — שער-אמת על מילויים (Wave-2 סעיף 1 · מנדט-הבעלים #11 "בורסת-אמת") |
 | `grids/self-deposit.mjs` | SELF-DEPOSIT — מנוע-ההפקדה-העצמית: אין-הפקדות-חוץ · idle→cashmachine פנימי · נתיב-דיבידנד-בעלים $1000/יום מרווח-מדוד (owner directive 2026-10-19 trace 1a1530e43b512305) |
 | `grids/internal-pnl.mjs` | INTERNAL-PNL — גשר-ה-P&L-הפנימי: ראצ'ט treasuryProfitEver→USD (1 USDS=1000µ מאומת-מהפקדה) · ספר-הפסדים-מדוד · מזין את internal-dex-fees ב-self-deposit (החלטה #24) |
+| `grids/fee-harvest.mjs` | FEE-HARVEST — קציר-עמלות-מתוזמן (ESC-11): feeMeter→treasuryProfit · רצפת-סולם-אינה-נגעת · סף-אבק 500µ · fail-honest · selftest 8/8 · סדולה: dex-economy-bridge כל-10 דק' |
 | `grids/validate-params.mjs` | VALIDATE-PARAMS — שומר-סף-פרמטרי-הגריד (fail-closed; 9-c · 2026-10-11) |
 | `grids/venues/blurt-quote.mjs` | BLURT-QUOTE — רגל-תכנון-בלרט חסרת-מפתחות (Z-87a · BRIDGE · plan-only) |
 | `grids/volume-verify.mjs` | VOLUME-VERIFY — VERIFIED-VS-CHAIN: אמת-מול-שרשרת על-כל-קבלה וכל-מילוי (R323) |
