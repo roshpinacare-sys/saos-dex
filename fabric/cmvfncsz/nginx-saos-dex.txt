@@ -1,0 +1,65 @@
+# SAOS-DEX Nginx Security Configuration - Attack Pattern Detection
+# Protecting web server layer as first line of defense before middleware
+
+# ModSecurity setup with OWASP Core Rule Set
+SecRuleEngine On
+SecRequestBodyAccess On
+SecResponseBodyAccess On
+SecResponseBodyLimit 2097152
+SecResponseBodyMimeType text/plain text/html text/xml
+
+# Include OWASP ModSecurity Core Rule Set
+Include /etc/nginx/modsecurity/crs/crs-setup.conf
+Include /etc/nginx/modsecurity/crs/rules/*.conf
+
+# Custom rules for SAOS-DEX specific attack patterns
+
+# 1. SQL Injection Detection
+SecRule ARGS|ARGS_NAMES|REQUEST_BODY "(?i)(\bunion\b.*\bselect\b|\bselect\b.*\bfrom\b|\binsert\b.*\binto\b|\bdelete\b.*\bfrom\b|\bdrop\b.*\btable\b|\bexec\(|\bexecute\(|\bcast\(|\bconvert\(|\bxp_cmdshell|\bwaitfor\b.*\bdelay)" \
+    "id:1001,phase:2,block,t:'SQLi Attack',msg:'SQL Injection Attack Detected',logdata:'%{TX.0}',tag:'SAOS-DEX/SQLi',severity:2,rev:'1'"
+
+# 2. XSS Detection
+SecRule ARGS|ARGS_NAMES|REQUEST_BODY "(?i)(<script[^>]*?>.*?</script>|javascript:|vbscript:|onload=|onerror=|onclick=|onfocus=|onmouseover=|alert\(|document\.cookie|<iframe|<object|<embed|<link|<meta|<form|<input|<img|<svg)" \
+    "id:1002,phase:2,block,t:'XSS Attack',msg:'Cross-Site Scripting Attack Detected',logdata:'%{TX.0}',tag:'SAOS-DX/XSS',severity:2,rev:'1'"
+
+# 3. Suspicious Requests to Critical Paths
+SecRule REQUEST_URI "(?i)(/api/dex/settle|/api/dex/transfer|/api/dex/order|/api/dex/cancel|/api/dex/swap|/api/dex/wallets|/api/dex/portfolio)" \
+    "id:1003,phase:1,pass,t:'Critical Path Access',msg:'Access to Critical API Path',tag:'SAOS-DEX/CRITICAL-PATH',severity:1,rev:'1'"
+
+# 4. Suspicious Headers
+SecRule REQUEST_HEADERS_NAMES|REQUEST_HEADERS "(?i)(x-forwarded-for:\s*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\s*,\s*\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|x-originating-ip|user-agent:\s*sqlmap|referer:\s*<script|accept-encoding:\s*gzip,\s*deflate)" \
+    "id:1004,phase:2,block,t:'Suspicious Headers',msg:'Suspicious Headers Detected',logdata:'%{TX.0}',tag:'SAOS-DEX/HEADERS',severity:2,rev:'1'"
+
+# 5. Rate Limiting - High Request Rate from Single IP
+SecRule "tx:rate_limit_counter" "@eq 0" "id:1005,phase:1,pass,nolog,tag:'SAOS-DEX/RATE_LIMIT',setvar:tx.rate_limit_counter=1"
+SecRule "tx:rate_limit_counter" "@gt 60" "id:1006,phase:1,block,t:'High Request Rate',msg:'Request Rate Exceeded Limit',tag:'SAOS-DEX/RATE_LIMIT_EXCEEDED',severity:1,rev:'1'"
+
+# IP Collection for rate limiting
+SecRule "REMOTE_ADDR" "@ipMatch 127.0.0.1" "id:1007,phase:1,pass,nolog,skip:1"
+SecRule "REMOTE_ADDR" "@ipMatch 192.168.0.0/16" "id:1008,phase:1,pass,nolog,skip:1"
+SecRule "REMOTE_ADDR" "@ipMatch 10.0.0.0/8" "id:1009,phase:1,pass,nolog,skip:1"
+SecRule "REMOTE_ADDR" "@ipMatch 172.16.0.0/12" "id:1010,phase:1,pass,nolog,skip:1"
+
+# Rate limit collection for all other IPs
+SecRule "REMOTE_ADDR" "@ipMatchVariable tx.allowed_ips" "id:1011,phase:1,pass,nolog,skip:1"
+SecRule "REMOTE_ADDR" "@ipMatchVariable tx.blocked_ips" "id:1012,phase:1,block,t:'Blocked IP',msg:'IP Address Blocked',tag:'SAOS-DEX/BLOCKED_IP',severity:1,rev:'1'"
+
+# Set rate limit counter
+SecRule "REMOTE_ADDR" "@ipMatchVariable tx.rate_limit_ips" "id:1013,phase:1,pass,nolog,setvar:tx.rate_limit_ips=%{tx.rate_limit_ips}|%{REMOTE_ADDR}"
+
+# Initialize rate limit counter
+SecRule "tx.rate_limit_ips" "@contains %{REMOTE_ADDR}" "id:1014,phase:1,pass,nolog,setvar:tx.rate_limit_counter=1"
+SecRule "tx.rate_limit_ips" "!@contains %{REMOTE_ADDR}" "id:1015,phase:1,pass,nolog,setvar:tx.rate_limit_ips=%{tx.rate_limit_ips}|%{REMOTE_ADDR},setvar:tx.rate_limit_counter=1"
+
+# Logging configuration
+SecAuditEngine RelevantOnly
+SecAuditLog /var/log/nginx/modsecurity_audit.log
+SecAuditLogFormat JSON
+SecAuditLogParts ABCDEFHZ
+SecAuditLogType Serial
+
+# Response body modification for blocked requests
+SecAction "id:1016,phase:5,block,t:'Attack Blocked',msg:'Attack Pattern Detected and Blocked',tag:'SAOS-DEX/BLOCKED',status:403"
+
+# Custom logging for security events
+SecRule "TX:ANOMALY_SCORE" "@gt 5" "id:1017,phase:4,pass,t:'High Anomaly Score',msg:'High Anomaly Score Detected',logdata:'%{TX.ANOMALY_SCORE}',tag:'SAOS-DEX/ANOMALY',severity:1,rev:'1'"
