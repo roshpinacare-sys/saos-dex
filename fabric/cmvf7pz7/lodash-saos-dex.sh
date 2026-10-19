@@ -1,0 +1,1 @@
+cd /home/z/my-project/repos/saos-dex && npm install lodash@latest && npm test && git add package.json package-lock.json && git commit -m "fix: update lodash to secure version to address CVE-2019-10744"
