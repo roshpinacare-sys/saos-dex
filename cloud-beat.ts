@@ -604,10 +604,11 @@ async function main(): Promise<void> {
   let feeds: Record<string, number> = {};
   try {
     const pp = await import("./src/lib/dex/price-proof");
-    /* המרה-דו-שלבית (Task 35): טיפוס-המודול האמיתי אינו-חופף-מספיק לחתימה — בלי-unknown
-     * המהדר מסרב (TS2352) וחוסם את הבנייה כולה. ההמרה כאן רק מצהירה-על-החלק-שבו-משתמשים. */
-    const f = await (pp as unknown as { extFeeds: (force?: boolean) => Promise<Record<string, number>> }).extFeeds(true);
-    feeds = f ?? {};
+    /* FIX(Task 23 · 2026-10-20 · credit-rate-bug): ההמרה-הישנה הצהירה extFeeds כ-Record<string,number>
+     * והלולאה קראה feeds["steem"] — תמיד-undefined (המחירים תחת .usd) → "no live rate" לנצח, כל-זיכוי-נכס-לא-יציב
+     * הושתק-מבנית גם-כשהפיד-חי (נמדד: oracle_set WSTEEM=0.0521$ באותה-ריצה בה "no live rate"). עתה: חילוץ-usd. */
+    const f = await (pp as unknown as { extFeeds: (force?: boolean) => Promise<unknown> }).extFeeds(true);
+    feeds = ((f as { ok?: boolean; usd?: Record<string, number | null> })?.ok ? (f as { usd: Record<string, number | null> }).usd : {}) as Record<string, number>;
   } catch (e) { console.warn(`[cloud-beat] extFeeds unavailable: ${String(e).slice(0, 60)}`); }
 
   /* ── R26 · מדיניות-עוגן-ברירה (standing anchor policy) ──────────────────────
