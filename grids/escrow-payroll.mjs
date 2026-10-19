@@ -102,6 +102,42 @@ function releaseDone(ops, escrowId, from) {
   return ops.some((o) => o.type === "escrow_release" && o.body?.from === from && Number(o.body?.escrow_id) === escrowId);
 }
 
+/* ── מצב-ה-escrow הישיר-מהשרשרת (W12) ──────────────────────────────────────────── */
+/* W12 נמדד-חי (3 ריצות אדומות 10-18T12:01 → 10-19T01:51, כולן legs:[]): האידמפוטנציה
+ * נשענה על get_account_history[-100,100] — חלון-ה-100-הפעולות-האחרונות של חשבון-אוצר
+ * חי קובר את ה-ops-המקוריים תוך-שעות → transferDone/approveDone מתחלפים-ל-false
+ * על-אותו-escrow_id בדיוק → המחזור מסיק-מסקנות-שגויות-מהיסטוריה ונזרק על-ידי
+ * assert-השחרור של השרשרת (e.to_approved && e.agent_approved). המקור-האמיתי
+ * למצב-ה-escrow הוא condenser_api.get_escrow — קריאה-ישירה, לא-היסטוריה: */
+async function escrowStateOf(from, escrowId) {
+  let e;
+  try {
+    e = await rpcAny("condenser_api.get_escrow", [from, escrowId]);
+  } catch (err) {
+    throw new Error(`escrowStateOf(${from}/${escrowId}) failed — refusing to broadcast on unreadable escrow state (fail-closed): ${String(err?.message ?? err).slice(0, 120)}`);
+  }
+  if (!e || typeof e !== "object" || Array.isArray(e) || Object.keys(e).length === 0) return null;
+  return e;
+}
+
+/* החלטת-רגליים טהורה (נבדקת-ב-selftest): מצב-השרשרת → מה-המחזור צריך-לעשות */
+export function planLegsFromState(st) {
+  // st === null → אין-escrow על-השרשרת → חייב transfer
+  if (st === null) return { doTransfer: true, needApprove: [], doRelease: false, complete: false };
+  const toOk = st.to_approved === true;
+  const agentOk = st.agent_approved === true;
+  const balanceZero = /^0(\.0+)? SBD$/.test(String(st.sbd_balance ?? "")) && /^0(\.0+)? STEEM$/.test(String(st.steem_balance ?? ""));
+  if (balanceZero) return { doTransfer: false, needApprove: [], doRelease: false, complete: true }; // שוחרר/הוחזר — המחזור הושלם-בעבר
+  return { doTransfer: false, needApprove: [!toOk, !agentOk], doRelease: toOk && agentOk, complete: false };
+}
+export function planApproveWhos(st, lane) {
+  const p = planLegsFromState(st);
+  const whos = [];
+  if (p.needApprove[0] === true) whos.push(lane.to);
+  if (p.needApprove[1] === true) whos.push(lane.agent);
+  return whos;
+}
+
 /* אילוץ-ייחודיות = האוביקט כבר-קיים בשרשרת. רק אם-האימות-מאשר — מטופל-כ"כבר-בוצע"
  * (כנות: ריצת-קנרית 02:09Z לימדה-את-המחלקה-הזו). אחרת — עצירה-כנה. */
 const UNIQ_RE = /uniqueness constraint/i;
@@ -112,6 +148,18 @@ async function uniquenessRecovered(account, verify) {
   } catch {
     return false;
   }
+}
+
+/* קריאת-מצב-חוזרת אחרי-שידור (הבלוק הקרוב-ביותר עשוי-להתאחר ~3 שנ׳/בלוק) */
+async function stateAfterBroadcast(from, escrowId, tries = 8) {
+  for (let i = 0; i < tries; i++) {
+    await sleep(2500);
+    try {
+      const st = await escrowStateOf(from, escrowId);
+      if (st) return st;
+    } catch { /* קריאה-בודדת נפלה — מנסים-שוב */ }
+  }
+  return null;
 }
 
 /* ── מפתחות — מקובץ-0700 או env; אימות-מול-רשות-חיה לכל-רגל ─────────────────── */
@@ -162,13 +210,26 @@ export async function selftest() {
   // וקטור 7: עקרון-השער — מפתח-לא-מתאים לעולם לא חותם (activeAuthorityOk מכסה; כאן: צורת-סירוב)
   const fmt = SBD(0.05);
   assert(fmt === "0.050 SBD", "amount formatting 3dp");
-  console.log("SELFTEST PASS: 7/7 vectors");
+  // וקטור 8-11 (W12): החלטות-רגליים-ממצב-השרשרת-הישיר (planLegsFromState)
+  assert(JSON.stringify(planLegsFromState(null)) === JSON.stringify({ doTransfer: true, needApprove: [], doRelease: false, complete: false }), "absent escrow → transfer leg");
+  const unrat = { to_approved: false, agent_approved: false, sbd_balance: "0.050 SBD", steem_balance: "0.000 STEEM" };
+  const pUnrat = planLegsFromState(unrat);
+  assert(pUnrat.doTransfer === false && pUnrat.doRelease === false && pUnrat.complete === false, "unratified escrow → no transfer/release");
+  assert(JSON.stringify(planApproveWhos(unrat, lane)) === JSON.stringify(["hcsoldier4", "hcsoldier5"]), "unratified → both whos approve");
+  const half = { to_approved: true, agent_approved: false, sbd_balance: "0.050 SBD", steem_balance: "0.000 STEEM" };
+  assert(JSON.stringify(planApproveWhos(half, lane)) === JSON.stringify(["hcsoldier5"]), "half-ratified → only the missing who");
+  const ready = { to_approved: true, agent_approved: true, sbd_balance: "0.050 SBD", steem_balance: "0.000 STEEM" };
+  assert(planLegsFromState(ready).doRelease === true, "fully ratified + funded → release leg");
+  const emptied = { to_approved: true, agent_approved: true, sbd_balance: "0.000 SBD", steem_balance: "0.000 STEEM" };
+  assert(planLegsFromState(emptied).complete === true, "zero balance → cycle already complete");
+  console.log("SELFTEST PASS: 12/12 vectors");
 }
 
 /* ── מחזור-מלא אידמפוטנטי על-מסלול ──────────────────────────────────────────── */
 async function runLane(lane, keys, receipt) {
   const escrowId = escrowIdFor(lane.id);
   const legs = [];
+  receipt.legs = legs; // W12: attach BEFORE running — a mid-cycle throw keeps the leg evidence (was: legs lost on every hardFail)
   const leg = async (name, fn) => {
     try {
       const r = await fn();
@@ -180,11 +241,17 @@ async function runLane(lane, keys, receipt) {
     }
   };
 
-  const hist = await escrowOpsOf(lane.from);
+  // W12: ההחלטות מהמצב-הישיר-מהשרשרת (get_escrow) — לא מחלון-היסטוריה-שנקבר.
+  // ההיסטוריה נשארת רק-כראיה משלימה בקבלות. כל-רגל: שער-מפתח → שידור → קריאת-מצב-חוזרת.
+  let st = await escrowStateOf(lane.from, escrowId);
+  let plan = planLegsFromState(st);
+  console.log(`escrow-payroll: lane=${lane.id} escrowId=${escrowId} chain-state=${st ? `exists(to_approved=${st.to_approved} agent_approved=${st.agent_approved} sbd=${st.sbd_balance})` : "absent"} → plan=${JSON.stringify(plan)}`);
 
-  // רגל 1: transfer (from)
-  if (transferDone(hist, escrowId, lane.from)) {
-    legs.push({ leg: "transfer", ok: true, skipped: "already on chain" });
+  // רגל 1: transfer (from) — רק-אם-השרשרת אינה-מכירה-את-ה-escrow
+  if (plan.complete) {
+    legs.push({ leg: "transfer", ok: true, skipped: "escrow already released/expired (chain balance zero)" });
+  } else if (!plan.doTransfer) {
+    legs.push({ leg: "transfer", ok: true, skipped: `escrow exists on chain (created ${st?.ratification_deadline ? "deadline " + st.ratification_deadline : "earlier"})` });
   } else {
     const wif = keys[lane.from];
     const gate = await activeAuthorityOk({ account: lane.from, wif, rpc: rpcAny });
@@ -201,54 +268,58 @@ async function runLane(lane, keys, receipt) {
       try {
         r = await signAndBroadcast(wif, [["escrow_transfer", body]]);
       } catch (e) {
-        if (UNIQ_RE.test(String(e?.message ?? e)) && await uniquenessRecovered(lane.from, (ops) => transferDone(ops, escrowId, lane.from))) {
-          console.log(`escrow-payroll: transfer — uniqueness constraint = the escrow is already on chain (verified in history); treated as done`);
-          return { ok: true, recovered: "uniqueness-verified-on-chain" };
+        // אילוץ-ייחודיות/קיים = ה-escrow עלה-בינתיים — מאמתים-מול-המצב-הישיר, לא-מההיסטוריה
+        const stNow = await escrowStateOf(lane.from, escrowId).catch(() => null);
+        if (stNow) {
+          console.log(`escrow-payroll: transfer — broadcast refused but chain-state shows the escrow exists (to_approved=${stNow.to_approved} agent_approved=${stNow.agent_approved}); treated as done`);
+          return { ok: true, recovered: "escrow-exists-on-chain" };
         }
         throw e;
       }
-      await sleep(2500);
-      const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
-      const onChain = tx?.operations?.some(([t, b]) => t === "escrow_transfer" && Number(b?.escrow_id) === escrowId);
-      console.log(`escrow-payroll: transfer txid=${r.txid} readback=${onChain ? "OK" : "PENDING"}`);
-      return { ok: true, txid: r.txid, readback: onChain };
+      const stNow = await stateAfterBroadcast(lane.from, escrowId);
+      if (!stNow) throw new Error(`transfer broadcast ${r?.txid ?? "?"} but get_escrow never materialized the escrow (fail-closed)`);
+      console.log(`escrow-payroll: transfer txid=${r.txid} chain-readback=OK (to_approved=${stNow.to_approved} agent_approved=${stNow.agent_approved})`);
+      st = stNow; plan = planLegsFromState(st);
+      return { ok: true, txid: r.txid, readback: true };
     });
   }
 
-  // רגל 2+3: approvals (to + agent)
-  for (const who of [lane.to, lane.agent]) {
-    const histWho = who === lane.from ? hist : await escrowOpsOf(who);
-    if (approveDone(histWho, escrowId, lane.from, who)) {
-      legs.push({ leg: `approve:${who}`, ok: true, skipped: "already on chain" });
-      continue;
+  // רגל 2+3: approvals (to + agent) — מהמצב-החי: מאשר-רק-את-מי-שעוד-לא-אישר
+  if (!plan.complete) {
+    for (const who of planApproveWhos(st, lane)) {
+      const wif = keys[who];
+      const gate = await activeAuthorityOk({ account: who, wif, rpc: rpcAny });
+      if (!gate.ok) throw new Error(`approve refused by key gate (${who}): ${gate.reason}`);
+      await leg(`approve:${who}`, async () => {
+        // השרשרת דורשת בדיוק-אחד-מהשניים: approve=true או reject=true (נמדד-חי: בלי-
+        // approve מפורש — "undefined is not valid JSON", ריצת-קנרית 02:07Z).
+        let r;
+        try {
+          r = await signAndBroadcast(wif, [["escrow_approve", { from: lane.from, to: lane.to, agent: lane.agent, who, escrow_id: escrowId, approve: true, reject: false }]]);
+        } catch (e) {
+          const stNow = await escrowStateOf(lane.from, escrowId).catch(() => null);
+          if (stNow && ((who === lane.to && stNow.to_approved === true) || (who === lane.agent && stNow.agent_approved === true))) {
+            console.log(`escrow-payroll: approve(${who}) — broadcast refused but chain-state shows the approval landed; treated as done`);
+            return { ok: true, recovered: "approval-on-chain" };
+          }
+          throw e;
+        }
+        const stNow = await stateAfterBroadcast(lane.from, escrowId);
+        const approved = stNow ? (who === lane.to ? stNow.to_approved === true : stNow.agent_approved === true) : false;
+        if (!approved) throw new Error(`approve(${who}) broadcast ${r?.txid ?? "?"} but chain-state never showed the ratification (fail-closed)`);
+        console.log(`escrow-payroll: approve(${who}) txid=${r.txid} chain-readback=OK`);
+        st = stNow; plan = planLegsFromState(st);
+        return { ok: true, txid: r.txid, readback: true };
+      });
     }
-    const wif = keys[who];
-    const gate = await activeAuthorityOk({ account: who, wif, rpc: rpcAny });
-    if (!gate.ok) throw new Error(`approve refused by key gate (${who}): ${gate.reason}`);
-    await leg(`approve:${who}`, async () => {
-      // השרשרת דורשת בדיוק-אחד-מהשניים: approve=true או reject=true (נמדד-חי: בלי-
-      // approve מפורש — "undefined is not valid JSON", ריצת-קנרית 02:07Z).
-      let r;
-      try {
-        r = await signAndBroadcast(wif, [["escrow_approve", { from: lane.from, to: lane.to, agent: lane.agent, who, escrow_id: escrowId, approve: true, reject: false }]]);
-      } catch (e) {
-        if (UNIQ_RE.test(String(e?.message ?? e)) && await uniquenessRecovered(who, (ops) => approveDone(ops, escrowId, lane.from, who))) {
-          console.log(`escrow-payroll: approve(${who}) — uniqueness constraint = already approved (verified in history); treated as done`);
-          return { ok: true, recovered: "uniqueness-verified-on-chain" };
-        }
-        throw e;
-      }
-      await sleep(2500);
-      const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
-      const onChain = tx?.operations?.some(([t, b]) => t === "escrow_approve" && Number(b?.escrow_id) === escrowId && b?.who === who);
-      console.log(`escrow-payroll: approve(${who}) txid=${r.txid} readback=${onChain ? "OK" : "PENDING"}`);
-      return { ok: true, txid: r.txid, readback: onChain };
-    });
   }
 
-  // רגל 4: release (from → to, מחזור-קנרית מלא)
-  if (releaseDone(hist, escrowId, lane.from)) {
-    legs.push({ leg: "release", ok: true, skipped: "already on chain" });
+  // רגל 4: release (from → to) — רק-כשהשרשרת עצמה מראה-שני-האשרורים (לעולם לא מניחים)
+  if (plan.complete) {
+    legs.push({ leg: "release", ok: true, skipped: "escrow balance already zero (released/expired)" });
+  } else if (!plan.doRelease) {
+    legs.push({ leg: "release", ok: false, hardFail: false, skipped: "awaiting ratification", state: { to_approved: st?.to_approved ?? null, agent_approved: st?.agent_approved ?? null, ratification_deadline: st?.ratification_deadline ?? null } });
+    console.log(`escrow-payroll: release skipped honestly — chain still awaits ratification (to_approved=${st?.to_approved} agent_approved=${st?.agent_approved}); next cycle completes it`);
   } else {
     const wif = keys[lane.from];
     const gate = await activeAuthorityOk({ account: lane.from, wif, rpc: rpcAny });
@@ -258,17 +329,18 @@ async function runLane(lane, keys, receipt) {
       try {
         r = await signAndBroadcast(wif, [["escrow_release", { from: lane.from, to: lane.to, agent: lane.agent, who: lane.from, receiver: lane.to, escrow_id: escrowId, sbd_amount: SBD(lane.amountSbd), steem_amount: STEEM0 }]]);
       } catch (e) {
-        if (UNIQ_RE.test(String(e?.message ?? e)) && await uniquenessRecovered(lane.from, (ops) => releaseDone(ops, escrowId, lane.from))) {
-          console.log(`escrow-payroll: release — uniqueness constraint = already released (verified in history); treated as done`);
-          return { ok: true, recovered: "uniqueness-verified-on-chain" };
+        const stNow = await escrowStateOf(lane.from, escrowId).catch(() => null);
+        if (stNow && planLegsFromState(stNow).complete) {
+          console.log(`escrow-payroll: release — broadcast refused but chain-state shows balance zero (already released); treated as done`);
+          return { ok: true, recovered: "release-on-chain" };
         }
         throw e;
       }
-      await sleep(2500);
-      const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
-      const onChain = tx?.operations?.some(([t, b]) => t === "escrow_release" && Number(b?.escrow_id) === escrowId);
-      console.log(`escrow-payroll: release txid=${r.txid} readback=${onChain ? "OK" : "PENDING"} — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
-      return { ok: true, txid: r.txid, readback: onChain };
+      const stNow = await stateAfterBroadcast(lane.from, escrowId);
+      const emptied = stNow ? planLegsFromState(stNow).complete : false;
+      if (!emptied) throw new Error(`release broadcast ${r?.txid ?? "?"} but chain-state never showed the escrow emptied (fail-closed)`);
+      console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
+      return { ok: true, txid: r.txid, readback: true };
     });
   }
 
@@ -312,8 +384,11 @@ async function main() {
   const receipt = { at: new Date().toISOString(), lane: lane.id, escrowId: escrowIdFor(lane.id), from: lane.from, to: lane.to, agent: lane.agent, amountSbd: lane.amountSbd, feeSbd: lane.feeSbd, legs: [], hardFail: false };
   try {
     receipt.legs = await runLane(lane, keys, receipt);
-    receipt.cycle = "COMPLETE";
-    console.log(`escrow-payroll: המסלול ${lane.id} הושלם — ${receipt.legs.length} רגליים, אפס-אמון, כל-החתימות-מאומתות-מול-הרשויות-החיות`);
+    // W12: מחזור-חלקי-כן — אם-השרשרת עוד-ממתינה-לאשרור (למשל-ריצה-הופסקה-בין-רגליים)
+    // המחזור-הבא ישלים: זה-מצב-מדיד, לא-כשל.
+    const awaiting = receipt.legs.some((l) => l.skipped === "awaiting ratification");
+    receipt.cycle = awaiting ? "AWAITING-RATIFICATION" : "COMPLETE";
+    console.log(`escrow-payroll: המסלול ${lane.id} — ${receipt.cycle} (${receipt.legs.length} רגליים, כל-החתימות-מאומתות-מול-הרשויות-החיות)`);
   } catch (e) {
     receipt.hardFail = true;
     receipt.reason = String(e?.message ?? e).slice(0, 200);
