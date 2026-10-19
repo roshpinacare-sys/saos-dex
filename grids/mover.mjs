@@ -219,6 +219,51 @@ export async function freshBook() {
   const nb = normBook({ bestAsk: parseFloat(raw.asks[0].real_price), bestBid: parseFloat(raw.bids[0].real_price) });
   return nb.bestAsk != null && nb.bestBid != null && nb.bestAsk > nb.bestBid ? { bestAsk: nb.bestAsk, bestBid: nb.bestBid } : null;
 }
+
+/* ── שומר-החצייה-העצמית (חוק-ברזל 2026-10-19 · trace 1a1533c25fd2cc69) ──────
+ * המדידה: 1430 חציות-עצמי (headcorner↔headcorner) — הריפרייס הציב-רגל-שחצה-את-רגלנו-החיה
+ * (רווח=0, נזק=RC+נפח-מזויף). החוק: אף-חתימת-רגל בלי-בדיקת-הפקודות-הפתוחות-שלנו:
+ *   אסק-חדש@px חוצה את ביד-שלנו עם מחיר ≥ px → הביד מבוטל קודם (אנחנו-השליטה).
+ *   ביד-חדשה@px חוצה את אסק-שלנו עם מחיר ≤ px → האסק מבוטל קודם.
+ * כישלון-ביטול = סירוב-חתימה (fail-closed). אפס-חצייה-עצמית מעכשיו. */
+export function ownCrossingOrders(mine, side, px) {
+  const opp = []; // רגליים-נגדיות-שלנו שהרגל-החדשה-תחצה
+  for (const o of mine ?? []) {
+    const [bAmt, bSym] = String(o.sell_price?.base ?? "").split(" ");
+    const [qAmt] = String(o.sell_price?.quote ?? "").split(" ");
+    const base = Number(bAmt), quote = Number(qAmt);
+    if (!(base > 0) || !(quote > 0)) continue;
+    const unit = quote / base;
+    if (bSym === "STEEM") { // אסק-שלנו · מחיר-אמת SBD/STEEM = unit
+      if (side === "bid" && unit <= px) opp.push({ orderid: o.orderid, side: "ask", price: unit });
+    } else if (bSym === "SBD") { // ביד-שלנו · מחיר = 1/unit
+      const bidPx = 1 / unit;
+      if (side === "ask" && bidPx >= px) opp.push({ orderid: o.orderid, side: "bid", price: bidPx });
+    }
+  }
+  return opp;
+}
+
+export async function selfCrossGuard(side, px, liveWif, evidence, dryRun) {
+  const mine = (await rpcAny("condenser_api.get_open_orders", [ACCOUNT]).catch(() => null)) ?? [];
+  const opp = ownCrossingOrders(mine, side, px);
+  if (!opp.length) return { ok: true, cancelled: [] };
+  evidence.selfGuard ??= [];
+  const cancelled = [];
+  for (const c of opp) {
+    if (dryRun) { cancelled.push({ ...c, dryRun: true }); continue; }
+    try {
+      const r = await signAndBroadcast(liveWif, [["limit_order_cancel", { owner: ACCOUNT, orderid: c.orderid }]]);
+      cancelled.push({ ...c, txid: r.txid });
+    } catch (e) {
+      cancelled.push({ ...c, error: String(e.message ?? e).slice(0, 80) });
+    }
+  }
+  evidence.selfGuard.push({ side, px, cancelled });
+  const anyFailed = cancelled.some((c) => c.error);
+  if (anyFailed) return { ok: false, cancelled, why: "self-cross guard: cancel of own opposite leg failed — refusing new leg (fail-closed)" };
+  return { ok: true, cancelled };
+}
 /* מהדק-מחיר-אחד אל המגע: אסק רק כלפי-מעלה, ביד רק כלפי-מטה (ההידוק לעולם
  * לא מפר את רצפת/תקרת-הפאריטי — ראה book-law.mjs). מחזיר {px, clamped} או null (אין-ספר). */
 export function clampToTouch(side, px, book) {
@@ -322,10 +367,14 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
       else {
         const pol = policyGate({ tool: "mover", lane: "grid", kind: "limit_order_create", account: ACCOUNT, amount: Number(sell), price: px, notionalSbd: Number(recv), orderid: id, meta: { side: "ask", phase: "reprice" } });
         if (!pol.allow) evidence.placed.push({ id, side: "ask", blocked: `POLICY-HALT: ${pol.reasons.join("; ")}` });
-        else try {
-          const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${sell.toFixed(3)} STEEM`, min_to_receive: `${recv.toFixed(3)} SBD`, fill_or_kill: false, expiration: new Date(rexp * 1000).toISOString().slice(0, 19) }]]);
-          evidence.placed.push({ id, side: "ask", sell: `${sell.toFixed(3)} STEEM`, receive: `${recv.toFixed(3)} SBD`, price: px, txid: r.txid, block: r.block });
-        } catch (e) { evidence.placed.push({ id, side: "ask", error: String(e.message ?? e).slice(0, 80) }); }
+        else {
+          const sg = await selfCrossGuard("ask", px, liveWif, evidence, dryRun);
+          if (!sg.ok) evidence.placed.push({ id, side: "ask", blocked: `SELF-CROSS-GUARD: ${sg.why}` });
+          else try {
+            const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${sell.toFixed(3)} STEEM`, min_to_receive: `${recv.toFixed(3)} SBD`, fill_or_kill: false, expiration: new Date(rexp * 1000).toISOString().slice(0, 19) }]]);
+            evidence.placed.push({ id, side: "ask", sell: `${sell.toFixed(3)} STEEM`, receive: `${recv.toFixed(3)} SBD`, price: px, txid: r.txid, block: r.block });
+          } catch (e) { evidence.placed.push({ id, side: "ask", error: String(e.message ?? e).slice(0, 80) }); }
+        }
       }
     } else if (freedSteem > 0) evidence.blockers.push(`freed STEEM ${freedSteem.toFixed(3)} < min ${REPRICE_MIN.STEEM} — dust, kept liquid (honest)`);
     if (freedSbd >= REPRICE_MIN.SBD) {
@@ -340,10 +389,14 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
       else {
         const pol = policyGate({ tool: "mover", lane: "grid", kind: "limit_order_create", account: ACCOUNT, amount: Number(spend), price: px, notionalSbd: Number(spend), orderid: id, meta: { side: "bid", phase: "reprice" } });
         if (!pol.allow) evidence.placed.push({ id, side: "bid", blocked: `POLICY-HALT: ${pol.reasons.join("; ")}` });
-        else try {
-          const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${spend.toFixed(3)} SBD`, min_to_receive: `${recv.toFixed(3)} STEEM`, fill_or_kill: false, expiration: new Date(rexp * 1000).toISOString().slice(0, 19) }]]);
-          evidence.placed.push({ id, side: "bid", sell: `${spend.toFixed(3)} SBD`, receive: `${recv.toFixed(3)} STEEM`, price: px, txid: r.txid, block: r.block });
-        } catch (e) { evidence.placed.push({ id, side: "bid", error: String(e.message ?? e).slice(0, 80) }); }
+        else {
+          const sg = await selfCrossGuard("bid", px, liveWif, evidence, dryRun);
+          if (!sg.ok) evidence.placed.push({ id, side: "bid", blocked: `SELF-CROSS-GUARD: ${sg.why}` });
+          else try {
+            const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${spend.toFixed(3)} SBD`, min_to_receive: `${recv.toFixed(3)} STEEM`, fill_or_kill: false, expiration: new Date(rexp * 1000).toISOString().slice(0, 19) }]]);
+            evidence.placed.push({ id, side: "bid", sell: `${spend.toFixed(3)} SBD`, receive: `${recv.toFixed(3)} STEEM`, price: px, txid: r.txid, block: r.block });
+          } catch (e) { evidence.placed.push({ id, side: "bid", error: String(e.message ?? e).slice(0, 80) }); }
+        }
       }
     } else if (freedSbd > 0) evidence.blockers.push(`freed SBD ${freedSbd.toFixed(3)} < min ${REPRICE_MIN.SBD} — dust, kept liquid (honest)`);
     evidence.summary = summarizeEvidence(evidence);
@@ -438,6 +491,8 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
     {
       const pol = policyGate({ tool: "mover", lane: "grid", kind: "limit_order_create", account: ACCOUNT, amount: Number(sell), price: px, notionalSbd: Number(recv), orderid: id, meta: { side: "ask", phase: "plan" } });
       if (!pol.allow) { evidence.placed.push({ id, level: a.level, side: "ask", blocked: `POLICY-HALT: ${pol.reasons.join("; ")}` }); continue; }
+      const sg = await selfCrossGuard("ask", px, liveWif, evidence, dryRun);
+      if (!sg.ok) { evidence.placed.push({ id, level: a.level, side: "ask", blocked: `SELF-CROSS-GUARD: ${sg.why}` }); continue; }
     }
     try {
       const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${sell.toFixed(3)} STEEM`, min_to_receive: `${recv.toFixed(3)} SBD`, fill_or_kill: false, expiration: new Date(expiry * 1000).toISOString().slice(0, 19) }]]);
@@ -462,6 +517,8 @@ export async function runMover({ dryRun = false, additive = false, reprice = fal
     {
       const pol = policyGate({ tool: "mover", lane: "grid", kind: "limit_order_create", account: ACCOUNT, amount: Number(spend), price: px, notionalSbd: Number(spend), orderid: id, meta: { side: "bid", phase: "plan" } });
       if (!pol.allow) { evidence.placed.push({ id, level: b.level, side: "bid", blocked: `POLICY-HALT: ${pol.reasons.join("; ")}` }); continue; }
+      const sg = await selfCrossGuard("bid", px, liveWif, evidence, dryRun);
+      if (!sg.ok) { evidence.placed.push({ id, level: b.level, side: "bid", blocked: `SELF-CROSS-GUARD: ${sg.why}` }); continue; }
     }
     try {
       const r = await signAndBroadcast(liveWif, [["limit_order_create", { owner: ACCOUNT, orderid: id, amount_to_sell: `${spend.toFixed(3)} SBD`, min_to_receive: `${recv.toFixed(3)} STEEM`, fill_or_kill: false, expiration: new Date(expiry * 1000).toISOString().slice(0, 19) }]]);

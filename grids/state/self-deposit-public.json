@@ -1,6 +1,6 @@
 {
  "schema": "SAOS-SELF-DEPOSIT/1",
- "at": "2026-10-19T07:45:34.577Z",
+ "at": "2026-10-19T08:38:18.544Z",
  "authority": "owner directive 2026-10-19 trace 1a1530e43b512305 — אין-הפקדות-חוץ · הריבונות מייצרת ומפקידה בעצמה · דיבידנד-בעלים $1000/יום",
  "mode": "census-only",
  "laws": [
@@ -11,17 +11,17 @@
   "LAW-4 fail-honest",
   "LAW-5 caps-in-code"
  ],
- "mid": 0.102073,
+ "mid": 0.102638,
  "midSource": "order-book",
  "census": {
   "totals": {
-   "steem": 149.893,
-   "sbd": 1.83,
+   "steem": 139.199,
+   "sbd": 1.849,
    "claimSteem": 0,
    "claimSbd": 0
   },
   "fleetRows": 13,
-  "fleetSteem": 149.893
+  "fleetSteem": 139.199
  },
  "dailyProfit": {
   "measuredUsd24h": 0,
@@ -36,97 +36,171 @@
   "targetUsdPerDay": 1000,
   "escalations": []
  },
+ "pnlSource": {
+  "at": "2026-10-19T08:30:10.681Z",
+  "eraPnlSbd": 0.065776,
+  "selfCrosses": 1430
+ },
+ "escalationLadder": [
+  {
+   "id": "ESC-1",
+   "name": "תיקון-חצייה-עצמית (self-cross guard ב-mover)",
+   "state": "SHIPPED — guard live, leak drains as old legs expire (27d max)",
+   "value": "סתימת-הדליפה ששרפה RC + נפח-מזויף; מאפשר-רווח-אמת",
+   "evidence": "selfCrosses=1430"
+  },
+  {
+   "id": "ESC-2",
+   "name": "P&L-אמת → נתיב-הדיבידנד",
+   "state": "SHIPPED",
+   "value": "המונה-מוזן-ממילויים-אמת (fill_order, מודע-חצייה-עצמית) — רווח-אמת-בלבד נכנס-למדידה",
+   "evidence": "eraPnlSbd=0.065776"
+  },
+  {
+   "id": "ESC-3",
+   "name": "הגדלת-רגלי-המדרגות לפי-רצף-ירוק",
+   "state": "ARMED — W13 caps 1.5/3.0 live; next tier = 3 green receipts (auto ×1.25)",
+   "value": "אותו-מבנה-מילויים, רגליים-גדולות — הרווח-נסקל-ליניארית-עד-תקרת-הסלמה",
+   "evidence": "treasury-ladder CAPS + dividend escalation"
+  },
+  {
+   "id": "ESC-4",
+   "name": "הפעלת-עובד-הון-האוצר (487 STEEM נזיל ב-headcorner)",
+   "state": "BLOCKED — owner key (REQ-0008): המפתח-ב-upload אינו-סמכות-החיה",
+   "value": "×5-עובד-הון = ×5-קנבס-מילויים-על-אותו-מנוע",
+   "evidence": "self-deposit census 2026-10-19: headcorner 487.086 STEEM"
+  },
+  {
+   "id": "ESC-5",
+   "name": "העמקת-מילויים-חוץ-אמת (84 מילויים-מול-צדדים-חוץ נמדדו)",
+   "state": "GROWING — depth + spread-tightening on the internal book",
+   "value": "כל-מילוי-חוץ = רווח-מרק-אמת (לא-wash)",
+   "evidence": "pnl-audit externalFills=84 (coin-raffle/cashly/btsx/vfund...)"
+  },
+  {
+   "id": "ESC-6",
+   "name": "מסילת-בלרט (57.97 BLURT נזיל · ציטוט-חסר-מפתחות קיים)",
+   "state": "READY-TO-PLAN — venues/blurt-quote.mjs live; execution needs Blurt key census",
+   "value": "שוק-שני-בלגרפיה-אחת — אותם-חוקי-מדרגה, ספר-דק-יותר",
+   "evidence": "custody.json blurt-liquid 57.972 ONCHAIN_REAL"
+  },
+  {
+   "id": "ESC-7",
+   "name": "תשואות-קורציון (צי-13 מצביע-ומפרסם כבר)",
+   "state": "ALIVE-LOW — claims flow into census; scale = more voting power via SP",
+   "value": "הכנסה-פסיבית-אמת-על-השרשרת; מחוברת-לדיבידנד דרך-התביעות",
+   "evidence": "grids/curate.mjs + chain-claims part in dailyProfit"
+  },
+  {
+   "id": "ESC-8",
+   "name": "דלגציית SP — תשואה-פסיבית על 2.35M VESTS-האוצר",
+   "state": "BLOCKED — owner key (REQ-0007/0008) + החלטת-מטריצה",
+   "value": "APR-מדוד ~24% (אומדן-לא-הבטחה) — ההכנסה-הפסיבית-הגדולה-ביותר-הזמינה",
+   "evidence": "REQ-0007 SP matrix + headcorner 2,349,020 VESTS delegated"
+  },
+  {
+   "id": "ESC-9",
+   "name": "ARB-מעבר-ל-STEEM: CEX (HTX/binance) מול-הספר-הפנימי",
+   "state": "MEASURED — arb-scan live (paperPnl −426 naive / +1.79 strategy); real execution = הכרעת-בעלים על-venue",
+   "value": "פוטנציאל-רחב-מעבר-ל-steem: פערים-אמת בין-ה-CEX-לספר-הפנימי",
+   "evidence": "grids/arb-ledger.json cumulative + arb-scan.mjs CEX feeds"
+  },
+  {
+   "id": "ESC-10",
+   "name": "עמלות-בריכות-דקס (feeMeter) בהיקף-מלא",
+   "state": "ALIVE — 5 שווקים מול-הסטייבל; scale = sweep velocity + נזילות-פולים",
+   "value": "הכנסה-פרוטוקולית-אמת; נמדדה 106K→171K µ/שעה ב-IGNITION",
+   "evidence": "DECISIONS #12 + sweep-cycle feeMeter"
+  }
+ ],
  "sweepPlan": {
   "legs": [
    {
-    "from": "hcsoldier4",
-    "to": "cashmachine",
-    "amountSteem": 2.3,
-    "reason": "self-deposit: idle keeper surplus → sovereign coffer",
-    "asset": "STEEM"
-   },
-   {
     "from": "hcsoldier6",
     "to": "cashmachine",
-    "amountSteem": 1.15,
+    "amountSteem": 1.05,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "israelnews",
     "to": "cashmachine",
-    "amountSteem": 1.15,
+    "amountSteem": 1.05,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "tov",
     "to": "cashmachine",
-    "amountSteem": 2.3,
+    "amountSteem": 2.2,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "hcsoldier5",
     "to": "cashmachine",
-    "amountSteem": 1.8,
+    "amountSteem": 1.7,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "haran",
     "to": "cashmachine",
-    "amountSteem": 2.3,
+    "amountSteem": 2.2,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "lsa",
     "to": "cashmachine",
-    "amountSteem": 2.3,
+    "amountSteem": 2.2,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "macrame",
     "to": "cashmachine",
-    "amountSteem": 2.3,
+    "amountSteem": 2.2,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "wic",
     "to": "cashmachine",
-    "amountSteem": 2.3,
+    "amountSteem": 1.786,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "wog",
     "to": "cashmachine",
-    "amountSteem": 2.3,
+    "amountSteem": 1.71,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "woq",
     "to": "cashmachine",
-    "amountSteem": 4,
+    "amountSteem": 0.81,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    }
   ],
-  "beatTotalSteem": 24.2,
+  "beatTotalSteem": 16.906,
   "note": "coffer→traders payroll rides the existing escrow/ladder engines — this engine only consolidates idle into the coffer"
  },
  "censusSnapshot": {
   "totals": {
-   "steem": 149.893,
-   "sbd": 1.83,
+   "steem": 139.199,
+   "sbd": 1.849,
    "claimSteem": 0,
    "claimSbd": 0
   },
-  "at": "2026-10-19T07:45:35.919Z"
+  "at": "2026-10-19T08:38:20.061Z"
+ },
+ "pnlSnapshot": {
+  "eraPnlSbd": 0.065776,
+  "at": "2026-10-19T08:30:10.681Z"
  },
  "verdict": "PLAN-READY (census-only — no keys injected, honest)"
 }
