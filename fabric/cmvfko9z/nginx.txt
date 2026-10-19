@@ -1,0 +1,43 @@
+modsecurity on;
+modsecurity_rules_file /etc/nginx/modsecurity/modsecurity.conf;
+modsecurity_transaction_id "$request_id";
+
+# --- כללים למניעת SQLi ---
+SecRule ARGS|REQUEST_BODY "(?i)\b(?:UNION|SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|EXECUTE|TRUNCATE|DECLARE)\b" \
+    "id:1001,phase:2,block,t:'SQL Injection Attack',logdata:'%{matched_var}',tag:'SQLI',severity:'CRITICAL',msg:'SQLi Attack Detected',log:'SQLi Attack: %{matched_var}'";
+
+SecRule REQUEST_HEADERS_NAMES|REQUEST_HEADERS "(?i)\b(?:UNION|SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|EXEC|EXECUTE|TRUNCATE|DECLARE)\b" \
+    "id:1002,phase:2,block,t:'SQL Injection Attack',logdata:'%{matched_var}',tag:'SQLI',severity:'CRITICAL',msg:'SQLi Attack in Headers',log:'SQLi Attack in Headers: %{matched_var}'";
+
+# --- כללים למניעת XSS ---
+SecRule ARGS|REQUEST_BODY "(?i)<script[^>]*>.*?</script>" \
+    "id:2001,phase:2,block,t:'XSS Attack',logdata:'%{matched_var}',tag:'XSS',severity:'CRITICAL',msg:'XSS Attack Detected',log:'XSS Attack: %{matched_var}'";
+
+SecRule REQUEST_HEADERS_NAMES|REQUEST_HEADERS "(?i)<script[^>]*>.*?</script>" \
+    "id:2002,phase:2,block,t:'XSS Attack',logdata:'%{matched_var}',tag:'XSS',severity:'CRITICAL',msg:'XSS Attack in Headers',log:'XSS Attack in Headers: %{matched_var}'";
+
+SecRule ARGS "(?i)javascript:" \
+    "id:2003,phase:2,block,t:'XSS Attack',logdata:'%{matched_var}',tag:'XSS',severity:'CRITICAL',msg:'XSS Attack via javascript protocol',log:'XSS Attack via javascript: %{matched_var}'";
+
+# --- כללים למניעת Path Traversal ---
+SecRule REQUEST_URI "(?i)\.\./" \
+    "id:3001,phase:1,block,t:'Path Traversal Attack',logdata:'%{matched_var}',tag:'PATH_TRAVERSAL',severity:'CRITICAL',msg:'Path Traversal Attack Detected',log:'Path Traversal: %{matched_var}'";
+
+# --- כללים למניעת SSRF ---
+SecRule ARGS "(?i)(?:127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)" \
+    "id:4001,phase:2,block,t:'SSRF Attack',logdata:'%{matched_var}',tag:'SSRF',severity:'CRITICAL',msg:'SSRF Attack Detected',log:'SSRF Attack: %{matched_var}'";
+
+SecRule ARGS "(?i)url=http://(?:127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)" \
+    "id:4002,phase:2,block,t:'SSRF Attack',logdata:'%{matched_var}',tag:'SSRF',severity:'CRITICAL',msg:'SSRF Attack via URL parameter',log:'SSRF Attack via URL: %{matched_var}'";
+
+SecRule ARGS "(?i)callback=http://(?:127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)" \
+    "id:4003,phase:2,block,t:'SSRF Attack',logdata:'%{matched_var}',tag:'SSRF',severity:'CRITICAL',msg:'SSRF Attack via callback parameter',log:'SSRF Attack via callback: %{matched_var}'";
+
+SecRule ARGS "(?i)redirect=http://(?:127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)" \
+    "id:4004,phase:2,block,t:'SSRF Attack',logdata:'%{matched_var}',tag:'SSRF',severity:'CRITICAL',msg:'SSRF Attack via redirect parameter',log:'SSRF Attack via redirect: %{matched_var}'";
+
+SecRule ARGS "(?i)destination=http://(?:127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)" \
+    "id:4005,phase:2,block,t:'SSRF Attack',logdata:'%{matched_var}',tag:'SSRF',severity:'CRITICAL',msg:'SSRF Attack via destination parameter',log:'SSRF Attack via destination: %{matched_var}'";
+
+SecRule ARGS "(?i)http://(?:127\.0\.0\.1|localhost|192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)" \
+    "id:4006,phase:2,block,t:'SSRF Attack',logdata:'%{matched_var}',tag:'SSRF',severity:'CRITICAL',msg:'SSRF Attack via HTTP parameter',log:'SSRF Attack via HTTP: %{matched_var}'";
