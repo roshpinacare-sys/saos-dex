@@ -39,7 +39,7 @@ export interface BookGasRT {
   dirty: boolean;
 }
 
-const BOOKGAS_FILE = path.join(process.cwd(), "db", "book-gas.json");
+const BOOKGAS_FILE = path.join(process.env.SAOS_DEX_STATE_DIR ? path.resolve(process.env.SAOS_DEX_STATE_DIR) : path.join(process.cwd(), "db"), "book-gas.json"); // FIX(recovery-continuation · Task 22): כיבוד-SAOS_DEX_STATE_DIR כמו-chain.ts
 
 const g = globalThis as unknown as { __saosDexBookGas?: BookGasRT };
 

@@ -42,7 +42,7 @@ const MIN_MS = 60_000;
 const MAX_CANDLES = 4_320; // 3 ימים × 1,440 דקות
 const MAX_TRADES = 2_000;  // טבעת-עסקאות פר-זוג
 
-const KLINES_FILE = path.join(process.cwd(), "db", "klines.json");
+const KLINES_FILE = path.join(process.env.SAOS_DEX_STATE_DIR ? path.resolve(process.env.SAOS_DEX_STATE_DIR) : path.join(process.cwd(), "db"), "klines.json"); // FIX(recovery-continuation · Task 22): כיבוד-SAOS_DEX_STATE_DIR כמו-chain.ts — מצב-אמת בעץ-האטימה
 
 /** מצב-המודול (חוץ-מצב קנוני — מקביל ל-tape של-chain.ts) */
 interface KlineRT {

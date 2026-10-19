@@ -41,7 +41,7 @@ interface MakerRT {
   dirty: boolean;
 }
 
-const MAKER_FILE = path.join(process.cwd(), "db", "maker-stats.json");
+const MAKER_FILE = path.join(process.env.SAOS_DEX_STATE_DIR ? path.resolve(process.env.SAOS_DEX_STATE_DIR) : path.join(process.cwd(), "db"), "maker-stats.json"); // FIX(recovery-continuation · Task 22): כיבוד-SAOS_DEX_STATE_DIR כמו-chain.ts
 
 const g = globalThis as unknown as { __saosDexMaker?: MakerRT };
 

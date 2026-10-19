@@ -112,7 +112,17 @@ interface ChainRT {
 }
 
 const g = globalThis as unknown as { __saosDexChain?: ChainRT };
-const DATA_DIR = path.join(process.cwd(), "db");
+/* FIX(recovery-continuation · Task 22 · 2026-10-20) — שורש-הלבנה-אחרי-כל-קציר:
+ * DATA_DIR היה process.cwd()/db בלבד — המשגיח (saos-dex-node) מכתיב
+ * SAOS_DEX_STATE_DIR לעץ-האטימה-הקנוני (repos/saos-dex/db — נחתם-גיט ושורד-קציר)
+ * והקרנל התעלם ממנו: טעינה+flush קרו בעץ-ה-work שנבנה-מחדש-מגיט-טרי אחרי-קציר →
+ * קובץ-ה-snapshot חזר לגובה-ישן מול DB-שהמשיך-לצמוח בעץ-האטימה → אתחול-בא
+ * נדחה snapshot-integrity-failed → לבנה על-כל-אתחול. rail.ts כבר מכבד את ה-env
+ * (הקונבנציה קיימת-בקודבייס; cloud-beat גם מגדיר אותה) — עתה כל-מצב-הקרנל נע
+ * דרכו, עם cwd/db כנפילה-אחורה לתאימות-מלאה (cloud-beat/Actions בלי-ה-env). */
+const DATA_DIR = process.env.SAOS_DEX_STATE_DIR
+  ? path.resolve(process.env.SAOS_DEX_STATE_DIR)
+  : path.join(process.cwd(), "db");
 const SNAPSHOT_FILE = path.join(DATA_DIR, "state-snapshot.json");
 const TAPE_FILE = path.join(DATA_DIR, "tape.jsonl");
 
@@ -230,8 +240,47 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
       pushReceipt(rt, "boot-acceptance-corroboration-birth", { snapshotH: raw.state.height, anchoredH: anchorH, anchor: anchorlessBirth ? "none" : extAnchor!.chain, txid: anchorlessBirth ? "none" : extAnchor!.txid, gap, at: Date.now() });
       acceptedWithoutCorroboration = true;
     } else {
-      console.error(`[saos-dex][ALERT] SNAPSHOT h${raw.state.height} HAS NO DB blockHeader TO CORROBORATE (DB down or evidence gap; priorCount=${priorCount}, anchorH=${anchorH}) — refusing load, evidence untouched`);
-      return "corrupt";
+      // ── FIX(recovery-continuation · Task 22 · 2026-10-20) ──
+      // הצורה-שנמדדה: עץ-האטימה משוחזר-מגיט עם snapshot-בגובה-ההולדה בעוד-ה-DB
+      // מכיל שרשרת-הדרק-רצופה שנבנתה ממנו (birth-acceptance הוכיחה את-הקשר
+      // בעת-השחזור עצמו). הדחייה-העיוורת לבנה כל-אתחול-אחרי-שחזור.
+      // הקבלה-החדשה חסומה-קשית: (1) ה-DB רצוף-החל מ-snapshot.height+1
+      // (אין-פערים — count == max-min+1), (2) עקביות-שושלת: blockHashes[0]
+      // של חלון-החותם-הראשון == hash-כותרת-הגובה-הראשון, (3) שורות-הנגזרת
+      // שמעבר-ל-snapshot נמחקות-בגלוי (קבלה-בלי-זה הייתה מתנגשת בכתיבות
+      // גובה-כפול ומשאירה dbOk=false בשקט) — ספירה-מדויקת בקבלה + גיבוי
+      // מפעיל חוץ-בנדיבי. עצמית-מגבילה: היא נדלקת רק-כשהקובץ מאחורי-ה-DB.
+      let recovery = false;
+      try {
+        const agg = await db.blockHeader.aggregate({ _min: { height: true }, _max: { height: true }, _count: { _all: true } });
+        const minH = agg._min.height ?? -1;
+        const maxH = agg._max.height ?? -1;
+        const cnt = agg._count._all ?? 0;
+        const contiguous = minH === raw.state.height + 1 && cnt === maxH - minH + 1 && maxH > minH;
+        if (contiguous) {
+          let lineage = false;
+          try {
+            const hdr0 = await db.blockHeader.findUnique({ where: { height: minH }, select: { hash: true } });
+            const seal0 = await db.sealRecord.findFirst({ where: { fromHeight: minH }, orderBy: { createdAt: "asc" } });
+            const note = seal0?.note ? (JSON.parse(seal0.note) as { blockHashes?: string[] }) : null;
+            lineage = !!(hdr0?.hash && note?.blockHashes?.[0] === hdr0.hash);
+          } catch { lineage = false; }
+          if (lineage) {
+            const delH = await db.blockHeader.deleteMany({ where: { height: { gte: minH } } });
+            const delS = await db.sealRecord.deleteMany({ where: { fromHeight: { gte: minH } } });
+            console.warn(`[saos-dex][ALERT] BOOT-ACCEPTANCE (recovery-continuation): snapshot h${raw.state.height} = parent state of the contiguous DB lineage h${minH}..h${maxH} (${cnt} headers, first-seal lineage verified) — derivative ahead-evidence rebuilt: blockHeaders=${delH.count}, sealRecords=${delS.count}. Loud, bounded, lineage-proven.`);
+            pushReceipt(rt, "boot-acceptance-recovery-continuation", { snapshotH: raw.state.height, dbMin: minH, dbMax: maxH, headers: cnt, purgedHeaders: delH.count, purgedSeals: delS.count, at: Date.now() });
+            recovery = true;
+          }
+        }
+      } catch (e) {
+        console.error(`[saos-dex][ALERT] recovery-continuation probe failed (${(e as Error)?.message ?? e}) — falling through to refusal`);
+      }
+      if (!recovery) {
+        console.error(`[saos-dex][ALERT] SNAPSHOT h${raw.state.height} HAS NO DB blockHeader TO CORROBORATE (DB down or evidence gap; priorCount=${priorCount}, anchorH=${anchorH}) — refusing load, evidence untouched`);
+        return "corrupt";
+      }
+      acceptedWithoutCorroboration = true;
     }
   }
   if (!acceptedWithoutCorroboration && dbRoot !== claimedRoot) {
