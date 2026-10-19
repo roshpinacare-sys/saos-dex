@@ -1,0 +1,318 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+// ── מנגנון ניתוח סדרות בקשות וזיהוי חריגות דינמי (Behavioral IDS) ──
+
+type UserProfile = {
+  ip: string;
+  firstSeen: number;
+  lastSeen: number;
+  requestCount: number;
+  endpointHits: Record<string, number>;
+  sequences: {
+    [key: string]: {
+      timestamps: number[];
+      count: number;
+    };
+  };
+  anomalyScore: number;
+  blockedUntil?: number;
+};
+
+type AnomalyPattern = {
+  name: string;
+  description: string;
+  check: (profile: UserProfile, request: NextRequest) => boolean;
+  severity: 'low' | 'medium' | 'high';
+  penalty: number; // דקות חסימה
+};
+
+// זיכרון זמני לפרופילי משתמשים (בפרודוקציה יש להחליף ב-Redis/DB)
+const userProfiles = new Map<string, UserProfile>();
+const MAX_PROFILES = 50000;
+const PROFILE_TTL_MS = 30 * 60 * 1000; // 30 דקות
+
+// דפוסי חריגות לזיהוי
+const anomalyPatterns: AnomalyPattern[] = [
+  {
+    name: 'rapid_order_sequence',
+    description: 'רצף מהיר של בקשות הזמנה',
+    check: (profile, req) => {
+      const now = Date.now();
+      const path = req.nextUrl.pathname;
+      
+      if (path === '/api/dex/order') {
+        const seq = profile.sequences['order_sequence'] || { timestamps: [], count: 0 };
+        seq.timestamps.push(now);
+        
+        // שמור רק את 10 השניות האחרונות
+        const recent = seq.timestamps.filter(t => now - t < 10000);
+        if (recent.length > 15) {
+          return true; // יותר מ-15 הזמנות ב-10 שניות
+        }
+        
+        profile.sequences['order_sequence'] = { timestamps: recent, count: recent.length };
+      }
+      return false;
+    },
+    severity: 'high',
+    penalty: 60
+  },
+  {
+    name: 'settle_transfer_burst',
+    description: 'פריצת בקשות להעברות וסגירה',
+    check: (profile, req) => {
+      const now = Date.now();
+      const path = req.nextUrl.pathname;
+      
+      if (path === '/api/dex/settle' || path === '/api/dex/transfer') {
+        const seq = profile.sequences['settle_transfer'] || { timestamps: [], count: 0 };
+        seq.timestamps.push(now);
+        
+        const recent = seq.timestamps.filter(t => now - t < 5000);
+        if (recent.length > 10) {
+          return true; // יותר מ-10 בקשות ב-5 שניות
+        }
+        
+        profile.sequences['settle_transfer'] = { timestamps: recent, count: recent.length };
+      }
+      return false;
+    },
+    severity: 'medium',
+    penalty: 30
+  },
+  {
+    name: 'endpoint_exploration',
+    description: 'חקירה מהירה של נקודות קצה רבות',
+    check: (profile, req) => {
+      const now = Date.now();
+      const path = req.nextUrl.pathname;
+      
+      // ספור נקודות קצה ייחודיות ב-60 שניות אחרונות
+      if (!profile.sequences['endpoint_exploration']) {
+        profile.sequences['endpoint_exploration'] = { timestamps: [now], count: 0 };
+      }
+      
+      const seq = profile.sequences['endpoint_exploration'];
+      seq.timestamps.push(now);
+      
+      const recentTimestamps = seq.timestamps.filter(t => now - t < 60000);
+      const uniqueEndpoints = new Set(
+        recentTimestamps.map(t => {
+          // בדיקה סימולטיבית - במערכת אמיתית יש לשמור את הנתיב עם החותמת
+          return path;
+        })
+      );
+      
+      if (uniqueEndpoints.size > 20) {
+        return true; // יותר מ-20 נקודות קצה שונות ב-דקה
+      }
+      
+      profile.sequences['endpoint_exploration'] = { timestamps: recentTimestamps, count: uniqueEndpoints.size };
+      return false;
+    },
+    severity: 'medium',
+    penalty: 15
+  },
+  {
+    name: 'parameter_manipulation',
+    description: 'ניסיונות חוזרים עם פרמטרים מוזרים',
+    check: (profile, req) => {
+      const now = Date.now();
+      const params = req.nextUrl.searchParams;
+      
+      // זיהוי ניסיונות חוזרים עם פרמטרים חשודים
+      const suspiciousParams = Array.from(params.keys()).filter(key => {
+        const value = params.get(key);
+        return value && (
+          value.length > 100 || // ערך ארוך מדי
+          value.match(/<|>|script|javascript/i) || // XSS פוטנציאלי
+          value.match(/\.{10,}/) // נקודות רבות
+        );
+      });
+      
+      if (suspiciousParams.length > 0) {
+        const seq = profile.sequences['suspicious_params'] || { timestamps: [], count: 0 };
+        seq.timestamps.push(now);
+        
+        const recent = seq.timestamps.filter(t => now - t < 30000);
+        if (recent.length > 5) {
+          return true; // יותר מ-5 ניסיונות עם פרמטרים חשודים
+        }
+        
+        profile.sequences['suspicious_params'] = { timestamps: recent, count: recent.length };
+      }
+      return false;
+    },
+    severity: 'high',
+    penalty: 45
+  }
+];
+
+// עדכון פרופיל משתמש
+function updateUserProfile(ip: string, request: NextRequest): UserProfile {
+  const now = Date.now();
+  let profile = userProfiles.get(ip);
+  
+  if (!profile) {
+    profile = {
+      ip,
+      firstSeen: now,
+      lastSeen: now,
+      requestCount: 0,
+      endpointHits: {},
+      sequences: {},
+      anomalyScore: 0
+    };
+    userProfiles.set(ip, profile);
+  }
+  
+  // ניקוי פרופילים ישנים
+  if (now - profile.lastSeen > PROFILE_TTL_MS) {
+    userProfiles.delete(ip);
+    return {
+      ip,
+      firstSeen: now,
+      lastSeen: now,
+      requestCount: 0,
+      endpointHits: {},
+      sequences: {},
+      anomalyScore: 0
+    };
+  }
+  
+  // עדכון סטטיסטיקות
+  profile.lastSeen = now;
+  profile.requestCount++;
+  
+  const path = request.nextUrl.pathname;
+  profile.endpointHits[path] = (profile.endpointHits[path] || 0) + 1;
+  
+  // ניהול זיכרון
+  if (userProfiles.size > MAX_PROFILES) {
+    const oldest = Array.from(userProfiles.entries())
+      .sort((a, b) => a[1].lastSeen - b[1].lastSeen)[0];
+    if (oldest) userProfiles.delete(oldest[0]);
+  }
+  
+  return profile;
+}
+
+// בדיקת חריגות
+function checkAnomalies(profile: UserProfile, request: NextRequest): {
+  detected: boolean;
+  pattern?: AnomalyPattern;
+  score: number;
+} {
+  let score = 0;
+  
+  for (const pattern of anomalyPatterns) {
+    if (pattern.check(profile, request)) {
+      score += pattern.severity === 'high' ? 30 : pattern.severity === 'medium' ? 15 : 5;
+      return { detected: true, pattern, score };
+    }
+  }
+  
+  // בדיקת קצב כללי
+  const now = Date.now();
+  const recentRequests = Object.values(profile.endpointHits)
+    .reduce((sum, count) => sum + count, 0);
+  
+  if (recentRequests > 1000) {
+    score += 10;
+  }
+  
+  return { detected: false, score };
+}
+
+// רישום אירוע חשוד
+function logSuspiciousActivity(profile: UserProfile, pattern: AnomalyPattern, request: NextRequest) {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    ip: profile.ip,
+    pattern: pattern.name,
+    description: pattern.description,
+    severity: pattern.severity,
+    endpoint: request.nextUrl.pathname,
+    userAgent: request.headers.get('user-agent') || 'unknown',
+    requestCount: profile.requestCount,
+    anomalyScore: profile.anomalyScore + pattern.severity === 'high' ? 30 : 15
+  };
+  
+  // במערכת אמיתית, יש לשלוח למערכת ניטור/לוג
+  console.log('[ANOMALY_DETECTED]', JSON.stringify(logEntry));
+  
+  // דוגמה לשמירה ב-JSONL לוג
+  // require('fs').appendFileSync('anomaly-detections.jsonl', JSON.stringify(logEntry) + '\n');
+}
+
+// הפונקציה הראשית של ה-middleware
+export async function middleware(request: NextRequest): Promise<NextResponse> {
+  const ip = request.ip || 'unknown';
+  
+  // פטורים לבדיקות
+  const exemptPaths = ['/api/dex/stream', '/api/revive'];
+  if (exemptPaths.some(path => request.nextUrl.pathname.startsWith(path))) {
+    return NextResponse.next();
+  }
+  
+  // עדכון פרופיל משתמש
+  const profile = updateUserProfile(ip, request);
+  
+  // בדיקת חסימה קיימת
+  if (profile.blockedUntil && Date.now() < profile.blockedUntil) {
+    return new NextResponse('Access temporarily blocked due to suspicious activity', {
+      status: 429,
+      headers: {
+        'X-Block-Reason': 'behavioral_anomaly',
+        'X-Block-Until': new Date(profile.blockedUntil).toISOString()
+      }
+    });
+  }
+  
+  // בדיקת חריגות
+  const anomalyCheck = checkAnomalies(profile, request);
+  
+  if (anomalyCheck.detected && anomalyCheck.pattern) {
+    const pattern = anomalyCheck.pattern;
+    
+    // עדכון ציון חריגה
+    profile.anomalyScore += pattern.severity === 'high' ? 30 : pattern.severity === 'medium' ? 15 : 5;
+    
+    // רישום האירוע
+    logSuspiciousActivity(profile, pattern, request);
+    
+    // החלטה על חסימה
+    const shouldBlock = profile.anomalyScore > 50;
+    
+    if (shouldBlock) {
+      const blockUntil = Date.now() + pattern.penalty * 60 * 1000;
+      profile.blockedUntil = blockUntil;
+      
+      return new NextResponse('Access temporarily blocked due to suspicious activity', {
+        status: 429,
+        headers: {
+          'X-Block-Reason': 'behavioral_anomaly',
+          'X-Block-Until': new Date(blockUntil).toISOString(),
+          'X-Anomaly-Score': profile.anomalyScore.toString(),
+          'X-Anomaly-Pattern': pattern.name
+        }
+      });
+    }
+  }
+  
+  // המשך עם כותרות התראה
+  const response = NextResponse.next();
+  if (anomalyCheck.score > 0) {
+    response.headers.set('X-Anomaly-Score', profile.anomalyScore.toString());
+  }
+  
+  return response;
+}
+
+// קונפיגורציה של המידלוור
+export const config = {
+  matcher: [
+    '/api/dex/:path*',
+    '/api/revive/:path*'
+  ]
+};
