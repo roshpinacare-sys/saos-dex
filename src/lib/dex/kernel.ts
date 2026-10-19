@@ -94,6 +94,16 @@ export const GAS_TABLE = {
   // חתום-לנצח-ביומן-ובדגל-מצב (primerH) — אידמפוטנטי-בדחייה. אישור-מפעיל מפורש: "תקן הכל
   // ולייעל... לא אכפת לי שיהיה מה שצריך" (EXEC-CD-9).
   primer: 0,
+  // EXEC-CD-10 · THE-REPRIME-2: הצתה-מחדש-ריבונית-חד-פעמית — אותו-חוק-בדיוק של-הפריימר
+  // (אפס-גז · אוצר-בלבד · פעם-אחת-לנצח · ספליט-קבוע · feeMinted↑ · מוצהר-בביקורת).
+  // הממצא-החי (נמדד 2026-10-20 · origin/main h683,667): Σcredits=12,839µ בלבד
+  // (operator 179 · treasury/wash/arena/בוטים 0) והמקומי h664,888 Σcredits=0 —
+  // המלאי-ההיסטורי נשרף-כולו דרך-מחזור-ה-bookgas-החוקי (עמלות-אמת מימנו גז-אמת),
+  // המזרקה-החוקית מטביעה 27µ-בלבד (profit 27 + meter על-רצפת-ה-8000), וכל-op-גז
+  // נדחה — תקיפה-כנה-מובטחת של-כל-עורקי-הכלכלה (אותו-דפוס-מדוד של EXEC-CD-9:
+  // "אף-op-לא-עובר → אף-גז-לא-נאסף → אין-מה-למחזר"). מנדט-בעלים: "בטח חייב הכל...
+  // לממן חיילים לסחר אוטומטי ומילוי מתמשך" + "תמשיך ודחוף כן" (2026-10-20).
+  reprime: 0,
   relay: 0, // THE-DOOR: חוזה-חינם שכופה עבודה-אמת על רשת-מרוחקת
   relay_ack: 0,
   xfer_free: 0, // THE-SWEEP (SETTLE-12): העברה-חופשית על הרשת-הריבונית — אפס-גז, תקרה-מדודה (FREE_XFER_CAP), העברה-טהורה בין-יתרות (אפס-נגיעה בקרדיטים → האינווריאנטה נשמרת מעצמה)
@@ -234,6 +244,17 @@ export const PRIMER_MU = 1_000_000; // תקרה-מוחלטת-חד-פעמית —
 export const PRIMER_SPLIT: Record<string, number> = {
   arena: 300_000, "bot-a": 150_000, "bot-b": 150_000, "bot-c": 150_000,
   treasury: 150_000, operator: 100_000,
+};
+
+// ── EXEC-CD-10 · THE-REPRIME-2 — הצתת-הדלק-החד-פעמית-השנייה (ראה-הערת-ה-GAS_TABLE) ──
+export const REPRIME_MU = 2_000_000; // תקרה-מוחלטת-חד-פעמית — 2×הפריימר; מכסה-את-סולם-הממנים ברצפות-בריאות
+/** ספליט-קבוע-דטרמיניסטי (Σ=REPRIME_MU בדיוק). שינוי-מול-הפריימר: אין-מימון-wash
+ * (רצפת-ה-DAM שלו 800K — הזרקה-תחת-הרצפה היא-כסף-מת-מבני; ה-forge-phase-הענני
+ * מממן-אותו-מהאוצר-מעל-הרצפה), הארנה-והאוצר-מוגדלים (ממני-הסולם-הראשיים —
+ * funderFor), המפעיל-מחזיק-קו-הגנה-לזיכוי-הפקדות (credit-issuer החי, Task 23). */
+export const REPRIME_SPLIT: Record<string, number> = {
+  arena: 500_000, treasury: 500_000, "bot-a": 200_000, "bot-b": 200_000,
+  "bot-c": 200_000, operator: 400_000,
 };
 
 // ── Task 54 · קבועי-כלכלה (חיים-בגרעין כדי-למנוע-יבוא-מעגלי: kernel ← economy) ──
@@ -449,6 +470,12 @@ export interface DexState {
   // עמלות-אלא-בהחלטת-הפריימר. הביקורת-מחסירה-אותו-מזהות-העמלות (settle (d)) —
   // מוצהר-ולא-מוסתר; חסום-מעל-feeMinted. רשויות: undefined → נגזר מ-primerUsed.
   primerMu?: number;
+  // EXEC-CD-10 · דגל-ה-reprime-החד-פעמי (אותן-סמנטיקות-בדיוק של-הפריימר):
+  // reprimeUsed = השער-הקנוני (חסין-גובה-0); reprimeH = פורנזי-בלבד;
+  // reprimeMu = ההצהרה-בתוך-feeMinted — ביקורת-העמלות מחסירה-אותו.
+  reprimeUsed?: boolean;
+  reprimeH?: number;
+  reprimeMu?: number;
   // FIX(Roast-65-a · LOW-11): cooldown-הברזל-של-ה-faucet — במצב (לא-בזיכרון-מודול)
   // כדי-שריסטארט לא יאפס את התקרה. רשויות: תמונות-ישנות (undefined→0).
   faucetAt?: Record<string, number>;
@@ -1669,6 +1696,23 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       st.feeMinted = (st.feeMinted ?? 0) + PRIMER_MU; // אינווריאנטת-הקרדיטים (a) נשמרת
       st.primerMu = (st.primerMu ?? 0) + PRIMER_MU; // ההצהרה — הביקורת מחסירה מזהות-העמלות (d)
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "primer", note: `THE-PRIMER: +${PRIMER_MU}µ credits re-primed →${Object.entries(PRIMER_SPLIT).map(([w, a]) => `${w}:${a}`).join(" · ")} (one-time, bounded; pre-meter era burned ${st.gasUsed}µ outside the cycle; invariant preserved via feeMinted)` });
+      return { ok: true, gas };
+    }
+    case "reprime": {
+      // EXEC-CD-10 · THE-REPRIME-2 — אותו-חוק-מדויק של-הפריימר: אוצר-בלבד · פעם-אחת-
+      // לנצח (דגל-reprimeH) · ספליט-קבוע-דטרמיניסטי · feeMinted↑ (האינווריאנטה
+      // Σcredits+gasUsed−feeMinted===ג'נזיס נשמרת-בדיוק) · הכל-מגולל-ביומן.
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      if (st.reprimeUsed) return { ok: false, err: "reprime-already-used", gas: 0 };
+      const c = consume(); if (c) return c; // אפס-גז — אבל-דדופ-נונס-מלא
+      for (const [who, amt] of Object.entries(REPRIME_SPLIT)) {
+        st.credits[who] = (st.credits[who] ?? 0) + amt; // Σ(REPRIME_SPLIT)===REPRIME_MU
+      }
+      st.reprimeUsed = true;
+      st.reprimeH = st.height;
+      st.feeMinted = (st.feeMinted ?? 0) + REPRIME_MU; // אינווריאנטת-הקרדיטים נשמרת
+      st.reprimeMu = (st.reprimeMu ?? 0) + REPRIME_MU; // ההצהרה — ביקורת-העמלות (settle (d))
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "reprime", note: `THE-REPRIME-2: +${REPRIME_MU}µ credits →${Object.entries(REPRIME_SPLIT).map(([w, a]) => `${w}:${a}`).join(" · ")} (one-time, bounded, owner-mandated; fountain legally mintable was ${st.treasuryProfit}µ — measured full stasis, all lanes starved)` });
       return { ok: true, gas };
     }
     case "order": {

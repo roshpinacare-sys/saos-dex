@@ -23,7 +23,7 @@
  */
 import {
   genesisState, stateRoot, applyOp, notional, poolKey,
-  type DexState, type Asset, PRIMER_MU } from "./kernel";
+  type DexState, type Asset, PRIMER_MU, REPRIME_MU } from "./kernel";
 import { fairPrice, MARKETS } from "./mm";
 import { poolMid, getPool } from "./amm";
 import { sortBook } from "./book";
@@ -234,12 +234,15 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
   //  · bookGasPortion — מיחזור-גז-הספר (bookGasRecycledMu — גז-שנשרף-וחוזר; הגיבוי
   //    הוא-העבודה-ששולמה-בפועל, לא-עמלות-בריכות).
   const primerPortion = st.primerMu ?? (st.primerUsed ? PRIMER_MU : 0);
+  // EXEC-CD-10 · ה-reprime מוצהר-כמו-הפריימר — ההטבעה-שאינה-מגובה-עמלות-בריכות
+  // (החלטת-בעלים מדודה) מוחסרת-מזהות-העמלות; רשויות: undefined → נגזר מהדגל.
+  const reprimePortion = st.reprimeMu ?? (st.reprimeUsed ? REPRIME_MU : 0);
   const bookGasPortion = st.bookGasRecycledMu ?? 0;
-  const declared = primerPortion + bookGasPortion;
-  if (declared > (st.feeMinted ?? 0)) errors.push(`minted-declared: primer${primerPortion}+bookgas${bookGasPortion} > minted ${st.feeMinted ?? 0}`);
+  const declared = primerPortion + reprimePortion + bookGasPortion;
+  if (declared > (st.feeMinted ?? 0)) errors.push(`minted-declared: primer${primerPortion}+reprime${reprimePortion}+bookgas${bookGasPortion} > minted ${st.feeMinted ?? 0}`);
   const feesRhs = st.feeMeter + st.treasuryProfit + ((st.feeMinted ?? 0) - declared) + feesSpentMu;
   const feesOk = poolsTreasury === feesRhs;
-  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted−primer${primerPortion}−bookgas${bookGasPortion}+spent ${feesRhs}`);
+  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted−primer${primerPortion}−reprime${reprimePortion}−bookgas${bookGasPortion}+spent ${feesRhs}`);
 
   return {
     ok: errors.length === 0 && negatives.length === 0,

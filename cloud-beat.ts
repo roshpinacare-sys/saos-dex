@@ -484,6 +484,26 @@ async function main(): Promise<void> {
     } else console.log("[cloud-beat] primer already fired — idempotent skip");
   } catch (e) { console.warn(`[cloud-beat] primer phase skipped: ${String(e).slice(0, 80)}`); }
 
+  /* ── EXEC-CD-10 · THE-REPRIME-2 — הצתת-הדלק-מחדש (חד-פעמית, מנומקת-במדידה) ──
+   * נמדד-חי (2026-10-20 · origin/main h683,667): Σcredits=12,839µ בלבד (operator
+   * 179 · treasury/wash/arena/בוטים 0) — המלאי נשרף-כולו דרך-מחזור-ה-bookgas-החוקי,
+   * המזרקה מטביעה 27µ-בלבד, וכל-op-גז נדחה: אותו-דפוס-קפוא של-EXEC-CD-9 ("אף-op-
+   * לא-עובר → אף-גז-לא-נאסף → אין-מה-למחזר"). חוק-הגרעין reprime (אותו-משפט-פריימר:
+   * אוצר-בלבד · פעם-אחת-לנצח · ספליט-קבוע 2Mµ · feeMinted↑ · מוצהר-בביקורת).
+   * שער-הסף בענן: נורה רק כשהספר בתשישות-אמת (Σcredits < 100Kµ) — אידמפוטנטי. */
+  try {
+    const stx_r = rt.st as unknown as { reprimeUsed?: boolean; credits?: Record<string, number> };
+    const sumCr = Object.values(stx_r.credits ?? {}).reduce((s, v) => s + (typeof v === "number" ? v : 0), 0);
+    if (!stx_r.reprimeUsed && sumCr < 100_000) {
+      const r = submitOp({ type: "reprime", issuer: "treasury", nonce: nextNonce("reprime") });
+      if (r.queued) {
+        await stepOnce();
+        const sumCr2 = Object.values((rt.st as unknown as { credits?: Record<string, number> }).credits ?? {}).reduce((s, v) => s + (typeof v === "number" ? v : 0), 0);
+        console.log(`[cloud-beat] THE-REPRIME-2 FIRED: +2,000,000µ credits (arena 500K · treasury 500K · bot-a/b/c 200K×3 · operator 400K) — Σcredits ${sumCr}→${sumCr2}, book lanes re-armed`);
+      } else console.warn(`[cloud-beat] reprime rejected: ${r.reason ?? "?"}`);
+    } else console.log(`[cloud-beat] reprime gate: used=${!!stx_r.reprimeUsed} Σcredits=${sumCr} — idempotent skip`);
+  } catch (e) { console.warn(`[cloud-beat] reprime phase skipped: ${String(e).slice(0, 80)}`); }
+
   /* ── SETTLE-19-c · רזרבת-הדלק-ההפוכה (fuel-reversal) ─────────────────────
    * נמדד-חי (run 38568088488: הפריימר-נשחק-בריצה-אחת; run 38569794882: 3,894
    * דחיות-גז, הגשר-משותק): גז-האוצר הוא הפקק-החוזר-של-ספר-ה-סרוו. בזמן-זאת
