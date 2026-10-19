@@ -347,22 +347,30 @@ async function run(keysFile) {
 
       const executed = [];
       for (const a of actions) {
+        let cancelTxid = null;
         try {
           if (a.action === "cancel") {
             const r = await signAndBroadcast(wif, [["limit_order_cancel", { owner: account, orderid: a.orderId }]]);
             executed.push({ ...a, txid: r.txid, block: r.block }); anyExecuted = true;
           } else {
+            if (a.action === "replace") {
+              // W12-fix (נמדד 05:42Z ×4: "could not insert object, uniqueness constraint"):
+              // replace = ביטול-ואז-הצבה — ה-orderid-הדטרמיניסטי ייחודי-בין-הפתוחים;
+              // הצבה-על-סדר-חי = דחיית-אילוץ. כשל-ביטול = כשל-כנה; מחזור-הבא מרפא (planning חי).
+              try { cancelTxid = (await signAndBroadcast(wif, [["limit_order_cancel", { owner: account, orderid: a.leg.orderId }]])).txid; }
+              catch (ce) { throw new Error(`replace-cancel failed: ${String(ce?.message ?? ce).slice(0, 90)}`); }
+            }
             const exp = new Date(Date.now() + num(plan.expiryDays) * 86400000).toISOString().slice(0, 19);
             const op = a.leg.side === "sell"
               ? ["limit_order_create", { owner: account, orderid: a.leg.orderId, amount_to_sell: `${a.leg.sizeSteem.toFixed(3)} STEEM`, min_to_receive: `${(a.leg.sizeSteem * a.leg.priceSbd).toFixed(3)} SBD`, fill_or_kill: false, expiration: exp }]
               : ["limit_order_create", { owner: account, orderid: a.leg.orderId, amount_to_sell: `${(a.leg.sizeSteem * a.leg.priceSbd).toFixed(3)} SBD`, min_to_receive: `${a.leg.sizeSteem.toFixed(3)} STEEM`, fill_or_kill: false, expiration: exp }];
             const r = await signAndBroadcast(wif, [op]);
-            executed.push({ ...a, txid: r.txid, block: r.block }); anyExecuted = true;
+            executed.push({ ...a, cancelTxid, txid: r.txid, block: r.block }); anyExecuted = true;
             // קריאה-אחרי-כתיבה — נכשל-כנה בתוך-הרשומה-עצמה, לעולם לא שורה-כפולה (R323-תיקון-ביקורת-עצמית)
             try { await altRpc("condenser_api.get_transaction", [r.txid]); } catch (pv) { executed[executed.length - 1].postVerify = String(pv?.message ?? pv).slice(0, 80); }
           }
         } catch (e) {
-          executed.push({ ...a, error: String(e?.message ?? e).slice(0, 120) });
+          executed.push({ ...a, cancelTxid, error: String(e?.message ?? e).slice(0, 120) });
         }
       }
       res.actions = actions.map((a) => ({ ...a, leg: a.leg ? { legId: a.leg.legId, side: a.leg.side, sizeSteem: a.leg.sizeSteem, priceSbd: a.leg.priceSbd, edgeBps: a.leg.edgeBps, blocked: a.leg.blocked } : undefined }));

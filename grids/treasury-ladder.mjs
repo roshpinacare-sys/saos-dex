@@ -211,21 +211,28 @@ async function run(keysFile) {
   const receipt = { schema: "SAOS-TREASURY-LADDER-RECEIPT/1", at: new Date().toISOString(), trader, mid: m.mid, source: m.source, traderSteem, traderSbd, liveOrders: liveOrders.length, actions: actions.map(a => ({ ...a, leg: a.leg ? { legId: a.leg.legId, side: a.leg.side, sizeSteem: a.leg.sizeSteem, priceSbd: a.leg.priceSbd, blocked: a.leg.blocked } : undefined })) };
   const executed = [];
   for (const a of actions) {
+    let cancelTxid = null;
     try {
       if (a.action === "cancel") {
         const r = await signAndBroadcast(wif, [["limit_order_cancel", { owner: trader, orderid: a.orderId }]]);
         executed.push({ ...a, txid: r.txid, block: r.block });
       } else if (a.action === "create" || a.action === "replace") {
+        if (a.action === "replace") {
+          // W12-fix (נמדד 05:42Z ×4 ב-army-ladder: "could not insert object, uniqueness constraint"):
+          // replace = ביטול-ואז-הצבה — הצבה-על-סדר-חי = דחיית-אילוץ-ייחודיות.
+          try { cancelTxid = (await signAndBroadcast(wif, [["limit_order_cancel", { owner: trader, orderid: a.leg.orderId }]])).txid; }
+          catch (ce) { throw new Error(`replace-cancel failed: ${String(ce?.message ?? ce).slice(0, 90)}`); }
+        }
         const exp = new Date(Date.now() + num(plan.expiryDays) * 86400000).toISOString().slice(0, 19);
         const op = a.leg.side === "sell"
           ? ["limit_order_create", { owner: trader, orderid: a.leg.orderId, amount_to_sell: `${a.leg.sizeSteem.toFixed(3)} STEEM`, min_to_receive: `${(a.leg.sizeSteem * a.leg.priceSbd).toFixed(3)} SBD`, fill_or_kill: false, expiration: exp }]
           : ["limit_order_create", { owner: trader, orderid: a.leg.orderId, amount_to_sell: `${(a.leg.sizeSteem * a.leg.priceSbd).toFixed(3)} SBD`, min_to_receive: `${a.leg.sizeSteem.toFixed(3)} STEEM`, fill_or_kill: false, expiration: exp }];
         const r = await signAndBroadcast(wif, [op]);
-        executed.push({ ...a, txid: r.txid, block: r.block });
+        executed.push({ ...a, cancelTxid, txid: r.txid, block: r.block });
         await altRpc("condenser_api.get_transaction", [r.txid]); // קריאה-אחרי-כתיבה
       }
     } catch (e) {
-      executed.push({ ...a, error: String(e?.message ?? e).slice(0, 120) });
+      executed.push({ ...a, cancelTxid, error: String(e?.message ?? e).slice(0, 120) });
     }
   }
   receipt.executed = executed;
