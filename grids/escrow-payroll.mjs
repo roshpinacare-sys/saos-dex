@@ -408,9 +408,15 @@ async function runLane(lane, keys, receipt) {
         if (planLegsFromState(stNow).complete) { readback = "complete"; break; }
       }
       if (readback === "gone") {
-        const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
-        const onChain = !!tx?.operations?.some(([t]) => t === "escrow_release");
-        if (!onChain) throw new Error(`release broadcast ${r.txid} and the escrow object vanished, but the release tx is NOT on chain (fail-closed)`);
+        // W12f נמדד-חי (ריצת 02:22Z): get_transaction מאונדקס-באיחור — מיד-אחרי-השידור
+        // הוא עלול-להחזיר-404-זמני. חמש-ניסיונות-×3 שנ׳ לפני-פסיקה-כנה.
+        let onChain = false;
+        for (let i = 0; i < 5 && !onChain; i++) {
+          await sleep(3000);
+          const tx = await rpcAny("condenser_api.get_transaction", [r.txid]).catch(() => null);
+          onChain = !!tx?.operations?.some(([t]) => t === "escrow_release");
+        }
+        if (!onChain) throw new Error(`release broadcast ${r.txid} and the escrow object vanished, but the release tx is NOT on chain after 15s (fail-closed)`);
         console.log(`escrow-payroll: release txid=${r.txid} chain-readback=OK (escrow object consumed by the chain) — הקנרית השלימה מחזור-שכר-מלא על-השרשרת`);
         return { ok: true, txid: r.txid, readback: true, consumed: "escrow-object-removed-after-release" };
       }
