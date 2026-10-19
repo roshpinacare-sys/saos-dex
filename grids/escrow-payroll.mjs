@@ -38,6 +38,9 @@ const PLAN_PATH = join(HERE, "state", "escrow-payroll-plan.json");
 const RECEIPT_PATH = join(HERE, "state", "escrow-receipts.jsonl");
 const MAX_AMOUNT_SBD = 1.0;
 const MAX_FEE_SBD = 0.1;
+// W12c: תקרת-מילוי-קשה למחזור — המסילה מממנת-את-עצמה מהאוצר באבק בלבד (ראה refillAmountSbd)
+const REFILL_CAP_SBD = 0.1;
+const TREASURY_ACCOUNT = "headcorner";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SBD = (v) => `${Number(v).toFixed(3)} SBD`;
 const STEEM0 = "0.000 STEEM";
@@ -120,6 +123,19 @@ async function escrowStateOf(from, escrowId) {
   return e;
 }
 
+/* W12c: יתרת-SBD חיה (לרגל-המימון-העצמי) — fail-closed על-קריאה-לא-קריאה */
+async function sbdBalanceOf(account) {
+  let a;
+  try {
+    a = await rpcAny("condenser_api.get_accounts", [[account]]);
+  } catch (err) {
+    throw new Error(`sbdBalanceOf(${account}) failed — refusing to broadcast on unreadable balance (fail-closed): ${String(err?.message ?? err).slice(0, 120)}`);
+  }
+  const acc = Array.isArray(a) ? a[0] : null;
+  if (!acc) throw new Error(`sbdBalanceOf(${account}) — account absent from chain (fail-closed)`);
+  return parseFloat(String(acc.sbd_balance ?? "0").split(" ")[0]) || 0;
+}
+
 /* החלטת-רגליים טהורה (נבדקת-ב-selftest): מצב-השרשרת → מה-המחזור צריך-לעשות */
 export function planLegsFromState(st) {
   // st === null → אין-escrow על-השרשרת → חייב transfer
@@ -136,6 +152,15 @@ export function planApproveWhos(st, lane) {
   if (p.needApprove[0] === true) whos.push(lane.to);
   if (p.needApprove[1] === true) whos.push(lane.agent);
   return whos;
+}
+
+/* W12c: חישוב-מילוי טהור (נבדק-ב-selftest): המסילה מממנת-את-עצמה מהאוצר —
+ * אבק-בלבד: בדיוק-המחסור + 0.001 מרווח, תקרה-קשה 0.100 SBD. מעל-התקרה = null
+ * (fail-closed — האוצר לעולם לא נשפך-למסילה בלי-תקרה). */
+export function refillAmountSbd(bal, need, cap = REFILL_CAP_SBD) {
+  if (bal >= need) return 0;
+  const raw = Math.ceil((need - bal + 0.001) * 1000) / 1000;
+  return raw > cap ? null : raw;
 }
 
 /* אילוץ-ייחודיות = האוביקט כבר-קיים בשרשרת. רק אם-האימות-מאשר — מטופל-כ"כבר-בוצע"
@@ -222,7 +247,11 @@ export async function selftest() {
   assert(planLegsFromState(ready).doRelease === true, "fully ratified + funded → release leg");
   const emptied = { to_approved: true, agent_approved: true, sbd_balance: "0.000 SBD", steem_balance: "0.000 STEEM" };
   assert(planLegsFromState(emptied).complete === true, "zero balance → cycle already complete");
-  console.log("SELFTEST PASS: 12/12 vectors");
+  // וקטור 12-14 (W12c): מימון-עצמי — בדיוק-המחסור + מרווח, תקרה-קשה
+  assert(refillAmountSbd(0.06, 0.06) === 0, "funded lane → no refill");
+  assert(refillAmountSbd(0.005, 0.06) === 0.056, "shortfall + 0.001 margin, exactly");
+  assert(refillAmountSbd(0, 0.25) === null, "shortfall above the hard cap → refuse");
+  console.log("SELFTEST PASS: 15/15 vectors");
 }
 
 /* ── מחזור-מלא אידמפוטנטי על-מסלול ──────────────────────────────────────────── */
@@ -246,6 +275,35 @@ async function runLane(lane, keys, receipt) {
   let st = await escrowStateOf(lane.from, escrowId);
   let plan = planLegsFromState(st);
   console.log(`escrow-payroll: lane=${lane.id} escrowId=${escrowId} chain-state=${st ? `exists(to_approved=${st.to_approved} agent_approved=${st.agent_approved} sbd=${st.sbd_balance})` : "absent"} → plan=${JSON.stringify(plan)}`);
+
+  // רגל 0 (W12c): מימון-עצמי-כן של המסילה — הפרימיטיב-המקורי "אוצר→עובד".
+  // נמדד-חי (ריצת 02:11Z): הקנרית שילמה-את-המחזור-הראשון בפועל → cashmachine 0.005 SBD →
+  // ה-transfer-הבא נזרק (available >= -delta). מסילה-חיה מתממנת-מהאוצר: בדיוק-המחסור,
+  // תקרה-קשה 0.100 SBD, שער-מפתח-מלא על-האוצר, readback-יתרה, רישום-מלא בקבלה.
+  if (plan.doTransfer) {
+    const need = lane.amountSbd + lane.feeSbd;
+    const bal = await sbdBalanceOf(lane.from);
+    const refill = refillAmountSbd(bal, need);
+    if (refill === null) throw new Error(`lane ${lane.from} holds ${bal} SBD, needs ${need} — shortfall exceeds the hard refill cap ${REFILL_CAP_SBD} SBD (fail-closed; owner word required)`);
+    if (refill > 0) {
+      const wif = keys[TREASURY_ACCOUNT];
+      if (!wif) throw new Error(`refill refused: no ${TREASURY_ACCOUNT} key in the runner-held material (fail-closed)`);
+      const gate = await activeAuthorityOk({ account: TREASURY_ACCOUNT, wif, rpc: rpcAny });
+      if (!gate.ok) throw new Error(`refill refused by key gate (${TREASURY_ACCOUNT}): ${gate.reason}`);
+      await leg(`refill:${TREASURY_ACCOUNT}→${lane.from}`, async () => {
+        const r = await signAndBroadcast(wif, [["transfer", { from: TREASURY_ACCOUNT, to: lane.from, amount: SBD(refill), memo: "SAOS-ESCROW-PAYROLL/1 canary lane self-funding (dust, hard-capped)" }]]);
+        let funded = 0;
+        for (let i = 0; i < 8; i++) {
+          await sleep(2500);
+          funded = await sbdBalanceOf(lane.from).catch(() => 0);
+          if (funded >= need) break;
+        }
+        if (funded < need) throw new Error(`refill broadcast ${r?.txid ?? "?"} but the lane balance never showed the funds (fail-closed)`);
+        console.log(`escrow-payroll: refill ${TREASURY_ACCOUNT}→${lane.from} ${SBD(refill)} txid=${r.txid} chain-readback=OK (balance ${funded} SBD)`);
+        return { ok: true, txid: r.txid, readback: true, amount: SBD(refill) };
+      });
+    }
+  }
 
   // רגל 1: transfer (from) — רק-אם-השרשרת אינה-מכירה-את-ה-escrow
   if (plan.complete) {
