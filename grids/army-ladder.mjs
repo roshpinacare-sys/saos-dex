@@ -40,7 +40,7 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync } from "node:fs
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
-import { rpcAny, signAndBroadcast, num, dp3 } from "./mover.mjs";
+import { rpcAny, signAndBroadcast, num, dp3, orderSteemLocked, orderLivePrice } from "./mover.mjs";
 import { stasisHalt } from "./brake.mjs";
 import { activeAuthorityOk } from "./key-gate.mjs";
 import { policyCycleGate, policyGate, recordLadderReceipt } from "./policy.mjs";
@@ -222,7 +222,7 @@ export function diffOrders({ liveOrders, targetLegs, knownIds, priceTolBps = 50 
   for (const l of targetLegs) {
     const o = byId.get(l.orderId);
     if (!o) { actions.push({ action: "create", leg: l }); continue; }
-    const livePrice = num(o.real_price) || (num(o.order_price?.quote) > 0 ? num(o.order_price?.base) / num(o.order_price?.quote) : 0);
+    const livePrice = orderLivePrice(o); // W12-fix: real_price קורא אפסים על-צמתים-חיים + אין order_price — הצורה-החיה = sell_price
     if (livePrice > 0 && Math.abs(livePrice - l.priceSbd) / l.priceSbd * 10000 > priceTolBps) actions.push({ action: "replace", leg: l, stalePrice: livePrice });
   }
   const targetIds = new Set(targetLegs.map((l) => l.orderId));
@@ -319,7 +319,7 @@ async function run(keysFile) {
       const liveOrders = await rpcAny("condenser_api.get_open_orders", [account]).catch(() => []);
       res.liveOrders = liveOrders.length;
       const myIds = new Set([...knownIds.entries()].filter(([, tag]) => tag.startsWith(`${account}:`)).map(([id]) => id));
-      const lockedSteem = liveOrders.filter((o) => myIds.has(Number(o.orderid)) && Number(o.steem) > 0).reduce((s, o) => s + Number(o.steem) / 1000, 0);
+      const lockedSteem = liveOrders.filter((o) => myIds.has(Number(o.orderid))).reduce((s, o) => s + orderSteemLocked(o), 0); // W12-fix: o.steem לא-קיים-בצמתים-חיים — for_sale+sell_price הוא-האמת
       estateLocked += lockedSteem;
 
       // חוק-הריגה ברמת-האחוזה: מיד זז מעבר לרצועה → ביטול-כל-שלנו (בכל-החשבונות)
@@ -443,6 +443,22 @@ export async function selftest() {
   const estate = planAccountLegs({ plan: { ...basePlan, __estateLockedSteem: 2.95 }, account: "hcsoldier6", accountIndex: 0, mid: 0.103, traderSteem: 1.0, traderSbd: 0, lockedSteem: 0 });
   assert(estate.length === 0, "estate cap nearly full → no new legs (limited-capital law)");
 
+  // W12-fix (2026-10-19, נמדד-חי 05:3xZ על שני-הצמתים): צורת-get_open_orders האמיתית —
+  // אין o.steem · real_price קורא אפסים · אין order_price. הוקטורים-אלה נועלים את-התיקון:
+  assert(orderSteemLocked({ for_sale: 2900, sell_price: { base: "2.900 STEEM", quote: "0.306 SBD" } }) === 2.9, "sell order → for_sale/1000 = STEEM locked (live shape)");
+  assert(orderSteemLocked({ for_sale: 306, sell_price: { base: "0.306 SBD", quote: "2.900 STEEM" } }) === 0, "buy order (SBD base) → zero STEEM locked");
+  assert(orderSteemLocked({ steem: 1500, for_sale: 2900, sell_price: { base: "2.900 STEEM" } }) === 1.5, "legacy steem field honored when a node returns it");
+  assert(orderSteemLocked({}) === 0, "malformed order → zero (fail-closed)");
+  const lpSell = orderLivePrice({ real_price: "0.00000000000000000", sell_price: { base: "2.900 STEEM", quote: "0.306 SBD" } });
+  assert(lpSell > 0.105 && lpSell < 0.106, "live real_price-zeros + sell_price → price derived (replace engine alive)");
+  assert(Math.abs(orderLivePrice({ real_price: "0.00000000000000000", sell_price: { base: "0.306 SBD", quote: "2.900 STEEM" } }) - 0.306 / 2.9) < 1e-9, "buy order price = base/quote");
+  assert(orderLivePrice({ real_price: "0.107000" }) === 0.107, "real_price honored when non-zero");
+  const w12oid = legOrderId("hcsoldier4", "sell-1");
+  const dStale = diffOrders({ liveOrders: [{ orderid: w12oid, real_price: "0.00000000000000000", sell_price: { base: "2.900 STEEM", quote: "0.300 SBD" }, for_sale: 2900 }], targetLegs: [{ legId: "sell-1", orderId: w12oid, priceSbd: 0.107 }], knownIds: new Set([w12oid]) });
+  assert(dStale.some((a) => a.action === "replace"), "live-shape stale order (0.1034 vs target 0.107) → replace fires (was dead code)");
+  const lLocked = planAccountLegs({ plan: { ...basePlan, estateMaxOpenSteem: 3.0 }, account: "hcsoldier4", accountIndex: 0, mid: 0.103, traderSteem: 0.1, traderSbd: 0, lockedSteem: 2.9 });
+  assert(lLocked.length === 2, "locked fuel counts toward budget (siq 05:16Z pattern: 0.1 liquid + locked orders → book rebuilt, never cancel-without-replace)");
+
   // W4 — arb-tilt vectors (fail-open law)
   const NOW = 1_800_000_000_000;
   assert(computeArbTilt({ ok: true, nowIso: new Date(NOW).toISOString(), bias: { bidShare: 0.538 } }, NOW) > 0, "bid-heavy book → positive tilt (asks up)");
@@ -487,7 +503,7 @@ export async function selftest() {
   const topUpLegs = planAccountLegs({ plan: w13Plan, account: "haran", accountIndex: 4, mid: 0.103, traderSteem: 1.6, traderSbd: 0, lockedSteem: 0 }); // אחרי-העזרה: 0.1+1.5
   assert(topUpLegs.length >= 1 && topUpLegs[0].sizeSteem >= 1.0, "aided trader places a real leg immediately (volume, not survival)");
 
-  console.log("SELFTEST PASS: 37/37 vectors (army-ladder)");
+  console.log("SELFTEST PASS: 46/46 vectors (army-ladder)");
 }
 
 async function main() {

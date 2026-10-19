@@ -59,6 +59,28 @@ export const RC_MIN = 1e9; // דלק-מינימלי לאומדן-פעולה (fai
 export const num = (s) => (s ? parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) : 0);
 export const dp3 = (v) => Math.floor(v * 1000) / 1000;
 
+/* ── צורת-הצבה-חיה (W12-fix 2026-10-19 — נמדד-חי על api.steemit.com + api.justyy.com) ──
+ * condenser_api.get_open_orders מחזיר {for_sale(1e3), sell_price{base,quote}, real_price:"0.000…"} —
+ * אין שדה `steem` ואין `order_price` באף-צומת-חי; real_price של-הצבה-פתוחה נקרא אפסים.
+ * הקוד-הישן קרא Number(o.steem)>0 (תמיד-false → lockedSteem תמיד 0 → siq 05:16Z קיבל
+ * ביטולים-בלי-הצבה-מחדש + תקרת-האחוזה הייתה-עיוורת) ו-real_price/order_price (תמיד-0 →
+ * מנוע-ה-replace היה-מת). שני-ה-helper-ים קוראים את-הצורה-החיה, עם-נדבך-ישן-אם-יש: */
+export function orderSteemLocked(o) {
+  const legacy = Number(o?.steem);
+  if (legacy > 0) return legacy / 1000; // שדה-ישן-אם-צומת-מסוים-מחזיר
+  const base = String(o?.sell_price?.base || "");
+  const units = Number(o?.for_sale) || 0;
+  return /\bSTEEM\b/.test(base) ? units / 1000 : 0; // הצבה-בסיס-SBD = דלק-קנייה, לא-דלק-STEEM
+}
+export function orderLivePrice(o) {
+  const real = num(o?.real_price);
+  if (real > 0) return real;
+  const base = String(o?.sell_price?.base || "");
+  const b = num(o?.sell_price?.base), q = num(o?.sell_price?.quote);
+  if (!(b > 0 && q > 0)) return 0;
+  return /\bSTEEM\b/.test(base) ? q / b : b / q; // מכירה: SBD/STEEM = quote/base · קנייה: base/quote
+}
+
 /* ── גזירת-המפתח (R10 מדוד — זהה ל-steem-rearm.ts של הפלטפורמה) ─────────── */
 const privToPub = (priv) => {
   const pub = Buffer.from(secp256k1.getPublicKey(priv, true));

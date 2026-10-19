@@ -29,7 +29,7 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync } from "node:fs
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
-import { rpcAny, signAndBroadcast, num, dp3 } from "./mover.mjs";
+import { rpcAny, signAndBroadcast, num, dp3, orderSteemLocked, orderLivePrice } from "./mover.mjs";
 import { stasisHalt } from "./brake.mjs";
 import { activeAuthorityOk } from "./key-gate.mjs";
 import { recordLadderReceipt } from "./policy.mjs"; // R329: the receipt IS the upshift — gearbox fed at verdict time
@@ -133,8 +133,8 @@ export function diffOrders({ liveOrders, targetLegs, knownIds, priceTolBps = 50 
   for (const l of targetLegs) {
     const o = byId.get(l.orderId);
     if (!o) { actions.push({ action: "create", leg: l }); continue; }
-    // real_price = שדה-האמת של get_open_orders (SBD/STEEM, נמדד-חי) — sell_price הוא-אובייקט-order_price
-    const livePrice = num(o.real_price) || (num(o.order_price?.quote) > 0 ? num(o.order_price?.base) / num(o.order_price?.quote) : 0);
+    // W12-fix: real_price קורא אפסים על-הצמתים-החיים ואין order_price — הצורה-החיה = sell_price (orderLivePrice)
+    const livePrice = orderLivePrice(o); // W12-fix: real_price קורא אפסים על-צמתים-חיים + אין order_price — הצורה-החיה = sell_price
     if (livePrice > 0 && Math.abs(livePrice - l.priceSbd) / l.priceSbd * 10000 > priceTolBps) actions.push({ action: "replace", leg: l, stalePrice: livePrice });
   }
   const targetIds = new Set(targetLegs.map((l) => l.orderId));
@@ -186,9 +186,9 @@ async function run(keysFile) {
 
   // condenser_api.get_open_orders (נמדד חי 03:3xZ — find_limit_orders אינו-קיים-בקונדנסר-על-הצמתים-החיים)
   const liveOrders = await rpcAny("condenser_api.get_open_orders", [trader]).catch(() => []);
-  // ה-locked שלנו = סכום-הרגליים-המוכרות-המונחות (o.steem ביחידות-1e3, נמדד-חי 03:4xZ)
+  // ה-locked שלנו = סכום-הרגליים-המוכרות-המונחות (W12-fix: for_sale+sell_price — o.steem אינו-קיים-בצמתים-החיים)
   const knownIds0 = myKnownOrderIds(plan);
-  const lockedSteem = liveOrders.filter((o) => knownIds0.has(Number(o.orderid))).reduce((s, o) => s + (Number(o.steem) > 0 ? Number(o.steem) / 1000 : 0), 0);
+  const lockedSteem = liveOrders.filter((o) => knownIds0.has(Number(o.orderid))).reduce((s, o) => s + orderSteemLocked(o), 0); // W12-fix: o.steem לא-קיים-בצמתים-חיים — for_sale+sell_price הוא-האמת (הריצות-הקודמות מדדו תמיד 0)
 
   const actions = [];
   const knownIds = myKnownOrderIds(plan);
@@ -267,7 +267,14 @@ export async function selftest() {
   assert(d3.length === 0, "FOREIGN order (unknown orderid) → NEVER touched");
   const l2 = planLadder({ plan: { maxPerLegSteem: 0.3, maxOpenSteem: 0.6, edgeBps: 150, sellLegs: [{}, {}] }, mid: 0.1028, traderSteem: 0.4, lockedSteem: 0.6 });
   assert(l2.length === 2, "locked funds count toward the ladder budget (no orphan-cancels on re-runs)");
-  console.log("SELFTEST PASS: 19/19 vectors");
+  // W12-fix (2026-10-19): צורת-get_open_orders החיה — אין o.steem · real_price=אפסים · אין order_price
+  assert(orderSteemLocked({ for_sale: 2900, sell_price: { base: "2.900 STEEM", quote: "0.306 SBD" } }) === 2.9, "live-shape sell order → STEEM locked");
+  assert(orderSteemLocked({ for_sale: 306, sell_price: { base: "0.306 SBD", quote: "2.900 STEEM" } }) === 0, "live-shape buy order → zero STEEM locked");
+  const lpStale = orderLivePrice({ real_price: "0.00000000000000000", sell_price: { base: "2.900 STEEM", quote: "0.300 SBD" } });
+  assert(lpStale > 0.103 && lpStale < 0.104, "live-shape price derivation (replace engine alive on real nodes)");
+  const dLiveStale = diffOrders({ liveOrders: [{ orderid: oid, real_price: "0.00000000000000000", sell_price: { base: "2.900 STEEM", quote: "0.300 SBD" }, for_sale: 2900 }], targetLegs: [{ legId: "sell-1", orderId: oid, priceSbd: 0.11 }], knownIds: known });
+  assert(dLiveStale.some((a) => a.action === "replace"), "live-shape stale order → replace (real_price-zeros no longer blinds the diff)");
+  console.log("SELFTEST PASS: 23/23 vectors");
 }
 
 async function main() {
