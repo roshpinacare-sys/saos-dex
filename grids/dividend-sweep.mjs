@@ -68,7 +68,7 @@ async function liveState() {
   if (!r.ok) throw new Error(`state ${r.status}`);
   const d = await r.json();
   const st = d?.state ?? d;
-  return { height: st.height, feeMeterMu: st.feeMeter, treasuryProfitMu: st.treasuryProfit, halted: st.halted, stateRoot: st.stateRoot };
+  return { height: st.height, feeMeterMu: st.feeMeter, treasuryProfitMu: st.treasuryProfit, halted: st.halted, stateRoot: st.stateRoot, income: st.income ?? null };
 }
 
 /* הראצ'ט-והיתרות-חיים-רק-מסנאפשוט-טרי (ה-API-הפומבי-אינו-חושף-אותם) */
@@ -87,6 +87,24 @@ async function snapshotTruth(maxAgeMin = 90) {
     treasuryUsdsMu: Number(bal?.USDS ?? 0),
     snapshotAt: at,
   };
+}
+
+/* FIX(2026-10-20 · מרשם-הטענות): ההערה-הישנה שגויה-מאז-שה-API חשף את income.* —
+ * הראצ'ט-החי (income.treasuryProfitEverMu) זמין-עכשיו-ב-API. העולם-החי הוא-היחיד
+ * שאפשר-לסלק-עליו-ops (ה- batch עצמו פוגע-ב-API) — ולכן-הוא-מקור-האמת-לראצ'ט.
+ * הסנאפשוט-המקומי נשאר-רק-ליתרת-האוצר (USDS) — וב- fail-honest-כנה אם-חסר.
+ * הפער-שנתפס-חי: הסדולה-קראה-את-סנאפשוט-עולם-הענן (ever 18,393,971µ) בזמן
+ * שהקרנל-החי עמד-על 18,401,971µ → דיבידנד-אמת-של-8,000µ דולג-בשקט. */
+async function liveTruth() {
+  const live = await liveState(); // זריקה-כנה אם-המנוע-מושהה/מת
+  const ever = Number(live?.income?.treasuryProfitEverMu ?? NaN);
+  if (!Number.isFinite(ever)) throw new Error("live ever-unavailable (fail-honest)");
+  let treasuryUsdsMu = NaN, source = "live-api";
+  try {
+    const snap = await snapshotTruth();
+    treasuryUsdsMu = snap.treasuryUsdsMu;
+  } catch { treasuryUsdsMu = NaN; source = "live-api-only (snapshot unavailable — D-2 floor unchecked honestly)" }
+  return { ever, treasuryUsdsMu, snapshotAt: live.at ?? null, source, height: live.height };
 }
 
 function operatorToken(pid) {
@@ -133,20 +151,21 @@ export async function sweep({ checkOnly = false } = {}) {
       }
     }
 
-    /* שלב-2+3 · הראצ'ט-והדיבידנד */
-    const snap = await snapshotTruth();
-    out.snapshotAt = snap.snapshotAt;
-    out.ever = snap.ever;
+    /* שלב-2+3 · הראצ'ט-והדיבידנד — מקור-אמת: המנוע-החי (liveTruth), הסנאפשוט-רק-ליתרת-האוצר */
+    const truth = await liveTruth();
+    out.snapshotAt = truth.snapshotAt ?? `live-h${truth.height}`;
+    out.ever = truth.ever;
+    out.truthSource = truth.source;
     const wm = readWatermark();
     if (!wm || !Number.isFinite(Number(wm.ever))) {
-      if (!checkOnly) writeWatermarkAtomic({ ever: snap.ever, at: new Date().toISOString(), note: "init — no retroactive dividend (D-1 honest)" });
-      out.verdict = "WATERMARK-INIT"; out.why = `watermark set to measured Ever ${snap.ever}µ — רווח-היסטורי-אינו-דיבידנד-חדש (D-1)`;
+      if (!checkOnly) writeWatermarkAtomic({ ever: truth.ever, at: new Date().toISOString(), note: "init — no retroactive dividend (D-1 honest)" });
+      out.verdict = "WATERMARK-INIT"; out.why = `watermark set to measured Ever ${truth.ever}µ — רווח-היסטורי-אינו-דיבידנד-חדש (D-1)`;
       if (!checkOnly) receipt(out);
       return out;
     }
-    const delta = Math.max(0, snap.ever - Number(wm.ever));
+    const delta = Math.max(0, truth.ever - Number(wm.ever));
     out.deltaEverMu = delta;
-    const dp = planDividend({ deltaEverMu: delta, treasuryUsdsMu: snap.treasuryUsdsMu });
+    const dp = planDividend({ deltaEverMu: delta, treasuryUsdsMu: truth.treasuryUsdsMu });
     out.dividendPlan = dp;
 
     if (dp.action === "DIVIDEND" && !checkOnly) {
@@ -166,7 +185,7 @@ export async function sweep({ checkOnly = false } = {}) {
         out.dividend = await r.json().catch(() => ({ err: "bad-json" }));
         /* סימן-מים-מתקדם-רק-על-הצלחה-אמת (xfer ok) — כשל = הסבב-הבא-מנסה-שוב */
         const ok = out.dividend?.ok === true || out.dividend?.results?.some?.((x) => x?.ok === true) || out.dividend?.accepted === true;
-        if (ok) writeWatermarkAtomic({ ever: snap.ever, at: new Date().toISOString(), sweptMu: dp.amount });
+        if (ok) writeWatermarkAtomic({ ever: truth.ever, at: new Date().toISOString(), sweptMu: dp.amount });
         out.watermarkAdvanced = ok;
       }
     } else if (dp.action === "SKIP" && delta >= DIVIDEND_MIN_MU && !checkOnly) {
