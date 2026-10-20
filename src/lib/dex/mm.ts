@@ -452,16 +452,22 @@ export function arenaTick(
     // (מתחת-ל-20k) = מזרקה-יבשה-לנצח בזמן-שלטרשורה-היה-גיבוי-אמת. השער הורד-ל-1k:
     // הגרעין (kernel mint_fuel) עדיין אוכף בעצמו את הגיבוי-הכפול, הרצפה (8k) והתקרה —
     // כאן-רק-החלטת-תזמון-כלכלית, לא-שכבת-אבטחה.
-    const trCr = st.credits["treasury"] ?? 0;
+    // FIX(g94): trCr הוסר — השער-החי-הוא-קרדיטי-הארנה (שורש-המימון), לא-האוצר.
     // FIX(roast-81 · fountain-half-throttle): ה-/2 כאן היה-חנק-כפול-מעל-אכיפת-הגרעין
     // (mint_fuel כבר-אוכף-בעצמו רצפת-8k + תקרה). נמדד-חי: fuelAvail=577<שער-1,000
     // בזמן-שהגרעין-הרשה-1,154 → מזרקה-יבשה, האוצר-תקוע-על-8µ-גז, ו-ProtoRev —
     // מנוע-הארב-שרץ-כ-batch-אוצר — מת-מרעב-גז (revAux.rejections=5,181).
     // עכשיו: אותו-מדד-בדיוק-של-הגרעין — האכיפה-במקום-אחד.
+    // FIX(g94 · self-enrich-vs-fountain, נתפס-חי-2026-10-20): הזרקה-ל-"treasury" נדחית-תמידית
+    // בשער-הגרעין batch-self-enrich-forbidden (מנגד-הטבעה-עצמית) → כל-ההטבעות-האוטומטיות
+    // מתו-בשקט-והמשק-נשתק (כל-קרדיטי-הגז=0, ארנה-מוסרת-insufficient-escrow-בכל-בלוק,
+    // נמדד h830516: batch(treasury):batch-self-enrich-forbidden). התיקון: להטביע-ישר-לארנה —
+    // שורש-שרשרת-המימון (funderFor: arena→בוטים→אוצר→מפעיל) — הארנה-מממנת-את-הכל-בעצמה.
+    // הגרעין-ממשיך-לאכוף-בעצמו: גיבוי-כפול (profit-ראשון) + רצפת-8k + תקרה-100k.
     const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
-    if (trCr < 10_000 && fuelAvail > 1_000) {
+    if ((st.credits["arena"] ?? 0) < 10_000 && fuelAvail > 1_000) {
       const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
-      if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-h${st.height}`, to: "treasury", amount: mint });
+      if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-h${st.height}`, to: "arena", amount: mint });
     }
     // EXEC-CD-46 · arena-first: נמדד-חי (t+2min אחרי-refuel-fairness): החיילים-התעוררו
     // (975/630/850µ) אבל-הארנה-נשארה 3µ — והיא-המממנת-את-בוטי-הרעש (זריעה=transfer

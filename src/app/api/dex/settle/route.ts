@@ -89,7 +89,9 @@ export async function POST(req: Request) {
     if (trCr < 60_000 && fuelAvail > 20_000) {
       const mint = Math.min(MINT_FUEL_CAP, fuelAvail);
       if (mint > 0) {
-        const r = submitOp({ type: "mint_fuel", issuer: "treasury", nonce: `settle-fountain-${Date.now().toString(36)}`, to: "treasury", amount: mint });
+        // FIX(g94): יעד-ההטבעה = הארנה (שורש-המימון) — הטבעה-לאוצר נדחית-בשער
+      // batch-self-enrich-forbidden (נמדד-חי h830516).
+      const r = submitOp({ type: "mint_fuel", issuer: "treasury", nonce: `settle-fountain-${Date.now().toString(36)}`, to: "arena", amount: mint });
         pushed.push({ kind: "mint-fuel", detail: r.queued ? `treasury self-mint +${mint}µ credits (fees-backed: profit ${st.treasuryProfit} + meter ${st.feeMeter})` : `rejected: ${r.reason}` });
       }
     }
