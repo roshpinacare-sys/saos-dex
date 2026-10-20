@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-18T18:08:56.116Z · 147 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-20T14:20:52.225Z · 154 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -72,11 +72,15 @@
 | `grids/custody.mjs` | CUSTODY (Z-89 · directive element #5) — שכבת-האמת של החזקות-רב-שרשרת |
 | `grids/daily-cycle.mjs` | DAILY-CYCLE (A-8 · T-7) — המחזור-היומי העצמי: צפה → טיק → הצמד → מוביל → דוח |
 | `grids/delegate-plan.mjs` | DELEGATE-PLAN — האצלת SP מדודה ואידמפוטנטית (owner-mandated 2026-10-11) |
+| `grids/dividend-release.mjs` | !/usr/bin/env node |
+| `grids/dividend-sweep.mjs` | !/usr/bin/env node |
 | `grids/engine-transfers.mjs` | ENGINE-TRANSFERS (Z-90-c) — היסטוריית-העברות-ה-Engine: הנקודה-החלופית שסוגרת את-הפער-המדיד |
 | `grids/engine.mjs` | ENGINE — לב רשת-הטריגרים: טיק אחד = קליטה→אסטרטגיות→כללים→אינווריאנטות |
 | `grids/escrow-payroll.mjs` | ESCROW-PAYROLL — מסילת-השכר בטוחה על-השרשרת (R16-a · owner mandate trace 1a12dbe9812eff11) |
 | `grids/events.mjs` | EVENTS — אפיק-האירועים של רשת-הטריגרים (JSONL append-only) |
+| `grids/fee-harvest.mjs` | !/usr/bin/env node |
 | `grids/fleet-grow.mjs` | FLEET-GROW — צמיחת-הצי הריבונית: רה-סולם של חיילי-העליונות על סולם-רוחבים ייחודי |
+| `grids/internal-pnl.mjs` | !/usr/bin/env node |
 | `grids/key-gate.mjs` | KEY-GATE — שער-אימות-מפתח מול רשות-ה-active החיה (מסילת-הגריד) |
 | `grids/liquidity-bootstrap.mjs` | LIQUIDITY-BOOTSTRAP — מסילת-הזרקת-נזילות לספרים (9-c · 2026-10-11 · owner mandate trace 1a |
 | `grids/liquidity-selftest.mjs` | LIQUIDITY-SELFTEST — וקטורים דטרמיניסטיים אופליין למסילת-הזרקת-הנזילות (9-c) |
@@ -87,15 +91,18 @@
 | `grids/mover.mjs` | MOVER — מבצע-ההצעה (A-5 · fleet/r130): offer.json → פקודות-אמת על ספר-STEEM |
 | `grids/observe-selftest.mjs` | OBSERVE-SELFTEST — וקטורים דטרמיניסטיים אופליין לצופה-המילויים-אמת (A-9) |
 | `grids/observe.mjs` | OBSERVE — צופה-מילויים-אמת (A-9 · fleet/r130): שרשרת → רשת-הטריגרים |
+| `grids/one-body.mjs` | ONE-BODY — עזרה-הדדית-צבאית (W13 · מנדט-בעלים 2026-10-19) |
 | `grids/params-selftest.mjs` | PARAMS-SELFTEST — וקטורים דטרמיניסטיים אופליין לשומר-סף-הפרמטרים (9-c) |
 | `grids/payout-doctrine.mjs` | PAYOUT-DOCTRINE (Z-90-c) — קבלת-הדוקטרינה-לתשלום: בנייה-דטרמיניסטית-מוקדמת של החלטות-הבשלו |
 | `grids/peg-selftest.mjs` | PEG-SELFTEST — וקטורים דטרמיניסטיים למנוע-הצמדה (B-1) |
 | `grids/peg.mjs` | PEG — מנוע-הצמדה (B-1 · fleet/r130): פרמטרי-גריד פנים → הצעה חוץ |
+| `grids/pnl-audit.mjs` | PNL-AUDIT — ביקורת-הרווח-האמת של הריבונות (SAOS-PNL-AUDIT/1) |
 | `grids/policy-selftest.mjs` | POLICY-ENGINE SELFTEST — מוכיח את חוקי SAOS-POLICY-ENGINE/1 על מדינה-מבודדת (tmp) |
 | `grids/policy.mjs` | POLICY-ENGINE — שכבת-הכסף של הרשת (SAOS-POLICY-ENGINE/1) |
 | `grids/route-receipt.mjs` | ROUTE-RECEIPT — המסלול-הראשון STEEM↔HIVE (Wave-2 סעיף 3 · מתוכנן-במלואו, לא-מבוצע) |
 | `grids/rules.mjs` | RULES — מנוע-הכללים: דבר-גורר-דבר (DAG טריגרים חסום-עומק) |
 | `grids/run.mjs` | RUN — CLI של רשת-הטריגרים |
+| `grids/self-deposit.mjs` | SELF-DEPOSIT — מנוע-ההפקדה-העצמית של הריבונות (SAOS-SELF-DEPOSIT/1) |
 | `grids/sim/volume-sim.mjs` | VOLUME-SIM — סימולטור-הווליום של מנוע-העליונות (דטרמיניסטי, חתום-SIM) |
 | `grids/sovereign-pulse.mjs` | SOVEREIGN-PULSE — הדופק-הריבוני על-השרשרת (R16-a · owner mandate trace 1a12dbe9812eff11) |
 | `grids/split-router.mjs` | SPLIT-ROUTER — מתכנן-פיצול-לעומק לסכומים-גדולים (Z-87a · plan-only · audit-Z86c פער-d) |
@@ -103,9 +110,6 @@
 | `grids/supremacy-selftest.mjs` | SUPREMACY-SELFTEST — אינווריאנטות-ברזל של מנוע-העליונות (שער-CI) |
 | `grids/treasury-ladder.mjs` | TREASURY-LADDER — מסילת-הכנסה של-האוצר על-הספר הציבורי (R16-b · owner trace 1a12defa203993 |
 | `grids/truth-gate.mjs` | TRUTH-GATE — שער-אמת על מילויים (Wave-2 סעיף 1 · מנדט-הבעלים #11 "בורסת-אמת") |
-| `grids/self-deposit.mjs` | SELF-DEPOSIT — מנוע-ההפקדה-העצמית: אין-הפקדות-חוץ · idle→cashmachine פנימי · נתיב-דיבידנד-בעלים $1000/יום מרווח-מדוד (owner directive 2026-10-19 trace 1a1530e43b512305) |
-| `grids/internal-pnl.mjs` | INTERNAL-PNL — גשר-ה-P&L-הפנימי: ראצ'ט treasuryProfitEver→USD (1 USDS=1000µ מאומת-מהפקדה) · ספר-הפסדים-מדוד · מזין את internal-dex-fees ב-self-deposit (החלטה #24) |
-| `grids/fee-harvest.mjs` | FEE-HARVEST — קציר-עמלות-מתוזמן (ESC-11): feeMeter→treasuryProfit · רצפת-סולם-אינה-נגעת · סף-אבק 500µ · fail-honest · selftest 8/8 · סדולה: dex-economy-bridge כל-10 דק' |
 | `grids/validate-params.mjs` | VALIDATE-PARAMS — שומר-סף-פרמטרי-הגריד (fail-closed; 9-c · 2026-10-11) |
 | `grids/venues/blurt-quote.mjs` | BLURT-QUOTE — רגל-תכנון-בלרט חסרת-מפתחות (Z-87a · BRIDGE · plan-only) |
 | `grids/volume-verify.mjs` | VOLUME-VERIFY — VERIFIED-VS-CHAIN: אמת-מול-שרשרת על-כל-קבלה וכל-מילוי (R323) |
