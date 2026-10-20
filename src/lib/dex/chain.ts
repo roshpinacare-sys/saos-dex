@@ -482,8 +482,8 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
         // feeMeterPlusProfit כבר-כולל-את-feeMinted — ראה-הערת-המבקר ב-settle.ts), ולכן
         // Δ = pools − (feeMeterPlusProfit + spent_הנמדד-הכולל). הערך-החתום-יכול-להיות-
         // שלילי: זו-הצהרה-כנה על פער-היסטורי מהעידן-שלפני-התיקונים בשני-הכיוונים
-        // (עמלות-פנטום-בבריכות או עמלות-שנעלמו).
-        const delta = pre.fees.poolsTreasury - (pre.fees.feeMeterPlusProfit + pre.fees.feesSpentMu);
+        // (עמלות-פנטום-בבריכות או עמלות-שנעלמו). BOOK-TAKER-FEE: מקור-הספר נכלל-בצד-המדידה.
+        const delta = (pre.fees.poolsTreasury + pre.fees.bookFeesMu) - (pre.fees.feeMeterPlusProfit + pre.fees.feesSpentMu);
         adj.feesSpentMu = (adj.feesSpentMu ?? 0) + delta;
         details.push(`feesSpent+=${delta > 0 ? "+" : ""}${delta} (historical fees-lineage gap, declared)`);
       }

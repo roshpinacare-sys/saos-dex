@@ -63,7 +63,7 @@ export interface LedgerAudit {
   credits: { sum: number; gasUsed: number; expected: number; minted: number; ok: boolean };
   assets: { asset: string; live: number; expected: number; ok: boolean; kind: "native" | "wrapped" | "lp" | "issued" }[];
   escrow: { accounts: number; lockedSum: number; ordersSum: number; exact: boolean; availOk: boolean; ok: boolean };
-  fees: { poolsTreasury: number; feeMeterPlusProfit: number; feesSpentMu: number; ok: boolean };
+  fees: { poolsTreasury: number; bookFeesMu: number; feeMeterPlusProfit: number; feesSpentMu: number; ok: boolean };
   negatives: string[];
   errors: string[];
 }
@@ -215,8 +215,11 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
     }
   }
 
-  // (d) עמלות: מדידה-כנה — Σpools.feeAccruedTreasury === feeMeter + treasuryProfit + feeMinted + feesSpentMu
+  // (d) עמלות: מדידה-כנה — Σpools.feeAccruedTreasury + bookFeesMu === feeMeter + treasuryProfit + feeMinted + feesSpentMu
   const poolsTreasury = Object.values(st.pools).reduce((s, p) => s + p.feeAccruedTreasury, 0);
+  // BOOK-TAKER-FEE (2026-10-20): עמלות-ספר-הפקודות הן-מקור-עמלות-שני (מחוץ-לבריכות) —
+// זורמות-לאותם-דליים (feeMeter→profit→דלק) ולכן מוחסרות-לצד-המדידה של-הזהות.
+  const bookFeesMu = st.bookFeesMu ?? 0;
   // (d) עמלות: כל-מה-שהבריכות-מדדו === מד-שלא-נקצר + רווח-שלא-נצרך + דלק-שמוחזר + צריכת-הראוטר
   // (THE-FOUNTAIN: feeMinted הוא-עמלות-שהפכו-קרדיטים — נצרך-מהמדידה, לא-נעלם ·
   // FIX(Roast-65-a · HIGH-3d): feesSpentMu — עמלות-שהראוטר צרך-מ-treasuryProfit (economy.ts)
@@ -241,8 +244,8 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
   const declared = primerPortion + reprimePortion + bookGasPortion;
   if (declared > (st.feeMinted ?? 0)) errors.push(`minted-declared: primer${primerPortion}+reprime${reprimePortion}+bookgas${bookGasPortion} > minted ${st.feeMinted ?? 0}`);
   const feesRhs = st.feeMeter + st.treasuryProfit + ((st.feeMinted ?? 0) - declared) + feesSpentMu;
-  const feesOk = poolsTreasury === feesRhs;
-  if (!feesOk) errors.push(`fees: pools ${poolsTreasury} ≠ feeMeter+profit+minted−primer${primerPortion}−reprime${reprimePortion}−bookgas${bookGasPortion}+spent ${feesRhs}`);
+  const feesOk = poolsTreasury + bookFeesMu === feesRhs;
+  if (!feesOk) errors.push(`fees: pools${poolsTreasury}+book${bookFeesMu} ≠ feeMeter+profit+minted−primer${primerPortion}−reprime${reprimePortion}−bookgas${bookGasPortion}+spent ${feesRhs}`);
 
   return {
     ok: errors.length === 0 && negatives.length === 0,
@@ -251,7 +254,7 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
     escrow: { accounts, lockedSum, ordersSum, exact: errors.filter((e) => e.startsWith("escrow")).length === 0, availOk, ok: errors.filter((e) => e.startsWith("escrow") || e.startsWith("escrow-shadow")).length === 0 && negatives.length === 0 },
     // שדה-השם-מטעה-בכוונת-מקור: feeMeterPlusProfit = meter+profit+**minted** (השלישייה-כולה) —
     // FIX(Roast-65 · doc): מתועד-כאן-כדי-שהצהרת-הסחיפה-ב-chain.ts לא תספור-את-ה-minted פעמיים.
-    fees: { poolsTreasury, feeMeterPlusProfit: st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0), feesSpentMu, ok: feesOk }, // FIX(3-a · D1): feeMeterPlusProfit נשאר-השלישייה (meter+profit+minted) — ההצהרה ב-chain.ts מחשבת-מולו את הדלי-הרביעי בכיוון-הנכון
+    fees: { poolsTreasury, bookFeesMu, feeMeterPlusProfit: st.feeMeter + st.treasuryProfit + (st.feeMinted ?? 0), feesSpentMu, ok: feesOk }, // FIX(3-a · D1): feeMeterPlusProfit נשאר-השלישייה (meter+profit+minted) — ההצהרה ב-chain.ts מחשבת-מולו את הדלי-הרביעי בכיוון-הנכון
     negatives,
     errors,
   };

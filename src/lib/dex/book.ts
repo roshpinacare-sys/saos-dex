@@ -11,7 +11,7 @@
  *  · market-טייקר: אין-נעילה מראש; בדיקת-היתרה לפני-כל-מילוי
  */
 import type { DexState, Op, OpResult, TradeEvent } from "./kernel";
-import { addBal, addLock, avail, bal, lockedOf, notional } from "./kernel";
+import { addBal, addLock, avail, bal, lockedOf, notional, BOOK_TAKER_FEE_BPS } from "./kernel";
 import { invariant } from "./invariant";
 import { RAIL_DUST_MU } from "./kernel"; // T15-P2 · רצפת-האבק — חוק-הספר-הנקי (מהקרנל — העלה-הנקי)
 
@@ -151,7 +151,15 @@ export function matchBook(
         if (avail(st, op.issuer, quote) < qMu) break; // נגמר-הציטוט
         addBal(st, op.issuer, quote, -qMu);
       }
-      addBal(st, op.issuer, base, qty);
+      // BOOK-TAKER-FEE · גבייה-in-kind: הטייקר-קונה מקבל בסיס — העמלה נגבית ממנו
+      // (הנעילה כבר-מכסה את מלוא-הכמות — אפס-שינוי-ערבויות). אבק (<34µ) = פטור (אותו-רוח-חוק-אבק).
+      const takerBaseFee = Math.floor((qty * BOOK_TAKER_FEE_BPS) / 10_000);
+      addBal(st, op.issuer, base, qty - takerBaseFee);
+      if (takerBaseFee > 0) {
+        addBal(st, "treasury", base, takerBaseFee);
+        st.feeMeter += takerBaseFee;
+        st.bookFeesMu = (st.bookFeesMu ?? 0) + takerBaseFee;
+      }
       // מייקר-מוכר: בסיס-נעול יוצא, ציטוט נכנס
       addBal(st, maker.owner, base, -qty);
       releaseMakerLock(maker, qty, qty); // נעילת-מכירה = בסיס-µ — מדויק
@@ -169,7 +177,14 @@ export function matchBook(
         if (avail(st, op.issuer, base) < qty) break;
         addBal(st, op.issuer, base, -qty);
       }
-      addBal(st, op.issuer, quote, qMu);
+      // BOOK-TAKER-FEE · גבייה-in-kind: הטייקר-מוכר מקבל ציטוט — העמלה נגבית ממנו.
+      const takerQuoteFee = Math.floor((qMu * BOOK_TAKER_FEE_BPS) / 10_000);
+      addBal(st, op.issuer, quote, qMu - takerQuoteFee);
+      if (takerQuoteFee > 0) {
+        addBal(st, "treasury", quote, takerQuoteFee);
+        st.feeMeter += takerQuoteFee;
+        st.bookFeesMu = (st.bookFeesMu ?? 0) + takerQuoteFee;
+      }
       // מייקר-קונה: ציטוט-נעול יוצא, בסיס נכנס
       addBal(st, maker.owner, quote, -qMu);
       releaseMakerLock(maker, qty, qMu); // FIX(escrow-dust): רגל-אחרונה משחררת-אבק-floor

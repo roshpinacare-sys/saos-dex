@@ -164,6 +164,12 @@ export const GAS_TABLE = {
 
 export type OpKind = keyof typeof GAS_TABLE;
 export const FEE_BPS = 30; // עמלי-30bps כמו-הבריכה-הילידית (dex-facts)
+// BOOK-TAKER-FEE (2026-10-20 · שורש-fee-meter נתפס-חי): ספר-הפקודות היה זירה-בלי-עמלה —
+// 205K+ מילויים הניבו אפס-הכנסה בזמן ש-feeMeter ניזון מסוואפי-בריכות-בלבד (קפואים).
+// מעתה: עמלת-taker ב-30bps בדיוק כמו-בסיס-הבריכות, נגבית in-kind מהנכס-שהטייקר
+// מקבל (קנייה→בסיס · מכירה→ציטוט) — אפס-שינוי-חוקי-הערבויות (הנעילה כבר-מכסה
+// את מלוא-הנכס), האוצר מקבל, והמדד (feeMeter) צומח מכל-מסחר-אמת.
+export const BOOK_TAKER_FEE_BPS = FEE_BPS;
 export const TREASURY_CUT_PCT = 30; // 30% מהעמלה → אוצר (רווח-מונוטוני, grid98)
 export const REFUEL_CAP = 100_000; // תקרת-עירוי-פר-פקודה — גם-אם-האוצר נחטף, הנזק מגודל
 // FIX(T15-P2 · 2026-10-19): רצפת-האבק עברה-לקרנל-מה-rail — חוק-הספר-הנקי הוא-חוק-מנוע
@@ -453,6 +459,9 @@ export interface DexState {
   // עולה-רק (Σ-harvest), לעולם לא יורד, והזרע שלו הוא השיא-ההיסטורי הגיט-מוכח.
   treasuryProfitEver?: number;
   feeMeter: number; // עמלות-שנצברו-שטרם-נקצרו (מדידה-כנה)
+  // BOOK-TAKER-FEE: Σעמלות-ספר-הפקודות (מקור-הזהות-החוץ-בריכתי — מוחסר-בצד-המדידה
+  // של אינווריאנטת-העמלות ב-settle.ts (d)). רשות (תמונות-ישנות = 0) — אותו-דפוס feeMinted.
+  bookFeesMu?: number;
   feeMinted?: number; // THE-FOUNTAIN: Σקרדיטים-שהוטבעו-מעמלות-מדודות — מנוכה-באינווריאנטה (רשות: תמונות-מצב-ישנות)
   // FIX(Roast-65-a · HIGH-3d): דלי-רביעי-לביקורת-העמלות (settle.ts (d)) — Σעמלות-שנצרכו
   // על-ידי-הראוטר (צריכת-treasuryProfit ב-economy.revenueCycle). בלעדיו הזהות
@@ -816,6 +825,7 @@ export function genesisState(): DexState {
     treasuryProfit: 0,
     treasuryProfitEver: 0, // FIX(R46): הגרעין נולד מאפס — בטעינת-תמונה-חיה הזרע ההיסטורי (213752µ) מוחל ב-chain.ts
     feeMeter: 0,
+    bookFeesMu: 0, // BOOK-TAKER-FEE: ג'נזיס = 0 (זהות-העמלות מתחשבת בתמונות-ישנות דרך ?? 0)
     ladder: { refPrice: 2500, stepCostMu: 8_000, lifts: 0, lastLiftHeight: 0, spentMu: 0 },
     journal: [], gasUsed: 0, nextSeq: 1,
     stats: { fills: 0, swaps: 0, opsTotal: 0, ladders: 0 },
