@@ -183,6 +183,11 @@ const REARM_TRANCHE_SAOS = 6_000_000; // [T25-FORGE] ×3
 const REARM_TRANCHE_USDS = 12_000_000; // [T25-FORGE] ×3
 const REARM_TRANCHE_WSTEEM = 1_000_000;
 const REARM_LIFETIME_SAOS = 48_000_000; // [T25-FORGE] ×6 — מלאי-הכבשן זורם-ארנה
+// REARM-STOCK-LAW (2026-10-20 · שורש-נתפס-חי): מונה-החיים-נשחט (44M/48M — שארית 4M < טרנס 6M)
+// בזמן-שלאוצר 29.6Mµ-SAOS אמת — הארנה רעבה (810µ) על-ספר-חשבון. המילוי הוא העברה-אמת
+// (אפס-הטבעה) — המגן-האמיתי הוא רצפת-שמורת-האוצר, לא מונה. המונים נשארים מדידה.
+const REARM_TREASURY_SAOS_RESERVE = 10_000_000; // האוצר-לא-יורד-מתחתיו-מעולם-מילוי-ארנה
+const REARM_TREASURY_USDS_RESERVE = 400_000;
 const REARM_LIFETIME_USDS = 120_000_000; // [T25-FORGE] ×6
 const REARM_LIFETIME_WSTEEM = 1_000_000; // גבול-אמת: סטוק-ה-STEEM-הטבעי של-האוצר (אפס-הטבעה)
 const REARM_FLOOR_SAOS = 3_000_000; // [T25-FORGE] ×5   // מתחת-לזה הארנה לא יכולה למכור-לתוך-בידים
@@ -527,16 +532,20 @@ export function arenaTick(
   // ── THE-REARM: חייל-אספקה-למייצב (למעלה — תיעוד-מלא) — קצב 16-טיק כמו-העירוי ──
   if (tick % 16 === 0) {
     const rc = rearmCounts(st);
-    if (avail(st, "arena", "SAOS") < REARM_FLOOR_SAOS && rc.saos + REARM_TRANCHE_SAOS <= REARM_LIFETIME_SAOS) {
-      const amt = Math.min(REARM_TRANCHE_SAOS, REARM_LIFETIME_SAOS - rc.saos);
-      if (avail(st, "treasury", "SAOS") >= amt) {
+    // REARM-STOCK-LAW: SAOS/USDS מתחדשים-מול-מלאי-אוצר-אמת (מעל-רצפת-שמורה) —
+    // מונה-החיים נשאר רק מדידה (rc). WSTEEM נשאר מוגבל-חיים (גבול-עטיפה 1:1 אמת).
+    if (avail(st, "arena", "SAOS") < REARM_FLOOR_SAOS) {
+      const stockCap = Math.max(0, avail(st, "treasury", "SAOS") - REARM_TREASURY_SAOS_RESERVE);
+      const amt = Math.min(REARM_TRANCHE_SAOS, stockCap);
+      if (amt > 0) {
         rc.saos += amt;
         pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-sh${st.height}`, to: "arena", asset: "SAOS", amount: amt });
       }
     }
-    if (avail(st, "arena", "USDS") < REARM_FLOOR_USDS && rc.usds + REARM_TRANCHE_USDS <= REARM_LIFETIME_USDS) {
-      const amt = Math.min(REARM_TRANCHE_USDS, REARM_LIFETIME_USDS - rc.usds);
-      if (avail(st, "treasury", "USDS") >= amt) {
+    if (avail(st, "arena", "USDS") < REARM_FLOOR_USDS) {
+      const stockCap = Math.max(0, avail(st, "treasury", "USDS") - REARM_TREASURY_USDS_RESERVE);
+      const amt = Math.min(REARM_TRANCHE_USDS, stockCap);
+      if (amt > 0) {
         rc.usds += amt;
         pushOp({ type: "transfer", issuer: "treasury", nonce: `rearm-uh${st.height}`, to: "arena", asset: "USDS", amount: amt });
       }
