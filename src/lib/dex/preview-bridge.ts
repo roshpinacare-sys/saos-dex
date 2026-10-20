@@ -187,7 +187,14 @@ function startBridge(): void {
     // את socket-ה-HMR בשורש גם עם basePath — נמדד: ניתוב-שורש→3050 עצר הידרציה)
     // → 3010 · רק-WS-זר-אמת → 3050.
     const wsUrl = req.url ?? "/";
-    const wsPort = (wsUrl === "/saos-dex" || wsUrl.startsWith("/saos-dex/") || wsUrl.startsWith("/_next/")) ? 3010 : 3050;
+    // T-95·gal-94 (MEASURE): console HMR was starved — every /_next/* WS went to
+    // 3010, so the mother console (3050) hydrated never (full SSR shell, dead
+    // effects, no errors — reproduced 4 rounds). Discriminator (measured live):
+    // the Referer of the WS handshake is the page that spawned it.
+    const ref = String(req.headers.referer ?? req.headers.origin ?? "");
+    const fromConsole = ref !== "" && !ref.includes("/saos-dex");
+    const wsPort = fromConsole ? 3050 : (wsUrl === "/saos-dex" || wsUrl.startsWith("/saos-dex/") || wsUrl.startsWith("/_next/")) ? 3010 : 3050;
+    try { fs.appendFileSync(path.join(process.cwd(), "db", "ws-route.log"), JSON.stringify({ at: new Date().toISOString(), url: wsUrl, ref, fromConsole, port: wsPort }) + "\n"); } catch { /* honest */ }
     const upstreamSocket = net.connect(wsPort, "127.0.0.1", () => {
       const lines: string[] = [`${req.method} ${req.url} HTTP/1.1`];
       for (let i = 0; i < req.rawHeaders.length; i += 2) {
