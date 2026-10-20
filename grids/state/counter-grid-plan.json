@@ -2,9 +2,9 @@
  "ok": false,
  "verdict": "COUNTER-GRID-BLOCKED",
  "blockers": [
-  "sell side below dust: ladder sum 0 STEEM < minLevel 1 — waiting for fuel (honest)"
+  "invariant violation in plan math — refusing to publish (fail-closed)"
  ],
- "nowIso": "2026-10-20T15:55:02.395Z",
+ "nowIso": "2026-10-20T19:22:44.140Z",
  "bias": {
   "value": -0.352486,
   "source": "measured-from-real-fills",
@@ -12,61 +12,92 @@
   "askShare": 0.676243
  },
  "partitions": {
-  "sellCapitalSteem": 0.288,
-  "buyCapitalSbdTotal": 22.54,
-  "askCapitalSteem": 0.194,
-  "bidCapitalSbd": 7.297,
-  "buyReserveSbd": 15.243,
-  "sellReserveSteem": 0.094
+  "sellCapitalSteem": 189.231,
+  "buyCapitalSbdTotal": 20.76,
+  "askCapitalSteem": 127.966,
+  "bidCapitalSbd": 6.721,
+  "buyReserveSbd": 14.039,
+  "sellReserveSteem": 61.265
  },
  "book": {
-  "bestAsk": 0.10576,
-  "bestBid": 0.1038637307852098,
-  "mid": 0.104812
+  "bestAsk": 0.1053190234697488,
+  "bestBid": 0.10514018691588785,
+  "mid": 0.10523
  },
- "anchor": 0.103954,
+ "anchor": 0.104677,
  "plan": {
-  "asks": [],
+  "asks": [
+   {
+    "side": "ask",
+    "level": 1,
+    "priceSbdPerSteem": 0.105319,
+    "sizeSteem": 9.703
+   },
+   {
+    "side": "ask",
+    "level": 2,
+    "priceSbdPerSteem": 0.105846,
+    "sizeSteem": 14.555
+   },
+   {
+    "side": "ask",
+    "level": 3,
+    "priceSbdPerSteem": 0.106372,
+    "sizeSteem": 21.833
+   },
+   {
+    "side": "ask",
+    "level": 4,
+    "priceSbdPerSteem": 0.106899,
+    "sizeSteem": 32.749
+   },
+   {
+    "side": "ask",
+    "level": 5,
+    "priceSbdPerSteem": 0.107425,
+    "sizeSteem": 49.124
+   }
+  ],
   "bids": [
    {
     "side": "bid",
     "level": 1,
-    "priceSbdPerSteem": 0.101875,
-    "spendSbd": 0.553,
-    "sizeSteem": 5.428
+    "priceSbdPerSteem": 0.102583,
+    "spendSbd": 0.509,
+    "sizeSteem": 4.961
    },
    {
     "side": "bid",
     "level": 2,
-    "priceSbdPerSteem": 0.099837,
-    "spendSbd": 0.829,
-    "sizeSteem": 8.303
+    "priceSbdPerSteem": 0.100532,
+    "spendSbd": 0.764,
+    "sizeSteem": 7.599
    },
    {
     "side": "bid",
     "level": 3,
-    "priceSbdPerSteem": 0.0978,
-    "spendSbd": 1.244,
-    "sizeSteem": 12.719
+    "priceSbdPerSteem": 0.09848,
+    "spendSbd": 1.146,
+    "sizeSteem": 11.636
    },
    {
     "side": "bid",
     "level": 4,
-    "priceSbdPerSteem": 0.095762,
-    "spendSbd": 1.867,
-    "sizeSteem": 19.496
+    "priceSbdPerSteem": 0.096428,
+    "spendSbd": 1.72,
+    "sizeSteem": 17.837
    },
    {
     "side": "bid",
     "level": 5,
-    "priceSbdPerSteem": 0.093725,
-    "spendSbd": 2.801,
-    "sizeSteem": 29.885
+    "priceSbdPerSteem": 0.094377,
+    "spendSbd": 2.58,
+    "sizeSteem": 27.337
    }
   ],
   "totals": {
-   "askSteem": 0,
-   "bidSbd": 7.294
+   "askSteem": 127.964,
+   "bidSbd": 6.719
   }
  },
  "invariants": {
@@ -76,7 +107,7 @@
   "buyCapitalWithinBalance": true,
   "asksMonotonicUp": true,
   "bidsMonotonicDown": true,
-  "asksAboveTouch": true,
+  "asksAboveTouch": false,
   "bidsBelowTouch": true,
   "sideSeparation": true
  },
