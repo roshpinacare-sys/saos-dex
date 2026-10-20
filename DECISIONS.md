@@ -236,3 +236,12 @@
 - ESC-11-OUT: /transfer ב-steem-voice (transfer-op-אמת) עם-תקרות-קשיחות בקוד (5/op · 20/יום · allowlist-headcorner) — fail-closed-עד-מפתח-active-חי.
 - REQ-0008-מוכח-קריפטוגרפית: הצלבת-13-חשבונות×2-דורות מול-השרשרת — אף-wif-בכספת-הגלמית (roshpinacare-sys/steem@main/.secrets · טביעות 1f629a92/87d7d1a9 מאומתות) לא מגזר את הסמכויות-החיות. הבעלים-חייב-למסור מפתח-posting+active-חיים.
 - secp256k1-shim-טהור-ב-bun (ה-native-NAN-קרס): sign/verify/recover-מאומתים selftest-5/5 — הערוץ-ישדר-מיד-עם-מפתח-חי.
+
+## #27 · 2026-10-20 · trace 1a1575d7d11c0b35 · תיקון-הקציר-המקיף: hydration-git-first + כספת-נפתחה-בראיה
+- **REQ-0008-נפתר-חלקית בראיה-בלתי-תלויה**: STEEM_POSTING_WIF_A מ-vault-home (ה-unseal-האוטונומי, PAT-כמפתח-C) נגזר→STM8m3rBLd8C… = **בסמכות-הפרסום-החיה של headcorner על-השרשרת** (מתוך-5, מתודת-הגזירה הוכחה 26/26 מול-זוגות-הכספת). הערת-#26 התייחסה לכספת-הגלמית בלבד. העתק-upload/headcorner.txt נדחה fail-honest (טביעת-אצבע 8ae2b7fa≠41c833bb — מפתח-מסובב-החוצה). פעיל-active: אין-התאמה עדיין → ESC-11-נשאר-סגור-עד-בעלים.
+- **פצע-הקציר-המרכזי**: הקרנל-המקומי עלה genesis (h=0) מול-שלושה-עותקים-סוטים (מקומי-ריק · db-קנוני h=501K מ-18/10 · עדות-גיט h=828K). טופל-בניתוח-מגולל: ריקון-שורות-נגזרת (6,915 BlockHeader + 577 SealRecord — כולן-אטומות-ב-HEAD) → הזרקת-origin/main:db/state-snapshot.json (h=828,226) → BOOT-ACCEPTANCE (corroboration-birth) בלוג-הקרנל → השרשרת חיה h=828,300+, ratchet 18,393,971µ רציף.
+- **חוק-חדש בקוד (giant)**: saos-dex-node גל-93 git-first-hydration — לפני-כל-עלייה, עדות-origin/main-גוברת-על-הקנוני-הישן (הזרקה+ריקון-נגזרות+גיבוי+לוג). התקפלות-העולמות-נמנעת-מבנית.
+- **boot-selfheal.sh (giant)**: רץ-בכל-`bun run dev` — מרפא-בעצמו: (1) כספת-vault-home+unseal אם-.secrets/.env.local חסר (כולל-מפתחות-צבא+מחזור-steem-voice-fail-closed) · (2) עוזר-אישורים **פר-ריפו-בלבד** · (3) מפתחות-ssh-Tier-1 מהכספת · (4) ifixai למבקר.
+- **שיעור-הרעלה**: עוזר-credential-גלובלי-עם-טוקן-מת דוחה-אפילו-שיבוטים-פומביים-כש-IP-מוגבל-קצב — החיווט-הנכון: מקומי-פר-ריפו + ssh-core.sshCommand (4 ריפואים מכוסים deploy-keys: saos-dex/FleetHQ/fleet-vault/steem).
+- **שיעור-הטוקן-הכפול**: pat.env = מת-כאישור (API 401, push "Invalid username or token" מאז-00:50Z) אך-חי-כמפתח-קריפטוגרפי (C-של-חוק-ה-wraps — פתח-את-הכספת). הדחיפות-ל-giant חסומות-עד-PAT-חדש-מהבעלים; דחיפות-ssh-חיות.
+- **הכלכלה-הוצתה-מחדש**: סוואפי-הצתה-מחשבון-operator (5.5Mµ-נפח) → עמלות-אמת: treasuryProfit 0→16,390µ, הראצ'ט-עולה, קצירים-חיים, mint_fuel-מתודלק-מהרווח. משבר-הרצפה (meter<8,000) נפתר-כלכלית-דרך-רווח-מסחר-אמת, לא-סובסידיה.
