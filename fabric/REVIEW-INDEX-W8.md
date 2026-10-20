@@ -98,3 +98,13 @@
 | cmvefxhq | src/lib/db.ts | Sentry-לשגיאות-DB | `@sentry/node`-חסר → **import-brick-של-כל-המנוע**; צורת-log-config-של-Prisma-שגויה (`error:`-בתוך-PrismaClientOptions — שגיאת-קומפילציה + excess-property `target`); `Sentry.init`-**אחרי**-ה-throw-של-fail-closed → ההתראות-מאבדות-בשקט (מוות-בלתי-נראה); ה-guard-מוחלש-מ-dex.db-ספציפי-ל-**כל-.db-שהוא** (נסיגה-מול-Roast-68-החי); תוכן-db.ts-בשם-קובץ-זר → הדבקה-לפי-שם = שני-`export const db` | REJECT-AS-WRITTEN |
 
 - **ראוי-לציון**: cmveei30-ו-cmveeogv-מצטרפים-למשפחת-"החלפה-במקום-עטיפה" (סה"כ-עתה 8-מהתור); cmveeogv-הוא-הבלתי-נסבל-מכולם — היה-ממית-כל-POST-אם-היה-מודבק.
+
+## W-11 · wave-19.44 (2026-10-20 · trace 1a159f309db70225) — שיפוט-שלוש-ההצעות-החדשות · capability-gate לפי החלטה #29 (ארכיטקטורה, לא-תור-בעלים)
+
+| תיקייה | יעד | רעיון | חוסמים (מאומתים) | פסק |
+|---|---|---|---|---|
+| cmvfl14p + cmvfmzwr | src/middleware.ts | זיהוי-חריגות-התנהגותי (v1+v2, אותה-משפחה) | (1) `req.ip` הוסר-ב-Next-15/16 → כל-ה-IP-ים "unknown" (הניטור-מת) — כ-cmvdl8jh; (2) XFF-קצה-אחרון סותר-את-קונבנציית-קצה-ראשון-שנחתמה (cmvdi78i); (3) מפות-per-IP בלתי-חסומות-ב-Edge בלי-פינוי; (4) `pathname.split("/")[3]` = undefined ל-/api/dex/settle → `includes(undefined)` — גלאי-החזרות-מת; (5) משכפל-מערכות-שנחתמו (EXEC-CD-44 + IDS-cmvdo3gm + early-alert-cmvdkj2e) — תקדים-W8: נבלעים-ולא-נערמים; (6) גלאי-ריפליי-x-nonce על-כותרת-שה-API-החי-לא-משתמש-בה — פיצ'ר-מת; (7) כותרת-x-anomaly-monitored = חשיפת-טביעת-אצבע-פנימית | REJECT-AS-WRITTEN |
+| cmvgt298 | src/lib/dex | Alert-Router מרכזי (dedup+suppression) | (1) import-"./alert" לא-נפתר-מהתיקייה-החונה (שבירת-tsc-בהכללה — פצע-ה-include-של-W8); (2) **rawUrl גולמי ב-payload** לקונסולה — וקטור-הדליפה-של-cmvvdv3t4 (מפתח-ה-dedup בלבד מוצפן); (3) הצורה-מפרה-את-הסכימה-המחמירה-של-POST-/api/alerts (שדות-זרים=400) → התראות-מתות; (4) משכפל-את-הדדופיקציה-הדקתית-שנחתמה-W10. חילוץ-לעתיד: hash-only-URL + צורה-מחמירה | REJECT-AS-WRITTEN |
+| cmvdp69f | api/dex | ניטור-פעולות-מסוכנות-בזמן-אמת | (1) `req.ip` (אותה-מחלקה); (2) `await req.json()`-ב-middleware צורך-את-הגוף ומעביר-בקשה-בלועה-הלאה — שובר-את-ה-handlers-של-order/swap/agent; (3) "המגביל" לעולם-לא-מחזיר-429 ומשתמש-במפת-ההתראות-כמפת-דליים — הטמעה-כ-middleware הייתה-מחליפה-את-מגביל-EXEC-CD-44-החי-ב-no-op (מחלקת-הפצע-של-cmvj3bn); (4) EARLY_WARN_THRESHOLD לעולם-לא-נבדק — התראה-על-כל-בקשה-ראשונה-בחלון (ספאם) — ה-cmvdkj2e-שנחתם אוכף-את-הסף-כנה; (5) isInternal=XFF-חסר — היוריסטיקה-שגויה-מול-הקונבנציה | REJECT-AS-WRITTEN |
+
+הערה-מבנית: exclude-ה-fabric/ ב-tsconfig (ממצא-W8) החזיק — שלוש-ההצעות-הבלתי-נשפטות לא-שברו-tsc-הפעם.
