@@ -239,6 +239,22 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
         : ` — snapshot h${raw.state.height} vs last PUBLICLY-anchored seal h${anchorH} (${extAnchor!.chain} txid ${String(extAnchor!.txid).slice(0, 12)}…, stateRoot ${String(extAnchor!.stateRoot).slice(0, 12)}…) — gap ${gap > 0 ? "+" : ""}${gap} blocks${gap < 0 ? " — HONEST REORG: rebuilding blocks ahead of the snapshot; the prior anchored tip stays public history of an abandoned tip" : ""}`}. Trust bounded: shape + canonical stateRoot + conservation audit + ≤${SEAL_EVERY}-window doctrine once the rail anchors. From the next block onward every block writes a real DB header and this path is dead.`);
       pushReceipt(rt, "boot-acceptance-corroboration-birth", { snapshotH: raw.state.height, anchoredH: anchorH, anchor: anchorlessBirth ? "none" : extAnchor!.chain, txid: anchorlessBirth ? "none" : extAnchor!.txid, gap, at: Date.now() });
       acceptedWithoutCorroboration = true;
+      // ── FIX(birth-flush · 2026-10-21) ── סגירת-חלון-הלבנה-עצמית:
+      // בלידה, ל-snapshot-בגובה-H לעולם אין שורת-header (headers מתחילים-ב-H+1)
+      // וה-flush-המחזורי רק-ב-tick%16 → restart/קציר/recompile בתוך-החלון =
+      // "אין-corroboration" מול priorCount>0 → לבנה-עצמית-כפויה. התיקון: אחרי
+      // הבלוק-הראשון (יש-לו-header) מתבצע-flush-אחד → ה-snapshot מתקדם-ל-H+1
+      // שיש-לו-header-תואם → כל-אתחול-עתידי מאומת-בנתיב-הרגיל. כפילות-flush
+      // חסרת-נזק (כתיבה-אטומית tmp+rename באותו-מצב).
+      const birthH = raw.state.height;
+      setTimeout(() => {
+        try {
+          if (rt.st.height > birthH && !rt.halted) {
+            flushSnapshot(rt);
+            console.info(`[saos-dex] birth-flush: snapshot advanced h${birthH}→h${rt.st.height} — restart-safe from the first block`);
+          }
+        } catch { /* flush-כושל לא מפיל את הלידה — ה-flush-המחזורי יתפוס */ }
+      }, TICK_MS * 2);
     } else {
       // ── FIX(recovery-continuation · Task 22 · 2026-10-20) ──
       // הצורה-שנמדדה: עץ-האטימה משוחזר-מגיט עם snapshot-בגובה-ההולדה בעוד-ה-DB
@@ -1686,6 +1702,35 @@ export function stopLoops(): void {
 export function forceFlush(): void {
   const rt = ensureChain();
   flushSnapshot(rt);
+}
+
+/* ── FIX(graceful-shutdown-flush · 2026-10-21) ──────────────────────────────
+ * הפגם-שנמדד: forceFlush() היה מת (אף-קורא) — כל-קציר-סנדבוקס (kill) השאיר
+ * את-ה-snapshot בגובה-flush-אחרון (עד 15 בלוקים מאחור). מי-נהרג בתוך-חלון-הלידה
+ * (birth-acceptance → headers מתחילים-ב-h+1, flush ראשון רק-ב-tick%16) השאיר
+ * snapshot-בלי-שורת-header-תואמת → restart-הבא: birth-נחסם (priorCount>0),
+ * recovery-continuation-נחסם (אין-חותם-עדיין) → לבנה-עצמית-כפויה בכל-קציר.
+ * התיקון: SIGTERM/SIGINT → flush-כפוי-אחד (snapshot+טייפ+נרות+maker+book-gas)
+ * ואז-יציאה. ה-snapshot תמיד בגובה-בלוק-אחרון-שיש-לו-header → אתחול-מאומת.
+ * SIGKILL לא ניתן-לתפיסה מטבעו — לכן flush-מחזורי-כל-16-בלוקים נשאר רשת-ביטחון. */
+function gracefulFlushAndExit(signal: string): void {
+  try {
+    const rt = (globalThis as { __saosDexChain?: Parameters<typeof flushSnapshot>[0] | undefined }).__saosDexChain;
+    /* שומר-חיים: flush רק-על-שרשרת-חיה-בגובה-אמת. על-שרשרת-עצורה-בטעינה
+     * (halted/refused) ה-rt-מחזיק ג'נזיס-ריק (h0) — flush היה דורס את
+     * ה-snapshot-הטוב-במצב-ריק ומוחק-את-עץ-האטימה של-הצי. אסור. */
+    if (rt && !rt.pendingLoad && !rt.halted && rt.st.height > 0) {
+      flushSnapshot(rt);
+      console.info(`[saos-dex] graceful ${signal}: snapshot flushed at h${rt.st.height} (restart-safe)`);
+    } else {
+      console.info(`[saos-dex] graceful ${signal}: chain not live (halted=${rt?.halted ?? "?"}, h=${rt?.st.height ?? "?"}) — snapshot left untouched`);
+    }
+  } catch { /* flush-כושל לא מונע יציאה — flush-המחזורי יתפוס את הפער */ }
+  process.exit(0);
+}
+if (process.env.NEXT_RUNTIME !== "edge") {
+  process.once("SIGTERM", () => gracefulFlushAndExit("SIGTERM"));
+  process.once("SIGINT", () => gracefulFlushAndExit("SIGINT"));
 }
 
 export { notional, sortBook, LP_ASSET_PREFIX };
