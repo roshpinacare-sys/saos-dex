@@ -1,207 +1,288 @@
-import { NextRequest, NextResponse } from "next/server";
+// src/lib/dex/anomaly-detector.ts
+import { createHash } from "node:crypto";
+
+// Configuration constants
+const WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_KEYS = 10_000; // Prevent memory bloat
+const ANOMALY_THRESHOLD_STDDEV = 3; // 3 standard deviations
+const ANOMALY_THRESHOLD_ABSOLUTE = 100; // 100 requests/minute from single IP
+const MIN_SAMPLES_FOR_STATS = 10; // Minimum samples before statistical detection
+
+// In-memory stores (per-process, suitable for single-instance deployment)
+const requestCounts = new Map<string, number[]>(); // key -> timestamps[]
+const pathAccessCounts = new Map<string, Map<string, number>>(); // ip -> (path -> count)
+const alertedAnomalies = new Map<string, number>(); // anomalyKey -> lastAlertTime
+const ALERT_COOLDOWN_MS = 60_000; // 1 minute cooldown per anomaly type per IP
 
 /**
- * anomaly-detector.ts — Real-time anomaly detection for SAOS-DEX
- * Detects unusual access patterns: IP spikes, repeated failed auth, protected path access
- * No secrets, no local paths, no external config dependencies.
+ * Generates a consistent key for tracking requests
  */
-
-interface AccessEvent {
-  ip: string;
-  path: string;
-  timestamp: number;
-  userAgent?: string;
-  authStatus?: "success" | "failure" | "unauthorized";
-}
-
-interface AnomalyAlert {
-  severity: "HIGH" | "MEDIUM" | "LOW";
-  message: string;
-  ip: string;
-  path: string;
-  requestCount: number;
-  windowMs: number;
-  timestamp: number;
-  anomalyType: "ip_spike" | "repeated_failures" | "protected_path_access" | "unusual_pattern";
-}
-
-// In-memory sliding window store (per IP + path)
-const accessWindows = new Map<string, number[]>();
-const MAX_WINDOW_ENTRIES = 10_000;
-const WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-const SPIKE_THRESHOLD_STD = 3; // 3 standard deviations
-const ABSOLUTE_THRESHOLD_PER_MIN = 100; // 100 req/min from single IP
-const FAILURE_THRESHOLD = 10; // 10 failures in window
-const PROTECTED_PATHS = [
-  "/api/dex/order",
-  "/api/dex/cancel",
-  "/api/dex/swap",
-  "/api/dex/bridge",
-  "/api/dex/transfer",
-  "/api/dex/wrap",
-  "/api/dex/pool",
-  "/api/dex/fleet",
-  "/api/dex/maker",
-  "/api/dex/launchpad",
-  "/api/dex/relay",
-  "/api/dex/settle",
-  "/api/dex/door",
-  "/api/dex/fuel",
-  "/api/dex/onramp",
-  "/api/dex/convert",
-  "/api/dex/grid",
-];
-
-function getWindowKey(ip: string, path: string): string {
+function makeKey(ip: string, path: string): string {
   return `${ip}:${path}`;
 }
 
-function pruneWindow(timestamps: number[], now: number): number[] {
-  const cutoff = now - WINDOW_MS;
-  return timestamps.filter((t) => t > cutoff);
-}
-
-function calculateStats(timestamps: number[]): { mean: number; std: number; count: number } {
-  const count = timestamps.length;
-  if (count === 0) return { mean: 0, std: 0, count: 0 };
-  const mean = count / (WINDOW_MS / 60_000); // requests per minute
-  // For Poisson-like process, variance ≈ mean, std ≈ sqrt(mean)
-  const std = Math.sqrt(mean);
-  return { mean, std, count };
-}
-
-function isProtectedPath(path: string): boolean {
-  return PROTECTED_PATHS.some((p) => path.startsWith(p));
-}
-
-function logAlert(alert: AnomalyAlert): void {
-  console.warn(JSON.stringify({
-    timestamp: new Date(alert.timestamp).toISOString(),
-    severity: alert.severity,
-    event_type: "anomaly_detected",
-    anomaly_type: alert.anomalyType,
-    ip: alert.ip,
-    path: alert.path,
-    request_count: alert.requestCount,
-    window_minutes: alert.windowMs / 60_000,
-    message: alert.message,
-  }));
+/**
+ * Generates a key for anomaly alert deduplication
+ */
+function makeAnomalyKey(ip: string, path: string, type: string): string {
+  return `${type}:${ip}:${path}`;
 }
 
 /**
- * Process an access event and detect anomalies.
- * Call this from middleware after auth but before authorization.
+ * Cleans up old timestamps outside the window
  */
-export function detectAnomaly(event: AccessEvent): AnomalyAlert | null {
-  const now = event.timestamp;
-  const key = getWindowKey(event.ip, event.path);
-  
-  let window = accessWindows.get(key) || [];
-  window = pruneWindow(window, now);
-  window.push(now);
-  
-  // Prevent memory bloat
-  if (accessWindows.size > MAX_WINDOW_ENTRIES) {
-    const firstKey = accessWindows.keys().next().value;
-    if (firstKey) accessWindows.delete(firstKey);
-  }
-  accessWindows.set(key, window);
-  
-  const { mean, std, count } = calculateStats(window);
-  const reqPerMin = count / (WINDOW_MS / 60_000);
-  
-  // 1. Absolute spike threshold
-  if (reqPerMin > ABSOLUTE_THRESHOLD_PER_MIN) {
-    const alert: AnomalyAlert = {
-      severity: "HIGH",
-      message: `IP ${event.ip} exceeded ${ABSOLUTE_THRESHOLD_PER_MIN} req/min on ${event.path} (actual: ${reqPerMin.toFixed(1)})`,
-      ip: event.ip,
-      path: event.path,
-      requestCount: count,
-      windowMs: WINDOW_MS,
-      timestamp: now,
-      anomalyType: "ip_spike",
-    };
-    logAlert(alert);
-    return alert;
+function pruneTimestamps(timestamps: number[], now: number): number[] {
+  const cutoff = now - WINDOW_MS;
+  return timestamps.filter(ts => ts > cutoff);
+}
+
+/**
+ * Calculates mean and standard deviation of request counts per minute
+ */
+function calculateStats(timestamps: number[], now: number): { mean: number; stddev: number; count: number } {
+  if (timestamps.length < MIN_SAMPLES_FOR_STATS) {
+    return { mean: 0, stddev: 0, count: timestamps.length };
   }
   
-  // 2. Statistical spike (3 sigma)
-  if (count > 10 && reqPerMin > mean + SPIKE_THRESHOLD_STD * std) {
-    const alert: AnomalyAlert = {
-      severity: "HIGH",
-      message: `Statistical anomaly: IP ${event.ip} on ${event.path} at ${reqPerMin.toFixed(1)} req/min (mean: ${mean.toFixed(1)}, std: ${std.toFixed(1)}, threshold: ${(mean + SPIKE_THRESHOLD_STD * std).toFixed(1)})`,
-      ip: event.ip,
-      path: event.path,
-      requestCount: count,
-      windowMs: WINDOW_MS,
-      timestamp: now,
-      anomalyType: "ip_spike",
-    };
-    logAlert(alert);
-    return alert;
+  // Bucket into 1-minute intervals
+  const buckets = new Map<number, number>();
+  const windowStart = now - WINDOW_MS;
+  
+  for (const ts of timestamps) {
+    if (ts < windowStart) continue;
+    const minuteBucket = Math.floor(ts / 60_000) * 60_000;
+    buckets.set(minuteBucket, (buckets.get(minuteBucket) || 0) + 1);
   }
   
-  // 3. Repeated auth failures
-  if (event.authStatus === "failure" || event.authStatus === "unauthorized") {
-    const failureKey = `fail:${event.ip}`;
-    let failWindow = accessWindows.get(failureKey) || [];
-    failWindow = pruneWindow(failWindow, now);
-    failWindow.push(now);
-    accessWindows.set(failureKey, failWindow);
-    
-    if (failWindow.length >= FAILURE_THRESHOLD) {
-      const alert: AnomalyAlert = {
-        severity: "HIGH",
-        message: `Repeated auth failures from IP ${event.ip}: ${failWindow.length} failures in ${WINDOW_MS / 60_000} minutes`,
-        ip: event.ip,
-        path: event.path,
-        requestCount: failWindow.length,
-        windowMs: WINDOW_MS,
-        timestamp: now,
-        anomalyType: "repeated_failures",
+  const counts = Array.from(buckets.values());
+  if (counts.length === 0) return { mean: 0, stddev: 0, count: 0 };
+  
+  const mean = counts.reduce((a, b) => a + b, 0) / counts.length;
+  const variance = counts.reduce((sum, c) => sum + Math.pow(c - mean, 2), 0) / counts.length;
+  const stddev = Math.sqrt(variance);
+  
+  return { mean, stddev, count: timestamps.length };
+}
+
+/**
+ * Records a request and checks for anomalies
+ * @returns anomaly info if detected, null otherwise
+ */
+export function recordAndCheckAnomaly(
+  ip: string,
+  path: string,
+  isProtectedPath: boolean,
+  userAgent?: string
+): { detected: boolean; type: string; details: Record<string, unknown> } | null {
+  const now = Date.now();
+  const key = makeKey(ip, path);
+  
+  // Record request timestamp
+  const timestamps = requestCounts.get(key) || [];
+  timestamps.push(now);
+  const pruned = pruneTimestamps(timestamps, now);
+  requestCounts.set(key, pruned);
+  
+  // Track path access per IP for protected path monitoring
+  if (isProtectedPath) {
+    const ipPaths = pathAccessCounts.get(ip) || new Map();
+    ipPaths.set(path, (ipPaths.get(path) || 0) + 1);
+    pathAccessCounts.set(ip, ipPaths);
+  }
+  
+  // Cleanup old entries to prevent memory bloat
+  if (requestCounts.size > MAX_KEYS) {
+    const oldestKey = requestCounts.keys().next().value;
+    if (oldestKey) requestCounts.delete(oldestKey);
+  }
+  if (pathAccessCounts.size > MAX_KEYS) {
+    const oldestIp = pathAccessCounts.keys().next().value;
+    if (oldestIp) pathAccessCounts.delete(oldestIp);
+  }
+  
+  // Calculate request rate per minute
+  const requestsPerMinute = (pruned.length / WINDOW_MS) * 60_000;
+  
+  // Check absolute threshold anomaly
+  if (requestsPerMinute > ANOMALY_THRESHOLD_ABSOLUTE) {
+    const anomalyKey = makeAnomalyKey(ip, path, "HIGH_FREQUENCY");
+    const lastAlert = alertedAnomalies.get(anomalyKey) || 0;
+    if (now - lastAlert > ALERT_COOLDOWN_MS) {
+      alertedAnomalies.set(anomalyKey, now);
+      return {
+        detected: true,
+        type: "HIGH_FREQUENCY",
+        details: {
+          ip,
+          path,
+          requestsPerMinute: Math.round(requestsPerMinute * 100) / 100,
+          threshold: ANOMALY_THRESHOLD_ABSOLUTE,
+          windowMs: WINDOW_MS,
+          isProtectedPath,
+          userAgent: userAgent || "unknown",
+          timestamp: new Date(now).toISOString(),
+        },
       };
-      logAlert(alert);
-      return alert;
     }
   }
   
-  // 4. Protected path access without auth (unauthorized)
-  if (isProtectedPath(event.path) && event.authStatus === "unauthorized") {
-    const alert: AnomalyAlert = {
-      severity: "MEDIUM",
-      message: `Unauthorized access attempt to protected path ${event.path} from IP ${event.ip}`,
-      ip: event.ip,
-      path: event.path,
-      requestCount: 1,
-      windowMs: WINDOW_MS,
-      timestamp: now,
-      anomalyType: "protected_path_access",
-    };
-    logAlert(alert);
-    return alert;
+  // Check statistical anomaly (3 sigma)
+  const { mean, stddev, count } = calculateStats(pruned, now);
+  if (count >= MIN_SAMPLES_FOR_STATS && stddev > 0) {
+    const currentMinuteCount = pruned.filter(ts => ts > now - 60_000).length;
+    if (currentMinuteCount > mean + ANOMALY_THRESHOLD_STDDEV * stddev) {
+      const anomalyKey = makeAnomalyKey(ip, path, "STATISTICAL_SPIKE");
+      const lastAlert = alertedAnomalies.get(anomalyKey) || 0;
+      if (now - lastAlert > ALERT_COOLDOWN_MS) {
+        alertedAnomalies.set(anomalyKey, now);
+        return {
+          detected: true,
+          type: "STATISTICAL_SPIKE",
+          details: {
+            ip,
+            path,
+            currentCount: currentMinuteCount,
+            mean: Math.round(mean * 100) / 100,
+            stddev: Math.round(stddev * 100) / 100,
+            threshold: "mean + 3*stddev",
+            windowMs: WINDOW_MS,
+            isProtectedPath,
+            userAgent: userAgent || "unknown",
+            timestamp: new Date(now).toISOString(),
+          },
+        };
+      }
+    }
+  }
+  
+  // Check for repeated access to protected paths
+  if (isProtectedPath) {
+    const ipPaths = pathAccessCounts.get(ip);
+    if (ipPaths) {
+      const protectedPathCount = Array.from(ipPaths.entries())
+        .filter(([p]) => isProtectedPathCheck(p))
+        .reduce((sum, [, c]) => sum + c, 0);
+      
+      if (protectedPathCount > 20) { // Threshold for repeated protected access
+        const anomalyKey = makeAnomalyKey(ip, "protected_paths", "REPEATED_PROTECTED_ACCESS");
+        const lastAlert = alertedAnomalies.get(anomalyKey) || 0;
+        if (now - lastAlert > ALERT_COOLDOWN_MS) {
+          alertedAnomalies.set(anomalyKey, now);
+          return {
+            detected: true,
+            type: "REPEATED_PROTECTED_ACCESS",
+            details: {
+              ip,
+              protectedPathsAccessed: Array.from(ipPaths.keys()).filter(isProtectedPathCheck),
+              totalProtectedRequests: protectedPathCount,
+              threshold: 20,
+              windowMs: WINDOW_MS,
+              userAgent: userAgent || "unknown",
+              timestamp: new Date(now).toISOString(),
+            },
+          };
+        }
+      }
+    }
   }
   
   return null;
 }
 
 /**
- * Get current request rate for an IP+path (for monitoring/debugging)
+ * Checks if a path is considered protected (requires authentication/authorization)
  */
-export function getRequestRate(ip: string, path: string): number {
-  const now = Date.now();
-  const key = getWindowKey(ip, path);
-  const window = accessWindows.get(key) || [];
-  const pruned = pruneWindow(window, now);
-  return pruned.length / (WINDOW_MS / 60_000);
+function isProtectedPathCheck(path: string): boolean {
+  const protectedPrefixes = [
+    "/api/dex/order",
+    "/api/dex/cancel",
+    "/api/dex/swap",
+    "/api/dex/pool",
+    "/api/dex/portfolio",
+    "/api/dex/wallets",
+    "/api/dex/transfer",
+    "/api/dex/bridge",
+    "/api/dex/settle",
+    "/api/dex/maker",
+    "/api/dex/fleet",
+    "/api/dex/grid",
+    "/api/dex/security",
+    "/api/dex/program",
+  ];
+  return protectedPrefixes.some(prefix => path.startsWith(prefix));
 }
 
 /**
- * Clear all windows (for testing)
+ * Triggers an alert by logging structured JSON to console
+ * In production, this could be extended to send to external systems
  */
-export function clearAnomalyState(): void {
-  accessWindows.clear();
+export function triggerAnomalyAlert(anomaly: { type: string; details: Record<string, unknown> }): void {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    severity: "HIGH",
+    component: "anomaly-detector",
+    event_type: "anomaly_detected",
+    anomaly_type: anomaly.type,
+    details: anomaly.details,
+  };
+  
+  // Structured JSON logging for log aggregation systems
+  console.warn(JSON.stringify(logEntry));
+  
+  // Also log a human-readable summary
+  console.warn(
+    `[ANOMALY] ${anomaly.type}: IP=${anomaly.details.ip} Path=${anomaly.details.path || "multiple"} ` +
+    `Details=${JSON.stringify(anomaly.details)}`
+  );
 }
 
-// Export types for testing
-export type { AccessEvent, AnomalyAlert };
+/**
+ * Middleware integration helper
+ * Call this after authentication but before authorization
+ */
+export function checkRequestAnomaly(
+  ip: string,
+  path: string,
+  userAgent?: string
+): { detected: boolean; type: string; details: Record<string, unknown> } | null {
+  const isProtected = isProtectedPathCheck(path);
+  return recordAndCheckAnomaly(ip, path, isProtected, userAgent);
+}
+
+/**
+ * Get current statistics for an IP (for debugging/monitoring)
+ */
+export function getIpStats(ip: string): Record<string, unknown> {
+  const now = Date.now();
+  const stats: Record<string, unknown> = {};
+  
+  for (const [key, timestamps] of requestCounts.entries()) {
+    if (key.startsWith(`${ip}:`)) {
+      const path = key.slice(ip.length + 1);
+      const pruned = pruneTimestamps(timestamps, now);
+      const { mean, stddev, count } = calculateStats(pruned, now);
+      stats[path] = {
+        totalRequests: count,
+        requestsPerMinute: Math.round((pruned.length / WINDOW_MS) * 60_000 * 100) / 100,
+        mean,
+        stddev,
+      };
+    }
+  }
+  
+  const protectedAccess = pathAccessCounts.get(ip);
+  if (protectedAccess) {
+    stats["protected_paths"] = Object.fromEntries(protectedAccess);
+  }
+  
+  return stats;
+}
+
+/**
+ * Reset all tracking data (for testing)
+ */
+export function resetAnomalyDetector(): void {
+  requestCounts.clear();
+  pathAccessCounts.clear();
+  alertedAnomalies.clear();
+}
