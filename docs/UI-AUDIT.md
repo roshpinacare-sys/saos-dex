@@ -1,6 +1,6 @@
 # סקירת-מוצר (UI-AUDIT)
 
-> נוצר אוטומטית ב-2026-10-20T23:55:38.250Z · נסרקו 122 קבצי ממשק · סתימות: 15
+> נוצר אוטומטית ב-2026-10-21T11:55:40.954Z · נסרקו 122 קבצי ממשק · סתימות: 15
 
 - `src/app/page.tsx:1161` [PLACEHOLDER] placeholder={String(market?.bestAsk ?? "")}
 - `src/app/page.tsx:1171` [PLACEHOLDER] placeholder={side === "sell" ? "sell take: fires when price ≥ trigger" : "buy ta
