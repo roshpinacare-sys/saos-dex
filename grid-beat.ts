@@ -212,16 +212,38 @@ function git(args: string, opts: { allowFail?: boolean; cwd?: string } = {}): st
   }
 }
 async function pushWithRetry(dir: string, branch: string, tries = 3): Promise<boolean> {
+  // W34 fail-honest (same law as cloud-beat's W33 patch): the grid lane's ledger push
+  // could die silently — a book that cannot publish must SAY why, in the log, forever.
   for (let i = 0; i < tries; i++) {
     try {
       execSync(`git push origin ${branch}`, { encoding: "utf8", cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
       return true;
-    } catch {
-      try { execSync(`git pull --rebase --autostash origin ${branch}`, { encoding: "utf8", cwd: dir, stdio: ["ignore", "pipe", "pipe"] }); } catch { /* שוב */ }
+    } catch (e) {
+      const why = String((e as { stderr?: string; message?: string }).stderr ?? (e as { message?: string }).message ?? e).split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300);
+      console.error(`[grid-beat] push try ${i + 1}/${tries} FAILED: ${why || "(no stderr — inspect runner)"}`);
+      try {
+        execSync(`git pull --rebase --autostash origin ${branch}`, { encoding: "utf8", cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+      } catch (e2) {
+        console.error(`[grid-beat] rebase try ${i + 1} failed: ${String((e2 as { stderr?: string }).stderr ?? e2).split("\n").slice(-2).join(" | ").slice(0, 200)}`);
+      }
       await new Promise((r) => setTimeout(r, 1_500));
     }
   }
   return false;
+}
+
+/* W34 fail-honest: git() with allowFail returns "" for BOTH success and failure —
+ * the ledger commit path could lose a whole run's orders with zero words in the log
+ * (measured live 2026-10-21T16:50Z: 6 real on-chain placements, ledger never landed,
+ * log silent). gitLoud speaks: same call, but failures print the real stderr. */
+function gitLoud(args: string, opts: { cwd?: string } = {}): { ok: boolean; out: string } {
+  try {
+    return { ok: true, out: execSync(`git ${args}`, { encoding: "utf8", cwd: opts.cwd ?? ROOT, stdio: ["ignore", "pipe", "pipe"] }).trim() };
+  } catch (e) {
+    const why = String((e as { stderr?: string; message?: string }).stderr ?? (e as { message?: string }).message ?? e).split("\n").filter(Boolean).slice(-3).join(" | ").slice(0, 300);
+    console.error(`[grid-beat] git ${args.split(" ").slice(0, 2).join(" ")} FAILED: ${why || "(no stderr — inspect runner)"}`);
+    return { ok: false, out: "" };
+  }
 }
 
 const dp3 = (v: number): string => v.toFixed(3);
@@ -746,14 +768,22 @@ async function main(): Promise<void> {
   }
 
   /* ── המעקה לריפו (הבית הקנוני) ── */
-  git('config user.name "grid-beat[bot]"', { allowFail: true });
-  git('config user.email "grid-beat[bot]@agents.roshpinacare-sys"', { allowFail: true });
-  git("add -- db/grid-ledger.json db/grid-public.json grids/state/policy-ledger.jsonl grids/state/policy-arm.json", { allowFail: true }); // DECISIONS #17: policy verdict receipts + owner arm file live in git (auditable)
+  // W34 fail-honest: המסלול הזה היה שקט-לחלוטין בכשל (allowFail בולע) — נמדד-חי
+  // 2026-10-21T16:50Z: 6 הצבות אמיתיות על-השרשרת וה-ledger מעולם לא הגיע ל-origin/main
+  // בלי מילה אחת בלוג. כל-צעד מדבר עתה: add, staged, commit, push — ושקט-אמיתי נשאר שקט.
+  gitLoud('config user.name "grid-beat[bot]"');
+  gitLoud('config user.email "grid-beat[bot]@agents.roshpinacare-sys"');
+  const addRes = gitLoud("add -- db/grid-ledger.json db/grid-public.json grids/state/policy-ledger.jsonl grids/state/policy-arm.json"); // DECISIONS #17: policy verdict receipts + owner arm file live in git (auditable)
   const staged = git("diff --cached --name-only", { allowFail: true });
   if (staged) {
-    git(`commit -m "grid-beat: ${placed + hivePlaced} placed (steem ${placed} / hive ${hivePlaced}) · ${cancelled + hiveCancelled} cancelled · ${ledger.fills.length} fills counted · ${new Date().toISOString().slice(0, 16)}Z"`, { allowFail: true });
+    const cRes = gitLoud(`commit -m "grid-beat: ${placed + hivePlaced} placed (steem ${placed} / hive ${hivePlaced}) · ${cancelled + hiveCancelled} cancelled · ${ledger.fills.length} fills counted · ${new Date().toISOString().slice(0, 16)}Z"`);
     const ok = await pushWithRetry(ROOT, "main");
+    console.log(`[grid-beat] ledger lane: add=${addRes.ok ? "ok" : "FAILED"} · staged=[${staged.split("\n").join(",")}] · commit=${cRes.ok ? "ok" : "FAILED"} · push=${ok ? "ok" : "FAILED — next run rebases and continues"}`);
     if (!ok) console.warn("[grid-beat] ledger push rejected (concurrent run) — next run rebases and continues");
+  } else if (placed + hivePlaced + cancelled + hiveCancelled > 0) {
+    console.error(`[grid-beat] ledger lane BUG (W34): ${placed + hivePlaced} placed / ${cancelled + hiveCancelled} cancelled executed on-chain but staged is EMPTY (add ${addRes.ok ? "succeeded — investigate no-diff path" : "FAILED — see error above"}) · fills=${ledger.fills.length} — the ledger is not allowed to lose chain ops quietly`);
+  } else {
+    console.log("[grid-beat] ledger lane: nothing changed (0 ops) — clean skip");
   }
   console.log(`[grid-beat] done in ${((Date.now() - t0) / 1000).toFixed(1)}s · verdict=${publicDoc.verdict} · hive=${(hiveLeg as { verdict?: string }).verdict ?? "?"}`);
   process.exit(0);
