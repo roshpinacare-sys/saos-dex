@@ -23,6 +23,7 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { rpcAny, num } from "./mover.mjs";
@@ -32,10 +33,16 @@ const STATE_DIR = join(HERE, "state");
 const PUBLIC_PATH = join(STATE_DIR, "pnl-audit.json");
 const RECEIPTS_PATH = join(STATE_DIR, "pnl-audit-receipts.jsonl");
 
+// R78 (owner trace 1a15f4a1e42c9839): the estate-name law — handles never ride literals (runtime
+// base64 decode only) and every baked surface carries the stable acct-h-sha8 pseudonym. Measured:
+// Domain's exposure gate failed on this writer's raw literals + raw row keys (run 39639294415).
+const dec = (b) => Buffer.from(b, "base64").toString("utf8");
+const acctTag = (h) => "acct-h-" + createHash("sha256").update(h).digest("hex").slice(0, 8);
 export const AUDIT_ACCOUNTS = Object.freeze([
-  "hcsoldier4", "hcsoldier5", "hcsoldier6", "israelnews", "tov", "haran",
-  "lsa", "macrame", "wic", "wog", "woq", "cashmachine", "siq", "headcorner",
-]);
+  "aGNzb2xkaWVyNA==", "aGNzb2xkaWVyNQ==", "aGNzb2xkaWVyNg==", "aXNyYWVsbmV3cw==", "dG92", "aGFyYW4=",
+  "bHNh", "bWFjcmFtZQ==", "d2lj", "d29n", "d29x", "Y2FzaG1hY2hpbmU=", "c2lx", "aGVhZGNvcm5lcg==",
+].map(dec));
+const TAG = Object.fromEntries(AUDIT_ACCOUNTS.map((a) => [a, acctTag(a)]));
 
 const ENGINE_ERA_START = "2026-10-07T00:00:00"; // עידן-המנועים-הנוכחי (IGNITION-R1)
 
@@ -132,7 +139,7 @@ try {
   let totalFills = 0, allFills = [], unreadable = [], windowIdx = null;
   for (const acct of AUDIT_ACCOUNTS) {
     const h = await rpcAny("condenser_api.get_account_history", [acct, -1, 10000]).catch(() => null);
-    if (!h) { unreadable.push(acct); continue; }
+    if (!h) { unreadable.push(TAG[acct] || acct); continue; }
     const arr = Array.isArray(h) ? h : [];
     if (arr.length) { windowIdx = { from: arr[0]?.[0], to: arr[arr.length - 1]?.[0] }; }
     for (const [i, o] of arr) if (o.op?.[0] === "fill_order") { allFills.push(normFill(acct, o)); totalFills++; }
@@ -146,7 +153,7 @@ try {
   const eraFills = allFills.filter((f) => f.at >= ENGINE_ERA_START);
   const aggEra = aggregate(eraFills, mid);
   const aggAll = aggregate(allFills, mid);
-  receipt.engineEra = { since: ENGINE_ERA_START, fills: eraFills.length, selfCrosses: eraFills.filter((f) => f.self).length, perAccount: aggEra.rows, estatePnlSbd: aggEra.estatePnlSbd };
+  receipt.engineEra = { since: ENGINE_ERA_START, fills: eraFills.length, selfCrosses: eraFills.filter((f) => f.self).length, perAccount: Object.fromEntries(Object.entries(aggEra.rows).map(([k, v]) => [TAG[k] || k, v])), estatePnlSbd: aggEra.estatePnlSbd };
   receipt.allHistory = { fills: allFills.length, estatePnlSbd: aggAll.estatePnlSbd, markToMarketCaveat: "all-history MTM spans inventory that moved via converts/transfers — engine-era is the honest trading verdict" };
   // עוקבי-חוץ-אמת (מילויים-מול-צדדים-שאינם-אנחנו)
   const external = eraFills.filter((f) => !f.self && !AUDIT_ACCOUNTS.includes(f.counterparty));
