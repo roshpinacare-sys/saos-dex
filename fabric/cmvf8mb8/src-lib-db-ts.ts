@@ -60,78 +60,84 @@ if (!isDexOwnDb) {
     }
   })();
 
-  // התראה-3 (חדשה): Webhook חיצוני דרך ALERT_WEBHOOK_URL — fail-open, מודולרי
+  // התראה-3 (חדשה · משימה): Webhook גנרי דרך ALERT_WEBHOOK_URL — fail-open, ללא סודות
   void (async () => {
     try {
-      const webhookUrl = process.env.ALERT_WEBHOOK_URL;
-      if (!webhookUrl) return; // לא מוגדר — התראה שקטה
-      await fetch(webhookUrl, {
+      const webhook = process.env.ALERT_WEBHOOK_URL;
+      if (!webhook) return;
+      await fetch(webhook, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          event_type: "unauthorized_database_connection_attempt",
-          at: timestamp,
-          service_id: "saos-dex",
-          error_type: "INVALID_DATABASE_URL",
-          description: errorMessage,
-          severity: "WARNING",
+          event: "database_access_denied",
+          timestamp,
+          service: "saos-dex",
+          reason: desc,
           url_hint: createHash("sha256").update(RAW_URL).digest("hex").slice(0, 12),
         }),
         signal: AbortSignal.timeout(3000),
       });
     } catch {
-      // אל-תשבור את ה-boot בגלל התראה
+      // התראה נכשלה — לא מפילים את ה-boot
     }
   })();
 
-  // רישום לוג מאובטח (ללא פרטי חיבור רגישים)
-  console.warn(`[${timestamp}] DATABASE_ACCESS_DENIED: ${errorMessage}`);
+  // לוג מאובטח ברמת warn — ללא פרטי חיבור רגישים
+  console.warn(JSON.stringify({
+    timestamp,
+    level: "warn",
+    event: "database_access_denied",
+    service: "saos-dex",
+    reason: desc,
+    url_hint: createHash("sha256").update(RAW_URL).digest("hex").slice(0, 12),
+  }));
 
   throw new Error(errorMessage);
 }
 
-const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
-
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
 export const prisma = globalForPrisma.prisma ?? new PrismaClient({
   log: [
-    { level: "query", emit: "event" },
-    { level: "error", emit: "event" },
     { level: "warn", emit: "event" },
+    { level: "error", emit: "event" },
   ],
 });
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 
-// רישום אירועי שגיאה של Prisma ללוג מאובטח
+// האזנה לאירועי שגיאה של Prisma ורישום לוג מאובטח
 prisma.$on("error", (e) => {
   const timestamp = new Date().toISOString();
-  console.error(`[${timestamp}] PRISMA_ERROR: ${e.message}`);
-  
-  // שליחת התראה על שגיאת Prisma למערכת ניטור
+  const safeMessage = e.message.replace(/[^\x20-\x7E]/g, "").slice(0, 500);
+  console.warn(JSON.stringify({
+    timestamp,
+    level: "warn",
+    event: "prisma_error",
+    service: "saos-dex",
+    message: safeMessage,
+    target: e.target,
+  }));
+  // שליחה ל-webhook אם מוגדר
   void (async () => {
     try {
-      const webhookUrl = process.env.ALERT_WEBHOOK_URL;
-      if (!webhookUrl) return;
-      await fetch(webhookUrl, {
+      const webhook = process.env.ALERT_WEBHOOK_URL;
+      if (!webhook) return;
+      await fetch(webhook, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          event_type: "prisma_database_error",
-          at: timestamp,
-          service_id: "saos-dex",
-          error_message: e.message,
-          severity: "ERROR",
+          event: "prisma_error",
+          timestamp,
+          service: "saos-dex",
+          message: safeMessage,
+          target: e.target,
         }),
         signal: AbortSignal.timeout(3000),
       });
     } catch {
-      // אל-תשבור את הפעילות בגלל התראה
+      // התראה נכשלה — לא מפילים
     }
   })();
 });
 
-// רישום אזהרות של Prisma
-prisma.$on("warn", (e) => {
-  const timestamp = new Date().toISOString();
-  console.warn(`[${timestamp}] PRISMA_WARN: ${e.message}`);
-});
+export default prisma;
