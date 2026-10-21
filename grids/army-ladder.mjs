@@ -44,6 +44,8 @@ import { rpcAny, signAndBroadcast, num, dp3, orderSteemLocked, orderLivePrice } 
 import { stasisHalt } from "./brake.mjs";
 import { activeAuthorityOk } from "./key-gate.mjs";
 import { policyCycleGate, policyGate, recordLadderReceipt } from "./policy.mjs";
+import { evaluateBudget, recordBudget } from "./daily-budget.mjs"; // השער-החמישי (19.46) — מהודק-לחיים בצרכן-היחיד (19.47)
+import { evaluateSizing } from "./position-sizing.mjs"; // שער-הגודל-היחסי (19.47 — תורם-דפוס AutoHedge Risk-Agent)
 import { planAid } from "./one-body.mjs"; // W13: עזרה-הדדית — הצבא כגוף אחד
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -346,6 +348,27 @@ async function run(keysFile) {
       const pg = policyCycleGate({ tool: "army-ladder", lane: "grid", account, opsEst: actions.length, notionalSbdUpper: notionalUpper });
       if (!pg.allow) { res.state = "POLICY-HALT"; res.why = (pg.reasons || []).join(" ; ").slice(0, 200); anyHalt = true; receipt.results.push(res); continue; }
 
+      // SAOS-DAILY-BUDGET/1 (השער-החמישי) — תקרת-יום מתמדת; observe = WOULD-BLOCK דפוס-בלבד.
+      // HALT/חריגה-ב-enforce = אפס-חתימות (fail-closed — אותו-חוק של השער-המדיניות).
+      try {
+        const bg = evaluateBudget("grid", notionalUpper, new Date().toISOString());
+        if (bg.verdict === "HALT" || (bg.mode === "enforce" && bg.verdict === "BLOCK")) {
+          res.state = bg.verdict === "HALT" ? "BUDGET-HALT" : "BUDGET-BLOCK"; res.why = String(bg.reason || "").slice(0, 180); anyHalt = true; receipt.results.push(res); continue;
+        }
+        if (bg.verdict === "WOULD-BLOCK") console.log(`[DAILY-BUDGET] WOULD-BLOCK (observe): ${bg.reason} · day=${bg.day} · ${bg.dayNotionalSbd}/${bg.capNotionalSbd} SBD`);
+      } catch (be) { res.state = "BUDGET-HALT"; res.why = `budget-gate fault (fail-closed): ${String(be?.message ?? be).slice(0, 120)}`; anyHalt = true; receipt.results.push(res); continue; }
+
+      // SAOS-RISK-SIZE/1 (שער-הגודל-היחסי — תורם-דפוס AutoHedge Risk-Agent): size לפני-ביצוע.
+      // קלטים-מדודים-בלבד: אחוזת-היד עצמה × מחיר-חי + פיזור-הספר; אין-מספרים-מומצאים.
+      const spreadBps = (m.bestBid != null && m.bestAsk != null && m.mid) ? Math.max(0, ((m.bestAsk - m.bestBid) / m.mid) * 10000) : 0;
+      try {
+        const sg = evaluateSizing({ lane: "grid", estateSbd: traderSteem * (m.mid || 0) + (traderSbd || 0), cycleNotionalSbdUpper: notionalUpper, spreadBps, dayPnlSbd: 0 });
+        if (sg.verdict === "HALT") { res.state = "SIZING-HALT"; res.why = String(sg.reason || "").slice(0, 180); anyHalt = true; receipt.results.push(res); continue; }
+        if (sg.mode === "enforce" && sg.verdict !== "ALLOW") { res.state = "SIZING-REDUCED"; res.why = `cycle ${notionalUpper.toFixed(3)} > sized cap ${sg.sizedCapSbd} SBD (estate-fraction law, fail-closed) · ${String(sg.reason || "").slice(0, 110)}`; anyHalt = true; receipt.results.push(res); continue; }
+        if (sg.verdict === "WOULD-REDUCE") console.log(`[RISK-SIZE] WOULD-REDUCE (observe): cycle ${notionalUpper.toFixed(3)} > sized ${sg.sizedCapSbd} SBD — zero behavior change`);
+        res.sizing = { sizedCapSbd: sg.sizedCapSbd, mode: sg.mode, spreadBps: +spreadBps.toFixed(1) };
+      } catch (se) { res.state = "SIZING-HALT"; res.why = `sizing-gate fault (fail-closed): ${String(se?.message ?? se).slice(0, 120)}`; anyHalt = true; receipt.results.push(res); continue; }
+
       const executed = [];
       for (const a of actions) {
         let cancelTxid = null;
@@ -374,6 +397,12 @@ async function run(keysFile) {
           executed.push({ ...a, cancelTxid, error: String(e?.message ?? e).slice(0, 120) });
         }
       }
+      // רישום-המימוש-בפועל אל השער-החמישי (ה-ledger עצמו הוא המדידה — SAOS-DAILY-BUDGET/1);
+      // כשל-רישום = כנות-לא-חוסמת (המסחר כבר אירע; הרשומה נכשלת-בקול ומדווחת).
+      try {
+        const executedNotional = executed.filter((e) => e.txid && e.leg).reduce((s, e) => s + (e.leg.sizeSteem || 0) * (e.leg.priceSbd || 0), 0);
+        if (executedNotional > 0) recordBudget("grid", "army-ladder", executedNotional, new Date().toISOString(), `account=${account}`);
+      } catch (re) { console.log(`[DAILY-BUDGET] record non-blocking: ${String(re?.message ?? re).slice(0, 80)}`); }
       res.actions = actions.map((a) => ({ ...a, leg: a.leg ? { legId: a.leg.legId, side: a.leg.side, sizeSteem: a.leg.sizeSteem, priceSbd: a.leg.priceSbd, edgeBps: a.leg.edgeBps, blocked: a.leg.blocked } : undefined }));
       res.executed = executed; res.txids = executed.filter((e) => e.txid).map((e) => e.txid);
       res.state = executed.some((e) => e.txid) ? "ACTED" : (executed.length ? "ACTS-FAILED" : "AT-TARGET");

@@ -72,3 +72,9 @@ Stage Summary:
 - השוק-החריף מקודד: 5-שערים fail-closed (brake · policy · key-gate · params · daily-budget) — השוק שלנו יכול להתחמם בלי לצאת מכללי-הבעלים.
 - מפת-הדלתות כנה ומדודה: התזרים-החוץ-האמת כבר חי על STEEM/HIVE (keyless מטבען); FixedFloat תיפתח כשתאושר אצלם — אפס-פעולת-בעלים.
 - Vibe-Trading תועל ברמת-דפוסים בלבד (R330 נשמר); אפס-סודות; אפס-דריסה של-עבודת-אחים (exec34/W116 חוזקו, לא שוכפלו).
+
+## wave-19.47 (trace 1a15c93be75475cd) — the donors-wired wave
+- refs-cure landed in Autonomy @2785bf0 (4/4 lanes verified SUCCESS by run-ID on the cure head).
+- SAOS-RISK-SIZE/1 born (grids/position-sizing.mjs, selftest 20 laws, CI'd) from the AutoHedge Risk-Agent donor pattern; observe-first.
+- The fifth gate (daily-budget) + the sixth gate (risk-size) wired live into army-ladder.mjs (the one policyCycleGate consumer); executed-notional recorded to the budget ledger; live-dry smoke: 13 hands KEY-STASIS, zero signatures.
+- DECISIONS #35: owner's blanket approval honored within laws — activation = wiring, not arming; measured gates stay gated.
