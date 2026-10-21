@@ -289,14 +289,26 @@ const RAIL_STATE_DIR = process.env.SAOS_DEX_STATE_DIR
 const RAIL_LIFETIME_FILE = path.join(RAIL_STATE_DIR, "rail-lifetime.json");
 const LIFETIME_KEYS = ["usds", "wsteem", "energy", "saos"] as const;
 
+/* W33 · A39/A44 root cure: המונה-החיים נטען-max משני-המקורות-הקנוניים —
+ *   · SAOS_DEX_STATE_DIR/rail-lifetime.json — ספר-הריצה המוגדר;
+ *   · cwd/db/rail-lifetime.json — ספר-השרשת הגיט-גיבוי (Task 33: הריפו הוא
+ *     הבית-הקנוני של השרשת; cloud-beat מחייב אותו בכל-פעימה).
+ * שורש-הכישלון-שנמדד: cloud-beat מייבא mm→rail סטטית (שורה 25) לפני-שהוא
+ * מציב SAOS_DEX_STATE_DIR=db (שורה 38) — הטעינה-הראשונה רצה נגד cwd/state
+ * (gitignored, חסר-בראנר-טרי) והמראה-הפומבית פרסמה ראצ'ט-אפס לנצח.
+ * max לשני-המקורות הורג את-המירוץ בלי-קשר-לסדר-הייבוא: ספר-הגיט לעולם
+ * לא-מתאפס, ותהליך-חי לעולם לא מוריד-מה שגיט מחזיק. */
 function loadRailLifetime(): void {
-  try {
-    const raw = JSON.parse(fs.readFileSync(RAIL_LIFETIME_FILE, "utf8")) as Partial<Record<string, number>>;
-    for (const k of LIFETIME_KEYS) {
-      const v = Number(raw[k]);
-      if (Number.isFinite(v) && v >= 0) railLifetime[k] = Math.max(railLifetime[k] ?? 0, v); // max — אף-פעם-לא-איפוס
-    }
-  } catch { /* אין-קובץ — התחלה-נקייה */ }
+  const sources = [RAIL_LIFETIME_FILE, path.join(process.cwd(), "db", "rail-lifetime.json")];
+  for (const src of sources) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(src, "utf8")) as Partial<Record<string, number>>;
+      for (const k of LIFETIME_KEYS) {
+        const v = Number(raw[k]);
+        if (Number.isFinite(v) && v >= 0) railLifetime[k] = Math.max(railLifetime[k] ?? 0, v); // max — אף-פעם-לא-איפוס
+      }
+    } catch { /* אין-קובץ — התחלה-נקייה למקור-זה */ }
+  }
 }
 
 function saveRailLifetime(): void {
@@ -305,6 +317,15 @@ function saveRailLifetime(): void {
     const tmp = RAIL_LIFETIME_FILE + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(railLifetime, null, 1));
     fs.renameSync(tmp, RAIL_LIFETIME_FILE);
+    // W33: ספר-השרשת שב-git הוא מראה-קנונית של הראצ'ט (מחויב-בכל-פעימה) —
+    // מתעדכן-ישירות-כאשר ספר-הריצה המוגדר אינו db/ עצמו (אותו-משמעת tmp+rename).
+    const dbBook = path.join(process.cwd(), "db", "rail-lifetime.json");
+    if (path.resolve(dbBook) !== path.resolve(RAIL_LIFETIME_FILE)) {
+      fs.mkdirSync(path.dirname(dbBook), { recursive: true });
+      const tmp2 = dbBook + ".tmp";
+      fs.writeFileSync(tmp2, JSON.stringify(railLifetime, null, 1));
+      fs.renameSync(tmp2, dbBook);
+    }
   } catch { /* כשל-שמירה לא מפיל את המסילה (ההזרמה-עצמה נרשמת-בגרעין) */ }
 }
 
