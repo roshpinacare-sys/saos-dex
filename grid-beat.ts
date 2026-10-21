@@ -32,7 +32,7 @@ import path from "path";
  * האחרונה-שלא-מוקשה בקוד (עד-כה רק שער-workflow). החוק-המעוגן ב-Domain/steem:
  * כל-חותם שואל את-הבלם בטרם-חתימה — fail-closed, קריאה-טרייה בכל-ריצה. */
 import { stasisHalt } from "./grids/brake.mjs";
-import { policyCycleGate } from "./grids/policy.mjs"; // DECISIONS #17 · SAOS-POLICY-ENGINE/1 (agentic-wallet pattern, owner trace 1a137c5876e963e9)
+import { policyCycleGate, policyGate } from "./grids/policy.mjs"; // DECISIONS #17 · SAOS-POLICY-ENGINE/1 (agentic-wallet pattern, owner trace 1a137c5876e963e9)
 /* 9-c (2026-10-11) · שער-המפתח: אימות שה-WIF גוזר בדיוק את רשות-ה-active החיה לפני-כל-שידור.
  * המדידה-החיה (twin run 38144052862 · 2026-10-11T13:39Z): WIF-ישן בכספת (רוטציית-בעלים
  * last_owner_update 2026-10-08T17:29:09Z) → 18 שידורים-נדונים ("broadcast answered without id")
@@ -161,6 +161,45 @@ function saveLedger(l: GridLedger): void {
   const tmp = LEDGER_FILE + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(l, null, 1));
   fs.renameSync(tmp, LEDGER_FILE);
+}
+
+/* ── EDGE-FLOOR (2026-10-21 · מהמדידה-החיה) ────────────────────────────────────
+ * המדידה שחשפה את הדימום: pnl-desk (Domain dex/pnl-desk.json 2026-10-20):
+ * sellVwap 0.100346 < buyVwap 0.102346 = edge -2% מדוד — הגריד מכר זול יותר
+ * משקנה, כי סולם-האסקים נפרש סביב המגע-החי ולא סביב בסיס-העלות של המלאי.
+ * החוק-החדש (מקביל לעיקרון-1 שכבר קיים): אף-אסק לא מתחת לבסיס-עלות-המלאי
+ * + שולי-קצה מינימליים (100bps). מעל-זה הסולם חופשי; מתחת — נהדק-מעלה.
+ * בסיס-העלות = ריפליי-נטו של פנקס-המילויים (אותו-חוק-ריפליי של pnl-book). */
+const MIN_ASK_EDGE_BPS = 100; // 1% מעל בסיס-עלות — הרווח-החוץ המינימלי המותר למכירה
+function inventoryCostBasis(fills: LedgerFill[], chain: "steem" | "hive" = "steem"): { qty: number; costSbd: number; avgCostSbd: number | null } {
+  const amtOf = (s: string): number => parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) || 0;
+  let qty = 0, costSbd = 0; // qty=יחידות-נכס (STEEM/HIVE), costSbd=SBD ששולם-ולא-הושב
+  for (const f of fills) {
+    if ((f.chain ?? "steem") !== chain) continue;
+    if (f.direction === "bought-steem" || f.direction === "bought-hive") {
+      const got = amtOf(f.received); // יחידות-הנכס שנקנו
+      const paid = amtOf(f.paid);    // SBD ששולם
+      qty += got; costSbd += paid;
+    } else if (f.direction === "sold-steem" || f.direction === "sold-hive") {
+      const sold = amtOf(f.paid);    // יחידות-הנכס שנמכרו
+      if (qty <= 0) { continue; }    // מכירה בלי בסיס-קנייה מתועד — לא משפיעה על הבסיס
+      const avg = costSbd / qty;
+      const take = Math.min(sold, qty);
+      qty -= take; costSbd -= take * avg;
+      if (qty <= 1e-9) { qty = 0; costSbd = 0; }
+    }
+  }
+  return { qty, costSbd, avgCostSbd: qty > 1e-9 ? costSbd / qty : null };
+}
+
+/* ── שער-הפר-פעולה (2026-10-21 · FIX(cycle-vs-perop)) ────────────────────────
+ * כל-הצבה בודדת עוברת policyGate משלה כ-limit_order_create עם ה-notional שלה.
+ * HALT ⇒ אותה-הצבה מדולגת בגלוי + נספרת בקבלה (fail-closed פר-פעולה ממשי —
+ * ההגנה שהייתה עד-היום רק תאורטית על סך-המחזור). אפס-סודות. */
+function perOpAllow(tool: string, account: string, chain: "steem" | "hive", kind: "bid" | "ask", notionalSbd: number, price: number, amount: number): { allow: boolean; why: string | null } {
+  const g = policyGate({ tool, lane: "grid", kind: "limit_order_create", account, amount, price, notionalSbd, meta: { chain, levelSide: kind } });
+  if (g.allow) return { allow: true, why: null };
+  return { allow: false, why: (g.reasons ?? []).join(" ; ").slice(0, 200) };
 }
 
 /* ── עזרי-git (הריצה חיה בתוך-checkout של-Actions) ─────────────────────────── */
@@ -339,27 +378,37 @@ async function main(): Promise<void> {
 
     // מדף-המכירה: מעל קו-הזהות החיצוני — אף-פעם לא מתחת (עיקרון 1)
     // Z-81: הדלק = נזיל-עכשיו + מה שהביטולים-שביצענו-מעלה מחזירים (אסקים נעולים)
+    // EDGE-FLOOR (2026-10-21): ומעל בסיס-עלות-המלאי + 100bps — אף-מכירה מתחת-לעלות (הדימום-המדוד: edge -2%)
     const steemReturned = ourAsks.reduce((s, a) => s + a.steem, 0);
     const steemAvail = snap.balances.steem + steemReturned - LIVE_MIN_KEEP_STEEM;
     const steemCommit = Math.max(0, Math.floor(steemAvail * LIVE_COMMIT_PCT * 1000) / 1000);
+    const invBasis = inventoryCostBasis(ledger.fills, "steem");
+    const costFloor = invBasis.avgCostSbd != null ? invBasis.avgCostSbd * (1 + MIN_ASK_EDGE_BPS / 10_000) : 0;
     if (steemCommit >= LIVE_MIN_LEVEL_STEEM * LIVE_ASK_LEVELS) {
       const per = Math.floor((steemCommit / LIVE_ASK_LEVELS) * 1000) / 1000;
       /* Z-80 חוק-הספר: רמה-1 נהדקת אל המגע-החי אם-הפאריטי מתחתיו; הרמות נפרשות
-       * כלפי-מעלה מהבסיס-המהודק — אף-אסק לא נופל מתחת ל-bestAsk (אין-taker-דימום). */
+       * כלפי-מעלה מהבסיס-המהודק — אף-אסק לא נופל מתחת ל-bestAsk (אין-taker-דימום).
+       * EDGE-FLOOR: הבסיס מרים גם את רצפת-העלות — אסק שלם לא נפרש מתחתיה. */
       const touchAsk = snap.book.bestAsk ?? 0;
-      const baseAsk = Math.max(parity * (1 + LIVE_ASK_STEP_BPS / 10_000), touchAsk);
+      const baseAsk = Math.max(parity * (1 + LIVE_ASK_STEP_BPS / 10_000), touchAsk, costFloor);
       for (let k = 1; k <= LIVE_ASK_LEVELS; k++) {
         const px = baseAsk * (1 + (LIVE_ASK_STEP_BPS * (k - 1)) / 10_000);
         const sellAmt = per;
         const recv = Math.floor(sellAmt * px * 1000) / 1000;
         if (recv < LIVE_MIN_LEVEL_SBD) continue;
+        const perOpNotional = sellAmt * px; // ערך-SBD של ההצבה הבודדת
+        const opGate = perOpAllow("grid-beat:steem", ACCOUNT, "steem", "ask", perOpNotional, px, sellAmt);
+        if (!opGate.allow) {
+          console.warn(`[grid-beat] ask level ${k} POLICY-SKIP (per-op): ${opGate.why}`);
+          continue;
+        }
         const id = nextId(); seq++;
         bcAttempted++;
         try {
           const r = await realPlaceOrder({ orderid: id, amountToSell: `${dp3(sellAmt)} STEEM`, minToReceive: `${dp3(recv)} SBD`, expirationDays: LIVE_EXPIRY_DAYS });
           placed++;
           ledger.orders.push({ id, at: new Date().toISOString(), txid: r.txid, side: "ask", sell: `${dp3(sellAmt)} STEEM`, receive: `${dp3(recv)} SBD`, priceSbdPerSteem: sbdPerSteemOf(sellAmt, recv), status: "open", lastSeenAt: new Date().toISOString() });
-          console.log(`[grid-beat] ask #${id}: ${dp3(sellAmt)} STEEM -> ${dp3(recv)} SBD @${px.toFixed(6)} (parity+${(LIVE_ASK_STEP_BPS * k) / 100}%) txid ${r.txid.slice(0, 12)}`);
+          console.log(`[grid-beat] ask #${id}: ${dp3(sellAmt)} STEEM -> ${dp3(recv)} SBD @${px.toFixed(6)} (parity+${(LIVE_ASK_STEP_BPS * k) / 100}%${costFloor > 0 && baseAsk === costFloor ? ` · cost-floor ${invBasis.avgCostSbd?.toFixed(6)}+${MIN_ASK_EDGE_BPS}bps` : ""}) txid ${r.txid.slice(0, 12)}`);
         } catch (e) {
           bcFailed++;
           console.warn(`[grid-beat] ask #${id} rejected: ${String(e).slice(0, 90)}`);
@@ -380,6 +429,12 @@ async function main(): Promise<void> {
         const px = Math.min(snap.book.bestBid * (1 - (LIVE_BID_STEP_BPS * k) / 10_000), snap.book.bestBid);
         const recv = Math.floor(per / px * 1000) / 1000; // STEEM
         if (recv < LIVE_MIN_LEVEL_STEEM) continue;
+        const perOpNotional = per; // ערך-SBD של ההצבה הבודדת (ה-BID מוכר SBD)
+        const opGate = perOpAllow("grid-beat:steem", ACCOUNT, "steem", "bid", perOpNotional, px, per);
+        if (!opGate.allow) {
+          console.warn(`[grid-beat] bid level ${k} POLICY-SKIP (per-op): ${opGate.why}`);
+          continue;
+        }
         const id = nextId(); seq++;
         bcAttempted++;
         try {
@@ -503,6 +558,8 @@ async function main(): Promise<void> {
           const recv = Math.ceil(recvTrue * 1000) / 1000;
           if (recv < HIVE_ASK_MIN_RECV_HBD_LIVE) continue; // גרעיניות-מחיר לא נשמרת — המלאי בונה
           if (recv / recvTrue > 1.005) continue; // עיוות-מיל מעבר לצעד הפריסה — דלג בכנות
+          const hiveOpGate = perOpAllow("grid-beat:hive", ACCOUNT, "hive", "ask", sellAmt * px, px, sellAmt);
+          if (!hiveOpGate.allow) { console.warn(`[grid-beat] hive ask level ${k} POLICY-SKIP (per-op): ${hiveOpGate.why}`); continue; }
           const id = nextHiveId(); hseq++;
           hbcAttempted++;
           try {
@@ -530,6 +587,8 @@ async function main(): Promise<void> {
           if (hiveParity !== null && px >= hiveParity) continue;
           const recv = Math.floor(per / px * 1000) / 1000; // HIVE
           if (recv < HIVE_MIN_LEVEL_LIVE) continue;
+          const hiveBidGate = perOpAllow("grid-beat:hive", ACCOUNT, "hive", "bid", per, px, per);
+          if (!hiveBidGate.allow) { console.warn(`[grid-beat] hive bid level ${k} POLICY-SKIP (per-op): ${hiveBidGate.why}`); continue; }
           const id = nextHiveId(); hseq++;
           hbcAttempted++;
           try {

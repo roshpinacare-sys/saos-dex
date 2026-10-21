@@ -288,7 +288,15 @@ export function policyGate(intent) {
         : null;
   const reasons = [];
 
-  if (notional != null && finiteNonNeg(laneCfg.maxNotionalPerOpSbd) && notional > laneCfg.maxNotionalPerOpSbd) {
+  // ── FIX(cycle-vs-perop · 2026-10-21) ── תיקון-סמנטיקה מדוד (run 39571345049):
+  // כוונת grid_cycle_refresh נושאת את **סך-המחזור** (חסם-עליון לכל-הביטולים+ההצבות
+  // יחד) — השוואת סך-מחזור מול maxNotionalPerOpSbd הייתה מדידה שגויה שחסמה כל
+  // רענון-גריד (סך-רגיל ~20-33 SBD מול תקרת-פר-פעולה kelly 20) בלי ששום שער
+  // פר-פעולה אמיתי היה קיים בכלל. התיקון: תקרת-המחזור מול maxCycleNotionalSbd
+  // (שכבר-כן נחתך ע"י kellyThrottle באותו-גורם מדויק), ותקרת-הפר-פעולה עוברת
+  // לנקודה-האמיתית שלה — כל-הצבה בודדת עוברת policyGate משלה (limit_order_create)
+  // ב-grid-beat. אפס-החלשה: ההגנה-פר-פעולה ממשית-עתה (הייתה תאורטית).
+  if (notional != null && intent.kind !== "grid_cycle_refresh" && finiteNonNeg(laneCfg.maxNotionalPerOpSbd) && notional > laneCfg.maxNotionalPerOpSbd) {
     reasons.push(`per-op notional ${notional.toFixed(3)} SBD > cap ${laneCfg.maxNotionalPerOpSbd} (lane ${intent.lane})`);
   }
   if (typeof intent.opsEst === "number" && finiteNonNeg(laneCfg.maxOpsPerCycle) && intent.opsEst > laneCfg.maxOpsPerCycle) {
