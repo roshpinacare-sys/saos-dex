@@ -334,9 +334,16 @@ export function selftest() {
   for (let i = 0; i < 3; i++) lane = advanceDividendLane(lane, { measuredUsd24h: 0.5, parts: [] });
   A(lane.greenStreak === 3 && lane.rateUsdPerDay === 1.25, `3 green runs → ×1.25 (got streak=${lane.greenStreak} rate=${lane.rateUsdPerDay})`);
   // שחרור = מינימום(רווח, תקרה)
-  const l2 = advanceDividendLane({ ...loadDividendLane(), rateUsdPerDay: 1.0 }, { measuredUsd24h: 0.4, parts: [] });
+  // [wave 19.55 · trace 1a15f267e3a06a41] determinism cure: the seed used to spread
+  // the LIVE lane file in — its greenStreak accumulator (live: 2 since the lane went
+  // live 10-19) + one advance = streak 3 = escalation ×1.25 → rate 1.25 → release
+  // 1.25 ≠ 1.0 — the selftest red-ed hourly (runs 13:47Z…15:55Z) on a HEALTHY law.
+  // A deterministic test seeds a deterministic base: accumulators zeroed explicitly,
+  // exactly like the lane0/3-green cases above. The cap law is isolated here; the
+  // escalation law has its own case (3 green → ×1.25).
+  const l2 = advanceDividendLane({ ...loadDividendLane(), greenStreak: 0, rateUsdPerDay: 1.0, escalations: [], pendingReleaseUsd: 0 }, { measuredUsd24h: 0.4, parts: [] });
   A(l2.pendingReleaseUsd === 0.4, "release = min(profit, rate)");
-  const l3 = advanceDividendLane({ ...loadDividendLane(), rateUsdPerDay: 1.0 }, { measuredUsd24h: 2.5, parts: [] });
+  const l3 = advanceDividendLane({ ...loadDividendLane(), greenStreak: 0, rateUsdPerDay: 1.0, escalations: [], pendingReleaseUsd: 0 }, { measuredUsd24h: 2.5, parts: [] });
   A(l3.pendingReleaseUsd === 1.0, "release capped by rate");
   // readLatestInternalPnl: טרי-עובר · ישן-נדחה · ראצ'ט-חשוד-נדחה · סכימה-שגויה-נדחית
   const ipTmp = mkTmp("internal-pnl.json", JSON.stringify({ schema: "SAOS-INTERNAL-PNL/1", at: nowIso(), treasuryProfitEverMu: 18393971, muPerUsds: 1000, ratchetSuspect: false, engineSnapshot: { fills: 119413, height: 722115 } }));
