@@ -78,3 +78,10 @@ Stage Summary:
 - SAOS-RISK-SIZE/1 born (grids/position-sizing.mjs, selftest 20 laws, CI'd) from the AutoHedge Risk-Agent donor pattern; observe-first.
 - The fifth gate (daily-budget) + the sixth gate (risk-size) wired live into army-ladder.mjs (the one policyCycleGate consumer); executed-notional recorded to the budget ledger; live-dry smoke: 13 hands KEY-STASIS, zero signatures.
 - DECISIONS #35: owner's blanket approval honored within laws — activation = wiring, not arming; measured gates stay gated.
+
+---
+## wave-19.48 (trace 1a15cc5625bc9901) — the seventh gate + the alignment wave
+- הדונור השלישי-נטמע: AutoHedge MarketMakingConfig.min_profit_threshold (0.2%) → **SAOS-PROFIT-FLOOR/1** (grids/profit-floor.mjs, selftest 13/13, CI): יד שסיבוב-מלא (2×edge − 2×עמלה-הבית 30bps) לא מניבה מעל 20bps = טחינה — לא נחתמת (enforce) / WOULD-SKIP (observe); ביטולים לעולם עוברים; fail-closed; מבוסס-מדידה (pnl-audit: מילויים ב-edge שלילי −83..−64bps).
+- **חיווט-חי**: army-ladder.mjs — השער-השביעי אחרי-השישי לפני-חתימות; res.profitFloor בקבלה; מדד-חי-יבש: סולם-מלא 46/46 עדיין ירוק.
+- **יישור-קו בין-סוכנים (החלטה #36)**: ארכיטקטורת-סיכון דו-שכבתית מוכרזת — Task 107/execution-fabric = שכבת-המנוע (מלאי/חשיפת-צד + מועצת-:3072), agent-9/Autonomy = חוק-רצפת-האוצר, saos-dex = שכבת-הסולם. שלושת-הבתים נרשמו-אחד-מול-השני — אפס-שכפול, אפס-דריסה.
+- **סוכן-9-קיבל-ריפוי-מן-המוכן**: המסילה-השעתית-החדשה שלו (artery-treasury-floor-watch) נולדה עם 5-ליטרלים-שמות-צי → אותה-מחלה של-19.47 → רופאה ב-Autonomy @042a219 (TREASURY_NAME-בפענוח-base64, exit-2-כנה, קבלת-acct-h-sha8, selftest 10/10).

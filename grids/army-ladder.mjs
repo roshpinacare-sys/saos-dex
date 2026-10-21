@@ -46,6 +46,7 @@ import { activeAuthorityOk } from "./key-gate.mjs";
 import { policyCycleGate, policyGate, recordLadderReceipt } from "./policy.mjs";
 import { evaluateBudget, recordBudget } from "./daily-budget.mjs"; // השער-החמישי (19.46) — מהודק-לחיים בצרכן-היחיד (19.47)
 import { evaluateSizing } from "./position-sizing.mjs"; // שער-הגודל-היחסי (19.47 — תורם-דפוס AutoHedge Risk-Agent)
+import { evaluateProfitFloor } from "./profit-floor.mjs"; // שער-רצפת-הרווח (19.48 — תורם-דפוס AutoHedge min_profit_threshold)
 import { planAid } from "./one-body.mjs"; // W13: עזרה-הדדית — הצבא כגוף אחד
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -368,6 +369,26 @@ async function run(keysFile) {
         if (sg.verdict === "WOULD-REDUCE") console.log(`[RISK-SIZE] WOULD-REDUCE (observe): cycle ${notionalUpper.toFixed(3)} > sized ${sg.sizedCapSbd} SBD — zero behavior change`);
         res.sizing = { sizedCapSbd: sg.sizedCapSbd, mode: sg.mode, spreadBps: +spreadBps.toFixed(1) };
       } catch (se) { res.state = "SIZING-HALT"; res.why = `sizing-gate fault (fail-closed): ${String(se?.message ?? se).slice(0, 120)}`; anyHalt = true; receipt.results.push(res); continue; }
+
+      // SAOS-PROFIT-FLOOR/1 (שער-רצפת-הרווח — תורם-דפוס AutoHedge min_profit_threshold):
+      // יד שסיבוב-מלא-שלה (2×edge − 2×עמלה) לא מניב מעל רצפת-הרווח היא טחינה — נמדד
+      // (pnl-audit: מילויים ב-edge שלילי) ולא נחתם. ביטולים לעולם עוברים (מפחיתי-סיכון).
+      try {
+        const handEdge = num(plan.edgeBps) + num(plan.staggerBps) * i; // אותו-edge של planAccountLegs (accountIndex=i)
+        const pf = evaluateProfitFloor({ buyEdgeBps: handEdge, sellEdgeBps: handEdge });
+        res.profitFloor = { verdict: pf.verdict, mode: pf.mode, captureBps: pf.captureBps };
+        if (pf.verdict === "HALT") { res.state = "PROFIT-HALT"; res.why = String(pf.reason || "").slice(0, 160); anyHalt = true; receipt.results.push(res); continue; }
+        if (pf.verdict === "CHURN") {
+          if (pf.mode === "enforce") {
+            const keep = actions.filter((a) => a.action === "cancel");
+            const dropped = actions.length - keep.length;
+            if (keep.length !== actions.length) console.log(`[PROFIT-FLOOR] enforce: ${dropped} churn create/replace skipped (capture ${pf.captureBps}bps < floor) — cancels kept`);
+            actions = keep; // ביטולים-חיים נשמרים; אפס-חתימות-טחינה
+          } else {
+            console.log(`[PROFIT-FLOOR] WOULD-SKIP (observe): capture ${pf.captureBps}bps < floor — zero behavior change`);
+          }
+        }
+      } catch (pe) { res.state = "PROFIT-HALT"; res.why = `profit-floor gate fault (fail-closed): ${String(pe?.message ?? pe).slice(0, 120)}`; anyHalt = true; receipt.results.push(res); continue; }
 
       const executed = [];
       for (const a of actions) {
