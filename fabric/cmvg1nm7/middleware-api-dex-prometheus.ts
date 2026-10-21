@@ -1,118 +1,266 @@
-// src/metrics.ts — פותח ניטור התנהגותי ל-DEX
-import { createInstrumentation } from '@opentelemetry/instrumentation'
-import type { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server';
+import { Counter, Gauge, Histogram } from 'prom-client';
 
-// מדדים גלובליים — מותאם על ידי middleware
-const metricCounters: Map<string, number> = new Map();
-const metricLastValues: Map<string, number> = new Map();
+// Prometheus metrics
+const requestCounter = new Counter({
+  name: 'dex_api_requests_total',
+  help: 'Total number of DEX API requests',
+  labelNames: ['endpoint', 'ip', 'status'] as const,
+});
 
-// מונה התראות התנהגותיות
-function incr(key: string): void {
-  const v = (metricCounters.get(key) ?? 0) + 1;
-  metricCounters.set(key, v);
-  return v;
-}
+const requestDuration = new Histogram({
+  name: 'dex_api_request_duration_seconds',
+  help: 'Duration of DEX API requests in seconds',
+  labelNames: ['endpoint', 'ip'] as const,
+  buckets: [0.1, 0.5, 1, 2, 5, 10],
+});
 
-// Z-score נייד על פני חלון זמן
-function zScore(current: number, window: number[]): number {
-  if (window.length < 2) return 0;
-  const mean = window.reduce((a, b) => a + b, 0) / window.length;
-  const variance = window.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / window.length;
-  const std = Math.sqrt(variance || 0);
-  return std > 0 ? (current - mean) / std : 0;
-}
+const volumeGauge = new Gauge({
+  name: 'dex_api_swap_volume',
+  help: 'Current swap volume',
+  labelNames: ['token'] as const,
+});
 
-export interface DexMetrics {
-  requestVolume: number;
-  requestFrequency: number;
-  swapAnomalyCount: number;
-  frontrunRisk: number;
-}
+const anomalyCounter = new Counter({
+  name: 'dex_api_behavioral_anomalies_total',
+  help: 'Total number of detected behavioral anomalies',
+  labelNames: ['type', 'ip', 'endpoint'] as const,
+});
 
-export function getMetrics(): DexMetrics {
+const requestVolumeZscore = new Gauge({
+  name: 'dex_api_request_volume_zscore',
+  help: 'Z-score for request volume',
+  labelNames: ['ip'] as const,
+});
+
+// In-memory storage for tracking behavior
+const requestHistory = new Map<string, {
+  timestamps: number[];
+  volumes: number[];
+  lastSwapPrice: number;
+  swapCount: number;
+}>();
+
+const ANOMALY_THRESHOLDS = {
+  requestFrequency: 3, // Z-score threshold for request frequency
+  volumeDeviation: 3, // Z-score threshold for volume deviation
+  priceChange: 0.1, // 10% price change threshold
+  rapidSwaps: 5, // Number of rapid swaps in a short time
+};
+
+const MONITORED_ENDPOINTS = ['/api/dex/agent', '/api/dex/order', '/api/dex/swap'];
+const MAX_HISTORY_SIZE = 100;
+const HISTORY_CLEANUP_INTERVAL = 60_000; // 1 minute
+
+// Cleanup old history periodically
+setInterval(() => {
   const now = Date.now();
-  const requestVolume = metricCounters.get('dex_api_request_volume') ?? 0;
-  const requestFrequency = metricCounters.get('dex_api_request_frequency') ?? 0;
-  const swapAnomalyCount = metricCounters.get('dex_api_swap_anomaly') ?? 0;
-  const frontrunRisk = metricCounters.get('dex_api_frontrun_risk') ?? 0;
-  return { requestVolume, requestFrequency, swapAnomalyCount, frontrunRisk };
+  for (const [key, data] of requestHistory.entries()) {
+    // Remove data older than 5 minutes
+    data.timestamps = data.timestamps.filter(t => now - t < 300_000);
+    data.volumes = data.volumes.slice(-data.timestamps.length);
+    
+    // Remove empty entries
+    if (data.timestamps.length === 0) {
+      requestHistory.delete(key);
+    }
+  }
+}, HISTORY_CLEANUP_INTERVAL);
+
+function calculateZScore(values: number[], mean: number, stdDev: number): number {
+  if (values.length === 0 || stdDev === 0) return 0;
+  const latest = values[values.length - 1];
+  return (latest - mean) / stdDev;
 }
 
-export function recordRequest(pathname: string, ip: string, userId?: string): void {
-  const key = `volume:${pathname}:${ip}:${userId || 'anon'}`;
-  incr(key);
-  const total = metricCounters.get('dex_api_request_volume') ?? 0;
-  metricCounters.set('dex_api_request_volume', total + 1);
+function calculateMean(values: number[]): number {
+  if (values.length === 0) return 0;
+  return values.reduce((sum, val) => sum + val, 0) / values.length;
 }
 
-export function recordSwap(pathname: string, ip: string, userId?: string, amount?: number, priceImpact?: number): void {
-  const key = `swap:${pathname}:${ip}:${userId || 'anon'}`;
-  incr(key);
-  // נרשם נפח לסלילת Z-score
-  const volKey = `swap_volume:${pathname}`;
-  const prev = metricCounters.get(volKey) ?? 0;
-  metricCounters.set(volKey, prev + (amount ?? 0));
-  // ניטור השפעת החלקה קיצונית
-  if (priceImpact && Math.abs(priceImpact) > 0.15) {
-    incr('dex_api_swap_anomaly');
+function calculateStdDev(values: number[], mean: number): number {
+  if (values.length === 0) return 0;
+  const squareDiffs = values.map(value => Math.pow(value - mean, 2));
+  const avgSquareDiff = squareDiffs.reduce((sum, val) => sum + val, 0) / values.length;
+  return Math.sqrt(avgSquareDiff);
+}
+
+function detectAnomalies(ip: string, endpoint: string, requestData: any): boolean {
+  const key = `${ip}-${endpoint}`;
+  let history = requestHistory.get(key);
+  
+  if (!history) {
+    history = {
+      timestamps: [],
+      volumes: [],
+      lastSwapPrice: 0,
+      swapCount: 0,
+    };
+    requestHistory.set(key, history);
+  }
+  
+  const now = Date.now();
+  history.timestamps.push(now);
+  
+  // Limit history size
+  if (history.timestamps.length > MAX_HISTORY_SIZE) {
+    history.timestamps.shift();
+    history.volumes.shift();
+  }
+  
+  let anomalyDetected = false;
+  
+  // Request frequency anomaly
+  if (endpoint === '/api/dex/agent') {
+    const recentRequests = history.timestamps.filter(
+      t => now - t < 60_000 // Last minute
+    ).length;
+    
+    const requestValues = history.timestamps
+      .filter((_, i) => i % 5 === 0) // Sample every 5th request
+      .map((_, i, arr) => {
+        const windowStart = Math.max(0, i - 4);
+        return arr.slice(windowStart, i + 1).length;
+      });
+    
+    if (requestValues.length > 1) {
+      const mean = calculateMean(requestValues);
+      const stdDev = calculateStdDev(requestValues, mean);
+      const zScore = calculateZScore([...requestValues, recentRequests], mean, stdDev);
+      
+      requestVolumeZscore.set({ ip }, zScore);
+      
+      if (Math.abs(zScore) > ANOMALY_THRESHOLDS.requestFrequency) {
+        anomalyCounter.inc({
+          type: 'high_request_frequency',
+          ip,
+          endpoint,
+        });
+        anomalyDetected = true;
+      }
+    }
+  }
+  
+  // Swap volume anomaly
+  if (endpoint === '/api/dex/swap') {
+    const volume = parseFloat(requestData.volume || 0);
+    history.volumes.push(volume);
+    
+    // Update volume gauge
+    const token = requestData.token || 'unknown';
+    volumeGauge.set({ token }, volume);
+    
+    // Check for volume deviation
+    if (history.volumes.length > 10) {
+      const recentVolumes = history.volumes.slice(-10);
+      const mean = calculateMean(recentVolumes);
+      const stdDev = calculateStdDev(recentVolumes, mean);
+      const zScore = calculateZScore([...recentVolumes, volume], mean, stdDev);
+      
+      if (Math.abs(zScore) > ANOMALY_THRESHOLDS.volumeDeviation) {
+        anomalyCounter.inc({
+          type: 'unusual_volume',
+          ip,
+          endpoint,
+        });
+        anomalyDetected = true;
+      }
+    }
+    
+    // Check for rapid swaps with price changes
+    const currentPrice = parseFloat(requestData.price || 0);
+    if (history.lastSwapPrice > 0) {
+      const priceChange = Math.abs(currentPrice - history.lastSwapPrice) / history.lastSwapPrice;
+      
+      if (priceChange > ANOMALY_THRESHOLDS.priceChange) {
+        // Price changed significantly, check for rapid swaps
+        const recentSwaps = history.timestamps.filter(
+          t => now - t < 30_000 // Last 30 seconds
+        ).length;
+        
+        if (recentSwaps > ANOMALY_THRESHOLDS.rapidSwaps) {
+          anomalyCounter.inc({
+            type: 'possible_sandwich_attack',
+            ip,
+            endpoint,
+          });
+          anomalyDetected = true;
+        }
+      }
+    }
+    
+    history.lastSwapPrice = currentPrice;
+    history.swapCount++;
+  }
+  
+  // Check for potential reentrancy
+  if (endpoint === '/api/dex/order') {
+    const functionName = requestData.function || 'unknown';
+    const recentSameFunctionCalls = history.timestamps.filter(
+      t => now - t < 5_000 // Last 5 seconds
+    ).length;
+    
+    if (recentSameFunctionCalls > 3) {
+      anomalyCounter.inc({
+        type: 'possible_reentrancy',
+        ip,
+        endpoint,
+      });
+      anomalyDetected = true;
+    }
+  }
+  
+  return anomalyDetected;
+}
+
+export function behavioralAnalysisMiddleware(req: NextRequest): boolean {
+  const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
+  const endpoint = new URL(req.url).pathname;
+  
+  if (!MONITORED_ENDPOINTS.includes(endpoint)) {
+    return false; // Skip non-monitored endpoints
+  }
+  
+  try {
+    // For POST requests, try to parse the body to get request data
+    let requestData: any = {};
+    if (req.method === 'POST' && req.body) {
+      // In a real implementation, you'd need to handle the stream properly
+      // This is a simplified version for demonstration
+      try {
+        // Clone the body to read it
+        const clonedBody = req.body.clone();
+        clonedBody.text().then(text => {
+          try {
+            requestData = JSON.parse(text);
+            detectAnomalies(ip, endpoint, requestData);
+          } catch (e) {
+            // If parsing fails, we can't analyze the data
+          }
+        }).catch(() => {});
+      } catch (e) {
+        // If cloning fails, we can't analyze the data
+      }
+    }
+    
+    // For GET requests, use query parameters
+    if (req.method === 'GET') {
+      const searchParams = new URL(req.url).searchParams;
+      requestData = {
+        token: searchParams.get('token'),
+        volume: searchParams.get('volume'),
+        price: searchParams.get('price'),
+        function: searchParams.get('function'),
+      };
+      detectAnomalies(ip, endpoint, requestData);
+    }
+    
+    return false; // Middleware continues processing
+  } catch (error) {
+    console.error('Behavioral analysis error:', error);
+    return false; // Continue processing even if analysis fails
   }
 }
 
-export function checkAnomaly(pathname: string, ip: string, userId?: string): boolean {
-  const freqKey = `freq:${pathname}:${ip}:${userId || 'anon'}`;
-  const count = metricCounters.get(freqKey) ?? 0;
-  const windowKey = `window:${pathname}:${ip}`;
-  let window = metricLastValues.get(windowKey) ?? [];
-  // שמרו את 60 הערכים האחרונים (דקה)
-  window = window.slice(-60);
-  window.push(count);
-  if (window.length > 60) window.shift();
-  metricLastValues.set(windowKey, window);
-  const z = zScore(count, window);
-  return Math.abs(z) > 3; // חריגה מעל 3 סטיות תקן
-}
-
-export function checkFrontrun(pathname: string, ip: string, userId?: string, priceImpact?: number): boolean {
-  // כלל פשוט: swap מהיר ברצף באותו טוקן עם השפעת חלקה גבוהה
-  const recentKey = `recent:${pathname}:${ip}`;
-  const lastTs = metricCounters.get(recentKey) ?? 0;
-  const now = Date.now();
-  if (now - lastTs < 2000) {
-    // swap בתוך 2 שניות זהים
-    if (priceImpact && Math.abs(priceImpact) > 0.2) {
-      incr('dex_api_frontrun_risk');
-      return true;
-    }
-  }
-  metricCounters.set(recentKey, now);
-  return false;
-}
-// חשיפה ל-Prometheus (פשוטה — export לקונסולה)
-export function exposeMetrics(): string {
-  const m = getMetrics();
-  return `# HELP dex_api_request_volume_total מספר כולל של בקשות API DEX\n# TYPE dex_api_request_volume_total counter\ndex_api_request_volume_total ${m.requestVolume}\n# HELP dex_api_swap_anomalies_total מספר התראותSwap חריג\n# TYPE dex_api_swap_anomalies_total counter\ndex_api_swap_anomalies_total ${m.swapAnomalyCount}\n# HELP dex_api_frontrun_risk_total סימני front-running\n# TYPE dex_api_frontrun_risk_total counter\ndex_api_frontrun_risk_total ${m.frontrunRisk}\n`;
-}
-// פותח פונקציה נוחה ל-middleware
-export function initBehavioralMiddleware() {
-  return async (req: Request, next: Function) => {
-    const pathname = new URL(req.url).pathname;
-    const ip = req.headers.get('x-forwarded-for')?.split(',')[0] || req.headers.get('x-real-ip') || 'unknown';
-    const userId = req.headers.get('x-user-id');
-    // נרשם כל בקשה
-    recordRequest(pathname, ip, userId);
-    // בדיקת חריגה רק בנקודות הקצה הרלוונטיות
-    if (pathname.startsWith('/api/dex/agent') || pathname.startsWith('/api/dex/order') || pathname.startsWith('/api/dex/swap')) {
-      const anomaly = checkAnomaly(pathname, ip, userId);
-      if (anomaly) {
-        incr('dex_api_behavioral_anomalies_total');
-        console.warn(`[behavioral-anomaly] path=${pathname} ip=${ip} user=${userId || 'anon'} z-score exceeded threshold`);
-      }
-      const frontrun = checkFrontrun(pathname, ip, userId);
-      if (frontrun) {
-        incr('dex_api_frontrun_detected_total');
-        console.warn(`[frontrun-detect] path=${pathname} ip=${ip} user=${userId || 'anon'}`);
-      }
-    }
-    return next(req);
-  };
-}
+// Export metrics for Prometheus to collect
+export { requestCounter, requestDuration, volumeGauge, anomalyCounter, requestVolumeZscore };
