@@ -262,14 +262,20 @@ function git(args: string, opts: { allowFail?: boolean } = {}): string {
 }
 
 async function pushWithRetry(dir: string, branch: string, tries = 3): Promise<boolean> {
+  // W33 fail-honest: the publish push failed silently twice in a row (16:08Z,
+  // 16:21Z) with errors swallowed — a book that cannot publish must SAY why.
   for (let i = 0; i < tries; i++) {
     try {
       execSync(`git push origin ${branch}`, { encoding: "utf8", cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
       return true;
-    } catch {
+    } catch (e) {
+      const why = String((e as { stderr?: string; message?: string }).stderr ?? (e as { message?: string }).message ?? e).split("\n").filter(Boolean).slice(-2).join(" | ").slice(0, 300);
+      console.error(`[cloud-beat] push try ${i + 1}/${tries} FAILED: ${why || "(no stderr — inspect runner)"}`);
       try {
         execSync(`git pull --rebase --autostash origin ${branch}`, { encoding: "utf8", cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
-      } catch { /* ננסה שוב */ }
+      } catch (e2) {
+        console.error(`[cloud-beat] rebase try ${i + 1} failed: ${String((e2 as { stderr?: string }).stderr ?? e2).split("\n").slice(-2).join(" | ").slice(0, 200)}`);
+      }
       await new Promise((r) => setTimeout(r, 1_500));
     }
   }
