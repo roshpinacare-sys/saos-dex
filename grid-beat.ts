@@ -773,15 +773,27 @@ async function main(): Promise<void> {
   // בלי מילה אחת בלוג. כל-צעד מדבר עתה: add, staged, commit, push — ושקט-אמיתי נשאר שקט.
   gitLoud('config user.name "grid-beat[bot]"');
   gitLoud('config user.email "grid-beat[bot]@agents.roshpinacare-sys"');
-  const addRes = gitLoud("add -- db/grid-ledger.json db/grid-public.json grids/state/policy-ledger.jsonl grids/state/policy-arm.json"); // DECISIONS #17: policy verdict receipts + owner arm file live in git (auditable)
+  // W34 root-cure (measured live 17:03Z): git add is all-or-nothing — the missing
+  // optional pathspec grids/state/policy-arm.json (the owner arm file, absent from
+  // the tree) fatals the WHOLE add, staged stayed EMPTY, and every run's ledger with
+  // its real placements died quietly for days. Per-file adds now: optional state
+  // files may be absent (honest skip, said out loud), core books must add or scream.
+  let coreAddOk = true;
+  for (const f of ["db/grid-ledger.json", "db/grid-public.json"]) {
+    if (!gitLoud(`add -- "${f}"`).ok) coreAddOk = false; // DECISIONS #17 core books
+  }
+  for (const f of ["grids/state/policy-ledger.jsonl", "grids/state/policy-arm.json"]) {
+    const r = gitLoud(`add -- "${f}"`); // DECISIONS #17: policy verdict receipts + owner arm file live in git when present (auditable)
+    if (!r.ok) console.log(`[grid-beat] optional state file absent — honest skip: ${f}`);
+  }
   const staged = git("diff --cached --name-only", { allowFail: true });
   if (staged) {
     const cRes = gitLoud(`commit -m "grid-beat: ${placed + hivePlaced} placed (steem ${placed} / hive ${hivePlaced}) · ${cancelled + hiveCancelled} cancelled · ${ledger.fills.length} fills counted · ${new Date().toISOString().slice(0, 16)}Z"`);
     const ok = await pushWithRetry(ROOT, "main");
-    console.log(`[grid-beat] ledger lane: add=${addRes.ok ? "ok" : "FAILED"} · staged=[${staged.split("\n").join(",")}] · commit=${cRes.ok ? "ok" : "FAILED"} · push=${ok ? "ok" : "FAILED — next run rebases and continues"}`);
+    console.log(`[grid-beat] ledger lane: coreAdd=${coreAddOk ? "ok" : "FAILED"} · staged=[${staged.split("\n").join(",")}] · commit=${cRes.ok ? "ok" : "FAILED"} · push=${ok ? "ok" : "FAILED — next run rebases and continues"}`);
     if (!ok) console.warn("[grid-beat] ledger push rejected (concurrent run) — next run rebases and continues");
-  } else if (placed + hivePlaced + cancelled + hiveCancelled > 0) {
-    console.error(`[grid-beat] ledger lane BUG (W34): ${placed + hivePlaced} placed / ${cancelled + hiveCancelled} cancelled executed on-chain but staged is EMPTY (add ${addRes.ok ? "succeeded — investigate no-diff path" : "FAILED — see error above"}) · fills=${ledger.fills.length} — the ledger is not allowed to lose chain ops quietly`);
+  } else if (placed + hivePlaced + cancelled + hiveCancelled > 0 || !coreAddOk) {
+    console.error(`[grid-beat] ledger lane BUG (W34): ${placed + hivePlaced} placed / ${cancelled + hiveCancelled} cancelled executed on-chain but staged is EMPTY (coreAdd ${coreAddOk ? "ok — investigate no-diff path" : "FAILED — see error above"}) · fills=${ledger.fills.length} — the ledger is not allowed to lose chain ops quietly`);
   } else {
     console.log("[grid-beat] ledger lane: nothing changed (0 ops) — clean skip");
   }
