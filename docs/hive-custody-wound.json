@@ -1,0 +1,21 @@
+{
+  "schema": "saos/known-wound/1",
+  "wound": "hive-custody-authority-mismatch",
+  "registeredAt": "2026-10-21T11:50:00Z",
+  "registeredBy": "wave 19.54 · trace 1a15e3e419138aa5 (KNOWN-WOUND law, precedent fleet-economy 19.51-f)",
+  "account": "headcorner",
+  "chain": "HIVE",
+  "measured": {
+    "since": "2026-10-17T05:31:21Z",
+    "runs": "23/23 failures, zero successes since birth (authorizedBy owner 2026-10-17)",
+    "probeFingerprints": {
+      "HIVE_POSTING_WIF": "c9a647a2",
+      "HIVE_ACTIVE_WIF": "4eb8662e"
+    },
+    "verdict": "fail-closed: no secret holds any live HIVE authority"
+  },
+  "diagnosis": "the held WIFs derive public keys that do NOT match headcorner's live posting/active authority on the HIVE chain — the keys were born wrong or the account's authority changed externally; only owner-side custody can heal this (deliver live-authority WIFs)",
+  "law": "the fail-closed custody check is CORRECT and stays; the KNOWN-WOUND verdict is loud in-run (probe fingerprints + this receipt) with exit 0 so the sibling dispatch loop stops emailing the owner 6-9 reds/day for a wound only he can heal; a CHANGED fingerprint (new secret or new authority) does NOT match this receipt and still fails loud as a new tear",
+  "healPath": "owner delivers a WIF holding headcorner's live posting or active authority -> the script signs normally, the wound file can be retired",
+  "ref": "scripts/hive-heartbeat-sign.ts"
+}

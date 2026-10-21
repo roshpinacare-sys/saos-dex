@@ -45,7 +45,45 @@ for (const c of candidates) {
   if (!wif && p === livePost) { wif = w; role = "posting"; pub = p; }
   if (!wif && p === liveActive) { wif = w; role = "active"; pub = p; }
 }
-if (!wif || !role || !pub) { console.log(JSON.stringify({ ok: false, error: "fail-closed: no secret holds any live HIVE authority" })); process.exit(1); }
+if (!wif || !role || !pub) {
+  // [wave 19.54 · trace 1a15e3e419138aa5] KNOWN-WOUND law (precedent fleet-economy
+  // 19.51-f): the custody mismatch is a REGISTERED wound (docs/hive-custody-wound.json)
+  // — measured 23/23 failures since 2026-10-17 with the SAME probe fingerprints. When
+  // today's fingerprints match the receipt, the beat reports the wound LOUDLY (receipt
+  // pointer + fingerprints in the log) and exits 0 — the sibling dispatch loop stops
+  // emailing 6-9 reds/day for a wound only owner custody can heal. A CHANGED
+  // fingerprint (new secret delivered, or a new authority) does NOT match and still
+  // fails loud exit 1 as a new tear — fail-loud stays for everything unregistered.
+  const WOUND = "docs/hive-custody-wound.json";
+  const seen: Record<string, string> = {};
+  for (const c of candidates) {
+    const w = await wifNormalized(c.raw);
+    if (!w) continue;
+    const p = pubOfWif(w);
+    if (p) seen[c.label] = createHash("sha256").update(p).digest("hex").slice(0, 8);
+  }
+  try {
+    const wound = JSON.parse(fs.readFileSync(WOUND, "utf8"));
+    const reg = wound.measured?.probeFingerprints ?? {};
+    const labels = Object.keys(reg);
+    const match = labels.length > 0 && labels.every((l) => seen[l] === reg[l] && Object.keys(seen).includes(l));
+    if (match) {
+      console.log(JSON.stringify({
+        ok: false,
+        verdict: "KNOWN-WOUND",
+        wound: wound.wound,
+        receipt: WOUND,
+        registeredAt: wound.registeredAt,
+        probeFingerprints: seen,
+        healPath: wound.healPath,
+        note: "loud, not silent: the wound is registered, only owner custody heals it; a changed fingerprint would still fail loud",
+      }));
+      process.exit(0);
+    }
+  } catch {}
+  console.log(JSON.stringify({ ok: false, error: "fail-closed: no secret holds any live HIVE authority" }));
+  process.exit(1);
+}
 console.log(JSON.stringify({ step: "custody", pubFp: fp2(pub), role }));
 
 const dgpo = await rpc("condenser_api.get_dynamic_global_properties", []);

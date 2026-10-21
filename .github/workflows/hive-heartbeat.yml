@@ -31,9 +31,15 @@ jobs:
           HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
         run: bun scripts/hive-heartbeat-sign.ts
       - name: emit signed tx (public material only)
+        # [wave 19.54 · trace 1a15e3e419138aa5] KNOWN-WOUND law: the sign step may
+        # end green with a loud KNOWN-WOUND verdict (registered custody wound,
+        # docs/hive-custody-wound.json) and no artifact — gate the emit/upload on
+        # the artifact actually existing, or the green verdict would red again.
+        if: hashFiles('signed-tx.b64') != ''
         run: |
           echo "signature-artifact-bytes: $(wc -c < signed-tx.b64)"
       - uses: actions/upload-artifact@v4
+        if: hashFiles('signed-tx.b64') != ''
         with:
           name: signed-tx
           path: signed-tx.b64
