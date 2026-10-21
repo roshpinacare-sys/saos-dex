@@ -37,6 +37,12 @@ jobs:
 
       - name: Measure 24h accrual (keyless, public RPC only)
         run: |
+          # race-safety (R78): the auto-economy sealer rebases concurrently and a dirty-tree
+          # rebase once baked conflict markers into this very file (measured 23e974b) —
+          # sync FIRST on a clean tree, then measure, then per-file add + push with retry.
+          git config user.name "external-profit-publish"
+          git config user.email "external-profit-publish@users.noreply.github.com"
+          git pull --rebase origin main || { git rebase --abort 2>/dev/null || true; git reset --hard origin/main; }
           SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
           echo "measuring since $SINCE"
           node grids/external-profit.mjs --measure --since "$SINCE"
