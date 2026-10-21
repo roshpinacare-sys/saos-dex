@@ -1,6 +1,6 @@
 {
  "schema": "SAOS-SELF-DEPOSIT/1",
- "at": "2026-10-19T14:24:25.298Z",
+ "at": "2026-10-21T12:27:38.628Z",
  "authority": "owner directive 2026-10-19 trace 1a1530e43b512305 — אין-הפקדות-חוץ · הריבונות מייצרת ומפקידה בעצמה · דיבידנד-בעלים $1000/יום",
  "mode": "census-only",
  "laws": [
@@ -11,58 +11,70 @@
   "LAW-4 fail-honest",
   "LAW-5 caps-in-code"
  ],
- "mid": 0.101653,
+ "mid": 0.102309,
  "midSource": "order-book",
  "census": {
   "totals": {
-   "steem": 145.903,
-   "sbd": 1.848,
+   "steem": 309.068,
+   "sbd": 7.915,
    "claimSteem": 0,
    "claimSbd": 0
   },
   "fleetRows": 13,
-  "fleetSteem": 145.903
+  "fleetSteem": 309.068
  },
  "dailyProfit": {
-  "measuredUsd24h": 0,
-  "parts": [],
+  "measuredUsd24h": 0.0026,
+  "parts": [
+   {
+    "id": "chain-yield",
+    "usd": 0.0026,
+    "vests": 77.367814,
+    "source": "external-profit 2026-10-21T12:26:19.311Z (curation+author-vests accrual, txid/block-evidenced)",
+    "note": "vests-denominated income — never counted by liquid-claims census (zero overlap)"
+   }
+  ],
   "fundExcluded": "principal deltas excluded by LAW-2 (transfers net to zero; balances are not profit)"
  },
  "dividendLane": {
   "rateUsdPerDay": 1,
-  "greenStreak": 0,
-  "pendingReleaseUsd": 0,
-  "gapToTargetUsd": 1000,
+  "greenStreak": 2,
+  "pendingReleaseUsd": 0.0026,
+  "gapToTargetUsd": 999.9974,
   "targetUsdPerDay": 1000,
   "escalations": []
  },
- "pnlSource": {
-  "at": "2026-10-19T08:30:10.681Z",
-  "eraPnlSbd": 0.065776,
-  "selfCrosses": 1430
- },
- "internalPnl": {
-  "at": "2026-10-19T14:20:36.991Z",
-  "treasuryProfitEverMu": 18395468,
-  "treasuryProfitEverUsd": 18395.47,
-  "fills": 122826,
-  "height": 726572,
-  "source": "grids/internal-pnl.mjs → SAOS-INTERNAL-PNL/1"
+ "pnlSource": null,
+ "internalPnl": null,
+ "externalProfit": {
+  "at": "2026-10-21T12:26:19.311Z",
+  "usd24h": 0.0026,
+  "vests24h": 77.367814,
+  "pricing": {
+   "vestSteem": 0.0006206021986261918,
+   "sbdPerSteem": 0.10408138149254616,
+   "external": {
+    "steemUsd": 0.05493,
+    "sbdUsd": null,
+    "source": "mexc"
+   }
+  },
+  "source": "grids/external-profit.mjs → SAOS-EXTERNAL-PROFIT/1"
  },
  "escalationLadder": [
   {
    "id": "ESC-1",
    "name": "תיקון-חצייה-עצמית (self-cross guard ב-mover)",
-   "state": "SHIPPED — guard live, leak drains as old legs expire (27d max)",
+   "state": "CLEAN",
    "value": "סתימת-הדליפה ששרפה RC + נפח-מזויף; מאפשר-רווח-אמת",
-   "evidence": "selfCrosses=1430"
+   "evidence": null
   },
   {
    "id": "ESC-2",
    "name": "P&L-אמת → נתיב-הדיבידנד",
    "state": "SHIPPED",
    "value": "המונה-מוזן-ממילויים-אמת (fill_order, מודע-חצייה-עצמית) — רווח-אמת-בלבד נכנס-למדידה",
-   "evidence": "eraPnlSbd=0.065776"
+   "evidence": null
   },
   {
    "id": "ESC-3",
@@ -123,9 +135,9 @@
   {
    "id": "ESC-11",
    "name": "קציר-עמלות-מתוזמן + מסילת-תשלום-דיבידנד (µ→STEEM→בעלים)",
-   "state": "HARVEST-SHIPPED-2026-10-19 — fee-harvest.mjs חי (selftest 8/8) · סדולת-גשר-כל-10-דק0027 · קציר-ראשון בנק: 1,497µ→ראצ0027ט · הקבלה-הירוקה-הראשונה: profitUsd24h=$1.497, greenStreak=1 · נותר: מסילת-משיכה-בפועל (bridge OUT → owner)",
-   "value": "הקילומטר-האחרון: רווח-מדוד-בפנקס → שחרור-קנברי → משיכה-אמת-לבעלים",
-   "evidence": "grids/state/self-deposit-receipts.jsonl 12:06Z · bridge.ts withdraw path"
+   "state": "RAIL-LIVE-2026-10-19 — dividend-sweep.mjs חי (selftest 10/10 · CI ציבורי) · לולאת-30-דק: קציר-עמלות (fee-harvest H-1..H-5) + Δראצ'ט-treasuryProfitEver → xfer_free treasury→owner-dividend (אפס-גז · רצפת-דלק 200Kµ · תקרה 2Mµ) · קציר-שני בנק: 2,152µ (19:20Z) · הרגל-החוץ (STEEM→בעלים) נשארת-נעולה-לאישור-מפעיל (bridge.ts כנות-מבנית) · מתוזמן-מקומית (resurrect-fleet) — בלי-תלות-Actions",
+   "value": "המסילה-זורמת: עמלות-נמדדות → רווח-אוצר → דיבידנד-בעלים-פנימי → קנברי-READY-FOR-RELEASE למשיכה-חוץ-מאושרת",
+   "evidence": "grids/state/dividend-sweep.jsonl · grids/state/dividend-watermark.json · kernel.ts:1571 xfer_free (SETTLE-12)"
   },
   {
    "id": "ESC-12",
@@ -140,107 +152,52 @@
    {
     "from": "hcsoldier4",
     "to": "cashmachine",
-    "amountSteem": 2.201,
+    "amountSteem": 10,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "hcsoldier6",
     "to": "cashmachine",
-    "amountSteem": 1.05,
+    "amountSteem": 10,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "israelnews",
     "to": "cashmachine",
-    "amountSteem": 1.284,
+    "amountSteem": 10,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "tov",
     "to": "cashmachine",
-    "amountSteem": 2.2,
+    "amountSteem": 10,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    },
    {
     "from": "hcsoldier5",
     "to": "cashmachine",
-    "amountSteem": 1.7,
-    "reason": "self-deposit: idle keeper surplus → sovereign coffer",
-    "asset": "STEEM"
-   },
-   {
-    "from": "haran",
-    "to": "cashmachine",
-    "amountSteem": 2.434,
-    "reason": "self-deposit: idle keeper surplus → sovereign coffer",
-    "asset": "STEEM"
-   },
-   {
-    "from": "lsa",
-    "to": "cashmachine",
-    "amountSteem": 2.434,
-    "reason": "self-deposit: idle keeper surplus → sovereign coffer",
-    "asset": "STEEM"
-   },
-   {
-    "from": "macrame",
-    "to": "cashmachine",
-    "amountSteem": 2.2,
-    "reason": "self-deposit: idle keeper surplus → sovereign coffer",
-    "asset": "STEEM"
-   },
-   {
-    "from": "wic",
-    "to": "cashmachine",
-    "amountSteem": 1.786,
-    "reason": "self-deposit: idle keeper surplus → sovereign coffer",
-    "asset": "STEEM"
-   },
-   {
-    "from": "wog",
-    "to": "cashmachine",
-    "amountSteem": 1.71,
-    "reason": "self-deposit: idle keeper surplus → sovereign coffer",
-    "asset": "STEEM"
-   },
-   {
-    "from": "woq",
-    "to": "cashmachine",
-    "amountSteem": 1.044,
-    "reason": "self-deposit: idle keeper surplus → sovereign coffer",
-    "asset": "STEEM"
-   },
-   {
-    "from": "siq",
-    "to": "cashmachine",
-    "amountSteem": 0.867,
+    "amountSteem": 10,
     "reason": "self-deposit: idle keeper surplus → sovereign coffer",
     "asset": "STEEM"
    }
   ],
-  "beatTotalSteem": 20.91,
+  "beatTotalSteem": 50,
   "note": "coffer→traders payroll rides the existing escrow/ladder engines — this engine only consolidates idle into the coffer"
  },
  "censusSnapshot": {
   "totals": {
-   "steem": 145.903,
-   "sbd": 1.848,
+   "steem": 309.068,
+   "sbd": 7.915,
    "claimSteem": 0,
    "claimSbd": 0
   },
-  "at": "2026-10-19T14:24:26.534Z"
+  "at": "2026-10-21T12:27:39.953Z"
  },
- "pnlSnapshot": {
-  "eraPnlSbd": 0.065776,
-  "at": "2026-10-19T08:30:10.681Z"
- },
- "internalPnlSnapshot": {
-  "treasuryProfitEverMu": 18395468,
-  "at": "2026-10-19T14:20:36.991Z"
- },
+ "pnlSnapshot": null,
+ "internalPnlSnapshot": null,
  "verdict": "PLAN-READY (census-only — no keys injected, honest)"
 }

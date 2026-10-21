@@ -197,12 +197,28 @@ export function readLatestInternalPnl(path = INTERNAL_PNL_PATH, maxAgeMs = 4 * 3
   } catch { return null; }
 }
 
+
+// ── רווח-חוץ-מהוכח (external-profit.mjs): התגשמות-vests עם-ראיות-שרשרת ──
+// partition-אנטי-כפילות: כאן-רק-הכנסה-המדודה-ב-external-profit-public.json
+// (curation + author-vests accrual); תביעות-נזילות נשארות-ב-chain-claims למעלה.
+export function readLatestExternalProfit(path = join(STATE_DIR, "external-profit-public.json"), maxAgeMs = 26 * 3600 * 1000) {
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    if (raw?.schema !== "SAOS-EXTERNAL-PROFIT/1") return null;
+    const ageMs = Date.now() - Date.parse(raw.at);
+    if (!(ageMs >= 0) || ageMs > maxAgeMs) return null; // ישן = לא-אמון (LAW-4)
+    const usd = Number(raw.measuredUsd24h);
+    if (!Number.isFinite(usd) || usd <= 0) return null; // אפס-או-חסר = אין-חלק (כנות)
+    return { usd: D(usd, 4), vests: raw.measuredVests24h ?? null, parts: raw.parts ?? [], at: raw.at, pricing: raw.pricing ?? null };
+  } catch { return null; }
+}
+
 // רווח-מדוד 24h: (א) תביעות-תשואה מהשרשרת (ב) עמלות-בריכה מקבלות-feeMeter
 // (ג) **רווח-מסחר-אמת מהביקורת** (pnl-audit — מילויים-אמת, מודע-חצייה-עצמית, דלתא-בין-ריצות).
 // (ד) **עמלות-ה-DEX-הפנימי** (internal-pnl — דלתא-ראצ'ט treasuryProfitEver, 1 USDS=1000µ).
 // כנות: מה שאין-לו-קבלה = 0. הקרן (יתרות) אינה רווח — LAW-2. דלתא-שלילית = 0-הכנסה
 // (ההפסד-כבר-משתקף-במלאי — לא-ממציאים-הכנסה-שלילית-לנתיב-הדיבידנד).
-export function measureDailyProfitUsd({ cen, prevCen, mid, poolFeesUsd24h, pnlNow, pnlPrev, sbdUsd = 1, ipNow, ipPrev }) {
+export function measureDailyProfitUsd({ cen, prevCen, mid, poolFeesUsd24h, pnlNow, pnlPrev, sbdUsd = 1, ipNow, ipPrev, xpNow }) {
   const parts = [];
   const claimSteem = cen.totals.claimSteem - (prevCen?.totals?.claimSteem ?? 0); // שלילי=נתבע-המחזור-קודם → רווח-הפוך
   const claims = { source: "chain rewards claimed (net of reserve)", usd: D(Math.max(0, -(claimSteem)) * mid + Math.max(0, -(cen.totals.claimSbd - (prevCen?.totals?.claimSbd ?? 0)))), steem: D(Math.max(0, -(claimSteem))) };
@@ -218,6 +234,7 @@ export function measureDailyProfitUsd({ cen, prevCen, mid, poolFeesUsd24h, pnlNo
     const usd = D(deltaMu / ipNow.muPerUsds, 6);
     if (usd > 0) parts.push({ id: "internal-dex-fees", usd, source: `internal-pnl ${ipNow.at} (ΔtreasuryProfitEver +${deltaMu}µ @${ipNow.muPerUsds}µ/USDS, fills ${ipNow.fills ?? "?"})`, note: "monotonic Σ-harvest of real DEX fills (kernel.ts:2288 ratchet)" });
   }
+  if (xpNow != null && xpNow.usd > 0) parts.push({ id: "chain-yield", usd: xpNow.usd, vests: xpNow.vests, source: `external-profit ${xpNow.at} (curation+author-vests accrual, txid/block-evidenced)`, note: "vests-denominated income — never counted by liquid-claims census (zero overlap)" });
   const total = D(parts.reduce((s, p) => s + p.usd, 0), 4);
   return { measuredUsd24h: total, parts, fundExcluded: "principal deltas excluded by LAW-2 (transfers net to zero; balances are not profit)" };
 }
@@ -418,12 +435,14 @@ try {
   try { const prev = JSON.parse(readFileSync(PUBLIC_PATH, "utf8")); prevCen = prev?.censusSnapshot ?? null; pnlPrev = prev?.pnlSnapshot ?? null; ipPrev = prev?.internalPnlSnapshot ?? null; } catch { /* ראשוני */ }
   const pnlNow = readLatestPnl();
   const ipNow = readLatestInternalPnl();
-  const daily = measureDailyProfitUsd({ cen, prevCen, mid: m.mid, poolFeesUsd24h: Number(process.env.SELF_DEPOSIT_POOL_FEES_USD_24H ?? 0), pnlNow, pnlPrev, ipNow, ipPrev });
+  const xpNow = readLatestExternalProfit();
+  const daily = measureDailyProfitUsd({ cen, prevCen, mid: m.mid, poolFeesUsd24h: Number(process.env.SELF_DEPOSIT_POOL_FEES_USD_24H ?? 0), pnlNow, pnlPrev, ipNow, ipPrev, xpNow });
   const lane = advanceDividendLane(loadDividendLane(), daily);
   receipt.dailyProfit = daily;
   receipt.dividendLane = { rateUsdPerDay: lane.rateUsdPerDay, greenStreak: lane.greenStreak, pendingReleaseUsd: lane.pendingReleaseUsd, gapToTargetUsd: lane.gapToTargetUsd, targetUsdPerDay: lane.targetUsdPerDay, escalations: (lane.escalations ?? []).slice(-3) };
   receipt.pnlSource = pnlNow ? { at: pnlNow.at, eraPnlSbd: pnlNow.eraPnlSbd, selfCrosses: pnlNow.selfCrosses } : null; // כנות: אין-ביקורת-טרייה = אין-מקור
   receipt.internalPnl = ipNow ? { at: ipNow.at, treasuryProfitEverMu: ipNow.treasuryProfitEverMu, treasuryProfitEverUsd: D(ipNow.treasuryProfitEverMu / ipNow.muPerUsds, 2), fills: ipNow.fills, height: ipNow.height, source: "grids/internal-pnl.mjs → SAOS-INTERNAL-PNL/1" } : null; // הרווח-הפנימי-המצטבר-רואה-אור
+  receipt.externalProfit = xpNow ? { at: xpNow.at, usd24h: xpNow.usd, vests24h: xpNow.vests, pricing: xpNow.pricing, source: "grids/external-profit.mjs → SAOS-EXTERNAL-PROFIT/1" } : null; // הרווח-החוץ-המדוד-רואה-אור (owner trace 1a15ceb5c5659485)
   receipt.escalationLadder = escalationLadder({ pnl: pnlNow, cen });
   const plan = planSweep(cen, m.mid);
   receipt.sweepPlan = { legs: plan.legs, beatTotalSteem: plan.beatTotalSteem, note: plan.note };
