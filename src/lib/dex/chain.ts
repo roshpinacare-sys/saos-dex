@@ -273,15 +273,56 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
         const maxH = agg._max.height ?? -1;
         const cnt = agg._count._all ?? 0;
         const contiguous = minH === raw.state.height + 1 && cnt === maxH - minH + 1 && maxH > minH;
-        if (contiguous) {
+        // ── FIX(gapped-derivative-acceptance · 2026-10-21) ──
+        // הצורה-שנמדדה: נזק-ENOSPC מתועד (דיסק 100% מלא, 2026-10-18, worklog Task 18/16)
+        // השאיר 7 שורות-header חסרות בשני פערים נקודתיים גבוה-בשרשרת הנגזרת.
+        // המשמעות הביטחונית: שורות-ה-header כולן נגזרת שנמחקת-בגלוי בקבלה גם במסלול
+        // הרצוף — הפערים לא פוגעים בשרשרת-המשמורת (snapshot גיט-קנוני → בלוק-ראשון).
+        // החלון שהליניאג' מוכיח (חותם ראשון) חייב להישאר שלם; פערים מעליו מתועדים
+        // בקבלה-רועשת. חסום-קשית: (a) אותו תנאי-עמדה minH==snapshot.h+1,
+        // (b) ליניאג' חותם-ראשון מאומת, (c) כל פער מתחיל אחרי חלון החותם הראשון,
+        // (d) סך-שורות-חסרות ≤ 128 וכל פער ≤ 16 (סדר-גודל ENOSPC, לא שחיתות-שיטתית),
+        // (e) קבלה-מתועדת עם טווחי-הפערים המדויקים בקבלה (pushReceipt).
+        const gappedDerivative = (() => {
+          if (contiguous) return { ok: false, gaps: [] as Array<[number, number]>, missing: 0 };
+          if (minH !== raw.state.height + 1 || maxH <= minH) return { ok: false, gaps: [] as Array<[number, number]>, missing: 0 };
+          const missing = maxH - minH + 1 - cnt;
+          if (missing <= 0 || missing > 128) return { ok: false, gaps: [] as Array<[number, number]>, missing };
+          return { ok: true, gaps: [] as Array<[number, number]>, missing };
+        })();
+        if (contiguous || gappedDerivative.ok) {
           let lineage = false;
+          let seal0ToH = -1;
           try {
             const hdr0 = await db.blockHeader.findUnique({ where: { height: minH }, select: { hash: true } });
             const seal0 = await db.sealRecord.findFirst({ where: { fromHeight: minH }, orderBy: { createdAt: "asc" } });
             const note = seal0?.note ? (JSON.parse(seal0.note) as { blockHashes?: string[] }) : null;
             lineage = !!(hdr0?.hash && note?.blockHashes?.[0] === hdr0.hash);
+            seal0ToH = seal0?.toHeight ?? -1;
           } catch { lineage = false; }
-          if (lineage) {
+          // מסלול-פערים: חישוב-פערים אמיתי מהשורות + איסור-מוחלט לגעת בחלון-החותם הראשון
+          if (!contiguous && gappedDerivative.ok && lineage) {
+            const rows = await db.blockHeader.findMany({ select: { height: true }, orderBy: { height: "asc" } });
+            const gaps: Array<[number, number]> = [];
+            let maxGapLen = 0;
+            let touchesFirstWindow = false;
+            for (let i = 1; i < rows.length; i++) {
+              if (rows[i].height !== rows[i - 1].height + 1) {
+                const a = rows[i - 1].height + 1, b = rows[i].height - 1; // [a..b] חסרים
+                gaps.push([a, b]);
+                maxGapLen = Math.max(maxGapLen, b - a + 1);
+                if (a <= Math.max(seal0ToH, minH + SEAL_EVERY - 1)) touchesFirstWindow = true; // החלון-המאומת חייב להישאר שלם
+              }
+            }
+            if (gaps.length === 0 || maxGapLen > 16 || touchesFirstWindow) lineage = false; // נפילה-כנה לדחייה
+            else {
+              const delH = await db.blockHeader.deleteMany({ where: { height: { gte: minH } } });
+              const delS = await db.sealRecord.deleteMany({ where: { fromHeight: { gte: minH } } });
+              console.warn(`[saos-dex][ALERT] BOOT-ACCEPTANCE (recovery-continuation·gapped): snapshot h${raw.state.height} = parent state of the gapped DB lineage h${minH}..h${maxH} (${cnt} headers, ${gappedDerivative.missing} ENOSPC-missing in ${gaps.length} ranges ${JSON.stringify(gaps)}, first-seal lineage verified, first window intact) — derivative ahead-evidence rebuilt: blockHeaders=${delH.count}, sealRecords=${delS.count}. Loud, bounded, lineage-proven, gaps documented.`);
+              pushReceipt(rt, "boot-acceptance-recovery-continuation-gapped", { snapshotH: raw.state.height, dbMin: minH, dbMax: maxH, headers: cnt, missing: gappedDerivative.missing, gaps: gaps.map(([a, b]) => `${a}-${b}`), purgedHeaders: delH.count, purgedSeals: delS.count, at: Date.now() });
+              recovery = true;
+            }
+          } else if (contiguous && lineage) {
             const delH = await db.blockHeader.deleteMany({ where: { height: { gte: minH } } });
             const delS = await db.sealRecord.deleteMany({ where: { fromHeight: { gte: minH } } });
             console.warn(`[saos-dex][ALERT] BOOT-ACCEPTANCE (recovery-continuation): snapshot h${raw.state.height} = parent state of the contiguous DB lineage h${minH}..h${maxH} (${cnt} headers, first-seal lineage verified) — derivative ahead-evidence rebuilt: blockHeaders=${delH.count}, sealRecords=${delS.count}. Loud, bounded, lineage-proven.`);
