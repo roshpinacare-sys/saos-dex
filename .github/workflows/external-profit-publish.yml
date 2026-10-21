@@ -1,0 +1,61 @@
+# external-profit-publish — המפרסם-האוטונומי של פנקס-הרווח-החוץ (R78 · owner trace 1a15f4a1e42c9839)
+# ═════════════════════════════════════════════════════════════════════════════════
+# למה: money.html מציג את פנקס-הרווח-החוץ (SAOS-EXTERNAL-PROFIT/1) ומצביע על
+# mini-services/external-profit-node/state/external-profit-public.json ב-giant — כתובת
+# שמעולם לא נכתבה על-ידי אף-כותב (המנוע חי רק בסנדבוקס שנמחק). הכותב-האמיתי —
+# grids/external-profit.mjs (keyless: RPC ציבורי בלבד) — קיים אך לא היה לו מתזמן.
+# זה היה החלון-המת בדף-הכסף: הבעלים ראה "כבוי". התרופה בכותב: מתזמן אוטונומי
+# שמודד 24ש׳ מלאים בכל-ריצה (--since — חסר-מצב, בלי-watermark) ומפרסם את
+# ה-public-json בלבד (בלי פנקס-הראיות — הוא נושא שמות-גלויים והוא לא נכתב לעץ).
+# חוקי-הבית: אפס-מפתחות · אפס-חתימה · קריאה-ציבורית-בלבד · [skip ci] נגד-סערות.
+name: external-profit-publish
+
+on:
+  schedule:
+    - cron: '43 */2 * * *' # כל שעתיים — הדף דורש טריות ≤6h, וזה משאיר מקום לשני שקיעות-סלוט
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: external-profit-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Measure 24h accrual (keyless, public RPC only)
+        run: |
+          SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          echo "measuring since $SINCE"
+          node grids/external-profit.mjs --measure --since "$SINCE"
+
+      - name: Publish the public book (single writer, name-free aggregate only)
+        run: |
+          git config user.name "external-profit-publish"
+          git config user.email "external-profit-publish@users.noreply.github.com"
+          git add grids/state/external-profit-public.json
+          if git diff --cached --quiet; then
+            echo "no changes — identical measurement"
+          else
+            git commit -m "external-profit: 24h accrual measured keyless · $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
+            ok=0
+            for i in 1 2 3; do
+              if git -c rebase.autoStash=true pull --rebase origin main && git push origin HEAD:main; then ok=1; break; fi
+              echo "push attempt $i failed (concurrent commits on main) — re-pulling"
+              git rebase --abort 2>/dev/null || true
+              sleep 10
+            done
+            [ "$ok" = "1" ] && echo "external-profit public book pushed" || { echo "publish failed — honest failure"; exit 1; }
+          fi
