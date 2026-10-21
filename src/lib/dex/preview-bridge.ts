@@ -80,6 +80,10 @@ function startFleetGuard(): void {
 }
 
 function startBridge(): void {
+  // FIX(off-at-start · 2026-10-21): המתג נבדק עד-היום רק פר-בקשה — כל-בקשה לדקס אחרי-שחרור
+  // הייתה מקשרה-מחדש את 3000 (ensure→start בלי-בדיקה) וגונבת את-הפורט משרת-האם במחזוריות.
+  // עתה: אין-הקשרה בכלל כשהמתג סגור — כוונת-המתג היא "רב-זמן", לא "עד-הבקשה-הבאה".
+  try { if (fs.existsSync(OFF_FILE)) return; } catch { /* קריאת-מתג נכשלה — ממשיכים תקין */ }
   // FIX(hop-by-hop): כותרות-קפיצה-אחת אסור שיעברו בין-פרוקסי — העברה שלהן
   // משבשת את ה-framing של node (ה-body "לא-נגמר" מנקודת-מבט הלקוח — נמדד).
   const HOP = new Set(["transfer-encoding", "connection", "keep-alive", "upgrade", "proxy-authenticate", "proxy-authorization", "te", "trailer"]);
