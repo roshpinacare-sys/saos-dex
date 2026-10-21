@@ -1,288 +1,354 @@
 // src/lib/dex/behavioral-monitor.ts
+import { NextRequest } from "next/server";
 import { createHash } from "node:crypto";
 
-// In-memory stores (bounded) for behavioral tracking
-const REENTRANCY_WINDOW_MS = 5_000; // 5 seconds
-const FRONTRUN_WINDOW_MS = 2_000;   // 2 seconds
-const SANDWICH_WINDOW_MS = 10_000;  // 10 seconds
-const MAX_KEYS = 10_000;
+// In-memory stores (replace with Redis in production)
+const requestHistory = new Map<string, RequestRecord[]>();
+const accountActivity = new Map<string, AccountActivity>();
+const suspiciousPatterns = new Map<string, SuspiciousPattern[]>();
 
 interface RequestRecord {
   timestamp: number;
-  account: string;
   endpoint: string;
-  paramsHash: string;
-  amount?: string;
-  assetIn?: string;
-  assetOut?: string;
-  price?: string;
+  account: string;
+  params: Record<string, unknown>;
+  ip: string;
+  userAgent: string;
 }
 
-const reentrancyStore = new Map<string, RequestRecord[]>(); // key: account
-const frontrunStore = new Map<string, RequestRecord[]>();   // key: paramsHash
-const sandwichStore = new Map<string, RequestRecord[]>();   // key: assetIn:assetOut
+interface AccountActivity {
+  lastRequestTime: number;
+  requestCount: number;
+  endpoints: Set<string>;
+  paramsHashes: string[];
+  volumes: number[];
+}
 
-function pruneStore<T extends RequestRecord>(store: Map<string, T[]>, windowMs: number, now: number): void {
-  for (const [key, records] of store.entries()) {
-    const filtered = records.filter(r => now - r.timestamp < windowMs);
-    if (filtered.length === 0) store.delete(key);
-    else store[key] = filtered;
+interface SuspiciousPattern {
+  type: "reentrancy" | "front-running" | "sandwich" | "volume-anomaly";
+  account: string;
+  ip: string;
+  timestamp: number;
+  details: Record<string, unknown>;
+  severity: "low" | "medium" | "high" | "critical";
+}
+
+const WINDOW_MS = 60_000; // 1 minute sliding window
+const MAX_HISTORY_PER_ACCOUNT = 100;
+const REENTRANCY_THRESHOLD = 10; // requests per minute from same account
+const FRONT_RUNNING_SIMILARITY_THRESHOLD = 0.8;
+const SANDWICH_TIME_WINDOW = 5_000; // 5 seconds
+const VOLUME_ANOMALY_MULTIPLIER = 10; // 10x average volume
+
+function getClientIp(req: NextRequest): string {
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    return forwarded.split(",")[0].trim();
   }
-  if (store.size > MAX_KEYS) {
-    const keys = Array.from(store.keys());
-    for (let i = 0; i < keys.length - MAX_KEYS; i++) store.delete(keys[i]);
-  }
+  return req.ip || "unknown";
 }
 
 function hashParams(params: Record<string, unknown>): string {
   return createHash("sha256").update(JSON.stringify(params)).digest("hex").slice(0, 16);
 }
 
-export interface BehavioralAlert {
-  type: "reentrancy" | "frontrun" | "sandwich" | "business_logic";
-  severity: "low" | "medium" | "high" | "critical";
-  account: string;
-  endpoint: string;
-  details: Record<string, unknown>;
-  timestamp: string;
-  requestId: string;
+function calculateSimilarity(params1: Record<string, unknown>, params2: Record<string, unknown>): number {
+  const keys1 = new Set(Object.keys(params1));
+  const keys2 = new Set(Object.keys(params2));
+  const intersection = new Set([...keys1].filter(x => keys2.has(x)));
+  const union = new Set([...keys1, ...keys2]);
+  return intersection.size / union.size;
 }
 
-const alertCallbacks: ((alert: BehavioralAlert) => void)[] = [];
-export function onBehavioralAlert(cb: (alert: BehavioralAlert) => void): () => void {
-  alertCallbacks.push(cb);
-  return () => { const idx = alertCallbacks.indexOf(cb); if (idx >= 0) alertCallbacks.splice(idx, 1); };
-}
-
-function emitAlert(alert: BehavioralAlert): void {
-  console.warn(JSON.stringify({ ...alert, channel: "behavioral_monitor" }));
-  for (const cb of alertCallbacks) {
-    try { cb(alert); } catch { /* fail-open */ }
+function extractVolume(params: Record<string, unknown>): number {
+  // Extract volume from common parameter names
+  const volumeKeys = ["amount", "quantity", "volume", "size", "baseAmount", "quoteAmount"];
+  for (const key of volumeKeys) {
+    if (typeof params[key] === "number") return params[key];
+    if (typeof params[key] === "string") {
+      const parsed = parseFloat(params[key]);
+      if (!isNaN(parsed)) return parsed;
+    }
   }
+  return 0;
 }
 
-export function recordRequest(
-  requestId: string,
-  account: string,
-  endpoint: string,
-  params: Record<string, unknown>
-): { allowed: boolean; reason?: string; alerts: BehavioralAlert[] } {
+export function recordRequest(req: NextRequest, account: string, params: Record<string, unknown>): void {
   const now = Date.now();
-  const alerts: BehavioralAlert[] = [];
+  const ip = getClientIp(req);
+  const endpoint = req.nextUrl.pathname;
+  const userAgent = req.headers.get("user-agent") || "unknown";
   
-  // Normalize account
-  const acc = account.toLowerCase();
+  const record: RequestRecord = {
+    timestamp: now,
+    endpoint,
+    account,
+    params,
+    ip,
+    userAgent
+  };
+
+  // Clean old records
+  const cutoff = now - WINDOW_MS;
   
-  // Extract common fields
-  const amount = params.amount as string | undefined;
-  const assetIn = (params.assetIn ?? params.from ?? params.tokenIn) as string | undefined;
-  const assetOut = (params.assetOut ?? params.to ?? params.tokenOut) as string | undefined;
-  const price = (params.price ?? params.minOut ?? params.maxIn) as string | undefined;
-  const paramsHash = hashParams(params);
-  
-  const record: RequestRecord = { timestamp: now, account: acc, endpoint, paramsHash, amount, assetIn, assetOut, price };
-  
-  // 1. Reentrancy detection: same account, same endpoint, rapid calls
-  const reentrancyKey = `${acc}:${endpoint}`;
-  const reentrancyRecords = reentrancyStore.get(reentrancyKey) ?? [];
-  const recentReentrancy = reentrancyRecords.filter(r => now - r.timestamp < REENTRANCY_WINDOW_MS);
-  if (recentReentrancy.length >= 3) {
-    alerts.push({
+  // Update account activity
+  let activity = accountActivity.get(account);
+  if (!activity) {
+    activity = {
+      lastRequestTime: now,
+      requestCount: 0,
+      endpoints: new Set(),
+      paramsHashes: [],
+      volumes: []
+    };
+    accountActivity.set(account, activity);
+  }
+
+  // Check for reentrancy
+  activity.requestCount++;
+  if (activity.requestCount > REENTRANCY_THRESHOLD) {
+    reportSuspiciousPattern({
       type: "reentrancy",
-      severity: "high",
-      account: acc,
-      endpoint,
-      details: { count: recentReentrancy.length + 1, windowMs: REENTRANCY_WINDOW_MS, paramsHash },
-      timestamp: new Date(now).toISOString(),
-      requestId
+      account,
+      ip,
+      timestamp: now,
+      details: { requestCount: activity.requestCount, windowMs: WINDOW_MS },
+      severity: "high"
     });
   }
-  recentReentrancy.push(record);
-  reentrancyStore.set(reentrancyKey, recentReentrancy);
-  
-  // 2. Front-running detection: similar params across different accounts
-  const frontrunRecords = frontrunStore.get(paramsHash) ?? [];
-  const recentFrontrun = frontrunRecords.filter(r => now - r.timestamp < FRONTRUN_WINDOW_MS);
-  if (recentFrontrun.length >= 2) {
-    const otherAccounts = new Set(recentFrontrun.map(r => r.account)).size;
-    if (otherAccounts >= 2 || !recentFrontrun.some(r => r.account === acc)) {
-      alerts.push({
-        type: "frontrun",
-        severity: "medium",
-        account: acc,
-        endpoint,
-        details: { similarRequests: recentFrontrun.length + 1, windowMs: FRONTRUN_WINDOW_MS, paramsHash, accounts: Array.from(new Set([...recentFrontrun.map(r => r.account), acc])) },
-        timestamp: new Date(now).toISOString(),
-        requestId
-      });
-    }
-  }
-  recentFrontrun.push(record);
-  frontrunStore.set(paramsHash, recentFrontrun);
-  
-  // 3. Sandwich detection: three rapid ops on same asset pair with suspicious pricing
-  if (assetIn && assetOut) {
-    const pairKey = `${assetIn}:${assetOut}`;
-    const sandwichRecords = sandwichStore.get(pairKey) ?? [];
-    const recentSandwich = sandwichRecords.filter(r => now - r.timestamp < SANDWICH_WINDOW_MS);
-    if (recentSandwich.length >= 2) {
-      // Check for price anomaly: middle request has worse price for user
-      const prices = recentSandwich.map(r => r.price).filter(Boolean).map(Number);
-      const currentPrice = price ? Number(price) : NaN;
-      if (prices.length >= 2 && !isNaN(currentPrice)) {
-        const avgPrice = prices.reduce((a, b) => a + b, 0) / prices.length;
-        const deviation = Math.abs(currentPrice - avgPrice) / avgPrice;
-        if (deviation > 0.05) { // 5% deviation
-          alerts.push({
-            type: "sandwich",
-            severity: "high",
-            account: acc,
-            endpoint,
-            details: { pair: pairKey, requestCount: recentSandwich.length + 1, windowMs: SANDWICH_WINDOW_MS, priceDeviationPct: deviation * 100, currentPrice, avgPrice },
-            timestamp: new Date(now).toISOString(),
-            requestId
-          });
-        }
-      }
-    }
-    recentSandwich.push(record);
-    sandwichStore.set(pairKey, recentSandwich);
-  }
-  
-  // 4. Business logic anomalies
-  if (amount) {
-    const amt = Number(amount);
-    if (!isNaN(amt)) {
-      // Excessive amount (configurable threshold per asset, here generic)
-      if (amt > 1_000_000) { // 1M base units
-        alerts.push({
-          type: "business_logic",
-          severity: "medium",
-          account: acc,
-          endpoint,
-          details: { amount: amt, threshold: 1_000_000, reason: "excessive_amount" },
-          timestamp: new Date(now).toISOString(),
-          requestId
-        });
-      }
-      // Zero or negative
-      if (amt <= 0) {
-        alerts.push({
-          type: "business_logic",
-          severity: "low",
-          account: acc,
-          endpoint,
-          details: { amount: amt, reason: "non_positive_amount" },
-          timestamp: new Date(now).toISOString(),
-          requestId
+
+  // Check for front-running (similar params from same IP)
+  const recentRecords = (requestHistory.get(ip) || []).filter(r => r.timestamp > cutoff);
+  for (const recent of recentRecords) {
+    if (recent.endpoint === endpoint && recent.account !== account) {
+      const similarity = calculateSimilarity(recent.params, params);
+      if (similarity > FRONT_RUNNING_SIMILARITY_THRESHOLD) {
+        reportSuspiciousPattern({
+          type: "front-running",
+          account,
+          ip,
+          timestamp: now,
+          details: { similarity, otherAccount: recent.account, endpoint },
+          severity: "medium"
         });
       }
     }
   }
-  
-  // Swap value sanity
-  if (assetIn && assetOut && amount && price) {
-    const amt = Number(amount);
-    const prc = Number(price);
-    if (!isNaN(amt) && !isNaN(prc) && prc > 0) {
-      const impliedValue = amt * prc;
-      if (impliedValue > 10_000_000) { // 10M quote units
-        alerts.push({
-          type: "business_logic",
-          severity: "medium",
-          account: acc,
-          endpoint,
-          details: { assetIn, assetOut, amount: amt, price: prc, impliedValue, threshold: 10_000_000, reason: "excessive_swap_value" },
-          timestamp: new Date(now).toISOString(),
-          requestId
+
+  // Check for sandwich attacks (three operations on same asset)
+  const assetKey = extractAssetKey(params);
+  if (assetKey) {
+    const assetRecords = recentRecords.filter(r => extractAssetKey(r.params) === assetKey);
+    if (assetRecords.length >= 2) {
+      const timeSpan = now - assetRecords[0].timestamp;
+      if (timeSpan < SANDWICH_TIME_WINDOW) {
+        reportSuspiciousPattern({
+          type: "sandwich",
+          account,
+          ip,
+          timestamp: now,
+          details: { asset: assetKey, operationCount: assetRecords.length + 1, timeSpan },
+          severity: "critical"
         });
       }
     }
   }
-  
-  // Prune stores periodically
-  if (Math.random() < 0.01) { // ~1% of calls
-    pruneStore(reentrancyStore, REENTRANCY_WINDOW_MS, now);
-    pruneStore(frontrunStore, FRONTRUN_WINDOW_MS, now);
-    pruneStore(sandwichStore, SANDWICH_WINDOW_MS, now);
+
+  // Check for volume anomalies
+  const volume = extractVolume(params);
+  if (volume > 0) {
+    activity.volumes.push(volume);
+    if (activity.volumes.length > 10) {
+      const avgVolume = activity.volumes.slice(0, -1).reduce((a, b) => a + b, 0) / (activity.volumes.length - 1);
+      if (volume > avgVolume * VOLUME_ANOMALY_MULTIPLIER) {
+        reportSuspiciousPattern({
+          type: "volume-anomaly",
+          account,
+          ip,
+          timestamp: now,
+          details: { volume, avgVolume, multiplier: volume / avgVolume },
+          severity: "high"
+        });
+      }
+    }
   }
-  
-  // Emit alerts
-  for (const alert of alerts) emitAlert(alert);
-  
-  // For now, allow all requests (monitoring mode). Can be flipped to block via config.
-  const blockMode = process.env.BEHAVIORAL_BLOCK_MODE === "true";
-  if (blockMode && alerts.some(a => a.severity === "high" || a.severity === "critical")) {
-    return { allowed: false, reason: `behavioral_block: ${alerts.map(a => a.type).join(",")}`, alerts };
+
+  // Store record
+  activity.lastRequestTime = now;
+  activity.endpoints.add(endpoint);
+  activity.paramsHashes.push(hashParams(params));
+  if (activity.paramsHashes.length > MAX_HISTORY_PER_ACCOUNT) {
+    activity.paramsHashes.shift();
   }
-  return { allowed: true, alerts };
+
+  const ipRecords = requestHistory.get(ip) || [];
+  ipRecords.push(record);
+  requestHistory.set(ip, ipRecords.slice(-MAX_HISTORY_PER_ACCOUNT));
+
+  // Cleanup old entries periodically
+  if (Math.random() < 0.01) { // 1% chance per request
+    cleanupOldEntries(now);
+  }
 }
 
-// Prometheus metrics exposition (text format)
-export function getMetrics(): string {
+function extractAssetKey(params: Record<string, unknown>): string | null {
+  const assetKeys = ["symbol", "asset", "token", "pair", "base", "quote"];
+  for (const key of assetKeys) {
+    if (typeof params[key] === "string") return params[key];
+  }
+  return null;
+}
+
+function reportSuspiciousPattern(pattern: SuspiciousPattern): void {
+  // Log with full request details
+  console.warn(JSON.stringify({
+    timestamp: new Date(pattern.timestamp).toISOString(),
+    action: "behavioral_alert",
+    pattern_type: pattern.type,
+    severity: pattern.severity,
+    account: pattern.account,
+    ip: pattern.ip,
+    details: pattern.details
+  }));
+
+  // Store for metrics
+  const key = `${pattern.type}:${pattern.account}:${pattern.ip}`;
+  const patterns = suspiciousPatterns.get(key) || [];
+  patterns.push(pattern);
+  suspiciousPatterns.set(key, patterns.slice(-50));
+
+  // Emit Prometheus metrics (would integrate with prom-client in production)
+  emitMetric("dex_behavioral_alerts_total", 1, {
+    type: pattern.type,
+    severity: pattern.severity,
+    endpoint: pattern.details.endpoint as string || "unknown"
+  });
+}
+
+function emitMetric(name: string, value: number, labels: Record<string, string>): void {
+  // In production, integrate with prom-client:
+  // registry.getSingleMetric(name)?.inc(labels);
+  // For now, structured log for scraping
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    metric: name,
+    value,
+    labels
+  }));
+}
+
+function cleanupOldEntries(now: number): void {
+  const cutoff = now - WINDOW_MS * 2;
+  
+  for (const [ip, records] of requestHistory.entries()) {
+    const filtered = records.filter(r => r.timestamp > cutoff);
+    if (filtered.length === 0) {
+      requestHistory.delete(ip);
+    } else {
+      requestHistory.set(ip, filtered);
+    }
+  }
+
+  for (const [account, activity] of accountActivity.entries()) {
+    if (activity.lastRequestTime < cutoff) {
+      accountActivity.delete(account);
+    }
+  }
+
+  for (const [key, patterns] of suspiciousPatterns.entries()) {
+    const filtered = patterns.filter(p => p.timestamp > cutoff);
+    if (filtered.length === 0) {
+      suspiciousPatterns.delete(key);
+    } else {
+      suspiciousPatterns.set(key, filtered);
+    }
+  }
+
+  // Prevent memory leaks
+  if (requestHistory.size > 10_000) {
+    const oldestIp = requestHistory.keys().next().value;
+    if (oldestIp) requestHistory.delete(oldestIp);
+  }
+  if (accountActivity.size > 10_000) {
+    const oldestAccount = accountActivity.keys().next().value;
+    if (oldestAccount) accountActivity.delete(oldestAccount);
+  }
+}
+
+export function getSuspiciousPatterns(account?: string): SuspiciousPattern[] {
+  const all: SuspiciousPattern[] = [];
+  for (const patterns of suspiciousPatterns.values()) {
+    all.push(...patterns);
+  }
+  if (account) {
+    return all.filter(p => p.account === account);
+  }
+  return all.sort((a, b) => b.timestamp - a.timestamp);
+}
+
+export function getAccountRiskScore(account: string): number {
+  const patterns = getSuspiciousPatterns(account);
   const now = Date.now();
-  let output = "";
-  output += `# HELP behavioral_monitor_reentrancy_tracked_accounts Number of accounts tracked for reentrancy\n`;
-  output += `# TYPE behavioral_monitor_reentrancy_tracked_accounts gauge\n`;
-  output += `behavioral_monitor_reentrancy_tracked_accounts ${reentrancyStore.size}\n`;
-  output += `# HELP behavioral_monitor_frontrun_tracked_patterns Number of param patterns tracked for front-running\n`;
-  output += `# TYPE behavioral_monitor_frontrun_tracked_patterns gauge\n`;
-  output += `behavioral_monitor_frontrun_tracked_patterns ${frontrunStore.size}\n`;
-  output += `# HELP behavioral_monitor_sandwich_tracked_pairs Number of asset pairs tracked for sandwich attacks\n`;
-  output += `# TYPE behavioral_monitor_sandwich_tracked_pairs gauge\n`;
-  output += `behavioral_monitor_sandwich_tracked_pairs ${sandwichStore.size}\n`;
-  // Alert counters (would be incremented in emitAlert in production)
-  output += `# HELP behavioral_monitor_alerts_total Total behavioral alerts by type and severity\n`;
-  output += `# TYPE behavioral_monitor_alerts_total counter\n`;
-  output += `behavioral_monitor_alerts_total{type="reentrancy",severity="high"} 0\n`;
-  output += `behavioral_monitor_alerts_total{type="frontrun",severity="medium"} 0\n`;
-  output += `behavioral_monitor_alerts_total{type="sandwich",severity="high"} 0\n`;
-  output += `behavioral_monitor_alerts_total{type="business_logic",severity="medium"} 0\n`;
-  output += `behavioral_monitor_alerts_total{type="business_logic",severity="low"} 0\n`;
-  return output;
+  const recentPatterns = patterns.filter(p => now - p.timestamp < 300_000); // 5 minutes
+  
+  let score = 0;
+  for (const p of recentPatterns) {
+    switch (p.severity) {
+      case "critical": score += 40; break;
+      case "high": score += 25; break;
+      case "medium": score += 10; break;
+      case "low": score += 5; break;
+    }
+  }
+  return Math.min(score, 100);
 }
 
-// Self-test
-export async function selftest(): Promise<void> {
-  const monitor = { recordRequest };
-  const reqId = "test-" + Date.now();
-  
-  // Test reentrancy
-  for (let i = 0; i < 4; i++) {
-    const res = monitor.recordRequest(`${reqId}-reentrancy-${i}`, "alice", "/api/dex/order", { action: "buy", amount: "100", price: "1.5" });
-    if (i === 3 && !res.alerts.some(a => a.type === "reentrancy")) throw new Error("Reentrancy detection failed");
-  }
-  
-  // Test frontrun
-  for (let i = 0; i < 3; i++) {
-    const account = i === 1 ? "bob" : "charlie";
-    const res = monitor.recordRequest(`${reqId}-frontrun-${i}`, account, "/api/dex/swap", { from: "HIVE", to: "SWA.HIVE", amount: "1000" });
-    if (i === 2 && !res.alerts.some(a => a.type === "frontrun")) throw new Error("Frontrun detection failed");
-  }
-  
-  // Test sandwich
-  monitor.recordRequest(`${reqId}-sandwich-0`, "victim", "/api/dex/swap", { from: "HIVE", to: "SWA.HIVE", amount: "1000", price: "1.0" });
-  monitor.recordRequest(`${reqId}-sandwich-1`, "attacker", "/api/dex/swap", { from: "HIVE", to: "SWA.HIVE", amount: "1000", price: "1.0" });
-  const sandwichRes = monitor.recordRequest(`${reqId}-sandwich-2`, "attacker", "/api/dex/swap", { from: "HIVE", to: "SWA.HIVE", amount: "1000", price: "1.1" }); // 10% deviation
-  if (!sandwichRes.alerts.some(a => a.type === "sandwich")) throw new Error("Sandwich detection failed");
-  
-  // Test business logic
-  const blRes = monitor.recordRequest(`${reqId}-bl`, "eve", "/api/dex/order", { amount: "2000000" });
-  if (!blRes.alerts.some(a => a.type === "business_logic" && a.details.reason === "excessive_amount")) throw new Error("Business logic detection failed");
-  
-  console.log("[behavioral-monitor] selftest passed");
+export function isAccountBlocked(account: string): boolean {
+  return getAccountRiskScore(account) >= 80;
 }
 
-// Integration helper for API routes
-export async function monitorApiRequest(
-  request: Request,
-  account: string,
-  endpoint: string
-): Promise<{ allowed: boolean; reason?: string; alerts: BehavioralAlert[] }> {
-  let params: Record<string, unknown> = {};
-  try {
-    const clone = request.clone();
-    params = await clone.json();
-  } catch {}
-  return recordRequest(crypto.randomUUID(), account, endpoint, params);
+// Middleware integration helper
+export function createBehavioralMiddleware() {
+  return async (req: NextRequest, account: string, params: Record<string, unknown>) => {
+    recordRequest(req, account, params);
+    
+    if (isAccountBlocked(account)) {
+      return {
+        blocked: true,
+        reason: "behavioral_anomaly",
+        riskScore: getAccountRiskScore(account)
+      };
+    }
+    return { blocked: false };
+  };
+}
+
+// Prometheus metrics endpoint data
+export function getMetricsData(): string {
+  const lines: string[] = [
+    "# HELP dex_behavioral_alerts_total Total number of behavioral alerts",
+    "# TYPE dex_behavioral_alerts_total counter"
+  ];
+  
+  const metricCounts = new Map<string, number>();
+  for (const patterns of suspiciousPatterns.values()) {
+    for (const p of patterns) {
+      const key = `dex_behavioral_alerts_total{type="${p.type}",severity="${p.severity}"}`;
+      metricCounts.set(key, (metricCounts.get(key) || 0) + 1);
+    }
+  }
+  
+  for (const [metric, count] of metricCounts.entries()) {
+    lines.push(`${metric} ${count}`);
+  }
+  
+  lines.push("# HELP dex_account_risk_score Current risk score for accounts",
+    "# TYPE dex_account_risk_score gauge");
+  
+  for (const account of accountActivity.keys()) {
+    const score = getAccountRiskScore(account);
+    lines.push(`dex_account_risk_score{account="${account}"} ${score}`);
+  }
+  
+  return lines.join("\n");
 }
