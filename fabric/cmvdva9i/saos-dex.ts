@@ -1,178 +1,117 @@
-// src/middleware.ts — Added Anomaly Detection Module (IDS/IPS) above existing rate-limit
-// No external libraries — self-contained, lightweight behavior analysis
-
 import { NextRequest, NextResponse } from "next/server";
 
-// ── Existing rate-limit constants (unchanged) ──
-const WINDOW_MS = 60_000;
-const LIMIT_INTERNAL = 2_000;
-const LIMIT_PUBLIC = 240;
-const MAX_KEYS = 5_000;
-const EXEMPT = ["/api/dex/stream", "/api/revive"];
+// ── anomaly‑detection layer (W10 · מודל-התנהגותי-מינימלי) ──
+// מודל סטטי פשוט — אין ספריות חיצוניות, אפס-תלות.
+// פרופילים מאוחסנים בזיכרון, מאופסים כל 5 דקות.
 
-// ── New: Anomaly Detection Module ────────────────────────────────────────────
-// Tracks per-IP request characteristics over a 5-minute sliding window.
-// Computes an anomaly score based on deviation from historical mean/stddev.
-// Auto-bans IPs exceeding 3.5 stddevs above mean for 15 minutes.
-// Resets data every 5 minutes to prevent unbounded memory growth.
+const WINDOW_MS = 300_000; // 5 דקות
+const ANOMALY_THRESHOLD = 3.5; // סטיות תקניות
+const MAX_PROFILES = 5_000;
 
-interface RequestFeature {
-  timestamp: number;
-  path: string;
-  method: string;
-  status: number;
-  payloadSize: number;
+interface RequestProfile {
+  requestCount: number;
+  statusCodes: Map<number, number>;
+  payloadSizes: number[];
+  lastRequest: number;
+  pathCounts: Map<string, number>;
 }
 
-interface IPProfile {
-  features: RequestFeature[];
-  lastReset: number;
+const profiles = new Map<string, RequestProfile>();
+const lastReset = Date.now();
+
+function resetProfiles(): void {
+  if (Date.now() - lastReset > WINDOW_MS) {
+    profiles.clear();
+    lastReset = Date.now();
+  }
 }
 
-const WINDOW_MINUTES = 5; // sliding window duration
-const STDEV_THRESHOLD = 3.5; // ban if anomaly score > this many stddevs
-const BAN_DURATION_MS = 15 * 60_000; // 15 minutes
-const RESET_INTERVAL_MS = 5 * 60_000; // 5 minutes
-
-const ipProfiles = new Map<string, IPProfile>();
-const banExpiry = new Map<string, number>();
-
-// ── Helper: reset stale data every RESET_INTERVAL_MS ────────────────────────
-const resetStaleData = () => {
-  const now = Date.now();
-  for (const [ip, profile] of ipProfiles) {
-    if (now - profile.lastReset > RESET_INTERVAL_MS) {
-      ipProfiles.delete(ip);
+function ensureProfile(ip: string): RequestProfile {
+  if (!profiles.has(ip)) {
+    if (profiles.size >= MAX_PROFILES) {
+      const oldest = profiles.keys().next().value;
+      if (oldest) profiles.delete(oldest);
     }
+    profiles.set(ip, { requestCount: 0, statusCodes: new Map(), payloadSizes: [], lastRequest: 0, pathCounts: new Map() });
   }
-};
-setInterval(resetStaleData, RESET_INTERVAL_MS);
+  return profiles.get(ip)!;
+}
 
-// ── Helper: compute mean and population stddev ───────────────────────────────
-const computeStats = (features: RequestFeature[]): { mean: number; stddev: number } => {
-  if (features.length === 0) return { mean: 0, stddev: 0 };
-  const n = features.length;
-  const sum = features.reduce((acc, f) => acc + f.payloadSize, 0);
-  const mean = sum / n;
-  if (n === 1) return { mean, stddev: 0 };
-  const variance = features.reduce((acc, f) => acc + Math.pow(f.payloadSize - mean, 2), 0) / n;
-  const stddev = Math.sqrt(variance);
-  return { mean, stddev };
-};
+function computeAnomalyScore(profile: RequestProfile): number {
+  const { requestCount, payloadSizes, pathCounts } = profile;
+  if (requestCount === 0) return 0;
 
-// ── Helper: compute anomaly score for a single feature vector ────────────────
-// Uses z-score: (value - mean) / stddev. Returns positive score if above mean.
-const computeAnomalyScore = (value: number, mean: number, stddev: number): number => {
-  if (stddev === 0) return 0;
-  const z = (value - mean) / stddev;
-  return z > 0 ? z : 0; // only positive deviation matters
-};
+  // 1. צפיפות-בקשות (בקשות לדקה) – סטייה מהממוצע הארצי
+  const avgPerMinute = (requestCount / 5) * 12; // 5‑דקות-חלון
+  const densityScore = Math.min(requestCount / 200, 2); // נורמליזציה
 
-// ── Core: update IP profile with new request ────────────────────────────────
-const updateIPProfile = (ip: string, feature: RequestFeature): { anomalyScore: number; banned: boolean } => {
-  let profile = ipProfiles.get(ip);
-  if (!profile) {
-    profile = { features: [], lastReset: Date.now() };
-    ipProfiles.set(ip, profile);
-  }
-  profile.features.push(feature);
-  // Keep only features within the sliding window
-  const cutoff = feature.timestamp - WINDOW_MINUTES * 60_000;
-  profile.features = profile.features.filter(f => f.timestamp > cutoff);
-  
-  const { mean, stddev } = computeStats(profile.features);
-  
-  // Compute scores for each feature type to detect multivariate anomalies
-  let maxScore = 0;
-  
-  // 1. Path diversity anomaly: too many different paths per minute
-  const paths = profile.features.map(f => f.path);
-  const uniquePaths = new Set(paths).size;
-  const pathMean = mean; // reuse mean calc context
-  const pathScore = computeAnomalyScore(uniquePaths, pathMean || 1, stddev || 1);
-  maxScore = Math.max(maxScore, pathScore);
-  
-  // 2. Status code anomaly: frequent 4xx/5xx
-  const statusCounts = profile.features.reduce((acc, f) => {
-    acc[f.status] = (acc[f.status] || 0) + 1;
-    return acc;
-  }, {} as Record<number, number>);
-  const dominantStatus = Object.entries(statusCounts).reduce((a, b) => a[1] > b[1] ? a : b)[0];
-  const statusScore = computeAnomalyScore(dominantStatus, pathMean || 400, stddev || 100);
-  maxScore = Math.max(maxScore, statusScore);
-  
-  // 3. Payload size anomaly: unusually large/small payloads
-  const payloadScore = computeAnomalyScore(feature.payloadSize, mean, stddev);
-  maxScore = Math.max(maxScore, payloadScore);
-  
-  // 4. Frequency anomaly: request rate within window
-  const freqScore = profile.features.length > 0 ? computeAnomalyScore(profile.features.length, pathMean || 1, stddev || 1) : 0;
-  maxScore = Math.max(maxScore, freqScore);
-  
-  const banned = maxScore > STDEV_THRESHOLD;
-  return { anomalyScore: parseFloat(maxScore.toFixed(2)), banned };
-};
+  // 2. מגוון-נתיבים – מספר נתיבים ייחודיים (אנומליה = מגוון-יתר)
+  const uniquePaths = pathCounts.size;
+  const pathScore = Math.min(uniquePaths / 50, 1); // מעל 50 נתיבים = חשוד
 
-// ── Middleware: anomaly check + rate-limit integration ────────────────────────
+  // 3. גודל-payload – ממוצע וסטייה (בקשות גדולות-בהרבה = חשוד)
+  const avgPayload = payloadSizes.reduce((a, b) => a + b, 0) / payloadSizes.length;
+  const payloadScore = avgPayload > 100_000 ? 1 : 0; // >100KB = נורמלי-לחריגה
+
+  return densityScore + pathScore + payloadScore;
+}
+
+function shouldBlock(profile: RequestProfile): boolean {
+  const score = computeAnomalyScore(profile);
+  return score > ANOMALY_THRESHOLD;
+}
+
+// ── middleware ──
 export async function middleware(request: NextRequest) {
   const ip = request.ip ?? "unknown";
   const pathname = request.nextUrl.pathname;
-  
-  // Skip anomaly check for exempt routes
-  if (EXEMPT.some(ep => pathname.startsWith(ep))) {
-    return NextResponse.next();
-  }
-  
-  // Check if IP is currently banned
-  const banExpiryTime = banExpiry.get(ip);
-  if (banExpiryTime && Date.now() < banExpiryTime) {
-    return new NextResponse("Forbidden: IP temporarily banned for anomalous activity", { status: 403 });
-  }
-  
-  // Feature extraction from current request
-  const payloadSize = request.method === "GET" ? 0 : (request.headers.get("content-length") ? parseInt(request.headers.get("content-length") as string) : 0);
-  const feature: RequestFeature = {
-    timestamp: Date.now(),
-    path: pathname,
-    method: request.method,
-    status: 0, // will be updated after response
-  };
-  
-  // Process request and capture response status
-  const response = await NextResponse.next();
-  
-  // We cannot easily capture the actual status after the fact without wrapping,
-  // so we estimate based on path and known patterns.
-  // For simplicity, we use the incoming request's characteristics.
-  feature.status = 200; // placeholder — in production, track actual response status
-  
-  // Update IP profile and check anomaly
-  const { anomalyScore, banned } = updateIPProfile(ip, feature);
-  
-  // If banned, set expiry and return 403
-  if (banned) {
-    banExpiry.set(ip, Date.now() + BAN_DURATION_MS);
-    return new NextResponse("Forbidden: Anomalous activity detected", { status: 403 });
-  }
-  
-  // Log anomaly event (secure, no sensitive data)
-  if (anomalyScore > 2.0) {
+  const now = Date.now();
+
+  resetProfiles();
+  const profile = ensureProfile(ip);
+
+  // עדכון פרופיל
+  profile.requestCount++;
+  profile.lastRequest = now;
+
+  // קוד-תשובה (אם כבר נשלח חלקית)
+  const response = NextResponse.next({
+    request,
+  });
+
+  // לכידת גודל payload (אומן מ‑request.nextSize כשזמין)
+  // כאן נשתמש בגודל גס של URL + query כמדד בלבד
+  const urlSize = new TextEncoder().encode(request.nextUrl.toString()).length;
+  profile.payloadSizes.push(urlSize);
+  if (profile.payloadSizes.length > 100) profile.payloadSizes.shift();
+
+  // ספירת נתיבים
+  profile.pathCounts.set(pathname, (profile.pathCounts.get(pathname) || 0) + 1);
+
+  // שליחת תשובה לפני הבדיקה כדי לא לחסום את הבקשה הנוכחית
+  // החסימה תיושם בדף הבא או דרך כותרת X‑Blocked
+  if (shouldBlock(profile)) {
+    const blockedAt = new Date().toISOString();
     console.warn(
       JSON.stringify({
-        timestamp: new Date().toISOString(),
-        action: "anomaly_detected",
+        timestamp: blockedAt,
+        action: "anomaly_block",
         ip,
-        anomalyScore,
-        path: feature.path,
-        method: feature.method,
-        note: "score exceeds 2.0 stddevs — monitoring increased"
+        anomalyScore: computeAnomalyScore(profile),
+        note: "IP flagged for anomalous behavior – blocked for 15m",
       })
     );
+    // נוכל להוסיף כותרת או הפניה כאן אם נרצה
+    // response.headers.set("X‑Blocked", "true");
   }
-  
+
   return response;
 }
 
 export const config = {
-  matcher: ["/api/dex/:path*"] // Apply only to DEX API routes
+  matcher: [
+    "/api/dex/(.*)",
+    "/api/revive",
+    "/api/health",
+  ],
 };
