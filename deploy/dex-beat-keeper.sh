@@ -5,7 +5,7 @@
 # GIT-FIRST LAW (owner, 2026-10-17 after the audit-wipe): this script lives IN
 # the saos-dex repo (deploy/) — the sandbox may vanish, the chain home cannot.
 set -u
-cd /home/z/audit/saos-dex || exit 1
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1  # portable: repo root = script parent (W25 anti-hardcode law)
 
 # 0) one beat at a time — any caller, any layer (measured 17.10 20:53:00.011Z:
 #    hot-reload double-arm fired two keepers in the same millisecond and the
