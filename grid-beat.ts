@@ -351,7 +351,7 @@ async function main(): Promise<void> {
   if (armed && parity && snap.book.bestBid && snap.book.bestAsk && blocker.length === 0) {
     const { realPlaceOrder, realCancelOrder } = rm as unknown as {
       realPlaceOrder: (p: { orderid: number; amountToSell: string; minToReceive: string; expirationDays?: number }) => Promise<{ txid: string; block: number | null }>;
-      realCancelOrder: (orderid: number) => Promise<{ txid: string; block: number | null }>;
+      realCancelOrder: (orderid: number) => Promise<{ txid: string; block: number | null; recovered?: boolean }>;
     };
     /* 9-c · מונה-שידורים: כל-כישלון-שידור ייספר ויפורסם — אסור-שריצה שכל-שידוריה
      * נדחו תירשם כ-ARMED-STABLE (השקר-המדוד של 10-08..10-11). */
@@ -395,11 +395,12 @@ async function main(): Promise<void> {
         if (isAsk && px < parity) {
           bcAttempted++;
           try {
-            await realCancelOrder(o.id);
+            const r = await realCancelOrder(o.id);
             cancelled++;
             const rec = ledger.orders.find((x) => x.id === o.id);
             if (rec) { rec.status = "cancelled"; rec.lastSeenAt = new Date().toISOString(); }
-            console.log(`[grid-beat] VALUE-GUARD cancel #${o.id}: ask @${px.toFixed(6)} < parity ${parity.toFixed(6)} (${(((px - parity) / parity) * 10000).toFixed(0)}bps) — sub-parity bleed stopped`);
+            // N2-b · כנות-השתקמות: txid של recovered-cancel מסומן-בגלוי — לא נראה כישלון מה שנחת-והושג
+            console.log(`[grid-beat] VALUE-GUARD cancel #${o.id}${r.recovered ? " [RECOVERED-no-id]" : ""}: ask @${px.toFixed(6)} < parity ${parity.toFixed(6)} (${(((px - parity) / parity) * 10000).toFixed(0)}bps) — sub-parity bleed stopped · txid ${r.txid.slice(0, 26)}`);
           } catch (e) {
             bcFailed++;
             console.warn(`[grid-beat] value-guard cancel #${o.id} failed: ${String(e).slice(0, 80)}`);

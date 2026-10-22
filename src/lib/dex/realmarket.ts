@@ -103,9 +103,23 @@ async function orderExistsOnChain(orderid: number): Promise<boolean> {
   } catch { return false; }
 }
 
+/* N2-b (2026-10-22, owner approve trace 1a1629f96941f20d · cycle 24): ההשתקמות-מדודה
+ * בירידה: גם הביטול יכול לקבל "broadcast answered without id" (ריצה 39746309859:
+ * 2/13 — שני ביטולי-VALUE-GUARD דווחו-כישלון ובעצם נחתו — הפקודות נעלמו מהספר).
+ * הסמנטיקה-הכנה של-ביטול: הצלחה = הפקודה-איננה-עוד על-הספר (בין-אם-השידור נחת,
+ * בין-אם היא נאכלה/פגה). guard-נגד-שקר-שמח: אימות-רק-אם קריאת-get_open_orders
+ * עצמה הצליחה (fetched=true) — RPC-כושל לא ייכריז "recovered" בשקר. */
+async function orderAbsentOnChain(orderid: number): Promise<{ absent: boolean; fetched: boolean }> {
+  try {
+    const orders = await rpcAny<{ orderid: number | string }[]>("condenser_api.get_open_orders", [ACCOUNT]);
+    if (!Array.isArray(orders)) return { absent: false, fetched: false };
+    return { absent: !orders.some((o) => Number(o?.orderid) === Number(orderid)), fetched: true };
+  } catch { return { absent: false, fetched: false }; }
+}
+
 export async function signAndBroadcast(
   ops: [string, Record<string, unknown>][],
-  opts: { recoverOrderId?: number } = {},
+  opts: { recoverOrderId?: number; recoverCancelOrderid?: number } = {},
 ): Promise<{ txid: string; block: number | null; recovered?: boolean }> {
   const wif = activeWif();
   if (!wif) throw new Error("STEEM_ACTIVE_WIF missing — fail-closed (אין-חתימה, אין-שידור)");
@@ -145,10 +159,24 @@ export async function signAndBroadcast(
     if (opts.recoverOrderId != null && (await orderExistsOnChain(opts.recoverOrderId))) {
       return { txid: `recovered-orderid-${opts.recoverOrderId}`, block: null, recovered: true };
     }
+    // N2-b · השתקמות-ביטול: הפקודה-נעלמה מהספר = מטרת-הביטול הושגה (ראיה-על-השרשרת,
+    // רק-אם-הקריאה עצמה הצליחה — לא מכריזים recovered מתוך-RPC-כושל).
+    if (opts.recoverCancelOrderid != null) {
+      const chk = await orderAbsentOnChain(opts.recoverCancelOrderid);
+      if (chk.fetched && chk.absent) {
+        return { txid: `recovered-cancel-orderid-${opts.recoverCancelOrderid}`, block: null, recovered: true };
+      }
+    }
     noIdErrs.push(`${new URL(node).host}: answered without id`);
   }
   if (opts.recoverOrderId != null && (await orderExistsOnChain(opts.recoverOrderId))) {
     return { txid: `recovered-orderid-${opts.recoverOrderId}`, block: null, recovered: true };
+  }
+  if (opts.recoverCancelOrderid != null) {
+    const chk = await orderAbsentOnChain(opts.recoverCancelOrderid);
+    if (chk.fetched && chk.absent) {
+      return { txid: `recovered-cancel-orderid-${opts.recoverCancelOrderid}`, block: null, recovered: true };
+    }
   }
   throw new Error(`broadcast answered without id (honest, ${noIdErrs.length} node attempts: ${noIdErrs.join(" | ").slice(0, 200)})`);
 }
@@ -385,9 +413,11 @@ export async function realPlaceOrder(params: {
   }]], { recoverOrderId: params.orderid });
 }
 
-export async function realCancelOrder(orderid: number): Promise<{ txid: string; block: number | null }> {
+export async function realCancelOrder(orderid: number): Promise<{ txid: string; block: number | null; recovered?: boolean }> {
   rt().data = null;
-  return signAndBroadcast([["limit_order_cancel", { owner: ACCOUNT, orderid }]]);
+  // N2-b: השתקמות-no-id גם לזרוע-הביטול — "הפקודה-נעלמה-מהספר" = הצלחה-מדודה-בראיה,
+  // לא כישלון-שמזהם-את-ה-verdict (הריצה-המדודה 39746309859: 2/13 בדיוק-כך).
+  return signAndBroadcast([["limit_order_cancel", { owner: ACCOUNT, orderid }]], { recoverCancelOrderid: orderid });
 }
 
 /** DIRECTIVE-R24 (owner 2026-09-13): **לא עושים powerdown** — כוח-הצי (SP/BP/HP) קדוש:
