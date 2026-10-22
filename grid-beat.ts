@@ -447,9 +447,15 @@ async function main(): Promise<void> {
     /* 2) פריסת הגריד */
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     let seq = 1;
+    /* N8-e (round-27 · מדוד-חי: שני-רצים-על-אותו-חשבון עם סכימת-התאריך×100+seq התנגשו
+     * באותה-דקה (14:18-מול-14:20) — אותם-orderids-בדיוק, הפקודות-שלי נדחו-וה-recovery
+     * העניק-קרדיט-שקרי-לפקודות-האחר). עתה: מרחב-epoch-שניות — רץ-בשנייה-אחרת = מרחב-אחר;
+     * slot 1..8 לרצף-בתוך-השנייה. גבול-uint32 נשמר (≤ 4.29e9). התנגשות-אפשרית-רק-באותה-
+     * שנייה-בדיוק — ואז-השרשרת דוחה-בכנה (כישלון-גלוי, לא-פנטום). */
     const nextId = (): number => {
-      let id = Number(today) * 100 + seq;
-      while (ledger.orders.some((x) => x.id === id)) { seq++; id = Number(today) * 100 + seq; }
+      const epochSec = Math.floor(Date.now() / 1000) % 500_000_000; // ≤ 4e9 עם slot×8
+      let id = (epochSec * 8 + (seq % 8)) >>> 0;
+      while (ledger.orders.some((x) => x.id === id) || id === 0) { seq++; id = (epochSec * 8 + (seq % 8)) >>> 0; }
       return id;
     };
 

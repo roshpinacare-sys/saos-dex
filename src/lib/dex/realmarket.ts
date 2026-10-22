@@ -103,6 +103,29 @@ async function orderExistsOnChain(orderid: number): Promise<boolean> {
   } catch { return false; }
 }
 
+/* N8-d (round-27 · owner mandate trace 1a163d4124276b39 · מדוד-חי-בריצה 39794568467):
+ * אימות-ההשתקמות-הישן היה עיוור-בעלים — orderid-קיים-על-הספר קיבל-קרדיט-השתקמות גם
+ * כשהוא נוצר ע"י **רץ-אחר על אותו-חשבון** (2-רצים עם סכימת-ה-orderid-התאריכית-הזהה
+ * התנגשו באותה-דקה: 14:18:42-מול-14:20:41, orderids 2026102230–32 — הריצה-שלי
+ * קיבלה-"recovered" על פקודות-של-האחר, ו-3-ההצבות-שלי למעשה לא-נחתו). עתה:
+ * ההשתקמות מאמתת **תוכן** — אותו-orderid וגם אותם-סכומים-בדיוק (sell/receive).
+ * פקודה-של-אחר = לא-ראיה-שלי → הריצה ממשיכה-כנה לצומת-הבא/נכשלת-כנה. */
+const amtNum = (s: unknown): number => parseFloat(String(s ?? "").replace(/[A-Za-z ]+/g, "")) || NaN;
+async function orderMatchesOnChain(orderid: number, amountToSell: string, minToReceive: string): Promise<boolean> {
+  try {
+    const orders = await rpcAny<{ orderid: number | string; sell_price?: { base?: unknown; quote?: unknown } }[]>("condenser_api.get_open_orders", [ACCOUNT]);
+    if (!Array.isArray(orders)) return false;
+    const o = orders.find((x) => Number(x?.orderid) === Number(orderid));
+    if (!o) return false;
+    const sp = o.sell_price as { base?: { amount?: string | number; symbol?: string } | string; quote?: { amount?: string | number; symbol?: string } | string } | undefined;
+    const base = typeof sp?.base === "string" ? String(sp.base) : `${(sp?.base as { amount?: string })?.amount ?? ""} ${(sp?.base as { symbol?: string })?.symbol ?? ""}`;
+    const quote = typeof sp?.quote === "string" ? String(sp.quote) : `${(sp?.quote as { amount?: string })?.amount ?? ""} ${(sp?.quote as { symbol?: string })?.symbol ?? ""}`;
+    const sellMatch = Math.abs(amtNum(base) - amtNum(amountToSell)) <= Math.max(1e-6, amtNum(amountToSell) * 0.001);
+    const recvMatch = Math.abs(amtNum(quote) - amtNum(minToReceive)) <= Math.max(1e-6, amtNum(minToReceive) * 0.001);
+    return sellMatch && recvMatch;
+  } catch { return false; }
+}
+
 /* N2-b (2026-10-22, owner approve trace 1a1629f96941f20d · cycle 24): ההשתקמות-מדודה
  * בירידה: גם הביטול יכול לקבל "broadcast answered without id" (ריצה 39746309859:
  * 2/13 — שני ביטולי-VALUE-GUARD דווחו-כישלון ובעצם נחתו — הפקודות נעלמו מהספר).
@@ -119,7 +142,7 @@ async function orderAbsentOnChain(orderid: number): Promise<{ absent: boolean; f
 
 export async function signAndBroadcast(
   ops: [string, Record<string, unknown>][],
-  opts: { recoverOrderId?: number; recoverCancelOrderid?: number } = {},
+  opts: { recoverOrderId?: number; recoverAmountToSell?: string; recoverMinToReceive?: string; recoverCancelOrderid?: number } = {},
 ): Promise<{ txid: string; block: number | null; recovered?: boolean }> {
   const wif = activeWif();
   if (!wif) throw new Error("STEEM_ACTIVE_WIF missing — fail-closed (אין-חתימה, אין-שידור)");
@@ -170,7 +193,10 @@ export async function signAndBroadcast(
     }
     if (res?.id) return { txid: res.id, block: res.block_num ?? null };
     // תשובה-בלי-id — המדוד: ייתכן-שנחת. אימות-על-השרשרת לפני-כל-ניסיון-חוזר:
-    if (opts.recoverOrderId != null && (await orderExistsOnChain(opts.recoverOrderId))) {
+    /* N8-d: האימות-מציית-לתוכן (orderid + סכומים) — פקודה-של-רץ-אחר-על-אותו-חשבון
+     * איננה-ראיה-שלנו (הפנטום-המדוד-של-ריצה 39794568467). */
+    if (opts.recoverOrderId != null && opts.recoverAmountToSell != null && opts.recoverMinToReceive != null
+      && (await orderMatchesOnChain(opts.recoverOrderId, opts.recoverAmountToSell, opts.recoverMinToReceive))) {
       return { txid: `recovered-orderid-${opts.recoverOrderId}`, block: null, recovered: true };
     }
     // N2-b · השתקמות-ביטול: הפקודה-נעלמה מהספר = מטרת-הביטול הושגה (ראיה-על-השרשרת,
@@ -183,7 +209,8 @@ export async function signAndBroadcast(
     }
     noIdErrs.push(`${new URL(node).host}: answered without id`);
   }
-  if (opts.recoverOrderId != null && (await orderExistsOnChain(opts.recoverOrderId))) {
+  if (opts.recoverOrderId != null && opts.recoverAmountToSell != null && opts.recoverMinToReceive != null
+    && (await orderMatchesOnChain(opts.recoverOrderId, opts.recoverAmountToSell, opts.recoverMinToReceive))) {
     return { txid: `recovered-orderid-${opts.recoverOrderId}`, block: null, recovered: true };
   }
   if (opts.recoverCancelOrderid != null) {
@@ -424,7 +451,7 @@ export async function realPlaceOrder(params: {
     min_to_receive: params.minToReceive,
     fill_or_kill: params.fillOrKill ?? false,
     expiration,
-  }]], { recoverOrderId: params.orderid });
+  }]], { recoverOrderId: params.orderid, recoverAmountToSell: params.amountToSell, recoverMinToReceive: params.minToReceive });
 }
 
 export async function realCancelOrder(orderid: number): Promise<{ txid: string; block: number | null; recovered?: boolean }> {
