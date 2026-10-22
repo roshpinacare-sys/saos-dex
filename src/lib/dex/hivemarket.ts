@@ -181,6 +181,8 @@ export interface HiveFill {
   price: string;
   openOrderid?: number;
   currentOrderid?: number;
+  /** R-GRID-WAR (task-20): צמד-עצמי — ווליום בלבד, לא רווח-חוץ */
+  selfCross?: boolean;
 }
 
 export interface HiveSnapshot {
@@ -273,18 +275,24 @@ async function fetchHiveSnapshot(): Promise<HiveSnapshot> {
         if (e.op[0] !== "fill_order" || fills.length >= 6) continue;
         const o = e.op[1] as Record<string, unknown>;
         const openOwner = String(o.open_owner ?? "");
+        const curOwner = String(o.current_owner ?? "");
         const isMaker = openOwner === ACCOUNT;
-        if (!isMaker && String(o.current_owner ?? "") !== ACCOUNT) continue;
+        if (!isMaker && curOwner !== ACCOUNT) continue;
         const paysOf = (x: unknown): string =>
           typeof x === "string" ? x : String((x as { amount?: string })?.amount ?? "");
-        const paid = paysOf(o.current_pays);
-        const recv = paysOf(o.open_pays);
+        // R-GRID-WAR (task-20): סמנטיקת-כיוון אמת לפי-זרוע — אותו-תיקון של-STEEM:
+        // maker שילם open_pays וקיבל current_pays; taker ההפך. wash (שני-הצדדים
+        // שלנו) מסומן selfCross — ווליום בלבד, לא רווח-חוץ.
+        const wash = isMaker && curOwner === ACCOUNT;
+        const paid = isMaker ? paysOf(o.open_pays) : paysOf(o.current_pays);
+        const recv = isMaker ? paysOf(o.current_pays) : paysOf(o.open_pays);
         const pf = n(paid) / Math.max(1e-12, n(recv));
         fills.push({
           at: e.timestamp, side: isMaker ? "maker" : "taker", paid, received: recv,
           price: `${pf.toFixed(6)} ${paid.includes("HBD") ? "HBD/HIVE" : "HIVE/HBD"}`,
           openOrderid: Number(o.open_orderid ?? 0) || undefined,
           currentOrderid: Number(o.current_orderid ?? 0) || undefined,
+          ...(wash ? { selfCross: true } : {}),
         });
       }
       const firstIdx = hist[0]![0];

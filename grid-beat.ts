@@ -491,18 +491,27 @@ async function main(): Promise<void> {
       const paidUsd = paidSteem ? paidAmt * steemUsd : paidAmt * sbdUsd;
       const recvUsd = recvSteem ? recvAmt * steemUsd : recvAmt * sbdUsd;
       const edgeBps = paidUsd > 0 ? Math.floor(((recvUsd - paidUsd) / paidUsd) * 10_000) : 0;
+      // R-GRID-WAR (task-20, measured 01:31–01:43Z): צמד-עצמי (wash) — שני-הצדדים
+      // שלנו; ההצלבה מנוטרלת-כלכלית (0-עמלות בספר-STEEM) ואינה רווח-חוץ. נרשם
+      // בפנקס עם edge=0 ומוצא מה-externalFlowUsd — כנות-מעל-ווליום.
+      const wash = (f as { selfCross?: boolean }).selfCross === true;
       ledger.fills.push({
         key, at: f.at, side: f.side === "maker" ? "maker" : "taker",
         direction: recvSteem ? "bought-steem" : "sold-steem",
-        paid: f.paid, received: f.received, steemUsd, sbdUsd, paidUsd, recvUsd, edgeBps,
+        paid: f.paid, received: f.received, steemUsd, sbdUsd, paidUsd, recvUsd,
+        edgeBps: wash ? 0 : edgeBps,
       });
       const oid = f.openOrderid ?? f.currentOrderid;
       if (oid) {
         const rec = ledger.orders.find((x) => x.id === oid && x.status === "open");
         if (rec) { rec.status = "filled"; rec.lastSeenAt = new Date().toISOString(); ledger.filledTotal++; }
       }
-      ledger.externalFlowUsd = Math.round((ledger.externalFlowUsd + (recvUsd - paidUsd)) * 1e6) / 1e6;
-      console.log(`[grid-beat] REAL FILL counted: ${f.paid} -> ${f.received} · edge ${edgeBps}bps vs live marks (marked-at-detection)`);
+      if (wash) {
+        console.log(`[grid-beat] SELF-CROSS (wash) fill recorded at edge 0: ${f.paid} -> ${f.received} — volume only, NOT external profit (R-GRID-WAR honesty)`);
+      } else {
+        ledger.externalFlowUsd = Math.round((ledger.externalFlowUsd + (recvUsd - paidUsd)) * 1e6) / 1e6;
+        console.log(`[grid-beat] REAL FILL counted: ${f.paid} -> ${f.received} · edge ${edgeBps}bps vs live marks (marked-at-detection)`);
+      }
     }
   }
   /* ── R99 · רגל-HIVE — אותה דוקטרינה, אותו חוק, שוק-פנימי אמת שני ─────────── */
@@ -644,18 +653,25 @@ async function main(): Promise<void> {
         const paidUsd = paidHive ? paidAmt * hiveUsd : paidAmt * hbdUsd;
         const recvUsd = recvHive ? recvAmt * hiveUsd : recvAmt * hbdUsd;
         const edgeBps = paidUsd > 0 ? Math.floor(((recvUsd - paidUsd) / paidUsd) * 10_000) : 0;
+        // R-GRID-WAR (task-20): wash-עצמי — edge 0, מחוץ-ל-externalFlowUsd (כנות)
+        const wash = (f as { selfCross?: boolean }).selfCross === true;
         ledger.fills.push({
           key, at: f.at, side: f.side === "maker" ? "maker" : "taker", chain: "hive",
           direction: recvHive ? "bought-hive" : "sold-hive",
-          paid: f.paid, received: f.received, steemUsd: hiveUsd, sbdUsd: hbdUsd, paidUsd, recvUsd, edgeBps,
+          paid: f.paid, received: f.received, steemUsd: hiveUsd, sbdUsd: hbdUsd, paidUsd, recvUsd,
+          edgeBps: wash ? 0 : edgeBps,
         });
         const oid = f.openOrderid ?? f.currentOrderid;
         if (oid) {
           const rec = ledger.orders.find((x) => x.id === oid && x.chain === "hive" && x.status === "open");
           if (rec) { rec.status = "filled"; rec.lastSeenAt = new Date().toISOString(); ledger.filledTotal++; }
         }
-        ledger.externalFlowUsd = Math.round((ledger.externalFlowUsd + (recvUsd - paidUsd)) * 1e6) / 1e6;
-        console.log(`[grid-beat] HIVE REAL FILL counted: ${f.paid} -> ${f.received} · edge ${edgeBps}bps vs live marks (marked-at-detection)`);
+        if (wash) {
+          console.log(`[grid-beat] HIVE SELF-CROSS (wash) fill recorded at edge 0: ${f.paid} -> ${f.received} — volume only, NOT external profit`);
+        } else {
+          ledger.externalFlowUsd = Math.round((ledger.externalFlowUsd + (recvUsd - paidUsd)) * 1e6) / 1e6;
+          console.log(`[grid-beat] HIVE REAL FILL counted: ${f.paid} -> ${f.received} · edge ${edgeBps}bps vs live marks (marked-at-detection)`);
+        }
       }
     }
 

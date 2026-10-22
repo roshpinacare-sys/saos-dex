@@ -132,6 +132,13 @@ export interface RealFill {
   /** R24 · grid-beat: מזהי-ההזמנות מהאירוע — השוואה מדויקת למעקה */
   openOrderid?: number;
   currentOrderid?: number;
+  /**
+   * R-GRID-WAR (task-20, measured 2026-10-22T01:31–01:43Z): TRUE כאשר שני-צידי
+   * ההצלבה שייכים לאותו-חשבון (current_owner === open_owner === ACCOUNT) —
+   * צמד-עצמי (wash). מילוי-כזה אינו רווח-חוץ ואינו נספר ב-externalFlowUsd;
+   * הוא ווליום בלבד. fail-honest: הדגל נחשף למעקה במקום להסתיר את האירוע.
+   */
+  selfCross?: boolean;
 }
 
 export interface RealSnapshot {
@@ -218,15 +225,24 @@ async function fetchSnapshot(): Promise<RealSnapshot> {
         if (e.op[0] !== "fill_order" || fills.length >= 6) continue;
         const o = e.op[1] as Record<string, { amount: string } | string>;
         const openOwner = String(o.open_owner ?? "");
+        const curOwner = String(o.current_owner ?? "");
         const isMaker = openOwner === ACCOUNT;
-        if (!isMaker && String(o.current_owner ?? "") !== ACCOUNT) continue;
+        if (!isMaker && curOwner !== ACCOUNT) continue;
         // FIX(R24 · pays-form): condenser מחזיר current_pays/open_pays כמחרוזת
         // ("0.049 SBD"); הקאסט-הישן חיפש .amount על-מחרוזת וקיבל ריק — המילויים
         // נספרו בלי-סכומים. עתה: שתי-הצורות (מחרוזת-גולמית או אובייקט-amount).
         const paysOf = (x: unknown): string =>
           typeof x === "string" ? x : String((x as { amount?: string })?.amount ?? "");
-        const paid = paysOf(o.current_pays);
-        const recv = paysOf(o.open_pays);
+        // R-GRID-WAR (task-20): סמנטיקת-כיוון אמת לפי-זרוע. ב-fill_order:
+        // current_pays = מה שהטייקר (current_owner) שילם · open_pays = מה שהמייקר
+        // (open_owner) שילם. מנקודת-מבט-החשבון:
+        //   taker (curOwner === ACCOUNT): שילם current_pays, קיבל open_pays.
+        //   maker (openOwner === ACCOUNT): שילם open_pays, קיבל current_pays.
+        // הקוד-הישן ייחס תמיד paid=current_pays — כלומר עבור מילויי-maker
+        // הכיוון-היה הפוך (מכירה-אמת שלנו נספרה כקנייה ולהפך) וה-edge התהפך.
+        const wash = isMaker && curOwner === ACCOUNT; // צמד-עצמי — ווליום בלבד
+        const paid = isMaker ? paysOf(o.open_pays) : paysOf(o.current_pays);
+        const recv = isMaker ? paysOf(o.current_pays) : paysOf(o.open_pays);
         const pf = n(paid) / Math.max(1e-12, n(recv));
         const openOid = Number(o.open_orderid ?? 0) || undefined;
         const curOid = Number(o.current_orderid ?? 0) || undefined;
@@ -235,6 +251,7 @@ async function fetchSnapshot(): Promise<RealSnapshot> {
           paid, received: recv,
           price: `${pf.toFixed(6)} ${paid.includes("SBD") ? "SBD/STEEM" : "STEEM/SBD"}`,
           openOrderid: openOid, currentOrderid: curOid,
+          ...(wash ? { selfCross: true } : {}),
         });
       }
       const firstIdx = hist[0]![0];
