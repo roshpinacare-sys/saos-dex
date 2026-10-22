@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-20T14:20:52.225Z · 154 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-22T10:40:55.213Z · 160 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -67,9 +67,11 @@
 | `grids/community.mjs` | COMMUNITY (D-024) — בית-הצי ב-Steem: קהילה ייעודית על-פי-הוראת-הבעלים המתועדת |
 | `grids/convert.mjs` | CONVERT (D-023 · T-8) — מסילת-ההמרה: קציר-אסקים → SBD נזיל → המרה בפאריטי-פנים → 3.5 ימים  |
 | `grids/counter-grid.mjs` | COUNTER-GRID — סולמות-נגדיים-מתמטיקה עם חלוקת-הון-פר-צד (Z-87a · plan-only · audit-Z86c פע |
+| `grids/curate-beat.mjs` | !/usr/bin/env node |
 | `grids/curate-selftest.mjs` | CURATE-SELFTEST (A-12 · T-7) — וקטורים אופליין לגמרי, אפס-רשת אפס-מפתחות |
 | `grids/curate.mjs` | CURATE (A-12 · T-7) — מסילת-הקיורציה: הון-ה-SP עובד גם-בהצבעה |
 | `grids/custody.mjs` | CUSTODY (Z-89 · directive element #5) — שכבת-האמת של החזקות-רב-שרשרת |
+| `grids/daily-budget.mjs` | DAILY-BUDGET — מושל-התקציב-היומי של סילות-השוק (SAOS-DAILY-BUDGET/1) |
 | `grids/daily-cycle.mjs` | DAILY-CYCLE (A-8 · T-7) — המחזור-היומי העצמי: צפה → טיק → הצמד → מוביל → דוח |
 | `grids/delegate-plan.mjs` | DELEGATE-PLAN — האצלת SP מדודה ואידמפוטנטית (owner-mandated 2026-10-11) |
 | `grids/dividend-release.mjs` | !/usr/bin/env node |
@@ -78,6 +80,7 @@
 | `grids/engine.mjs` | ENGINE — לב רשת-הטריגרים: טיק אחד = קליטה→אסטרטגיות→כללים→אינווריאנטות |
 | `grids/escrow-payroll.mjs` | ESCROW-PAYROLL — מסילת-השכר בטוחה על-השרשרת (R16-a · owner mandate trace 1a12dbe9812eff11) |
 | `grids/events.mjs` | EVENTS — אפיק-האירועים של רשת-הטריגרים (JSONL append-only) |
+| `grids/external-profit.mjs` | !/usr/bin/env node |
 | `grids/fee-harvest.mjs` | !/usr/bin/env node |
 | `grids/fleet-grow.mjs` | FLEET-GROW — צמיחת-הצי הריבונית: רה-סולם של חיילי-העליונות על סולם-רוחבים ייחודי |
 | `grids/internal-pnl.mjs` | !/usr/bin/env node |
@@ -92,6 +95,7 @@
 | `grids/observe-selftest.mjs` | OBSERVE-SELFTEST — וקטורים דטרמיניסטיים אופליין לצופה-המילויים-אמת (A-9) |
 | `grids/observe.mjs` | OBSERVE — צופה-מילויים-אמת (A-9 · fleet/r130): שרשרת → רשת-הטריגרים |
 | `grids/one-body.mjs` | ONE-BODY — עזרה-הדדית-צבאית (W13 · מנדט-בעלים 2026-10-19) |
+| `grids/oracle-grid.mjs` | !/usr/bin/env node |
 | `grids/params-selftest.mjs` | PARAMS-SELFTEST — וקטורים דטרמיניסטיים אופליין לשומר-סף-הפרמטרים (9-c) |
 | `grids/payout-doctrine.mjs` | PAYOUT-DOCTRINE (Z-90-c) — קבלת-הדוקטרינה-לתשלום: בנייה-דטרמיניסטית-מוקדמת של החלטות-הבשלו |
 | `grids/peg-selftest.mjs` | PEG-SELFTEST — וקטורים דטרמיניסטיים למנוע-הצמדה (B-1) |
@@ -99,6 +103,8 @@
 | `grids/pnl-audit.mjs` | PNL-AUDIT — ביקורת-הרווח-האמת של הריבונות (SAOS-PNL-AUDIT/1) |
 | `grids/policy-selftest.mjs` | POLICY-ENGINE SELFTEST — מוכיח את חוקי SAOS-POLICY-ENGINE/1 על מדינה-מבודדת (tmp) |
 | `grids/policy.mjs` | POLICY-ENGINE — שכבת-הכסף של הרשת (SAOS-POLICY-ENGINE/1) |
+| `grids/position-sizing.mjs` | POSITION-SIZING — שער-הגודל-היחסי של סילות-השוק (SAOS-RISK-SIZE/1) |
+| `grids/profit-floor.mjs` | PROFIT-FLOOR — שער-רצפת-הרווח של רגלי-הסולם (SAOS-PROFIT-FLOOR/1) |
 | `grids/route-receipt.mjs` | ROUTE-RECEIPT — המסלול-הראשון STEEM↔HIVE (Wave-2 סעיף 3 · מתוכנן-במלואו, לא-מבוצע) |
 | `grids/rules.mjs` | RULES — מנוע-הכללים: דבר-גורר-דבר (DAG טריגרים חסום-עומק) |
 | `grids/run.mjs` | RUN — CLI של רשת-הטריגרים |
