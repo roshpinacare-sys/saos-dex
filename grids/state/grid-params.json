@@ -1,7 +1,7 @@
 {
   "protocol": "SAOS-GRID-PARAMS/1",
-  "sealedAt": "2026-10-22T14:10:00Z",
-  "sealedBy": "zai-agent round-27 (N8 price-truth value line + N8-b bid touch-hug) · owner mandate trace 1a163d4124276b39",
+  "sealedAt": "2026-10-22T14:52:00Z",
+  "sealedBy": "zai-agent round-27b (N8-f guard scope-split) · owner mandate trace 1a163d4124276b39 · measured war 14:39-14:40Z",
   "source": "measured live 2026-10-22T13:30-14:05Z: binance STEEMUSDT 0.0527 (vol 4.6M/24h), sbdUsd 0.5009 (our own ledger marks), chain median feed 0.10408 SBD/STEEM, book touch 0.1028 = 340bps under USD value, cashly external fill 0.5 STEEM @0.102 at 13:37:51Z, 19 days zero third-party fills on the parity+60bps shelf",
   "rationale": {
     "steemAskStepBps": "askStep 80→60bps: the drift-protection that justified 80bps (9-c) is now mechanical — the value-guard cancels any sub-parity ask every beat (measured 5 cancels in run 39723306632), so max adverse-selection exposure is drift between ~3s beats, not 4-day drift. 60bps keeps expected maker edge >= 0 by construction (value line) while moving level-1 ask 20bps closer to the touch; cost floor (avgCost+100bps) still overrides when basis demands.",
@@ -13,7 +13,8 @@
     "honesty": "fill-rate figures are estimates from a 72-fill tape and 7-day parity series, not promises; the ledger keeps marking every fill's live edge (marked-at-detection) so the next proposal re-fits from receipts.",
     "spreadTiers": "N1 tier ladder (round-26): these sealed values are the T0 base and the hard ceiling — the live steps derive per-run in grids/spread-tiers.mjs, tightening only as third-party fills accumulate on the ledger tape (T1 ≥2 fills → 45/80, T2 ≥5 → 30/60, T3 ≥12 → 18/45 double-digit). Wash fills (selfCross) and zero-edge fills never count as evidence. Floors from grids/validate-params.mjs (ask≥10/bid≥25) hold absolutely; the ladder never widens above this base.",
     "bidTouchHugBps": "N8-b (round-27): level-1 bid hugs the live touch by 10bps instead of dropping the full bidStep (100bps) below it. Measured: our 13:37-13:42 bids at bestBid-100bps sat 90bps behind the competing bid and never saw seller flow, while the competing touch-bid ladder captured a real third-party fill (cashly) within minutes. Top of queue = the flow. Doctrine ceiling preserved: no bid may ever exceed the value line (min(chainFeed, USD parity)); deeper levels still step down by the live TIER bidStep. SBD fuel is honestly micro (0.27 SBD liquid), so the hug raises fill probability without raising exposure.",
-    "priceTruthValueLine": "N8 (round-27): the value line becomes min(chain median feed 0.10408, USD parity 0.1052) = 0.10408, published in every run (publicDoc.priceTruth) with the measured SBD de-peg (~$0.50, implied-from-feed 0.5063 vs measured 0.5009 - two independent authorities agree within 1.1%). The ask shelf stays on the line (valueLine+TIER, fills on rally, never bleeds); the bid side becomes the legal external-fill engine (buying under the line = measured surplus per the original doctrine). The 19-day zero-fill outcome of the parity+60bps shelf (~400bps above touch) is the evidence that motivated this re-measurement, not a change of doctrine: never sell below external value, never buy above it - word for word."
+    "priceTruthValueLine": "N8 (round-27): the value line becomes min(chain median feed 0.10408, USD parity 0.1052) = 0.10408, published in every run (publicDoc.priceTruth) with the measured SBD de-peg (~$0.50, implied-from-feed 0.5063 vs measured 0.5009 - two independent authorities agree within 1.1%). The ask shelf stays on the line (valueLine+TIER, fills on rally, never bleeds); the bid side becomes the legal external-fill engine (buying under the line = measured surplus per the original doctrine). The 19-day zero-fill outcome of the parity+60bps shelf (~400bps above touch) is the evidence that motivated this re-measurement, not a change of doctrine: never sell below external value, never buy above it - word for word.",
+    "mmGuardBandBps": "N8-f (round-27b): the account-wide VALUE-GUARD narrows its cancellation scope from the value line to the broken-price envelope (bestBid + mmGuardBandBps, default 10bps). Measured war 14:39-14:40Z: two owner mandates collide on one account - grid-beat value-shelf law (asks >= valueLine, zero third-party fills in 19 days) vs the DEX VOLUME MANDATE market-exec spread machine (marketable sell at bid+0.1%, symmetric touch-hug bids, POSITIVE round-trip spread, and the only engine that captured a real external fill today: cashly 13:37:51Z). My guard was cancelling the fill engine (8 cancels with real txids at 14:39) and its refresh was cancelling my shelf (2341439833 murdered at 14:40:36, 51s after placement). Scope-split: the value line still governs EVERYTHING grid-beat itself places (shelf >= valueLine+TIER, bids <= valueLine - word-for-word doctrine), and the fill-ledger still marks every fill edge in honest USD; but the account-wide guard now stops only broken prices (deep sub-market), because a tight two-sided spread book with positive round-trip is not the Oct-4 bleed pattern. Two owner mandates, one account, no more fratricide."
   },
   "steem": {
     "commitPct": 0.85,
@@ -26,7 +27,8 @@
     "askStepBps": 60,
     "parityBandBps": 5000,
     "expiryDays": 27,
-    "bidTouchHugBps": 10
+    "bidTouchHugBps": 10,
+    "mmGuardBandBps": 10
   },
   "hive": {
     "commitPct": 0.9,

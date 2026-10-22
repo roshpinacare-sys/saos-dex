@@ -20,7 +20,7 @@
 export const PARAMS_PROTOCOL = "SAOS-GRID-PARAMS/1";
 
 const CHAIN_KEYS = {
-  steem: ["commitPct", "minKeepSteem", "minLevelSteem", "minLevelSbd", "bidLevels", "bidStepBps", "bidTouchHugBps", "askLevels", "askStepBps", "parityBandBps", "expiryDays"],
+  steem: ["commitPct", "minKeepSteem", "minLevelSteem", "minLevelSbd", "bidLevels", "bidStepBps", "bidTouchHugBps", "mmGuardBandBps", "askLevels", "askStepBps", "parityBandBps", "expiryDays"],
   hive: ["commitPct", "minKeepHive", "minLevelHive", "minLevelHbd", "askMinRecvHbd", "bidLevels", "bidStepBps", "askLevels", "askStepBps", "parityBandBps", "expiryDays"],
 };
 const TOP_KEYS = ["protocol", "sealedAt", "sealedBy", "source", "rationale", "steem", "hive"];
@@ -84,6 +84,13 @@ export function validateParams(doc) {
       if (hug !== undefined) {
         if (!finNum(hug) || !isInt(hug) || hug < 1 || hug > 200) errors.push(`steem.bidTouchHugBps must be an integer in [1, 200] (level-1 touch-hug; 0/absent = legacy step) — got ${JSON.stringify(hug)}`);
         else p.bidTouchHugBps = hug;
+      }
+      /* N8-f (round-27b): חגורת-השומר-מפורקת-מקו-הערך — השומר-ברמת-החשבון עוצר-רק
+       * מחירים-שבורים (עמוק-מתחת-למגע); מדף-הערך-של-grid-beat-עצמו נשאר-על-קו-הערך. */
+      const mgb = get("mmGuardBandBps");
+      if (mgb !== undefined) {
+        if (!finNum(mgb) || !isInt(mgb) || mgb < 1 || mgb > 500) errors.push(`steem.mmGuardBandBps must be an integer in [1, 500] (broken-price envelope over bestBid) — got ${JSON.stringify(mgb)}`);
+        else p.mmGuardBandBps = mgb;
       }
     }
     const as = get("askStepBps");

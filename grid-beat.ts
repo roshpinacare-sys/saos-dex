@@ -125,6 +125,7 @@ const HIVE_BID_STEP_BPS_LIVE = GP.hive.bidStepBps;
 const HIVE_ASK_LEVELS_LIVE = GP.hive.askLevels;
 const HIVE_ASK_STEP_BPS_LIVE = GP.hive.askStepBps;
 const LIVE_BID_TOUCH_HUG_BPS = typeof GP.steem.bidTouchHugBps === "number" && GP.steem.bidTouchHugBps >= 1 ? GP.steem.bidTouchHugBps : 10; // N8-b: התחבקות-מגע (round-27)
+const LIVE_MM_GUARD_BAND_BPS = typeof GP.steem.mmGuardBandBps === "number" && GP.steem.mmGuardBandBps >= 1 ? GP.steem.mmGuardBandBps : 10; // N8-f: מעטפת-מחיר-שבור (round-27b)
 const HIVE_PARITY_BAND_BPS = GP.hive.parityBandBps;
 const HIVE_EXPIRY_DAYS = GP.hive.expiryDays;
 
@@ -410,15 +411,20 @@ async function main(): Promise<void> {
     if (ladderIntact) {
       console.log(`[grid-beat] ladder intact & above value line — queue preserved · ask ${bestOurAsk?.toFixed(5)} ≥ ${askValueLine.toFixed(5)} · bid ${bestOurBid?.toFixed(5)} ≤ valueLine ${valueLine.toFixed(5)} · ${snap.openOrders.length} orders untouched`);
     }
-    /* R-GRID-WAR הגנת-ערך (רצה-בכל-מחזור, גם-כשהסולם-שלם): אסק-פתוח-מתחת-לפאריטי =
-     * מכירת-STEEM מתחת לשוויו-החוץ = דימום-אוצר. מבוטל-מיידי בלי-קשר למי-הציב אותו —
-     * המדיניות כובלת את-החשבון, לא את-הכותב. ראיות-מלאות בפנקס. */
+    /* R-GRID-WAR הגנת-ערך — N8-f פיצול-היקפים (round-27b · המלחמה-המדודה 14:39–14:40Z):
+     * שני-מנדטים-של-הבעלים על-חשבון-אחד: מדף-הערך (grid-beat) מול מנדט-הנפח (market-exec —
+     * מכירה-שווקית-במגע+0.1% · המנוע-היחיד-שלכד-מילוי-חוץ-אמת היום: cashly 13:37:51Z).
+     * השומר-עתה עוצר **מחירים-שבורים בלבד** (עמוק-מתחת-מעטפת-המגע) — לא-את-מנוע-המילויים;
+     * קו-הערך נשאר-שולט-בכל-מה-ש-grid-beat-עצמו מציב (מדף ≥ valueLine+TIER · בידים ≤ valueLine)
+     * והפנקס-מסמן-כל-edge-ב-USD-חי. אחווה-בין-מנדטים-במקום-רצח-אחים. */
     if (valueLine > 0) {
+      const mmEnvelope = snap.book.bestBid ? snap.book.bestBid * (1 + LIVE_MM_GUARD_BAND_BPS / 10_000) : 0;
+      const guardFloor = mmEnvelope > 0 ? Math.min(valueLine, mmEnvelope) : valueLine;
       for (const o of snap.openOrders) {
         const sellAmt = amtOfStr(o.sell), recvAmt = amtOfStr(o.receive);
         const isAsk = o.sell.includes("STEEM");
         const px = isAsk ? recvAmt / sellAmt : sellAmt / recvAmt;
-        if (isAsk && px < valueLine) {
+        if (isAsk && px < guardFloor) {
           bcAttempted++;
           try {
             const r = await realCancelOrder(o.id);
@@ -426,7 +432,7 @@ async function main(): Promise<void> {
             const rec = ledger.orders.find((x) => x.id === o.id);
             if (rec) { rec.status = "cancelled"; rec.lastSeenAt = new Date().toISOString(); }
             // N2-b · כנות-השתקמות: txid של recovered-cancel מסומן-בגלוי — לא נראה כישלון מה שנחת-והושג
-            console.log(`[grid-beat] VALUE-GUARD cancel #${o.id}${r.recovered ? " [RECOVERED-no-id]" : ""}: ask @${px.toFixed(6)} < valueLine ${valueLine.toFixed(6)} (${(((px - valueLine) / valueLine) * 10000).toFixed(0)}bps) — sub-value bleed stopped (N8 measured line) · txid ${r.txid.slice(0, 26)}`);
+            console.log(`[grid-beat] VALUE-GUARD cancel #${o.id}${r.recovered ? " [RECOVERED-no-id]" : ""}: ask @${px.toFixed(6)} < guardFloor ${guardFloor.toFixed(6)} (broken-price envelope bestBid+${LIVE_MM_GUARD_BAND_BPS}bps · valueLine ${valueLine.toFixed(6)}) — N8-f scope-split · txid ${r.txid.slice(0, 26)}`);
           } catch (e) {
             bcFailed++;
             console.warn(`[grid-beat] value-guard cancel #${o.id} failed: ${String(e).slice(0, 80)}`);
