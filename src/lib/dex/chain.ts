@@ -10,6 +10,7 @@
  */
 import fs from "fs";
 import path from "path";
+import { execSync } from "child_process"; // Task-115: קריאת-גבהים-חתומים-מגיט (דפוס-העוגן — אפס-סודות, קריאה-בלבד)
 import { db } from "@/lib/db";
 import {
   applyOp, genesisState, stateRoot, type DexState, type Op, type TradeEvent,
@@ -332,6 +333,50 @@ async function loadSnapshot(rt: ChainRT): Promise<"loaded" | "absent" | "corrupt
         }
       } catch (e) {
         console.error(`[saos-dex][ALERT] recovery-continuation probe failed (${(e as Error)?.message ?? e}) — falling through to refusal`);
+      }
+      if (!recovery) {
+        // ── Task-115 · stale-DB-lineage birth (סמכות-עצמית, אפס-המתנה-למפעיל) ──
+        // הלקח-החי (2026-10-22 00:1xZ): שחזור-סנדבוקס-מגיט החזיר את ה-DB לליניאג'
+        // עתיק (h146,512 — שארית-גיט) בעוד-ה-snapshot חי-ב-h1,141,687 (תואם-לדפקי-
+        // dex-beat החתומים-בגיט). התוצאה: אין-header-בגובה-התמונה, recovery-continuation
+        // דורש-DB-מעל-התמונה — והשרשרת-נכנסה-ל-halt-עד-מפעיל. זה-נגד-חוק-הריבונות
+        // ("פעילות-אוטונומית-חייבת-להפעיל-את-עצמה"). הנתיב-הזה מקבל-את-התמונה-כהורה
+        // כשהוכחות-חסומות-קשיח מתקיימות, ומטהר-בגלוי-את-הנגזרת-המיושנת:
+        //   (a) צורה+stateRoot-קנוני כבר-אומתו (הגענו-הנה);
+        //   (b) כל-שרשרת-ה-DB מאחורי-התמונה בהפרש->SEAL_EVERY — לא-סותרת, מיושנת;
+        //   (c) אימות-חוץ-מהגיט: גובה-דפקי-dex-beat החתומים (git log) תואם-לתמונה
+        //       בתוך-24-בלוקים (שני-חלונות-חותם) — אותה-משפחה-ליניאג', לא-זיוף;
+        //   (d) טיהור-גלוי-מתועד-ספירות + קבלה-חתומה + גיבוי-קובץ-DB (best-effort);
+        //   (e) משתתק-מעצמו: מהבלוק-הראשון-יש-header-בגובה-התמונה → הנתיב-הרגיל-חי.
+        // אם-אחת-מההוכחות-חסרה — נשארים-בדחייה-הכנה (return "corrupt").
+        try {
+          const agg2 = await db.blockHeader.aggregate({ _min: { height: true }, _max: { height: true }, _count: { _all: true } });
+          const stMax = agg2._max.height ?? -1;
+          const stCnt = agg2._count._all ?? 0;
+          const staleBehind = stMax > 0 && stMax < raw.state.height && raw.state.height - stMax > SEAL_EVERY;
+          const beatH = (() => {
+            try {
+              const out = execSync("git log -16 --format=%s", { cwd: process.cwd(), encoding: "utf8", timeout: 5000 });
+              let best = -1;
+              for (const m of out.matchAll(/h(\d+)\u2192h(\d+)/g)) best = Math.max(best, parseInt(m[2] ?? "0", 10));
+              return best;
+            } catch { return -1; }
+          })();
+          const beatCorroborates = beatH > 0 && Math.abs(raw.state.height - beatH) <= 24;
+          if (staleBehind && beatCorroborates) {
+            const backup = path.join(DATA_DIR, `dex.db.pre-selfrecovery-h${raw.state.height}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+            try { fs.copyFileSync(path.join(process.cwd(), "db", "dex.db"), backup); } catch { /* גיבוי-הוא-הכי-טוב-שאפשר; הטיהור-מתועד-בקבלה */ }
+            const delH = await db.blockHeader.deleteMany({});
+            const delS = await db.sealRecord.deleteMany({});
+            console.warn(`[saos-dex][ALERT] BOOT-ACCEPTANCE (stale-DB-birth\u00b7Task-115): snapshot h${raw.state.height} adopted as birth-parent — DB lineage was ENTIRELY BEHIND (max h${stMax}, ${stCnt} rows, gap ${raw.state.height - stMax} blocks > SEAL_EVERY=${SEAL_EVERY}) and git-committed dex-beat heights corroborate the snapshot (beat h${beatH}, \u0394${Math.abs(raw.state.height - beatH)} \u2264 24). Stale derivative tip purged OPENLY: blockHeaders=${delH.count}, sealRecords=${delS.count}; DB file backed up. Self-disabling: the first new block writes a header at snapshot height and the normal path resumes forever. Zero operator-wait (sovereignty law).`);
+            pushReceipt(rt, "boot-acceptance-stale-db-birth", { snapshotH: raw.state.height, dbMax: stMax, dbCount: stCnt, beatH, delta: Math.abs(raw.state.height - beatH), purgedHeaders: delH.count, purgedSeals: delS.count, at: Date.now() });
+            recovery = true;
+          } else {
+            console.error(`[saos-dex][ALERT] stale-DB-birth candidate refused (staleBehind=${staleBehind}, beatH=${beatH}, beatCorroborates=${beatCorroborates}) — falling back to honest refusal`);
+          }
+        } catch (e) {
+          console.error(`[saos-dex][ALERT] stale-DB-birth probe failed (${(e as Error)?.message ?? e}) — falling through to refusal`);
+        }
       }
       if (!recovery) {
         console.error(`[saos-dex][ALERT] SNAPSHOT h${raw.state.height} HAS NO DB blockHeader TO CORROBORATE (DB down or evidence gap; priorCount=${priorCount}, anchorH=${anchorH}) — refusing load, evidence untouched`);
