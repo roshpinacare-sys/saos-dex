@@ -56,13 +56,14 @@ jobs:
       - name: typecheck (tsc --noEmit)
         run: bun run typecheck
 
-      - name: grids + mission offline selftests (node, 17 files)
+      - name: grids + mission offline selftests (node, 18 files)
         run: |
           set -euo pipefail
           node grids/run.mjs --selftest
           node grids/book-law-selftest.mjs
           node grids/brake-selftest.mjs
           node grids/spread-tiers-selftest.mjs
+          node grids/price-truth-selftest.mjs
           node grids/params-selftest.mjs
           node grids/liquidity-selftest.mjs
           node grids/arb-selftest.mjs

@@ -124,6 +124,7 @@ const HIVE_BID_LEVELS_LIVE = GP.hive.bidLevels;
 const HIVE_BID_STEP_BPS_LIVE = GP.hive.bidStepBps;
 const HIVE_ASK_LEVELS_LIVE = GP.hive.askLevels;
 const HIVE_ASK_STEP_BPS_LIVE = GP.hive.askStepBps;
+const LIVE_BID_TOUCH_HUG_BPS = typeof GP.steem.bidTouchHugBps === "number" && GP.steem.bidTouchHugBps >= 1 ? GP.steem.bidTouchHugBps : 10; // N8-b: התחבקות-מגע (round-27)
 const HIVE_PARITY_BAND_BPS = GP.hive.parityBandBps;
 const HIVE_EXPIRY_DAYS = GP.hive.expiryDays;
 
@@ -295,6 +296,18 @@ async function main(): Promise<void> {
   const ledger = loadLedger();
   const armed = !!activeWif();
 
+  /* N8 · PRICE-TRUTH (round-27, owner mandate trace 1a163d4124276b39): קו-הערך-המשולש.
+   * valueLine = min(feed-רפואי-על-השרשרת, פאריטי-USD-חוץ) — התביעה-השמרנית-משתי-סמכויות.
+   * מדוד-חי 10-22: chainFeed 0.10408 · usdParity 0.1052 (binance 0.0527 ÷ sbdUsd 0.501 —
+   * SBD-דה-פג-מדוד-ומפורסם) · מגע 0.1028. העוגן-הישן היה נכון — מה שהיה-שבור זה
+   * המדף (parity+60bps ≈ 400bps-מעל-המגע — אפס-מילויים) והבידים (100bps-מתחת-המגע —
+   * אפס-זרימה). נפילה-כנה: מדידה-שנכשלה → parity-הישן (התנהגות-קודמת). */
+  const priceTruthMod = await import("./grids/price-truth.mjs");
+  const PT = await (priceTruthMod as { measurePriceTruth: (o?: unknown) => Promise<{ valueLineSbdPerSteem: number | null; bandRefSbdPerSteem: number | null; verdict: string; marks: Record<string, unknown>; notes: string[]; law?: string; measuredAt?: string } | null> }).measurePriceTruth({ steemUsd, sbdUsd }).catch(() => null);
+  const valueLine = PT?.valueLineSbdPerSteem ?? parity;
+  const bandRef = PT?.bandRefSbdPerSteem ?? parity;
+  console.log(`[grid-beat] PRICE-TRUTH ${PT?.verdict ?? "unmeasured"}: valueLine ${valueLine?.toFixed(5) ?? "∅"} SBD/STEEM (chain ${String(PT?.marks.chainFeedSbdPerSteem ?? "∅")} · usdParity ${String(PT?.marks.usdParitySbdPerSteem ?? "∅")}) · sbdUsd ${String(PT?.marks.measuredSbdUsd ?? "∅")} (implied ${String(PT?.marks.impliedSbdUsdFromFeed ?? "∅")} · depeg ${String(PT?.marks.sbdDepegBps ?? "∅")}bps)${PT?.notes.length ? ` · ${PT.notes.join(" · ")}` : ""}`);
+
   /* N1 · המדרגה-החיה: נגזרת-מהראיות-בפנקס (מילויי-חוץ מצטברים) מעל הבסיס-החתום.
    * הערכים-החיים של רגל-STEEM: אסקים/בידים נפרשים לפי TIER, לא לפי הבסיס ישירות —
    * כך ההידוק-אל-דו-ספרתי-bps קורה רק כשהשוק-החוץ באמת משלם. */
@@ -311,11 +324,13 @@ async function main(): Promise<void> {
   let placed = 0, cancelled = 0;
   const blocker: string[] = [];
   if (!armed) blocker.push("STEEM_ACTIVE_WIF secret missing: one operator action to arm the external grid");
-  if (!parity) blocker.push("external USD marks unavailable (steem/sbd feeds down): no marking, no trading");
+  /* N8: קו-ערך-חי מספיק — גם CHAIN-ONLY (ה-USD-פידים-נפלו, ה-feed-הרפואי-חי) עדיין מצייר
+   * קו-ערך-אמת; חסימה-מלאה רק-כשאין-אף-סמכות (UNMEASURED). */
+  if (!valueLine) blocker.push("no measured value line (chain feed down AND USD feeds down): no marking, no trading");
   if (!snap.book.bestBid || !snap.book.bestAsk) blocker.push("public book one-sided or unreachable");
-  if (parity && snap.book.mid) {
-    const devBps = Math.floor(((snap.book.mid - parity) / parity) * 10_000);
-    if (Math.abs(devBps) > LIVE_PARITY_BAND_BPS) blocker.push(`book mid deviates ${devBps}bps from external parity: refusing to trade a broken market`);
+  if (bandRef && snap.book.mid) {
+    const devBps = Math.floor(((snap.book.mid - bandRef) / bandRef) * 10_000);
+    if (Math.abs(devBps) > LIVE_PARITY_BAND_BPS) blocker.push(`book mid deviates ${devBps}bps from the measured value line (chain feed): refusing to trade a broken market`);
   }
   /* R25 · שער-STASIS: הבלם נקרא טרי בכל-ריצה, לפני-כל-מסילת-חתימה —
    * active=true → חוסם-כנה (no-op בריא) עם הסיבה-מפורסמת בגלוי. */
@@ -328,7 +343,7 @@ async function main(): Promise<void> {
   const polAmt = (s: string): number => parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) || 0;
   const polSteemReturned = snap.openOrders.filter((o) => o.sell.includes("STEEM")).reduce((s, o) => s + polAmt(o.sell), 0);
   const polSbdReturned = snap.openOrders.filter((o) => o.sell.includes("SBD")).reduce((s, o) => s + polAmt(o.sell), 0);
-  const polNotionalUpper = Math.max(0, snap.balances.steem + polSteemReturned - LIVE_MIN_KEEP_STEEM) * LIVE_COMMIT_PCT * (parity ?? 0)
+  const polNotionalUpper = Math.max(0, snap.balances.steem + polSteemReturned - LIVE_MIN_KEEP_STEEM) * LIVE_COMMIT_PCT * (parity ?? valueLine ?? 0)
     + Math.max(0, snap.balances.sbd + polSbdReturned) * LIVE_COMMIT_PCT;
   /* Trim-to-cap (2026-10-22, owner approve trace 1a1629f96941f20d): חריגת-תקרת-מחזור לא תזרוק
    * HALT-מלא — הגריד מתאים-את-עצמו מטה (גורם-התאמה ≤1) אל-תוך התקרה. המשמעת-הון-נשמרת
@@ -359,7 +374,7 @@ async function main(): Promise<void> {
     }
   }
 
-  if (armed && parity && snap.book.bestBid && snap.book.bestAsk && blocker.length === 0) {
+  if (armed && valueLine && snap.book.bestBid && snap.book.bestAsk && blocker.length === 0) {
     const { realPlaceOrder, realCancelOrder } = rm as unknown as {
       realPlaceOrder: (p: { orderid: number; amountToSell: string; minToReceive: string; expirationDays?: number }) => Promise<{ txid: string; block: number | null }>;
       realCancelOrder: (orderid: number) => Promise<{ txid: string; block: number | null; recovered?: boolean }>;
@@ -389,21 +404,21 @@ async function main(): Promise<void> {
     const TOUCH_EPS = 1e-4; // סובלנות-השוואת-מגע (0.01%)
     const ownsAsk = bestOurAsk != null && Math.abs(bestOurAsk - snap.book.bestAsk) <= snap.book.bestAsk * TOUCH_EPS;
     const ownsBid = bestOurBid != null && Math.abs(bestOurBid - snap.book.bestBid) <= snap.book.bestBid * TOUCH_EPS;
-    const askValueLine = parity * (1 + TIER.askStepBps / 10_000); // N1: מדרגה-חיה מבוססת-ראיות
-    const ladderIntact = ownsAsk && ownsBid && bestOurAsk !== null && bestOurAsk >= askValueLine && bestOurBid !== null && bestOurBid <= parity;
+    const askValueLine = valueLine * (1 + TIER.askStepBps / 10_000); // N1: מדרגה-חיה מבוססת-ראיות, על-קו-הערך-המדוד (N8)
+    const ladderIntact = ownsAsk && ownsBid && bestOurAsk !== null && bestOurAsk >= askValueLine && bestOurBid !== null && bestOurBid <= valueLine;
 
     if (ladderIntact) {
-      console.log(`[grid-beat] ladder intact & above value line — queue preserved · ask ${bestOurAsk?.toFixed(5)} ≥ ${askValueLine.toFixed(5)} · bid ${bestOurBid?.toFixed(5)} ≤ parity ${parity.toFixed(5)} · ${snap.openOrders.length} orders untouched`);
+      console.log(`[grid-beat] ladder intact & above value line — queue preserved · ask ${bestOurAsk?.toFixed(5)} ≥ ${askValueLine.toFixed(5)} · bid ${bestOurBid?.toFixed(5)} ≤ valueLine ${valueLine.toFixed(5)} · ${snap.openOrders.length} orders untouched`);
     }
     /* R-GRID-WAR הגנת-ערך (רצה-בכל-מחזור, גם-כשהסולם-שלם): אסק-פתוח-מתחת-לפאריטי =
      * מכירת-STEEM מתחת לשוויו-החוץ = דימום-אוצר. מבוטל-מיידי בלי-קשר למי-הציב אותו —
      * המדיניות כובלת את-החשבון, לא את-הכותב. ראיות-מלאות בפנקס. */
-    if (parity > 0) {
+    if (valueLine > 0) {
       for (const o of snap.openOrders) {
         const sellAmt = amtOfStr(o.sell), recvAmt = amtOfStr(o.receive);
         const isAsk = o.sell.includes("STEEM");
         const px = isAsk ? recvAmt / sellAmt : sellAmt / recvAmt;
-        if (isAsk && px < parity) {
+        if (isAsk && px < valueLine) {
           bcAttempted++;
           try {
             const r = await realCancelOrder(o.id);
@@ -411,7 +426,7 @@ async function main(): Promise<void> {
             const rec = ledger.orders.find((x) => x.id === o.id);
             if (rec) { rec.status = "cancelled"; rec.lastSeenAt = new Date().toISOString(); }
             // N2-b · כנות-השתקמות: txid של recovered-cancel מסומן-בגלוי — לא נראה כישלון מה שנחת-והושג
-            console.log(`[grid-beat] VALUE-GUARD cancel #${o.id}${r.recovered ? " [RECOVERED-no-id]" : ""}: ask @${px.toFixed(6)} < parity ${parity.toFixed(6)} (${(((px - parity) / parity) * 10000).toFixed(0)}bps) — sub-parity bleed stopped · txid ${r.txid.slice(0, 26)}`);
+            console.log(`[grid-beat] VALUE-GUARD cancel #${o.id}${r.recovered ? " [RECOVERED-no-id]" : ""}: ask @${px.toFixed(6)} < valueLine ${valueLine.toFixed(6)} (${(((px - valueLine) / valueLine) * 10000).toFixed(0)}bps) — sub-value bleed stopped (N8 measured line) · txid ${r.txid.slice(0, 26)}`);
           } catch (e) {
             bcFailed++;
             console.warn(`[grid-beat] value-guard cancel #${o.id} failed: ${String(e).slice(0, 80)}`);
@@ -452,7 +467,7 @@ async function main(): Promise<void> {
        * כלפי-מעלה מהבסיס-המהודק — אף-אסק לא נופל מתחת ל-bestAsk (אין-taker-דימום).
        * EDGE-FLOOR: הבסיס מרים גם את רצפת-העלות — אסק שלם לא נפרש מתחתיה. */
       const touchAsk = snap.book.bestAsk ?? 0;
-      const baseAsk = Math.max(parity * (1 + TIER.askStepBps / 10_000), touchAsk, costFloor);
+      const baseAsk = Math.max(valueLine * (1 + TIER.askStepBps / 10_000), touchAsk, costFloor);
       for (let k = 1; k <= LIVE_ASK_LEVELS; k++) {
         const px = baseAsk * (1 + (TIER.askStepBps * (k - 1)) / 10_000);
         const sellAmt = per;
@@ -486,9 +501,15 @@ async function main(): Promise<void> {
     const sbdCommit = Math.max(0, Math.floor((snap.balances.sbd + sbdReturned) * LIVE_COMMIT_PCT * commitScale * 1000) / 1000); // commitScale: trim-to-cap (owner approve 1a1629f96941f20d)
     if (sbdCommit >= LIVE_MIN_LEVEL_SBD * LIVE_BID_LEVELS && snap.book.bestBid) {
       const per = Math.floor((sbdCommit / LIVE_BID_LEVELS) * 1000) / 1000;
+      /* N8-b · התחבקות-מגע (bidTouchHugBps, round-27): רמה-1-מתחבקת-מגע (ברירת-מחדל
+       * 10bps) במקום-100bps-מתחתיו — הביד-המדוד-היה-90bps-מאחורי-הביד-המתחרה-ולא-ראה
+       * אף-זרימת-מוכרים. ראש-התור = זרימה. רמות-עמוקות-ממשיכות-לרדת-ב-TIER-החי.
+       * תקרת-הדוקטרינה-נשמרת: אף-ביד מעל קו-הערך (valueLine) לא-יוצא-לעולם. */
+      const hugBps = Math.min(LIVE_BID_TOUCH_HUG_BPS, TIER.bidStepBps);
+      const bidBase = Math.min(snap.book.bestBid * (1 - hugBps / 10_000), valueLine);
       for (let k = 1; k <= LIVE_BID_LEVELS; k++) {
-        // Z-80: ביד לא עולה על המגע — תמיד (כפול-ביטחון; הנוסחה כבר מתחתיו)
-        const px = Math.min(snap.book.bestBid * (1 - (TIER.bidStepBps * k) / 10_000), snap.book.bestBid); // N1: מדרגה-חיה
+        // Z-80: ביד לא עולה על המגע — תמיד (כפול-ביטחון; bidBase כבר מתחתיו)
+        const px = Math.min(bidBase * (1 - (TIER.bidStepBps * (k - 1)) / 10_000), snap.book.bestBid); // N8-b: התחבקות-מגע + N1 מדרגה-חיה
         const recv = Math.floor(per / px * 1000) / 1000; // STEEM
         if (recv < LIVE_MIN_LEVEL_STEEM) continue;
         const perOpNotional = per; // ערך-SBD של ההצבה הבודדת (ה-BID מוכר SBD)
@@ -780,6 +801,8 @@ async function main(): Promise<void> {
       directiveR24: "powerdown is read-only here: never opened, never replaced, fleet RC is sacred",
     },
     marks: { steemUsd, sbdUsd, paritySbdPerSteem: parity },
+    /* N8 · PRICE-TRUTH מפורסם-בגלוי: הקו-המשולש + הדה-פג-המדוד של SBD — אין-קו-ערך-סמוי */
+    priceTruth: PT ? { verdict: PT.verdict, valueLineSbdPerSteem: PT.valueLineSbdPerSteem, marks: PT.marks, notes: PT.notes, measuredAt: PT.measuredAt, law: PT.law } : null,
     fuel: {
       powerdownActive: snap.powerdown.active,
       weeklySp: snap.powerdown.weeklySp,

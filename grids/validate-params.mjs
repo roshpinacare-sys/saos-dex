@@ -20,7 +20,7 @@
 export const PARAMS_PROTOCOL = "SAOS-GRID-PARAMS/1";
 
 const CHAIN_KEYS = {
-  steem: ["commitPct", "minKeepSteem", "minLevelSteem", "minLevelSbd", "bidLevels", "bidStepBps", "askLevels", "askStepBps", "parityBandBps", "expiryDays"],
+  steem: ["commitPct", "minKeepSteem", "minLevelSteem", "minLevelSbd", "bidLevels", "bidStepBps", "bidTouchHugBps", "askLevels", "askStepBps", "parityBandBps", "expiryDays"],
   hive: ["commitPct", "minKeepHive", "minLevelHive", "minLevelHbd", "askMinRecvHbd", "bidLevels", "bidStepBps", "askLevels", "askStepBps", "parityBandBps", "expiryDays"],
 };
 const TOP_KEYS = ["protocol", "sealedAt", "sealedBy", "source", "rationale", "steem", "hive"];
@@ -77,6 +77,15 @@ export function validateParams(doc) {
     const bs = get("bidStepBps");
     if (!finNum(bs) || bs < 25 || bs > 1000) errors.push(`${chain}.bidStepBps must be a finite number in [25, 1000] (min spread floor below touch) — got ${JSON.stringify(bs)}`);
     else p.bidStepBps = bs;
+    /* N8-b (round-27): bidTouchHugBps — רק-STEEM, אופציונלי (ברירת-מחדל-חיה-ב-grid-beat=10);
+     * רמת-הביד-הראשונה מתחבקת-מגע במקום-לרדת-מהמגע-בבידStep המלא. */
+    if (chain === "steem") {
+      const hug = get("bidTouchHugBps");
+      if (hug !== undefined) {
+        if (!finNum(hug) || !isInt(hug) || hug < 1 || hug > 200) errors.push(`steem.bidTouchHugBps must be an integer in [1, 200] (level-1 touch-hug; 0/absent = legacy step) — got ${JSON.stringify(hug)}`);
+        else p.bidTouchHugBps = hug;
+      }
+    }
     const as = get("askStepBps");
     if (!finNum(as) || as < 10 || as > 1000) errors.push(`${chain}.askStepBps must be a finite number in [10, 1000] — got ${JSON.stringify(as)}`);
     else p.askStepBps = as;
