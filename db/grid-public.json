@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-10-22T04:37:05.899Z",
+ "publishedAt": "2026-10-22T08:08:24.085Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -11,34 +11,33 @@
  "armed": true,
  "verdict": "ARMED-WAITING",
  "blocker": [
-  "buy-side waiting for SBD inventory: 0.143 SBD commitable < 0.15 needed",
-  "broadcast failing: 3/8 chain ops rejected this run (\"broadcast answered without id\") — stale key/authority or node fault; verdict cannot be stable until signing succeeds"
+  "POLICY-HALT (steem leg): cycle notional upper-bound 33.188 SBD > cap 19 ; kelly-cap: gear cap 25→4 SBD (mode=kelly; winRate=0.527 WLR=1.101 kelly=0.097 safe=0.049 ×4 → 4/25) — atomic refresh skipped, ladder untouched"
  ],
  "keyGate": {
   "ok": true,
   "authorityOk": true
  },
  "zombieOrders": {
-  "count": 17,
+  "count": 16,
   "ids": [
-   1792638419,
-   1792638420,
-   1792638421,
-   1792638422,
-   1792638425,
-   1792638426,
-   1792643570,
-   1792643571,
-   1792643572,
-   1792643573,
-   2026102212,
-   2026102216
+   1792644651,
+   1792644652,
+   1792644663,
+   1792644664,
+   1792644665,
+   1792644666,
+   1792644667,
+   1792644668,
+   1792644669,
+   1792645719,
+   1792654369,
+   1792654370
   ],
   "note": "open on-chain but not known-open in the ledger — ledger/chain drift surfaced honestly (lost concurrent push, or another actor trading this account)"
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-10-22T04:37:05.899Z",
+  "publishedAt": "2026-10-22T08:08:24.084Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": true,
@@ -50,23 +49,23 @@
   },
   "verdict": "ARMED-WAITING",
   "blocker": [
-   "hive book mid deviates 7608bps from external parity: refusing to trade a broken market"
+   "hive book mid deviates 7976bps from external parity: refusing to trade a broken market"
   ],
   "marks": {
-   "hiveUsd": 0.050225979473791676,
-   "hbdUsd": 1.76,
-   "parityHbdPerHive": 0.028537488337381633
+   "hiveUsd": 0.04957926099103087,
+   "hbdUsd": 1.79,
+   "parityHbdPerHive": 0.027697911168173668
   },
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.619794434174445
+   "hp": 21.62004017392591
   },
   "book": {
-   "bestBid": 0.05024758503125254,
-   "bestAsk": 0.05025187622082862,
-   "mid": 0.05024973062604058,
-   "spreadBps": 0
+   "bestBid": 0.04978354978354978,
+   "bestAsk": 0.04979775730853957,
+   "mid": 0.04979065354604467,
+   "spreadBps": 2
   },
   "openOrdersNow": 0,
   "run": {
@@ -86,42 +85,42 @@
   "principle": "never sell STEEM below its external USD value; every buy below parity is measured surplus",
   "commitPct": 0.85,
   "bidLevels": 3,
-  "bidStepBps": 150,
+  "bidStepBps": 100,
   "askLevels": 3,
-  "askStepBps": 80,
+  "askStepBps": 60,
   "expiryDays": 27,
   "hiveCommitPct": 0.9,
   "paramsSource": "grids/state/grid-params.json (validated fail-closed by grids/validate-params.mjs before every run)",
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.052962329114994086,
-  "sbdUsd": 0.500748,
-  "paritySbdPerSteem": 0.10576643164824241
+  "steemUsd": 0.052832158209012964,
+  "sbdUsd": 0.498888,
+  "paritySbdPerSteem": 0.10589983765697504
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 0.00025006752017163594,
+  "weeklySp": 0.0002500699997616944,
   "weeklyUsd": 0,
-  "remainingSp": 1000.2694600561034,
+  "remainingSp": 1000.2793784101833,
   "remainingWeeks": 3999998,
   "nextPayout": "2026-10-25T01:40:51",
-  "rcFuelSp": 150.39737460617368
+  "rcFuelSp": 150.39886589874394
  },
  "inventory": {
-  "steem": 75.114,
-  "sbd": 0.169
+  "steem": 83.294,
+  "sbd": 1.108
  },
  "book": {
-  "bestBid": 0.10102335345053792,
-  "bestAsk": 0.1018867924528302,
-  "mid": 0.10145507295168406,
-  "spreadBps": 85
+  "bestBid": 0.10175010175010175,
+  "bestAsk": 0.10175188429415359,
+  "mid": 0.10175099302212767,
+  "spreadBps": 0
  },
- "openOrdersNow": 17,
+ "openOrdersNow": 16,
  "run": {
   "placed": 0,
-  "cancelled": 5,
+  "cancelled": 0,
   "placedTotal": 188,
   "cancelledTotal": 317,
   "filledTotal": 118
