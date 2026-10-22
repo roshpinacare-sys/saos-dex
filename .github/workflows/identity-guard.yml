@@ -32,6 +32,7 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '53 7 * * 1'   # weekly Monday census slot (07:53Z) — runs only when the wall lifts
+    - cron: '53 9 * * *'   # daily silence-sweep 09:53Z — the unsilenceable channel against skip-CI-marker pushes (wave 19.69)
 
 permissions:
   contents: read
@@ -154,3 +155,44 @@ jobs:
             sleep $((i * 7))
           done
           [ "$ok" = "1" ] || echo "publish-deferred (sibling races) — the next weekly slot re-measures honestly"
+
+  silence-sweep:
+    # [wave 19.69 · trace 1a162c0c84652ef5] THE SILENCE HOLE, measured: a push whose
+    # HEAD commit message carries the CI-skip marker silences EVERY push-triggered
+    # workflow — agent4's container-class evidence push b65c6b5aa (2026-10-22T08:34Z,
+    # committer z@container) landed on main with ZERO guard run, and landed
+    # violations never re-tear on push ranges, so a wound could sleep until the
+    # weekly REPORT-ONLY deep sweep. This job runs on schedule — the one trigger
+    # the skip marker cannot silence — and tears loudly on any unlawful identity
+    # landed in the last 26h: the silence window collapses from up to 7 days to
+    # at most 26h. It is enforcement (fails the run), not report: the
+    # deny-by-default law now has an unsilenceable channel. Dispatchable for
+    # run-ID proof on demand.
+    if: false  # dormant with the guard — armed by deleting the if-false lines together when the wall lifts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Recent-window identity enforcement (last 26h, unsilenceable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same law text as the push guard (v3 deny-by-default), same allowlist.
+          # Window is recent-only: old wounds belong to the weekly report-only
+          # deep sweep and to owner-side history rewrite (DECISIONS #29).
+          ALLOWED='^([0-9]+\+roshpinacare-sys@users\.noreply\.github\.com|roshpinacare-sys@users\.noreply\.github\.com|([0-9]+\+)?github-actions\[bot\]@users\.noreply\.github\.com|[^@]+@fleet\.local|[^@]+@agents\.roshpinacare-sys|roshpinacare@gmail\.com|actions@github\.com)$'
+          VIOLATIONS="$(git log --pretty='%H|%ae|%ce|%ad|%s' --date=iso --since='26 hours ago' origin/main 2>/dev/null | awk -F'|' -v ALLOWED="$ALLOWED" '
+            $2 !~ ALLOWED || $3 !~ ALLOWED
+          ' || true)"
+          if [ -n "$VIOLATIONS" ]; then
+            echo "::error::IDENTITY LAW VIOLATION LANDED SILENTLY — the skip-CI marker silenced the push guard, but this scheduled sweep is unsilenceable; unlawful identities on main in the last 26h (identity law v3 deny-by-default: only <lane>@fleet.local, <lane>@agents.roshpinacare-sys, the owner org identities, github-actions[bot], actions@github.com and roshpinacare@gmail.com are lawful)"
+            printf '%s\n' "$VIOLATIONS"
+            exit 1
+          fi
+          echo "identity-guard silence-sweep: PASS — 0 unlawful identities landed in the last 26h"
