@@ -1,525 +1,436 @@
-// src/lib/dex/attack-detector.ts
-/**
- * Attack Detector — מנגנון זיהוי תקיפות פרוגרמטי ל-SAOS-DEX
- * 
- * מודול זה מיישם 5 שכבות הגנה:
- * 1. Reentrancy Detection — ניתוח זרימות קריאות חוזרות
- * 2. Front-running Detection — זיהוי עליות מחיר חשודות לפני עסקאות גדולות
- * 3. Sandwich Attack Detection — ניתוח עסקאות בזמן קצר עם רווחים חריגים
- * 4. User Behavior Monitoring — סימון פעולות חריגות (קצב עסקאות גבוה)
- * 5. Real-time Suspicious Activity Reports — דוחות עם דרגות סיכון
- * 
- * עקרונות תכנון:
- * - אפס תלות חיצונית — רץ בתוך הגרעין הדטרמיניסטי
- * - O(1) זיכרון לכל משתמש — חלונות הזזה קבועים
- * - fail-open לזמינות — כשל בניטור לא חוסם מסחר לגיטימי
- * - אין סודות בלוגים — רק מזהים ציבוריים (account, symbol, txid)
- */
+import { NextRequest, NextResponse } from 'next/server';
+import { createHash, randomBytes } from 'crypto';
 
-import { createHash } from "node:crypto";
-
-// ─── Types ──────────────────────────────────────────────────────────────
-
-export type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-
-export interface AttackSignal {
-  type: "REENTRANCY" | "FRONT_RUNNING" | "SANDWICH" | "ANOMALOUS_BEHAVIOR";
-  risk: RiskLevel;
-  account: string;
-  symbol?: string;
-  details: Record<string, unknown>;
-  timestamp: number;
-  txid?: string;
-}
-
-export interface UserBehaviorProfile {
-  account: string;
-  txCountWindow: number;        // עסקאות בחלון הנוכחי
-  txTimestamps: number[];       // timestamps של עסקאות אחרונות (מקס 100)
-  volumeWindow: number;         // נפח בחלון הנוכחי (בסיסי)
-  uniqueSymbols: Set<string>;   // סימבולים ייחודיים בחלון
-  avgTxInterval: number;        // מרווח ממוצע בין עסקאות (ms)
-  lastUpdate: number;
-  riskScore: number;            // 0-100
-  flags: string[];              // דגלים מצטברים
-}
-
-export interface DetectionConfig {
-  // Reentrancy
-  reentrancyMaxDepth: number;           // עומק קריאות מקסימלי מותר
-  reentrancyWindowMs: number;           // חלון זמן לזיהוי קריאות חוזרות
-  
-  // Front-running
-  frontRunPriceShiftBps: number;        // שינוי מחיר ב-bps שמפעיל חשד
-  frontRunTimeWindowMs: number;         // חלון זמן לפני עסקה גדולה
-  frontRunMinVolume: number;            // נפח מינימלי לעסקה "גדולה"
-  
-  // Sandwich
-  sandwichTimeWindowMs: number;         // חלון זמן מקסימלי בין קנייה למכירה
-  sandwichMinProfitBps: number;         // רווח מינימלי ב-bps לזיהוי
-  sandwichMaxSlippageBps: number;       // החלקה מקסימלית צפויה לגיטימית
-  
-  // Anomalous Behavior
-  anomalyMaxTxPerMinute: number;        // מקס עסקאות לדקה לפני דגל
-  anomalyMaxVolumeMultiplier: number;   // מכפיל נפח מעל הממוצע
-  anomalyMinUniqueSymbols: number;      // מינימום סימבולים שונים לפיזור
-  anomalyWindowMs: number;              // חלון התנהגות
-  
-  // General
-  maxProfiles: number;                  // מקסימום פרופילים בזיכרון
-  reportCooldownMs: number;             // קירור בין דוחות לאותו חשבון
-}
-
-// ─── Default Config ─────────────────────────────────────────────────────
-
-export const DEFAULT_CONFIG: DetectionConfig = {
-  reentrancyMaxDepth: 3,
-  reentrancyWindowMs: 5000,
-  frontRunPriceShiftBps: 50,        // 0.5%
-  frontRunTimeWindowMs: 10000,      // 10 שניות
-  frontRunMinVolume: 10000,         // 10k יחידות בסיס
-  sandwichTimeWindowMs: 30000,      // 30 שניות
-  sandwichMinProfitBps: 100,        // 1%
-  sandwichMaxSlippageBps: 200,      // 2%
-  anomalyMaxTxPerMinute: 30,
-  anomalyMaxVolumeMultiplier: 5,
-  anomalyMinUniqueSymbols: 3,
-  anomalyWindowMs: 60000,           // דקה
-  maxProfiles: 10000,
-  reportCooldownMs: 300000,         // 5 דקות
+type UserActivity = {
+  userId: string;
+  ip: string;
+  lastAction: number;
+  actionCount: number;
+  suspiciousFlags: {
+    reentrancy: boolean;
+    frontRunning: boolean;
+    sandwichAttack: boolean;
+    highFrequency: boolean;
+  };
+  transactions: {
+    timestamp: number;
+    amount: number;
+    price: number;
+    type: 'buy' | 'sell';
+  }[];
 };
 
-// ─── Internal State ─────────────────────────────────────────────────────
+// In-memory store for user activities (in production, use Redis or similar)
+const userActivities = new Map<string, UserActivity>();
+const recentTransactions = new Map<string, { timestamp: number; amount: number; price: number; type: 'buy' | 'sell' }[]>();
 
-interface CallFrame {
-  account: string;
-  fn: string;
-  timestamp: number;
-  depth: number;
-}
+// Constants for detection thresholds
+const REENTRANCY_THRESHOLD = 3; // Number of recursive calls in short time
+const FRONT_RUNNING_TIME_WINDOW = 5000; // ms before a large trade
+const FRONT_RUNNING_PRICE_THRESHOLD = 0.01; // 1% price increase
+const SANDWICH_TIME_WINDOW = 10000; // ms between buy/sell pairs
+const SANDWICH_PROFIT_THRESHOLD = 0.005; // 0.5% profit minimum
+const HIGH_FREQUENCY_THRESHOLD = 10; // Actions per minute
+const MONITORING_WINDOW = 60000; // ms to monitor user activity
 
-const callStack = new Map<string, CallFrame[]>(); // account -> stack
-const userProfiles = new Map<string, UserBehaviorProfile>();
-const recentReports = new Map<string, number>();  // account -> last report timestamp
-const priceHistory = new Map<string, { price: number; timestamp; volume: number }[]>(); // symbol -> history
+/**
+ * Detects potential reentrancy attacks by tracking recursive function calls
+ * @param userId - Unique identifier for the user
+ * @param functionName - Name of the function being called
+ * @returns Whether a reentrancy attack is suspected
+ */
+function detectReentrancy(userId: string, functionName: string): boolean {
+  const activity = userActivities.get(userId);
+  if (!activity) return false;
 
-// ─── Helpers ────────────────────────────────────────────────────────────
-
-function now(): number {
-  return Date.now();
-}
-
-function pruneOldEntries<T extends { timestamp: number }>(arr: T[], windowMs: number): T[] {
-  const cutoff = now() - windowMs;
-  const idx = arr.findIndex(e => e.timestamp >= cutoff);
-  return idx >= 0 ? arr.slice(idx) : [];
-}
-
-function getOrCreateProfile(account: string): UserBehaviorProfile {
-  let profile = userProfiles.get(account);
-  if (!profile) {
-    if (userProfiles.size >= DEFAULT_CONFIG.maxProfiles) {
-      // LRU eviction — הסר הכי ישן
-      const oldest = [...userProfiles.entries()].sort((a, b) => a[1].lastUpdate - b[1].lastUpdate)[0];
-      if (oldest) userProfiles.delete(oldest[0]);
+  // In a real implementation, track call stack depth and recursive calls
+  // For this example, we'll simulate detection by tracking rapid repeated calls
+  const now = Date.now();
+  if (now - activity.lastAction < 1000) { // Within 1 second
+    activity.actionCount++;
+    if (activity.actionCount > REENTRANCY_THRESHOLD) {
+      activity.suspiciousFlags.reentrancy = true;
+      return true;
     }
-    profile = {
-      account,
-      txCountWindow: 0,
-      txTimestamps: [],
-      volumeWindow: 0,
-      uniqueSymbols: new Set(),
-      avgTxInterval: 0,
-      lastUpdate: now(),
-      riskScore: 0,
-      flags: [],
-    };
-    userProfiles.set(account, profile);
+  } else {
+    activity.actionCount = 1;
   }
-  return profile;
-}
 
-function calculateRiskScore(profile: UserBehaviorProfile): number {
-  let score = 0;
-  // קצב עסקאות
-  if (profile.txCountWindow > DEFAULT_CONFIG.anomalyMaxTxPerMinute) {
-    score += Math.min(40, (profile.txCountWindow / DEFAULT_CONFIG.anomalyMaxTxPerMinute) * 20);
-  }
-  // עקביות מרווחים (בוטים נוטים להיות מדויקים מדי)
-  if (profile.txTimestamps.length >= 5) {
-    const intervals = [];
-    for (let i = 1; i < profile.txTimestamps.length; i++) {
-      intervals.push(profile.txTimestamps[i] - profile.txTimestamps[i-1]);
-    }
-    const mean = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-    const variance = intervals.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / intervals.length;
-    const cv = mean > 0 ? Math.sqrt(variance) / mean : 0; // coefficient of variation
-    if (cv < 0.1) score += 25; // חשוד: מרווחים זהים מדי
-  }
-  // ריכוז סימבולים
-  if (profile.uniqueSymbols.size < DEFAULT_CONFIG.anomalyMinUniqueSymbols && profile.txCountWindow > 10) {
-    score += 15;
-  }
-  return Math.min(100, score);
-}
-
-function riskLevelFromScore(score: number): RiskLevel {
-  if (score >= 80) return "CRITICAL";
-  if (score >= 60) return "HIGH";
-  if (score >= 35) return "MEDIUM";
-  return "LOW";
-}
-
-function shouldReport(account: string): boolean {
-  const last = recentReports.get(account) ?? 0;
-  if (now() - last >= DEFAULT_CONFIG.reportCooldownMs) {
-    recentReports.set(account, now());
-    return true;
-  }
+  activity.lastAction = now;
   return false;
 }
 
-function emitSignal(signal: AttackSignal): void {
-  // לוג מבני — ללא סודות
-  console.warn(JSON.stringify({
-    timestamp: new Date(signal.timestamp).toISOString(),
-    action: "attack_signal",
-    type: signal.type,
-    risk: signal.risk,
-    account: signal.account,
-    symbol: signal.symbol,
-    txid: signal.txid,
-    details: signal.details,
-  }));
+/**
+ * Detects potential front-running by monitoring price movements before large trades
+ * @param userId - Unique identifier for the user
+ * @param transactionDetails - Details of the transaction being processed
+ * @returns Whether front-running is suspected
+ */
+function detectFrontRunning(userId: string, transactionDetails: { amount: number; type: 'buy' | 'sell' }): boolean {
+  const activity = userActivities.get(userId);
+  if (!activity) return false;
+
+  // Check for price movements before this transaction
+  const now = Date.now();
+  const recentTxs = recentTransactions.get(userId) || [];
   
-  // כאן אפשר לחבר למערכת התראות חיצונית (webhook, DB, וכו')
-  // נשמר fail-open — כשל כאן לא שובר את הזרימה
+  // Look for price movements in the time window before this transaction
+  const relevantTxs = recentTxs.filter(tx => 
+    now - tx.timestamp < FRONT_RUNNING_TIME_WINDOW && 
+    tx.type !== transactionDetails.type
+  );
+
+  if (relevantTxs.length > 0) {
+    // Calculate average price movement
+    const priceChanges = relevantTxs.map(tx => {
+      const prevTxs = recentTxs.filter(t => 
+        tx.timestamp - t.timestamp < 5000 && t.type !== tx.type
+      );
+      
+      if (prevTxs.length === 0) return 0;
+      
+      const avgPrevPrice = prevTxs.reduce((sum, t) => sum + t.price, 0) / prevTxs.length;
+      return tx.price - avgPrevPrice;
+    });
+    
+    const avgPriceChange = priceChanges.reduce((sum, change) => sum + change, 0) / priceChanges.length;
+    
+    if (Math.abs(avgPriceChange) / avgPriceChange > FRONT_RUNNING_PRICE_THRESHOLD) {
+      activity.suspiciousFlags.frontRunning = true;
+      return true;
+    }
+  }
+
+  return false;
 }
 
-// ─── 1. Reentrancy Detection ────────────────────────────────────────────
+/**
+ * Detects potential sandwich attacks by analyzing rapid buy/sell pairs
+ * @param userId - Unique identifier for the user
+ * @param transactionDetails - Details of the transaction being processed
+ * @returns Whether a sandwich attack is suspected
+ */
+function detectSandwichAttack(userId: string, transactionDetails: { amount: number; price: number; type: 'buy' | 'sell' }): boolean {
+  const activity = userActivities.get(userId);
+  if (!activity) return false;
+
+  const now = Date.now();
+  const userTxs = recentTransactions.get(userId) || [];
+  
+  // Find transactions in the time window
+  const recentTxs = userTxs.filter(tx => 
+    now - tx.timestamp < SANDWICH_TIME_WINDOW
+  );
+
+  // Look for alternating buy/sell patterns
+  let alternatingPattern = 0;
+  let lastType: 'buy' | 'sell' | null = null;
+  
+  for (const tx of recentTxs) {
+    if (lastType && lastType !== tx.type) {
+      alternatingPattern++;
+    }
+    lastType = tx.type;
+  }
+
+  if (alternatingPattern >= 2) {
+    // Check for profit patterns
+    const buyTx = recentTxs.find(tx => tx.type === 'buy');
+    const sellTx = recentTxs.find(tx => tx.type === 'sell');
+    
+    if (buyTx && sellTx && sellTx.price > buyTx.price * (1 + SANDWICH_PROFIT_THRESHOLD)) {
+      activity.suspiciousFlags.sandwichAttack = true;
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
- * נכנס להקשר קריאה — בודק עומק קריאות חוזרות לאותו חשבון+פונקציה
- * 
- * לוגיקה עסקית:
- * - התקפת reentrancy קלאסית קוראת לפונקציה חיצונית שקוראת חזרה לאותה פונקציה
- * - בגרעין דטרמיניסטי כמו שלנו, זה מתבטא בקריאות מקוננות לאותו op
- * - אנו עוקבים אחר עומק הקריאה לכל (account, function) בחלון זמן
- * - חריגה מהעומק המותר = סיגנל REENTRANCY
+ * Detects high-frequency trading patterns
+ * @param userId - Unique identifier for the user
+ * @returns Whether high-frequency trading is suspected
  */
-export function enterCallFrame(account: string, fn: string): { allowed: boolean; signal?: AttackSignal } {
-  const key = `${account}:${fn}`;
-  const stack = callStack.get(key) ?? [];
-  const currentDepth = stack.length;
+function detectHighFrequency(userId: string): boolean {
+  const activity = userActivities.get(userId);
+  if (!activity) return false;
+
+  const now = Date.now();
+  const userTxs = recentTransactions.get(userId) || [];
   
-  // ניקוי ישן
-  const cleaned = pruneOldEntries(stack, DEFAULT_CONFIG.reentrancyWindowMs);
+  // Count transactions in the last minute
+  const recentTxs = userTxs.filter(tx => 
+    now - tx.timestamp < MONITORING_WINDOW
+  );
+
+  if (recentTxs.length > HIGH_FREQUENCY_THRESHOLD) {
+    activity.suspiciousFlags.highFrequency = true;
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Updates user activity with transaction details
+ * @param userId - Unique identifier for the user
+ * @param transactionDetails - Details of the transaction
+ */
+function updateUserActivity(userId: string, transactionDetails: { amount: number; price: number; type: 'buy' | 'sell' }) {
+  let activity = userActivities.get(userId);
   
-  if (cleaned.length >= DEFAULT_CONFIG.reentrancyMaxDepth) {
-    const signal: AttackSignal = {
-      type: "REENTRANCY",
-      risk: "HIGH",
-      account,
-      details: {
-        function: fn,
-        depth: cleaned.length,
-        maxAllowed: DEFAULT_CONFIG.reentrancyMaxDepth,
-        windowMs: DEFAULT_CONFIG.reentrancyWindowMs,
+  if (!activity) {
+    activity = {
+      userId,
+      ip: '', // Would be populated from request
+      lastAction: Date.now(),
+      actionCount: 0,
+      suspiciousFlags: {
+        reentrancy: false,
+        frontRunning: false,
+        sandwichAttack: false,
+        highFrequency: false,
       },
-      timestamp: now(),
+      transactions: [],
     };
-    if (shouldReport(account)) emitSignal(signal);
-    return { allowed: false, signal };
+    userActivities.set(userId, activity);
   }
+
+  // Add transaction to recent transactions
+  let userTxs = recentTransactions.get(userId) || [];
+  userTxs.push({
+    timestamp: Date.now(),
+    amount: transactionDetails.amount,
+    price: transactionDetails.price,
+    type: transactionDetails.type,
+  });
   
-  cleaned.push({ account, fn, timestamp: now(), depth: currentDepth + 1 });
-  callStack.set(key, cleaned);
-  return { allowed: true };
+  // Keep only recent transactions (last hour)
+  const now = Date.now();
+  userTxs = userTxs.filter(tx => now - tx.timestamp < 3600000);
+  recentTransactions.set(userId, userTxs);
+  
+  // Add to activity's transaction history
+  activity.transactions.push({
+    timestamp: Date.now(),
+    amount: transactionDetails.amount,
+    price: transactionDetails.price,
+    type: transactionDetails.type,
+  });
 }
-
-export function exitCallFrame(account: string, fn: string): void {
-  const key = `${account}:${fn}`;
-  const stack = callStack.get(key);
-  if (stack && stack.length > 0) {
-    stack.pop();
-    if (stack.length === 0) callStack.delete(key);
-  }
-}
-
-// ─── 2. Front-running Detection ─────────────────────────────────────────
 
 /**
- * רושם תצפית מחיר — נקרא בכל עדכון מחיר (AMM swap, book fill, oracle)
+ * Generates a security report for a user
+ * @param userId - Unique identifier for the user
+ * @returns Security report with risk assessment
  */
-export function recordPriceObservation(symbol: string, price: number, volume: number): void {
-  const history = priceHistory.get(symbol) ?? [];
-  history.push({ price, timestamp: now(), volume });
-  // שמור רק חלון רלוונטי (5 דקות)
-  priceHistory.set(symbol, pruneOldEntries(history, 300000));
-}
-
-/***
- * בודק front-running לפני ביצוע עסקה גדולה
- * 
- * לוגיקה עסקית:
- * - Front-runner מזהה עסקה גדולה ממתינה (ב-mempool או ב-book גלוי)
- * - קונה לפניה ומוכר אחריה ברווח
- * - סימן מקדים: תזוזת מחיר חדה בכיוון העסקה הגדולה, זמן קצר לפניה
- * - אנו בודקים היסטוריית מחירים בחלון הזמן לפני העסקה
- */
-export function checkFrontRunning(
-  account: string,
-  symbol: string,
-  side: "buy" | "sell",
-  volume: number,
-  currentPrice: number
-): AttackSignal | null {
-  if (volume < DEFAULT_CONFIG.frontRunMinVolume) return null;
-  
-  const history = priceHistory.get(symbol) ?? [];
-  const cutoff = now() - DEFAULT_CONFIG.frontRunTimeWindowMs;
-  const recent = history.filter(h => h.timestamp >= cutoff);
-  if (recent.length < 2) return null;
-  
-  // חשב שינוי מחיר בחלון
-  const oldest = recent[0];
-  const priceChangeBps = ((currentPrice - oldest.price) / oldest.price) * 10000;
-  
-  // כיוון חשוד: מחיר עולה לפני קנייה גדולה, יורד לפני מכירה גדולה
-  const suspiciousDirection = (side === "buy" && priceChangeBps > DEFAULT_CONFIG.frontRunPriceShiftBps) ||
-                              (side === "sell" && priceChangeBps < -DEFAULT_CONFIG.frontRunPriceShiftBps);
-  
-  if (!suspiciousDirection) return null;
-  
-  const signal: AttackSignal = {
-    type: "FRONT_RUNNING",
-    risk: Math.abs(priceChangeBps) > DEFAULT_CONFIG.frontRunPriceShiftBps * 3 ? "HIGH" : "MEDIUM",
-    account,
-    symbol,
-    details: {
-      side,
-      volume,
-      priceChangeBps: Math.round(priceChangeBps),
-      thresholdBps: DEFAULT_CONFIG.frontRunPriceShiftBps,
-      windowMs: DEFAULT_CONFIG.frontRunTimeWindowMs,
-      observationsCount: recent.length,
-    },
-    timestamp: now(),
-  };
-  
-  if (shouldReport(account)) emitSignal(signal);
-  return signal;
-}
-
-// ─── 3. Sandwich Attack Detection ───────────────────────────────────────
-
-interface UserTrade {
-  account: string;
-  symbol: string;
-  side: "buy" | "sell";
-  price: number;
-  volume: number;
+function generateSecurityReport(userId: string): {
+  userId: string;
   timestamp: number;
-  txid: string;
-}
-
-const recentTrades = new Map<string, UserTrade[]>(); // account -> trades
-
-/***
- * רושם עסקה שבוצעה — משמש לזיהוי sandwich
- */
-export function recordTrade(trade: UserTrade): void {
-  const trades = recentTrades.get(trade.account) ?? [];
-  trades.push(trade);
-  recentTrades.set(trade.account, pruneOldEntries(trades, DEFAULT_CONFIG.sandwichTimeWindowMs * 2));
-}
-
-/***
- * בודק דפוס sandwich: קנייה ואז מכירה מהירה באותו סימבול ברווח חריג
- * 
- * לוגיקה עסקית:
- * - Sandwich attacker: קונה -> קורבן קונה (מעלה מחיר) -> מוכר ברווח
- * - או: מוכר -> קורבן מוכר (מוריד מחיר) -> קונה בזול
- * - מאפיינים: זמן קצר, אותו סימבול, צדדים הפוכים, רווח > עמלות + החלקה
- */
-export function checkSandwichAttack(account: string, symbol: string): AttackSignal | null {
-  const trades = recentTrades.get(account) ?? [];
-  const symbolTrades = trades.filter(t => t.symbol === symbol);
-  if (symbolTrades.length < 2) return null;
-  
-  // חפש זוגות קנייה-מכירה או מכירה-קנייה קרובים בזמן
-  for (let i = 0; i < symbolTrades.length - 1; i++) {
-    const t1 = symbolTrades[i];
-    const t2 = symbolTrades[i + 1];
-    
-    if (t1.side === t2.side) continue; // אותו צד — לא sandwich
-    const timeDiff = t2.timestamp - t1.timestamp;
-    if (timeDiff > DEFAULT_CONFIG.sandwichTimeWindowMs) continue;
-    
-    // חשב רווח יחסי
-    let profitBps: number;
-    if (t1.side === "buy" && t2.side === "sell") {
-      profitBps = ((t2.price - t1.price) / t1.price) * 10000;
-    } else {
-      profitBps = ((t1.price - t2.price) / t2.price) * 10000;
-    }
-    
-    // נכה עמלות צפויות (30bps AMM + החלקה מקסימלית)
-    const netProfitBps = profitBps - 30 - DEFAULT_CONFIG.sandwichMaxSlippageBps;
-    
-    if (netProfitBps >= DEFAULT_CONFIG.sandwichMinProfitBps) {
-      const signal: AttackSignal = {
-        type: "SANDWICH",
-        risk: netProfitBps > DEFAULT_CONFIG.sandwichMinProfitBps * 3 ? "CRITICAL" : "HIGH",
-        account,
-        symbol,
-        details: {
-          firstTrade: { side: t1.side, price: t1.price, volume: t1.volume, txid: t1.txid },
-          secondTrade: { side: t2.side, price: t2.price, volume: t2.volume, txid: t2.txid },
-          timeDiffMs: timeDiff,
-          grossProfitBps: Math.round(profitBps),
-          netProfitBps: Math.round(netProfitBps),
-          thresholdBps: DEFAULT_CONFIG.sandwichMinProfitBps,
-        },
-        timestamp: now(),
-        txid: t2.txid,
-      };
-      if (shouldReport(account)) emitSignal(signal);
-      return signal;
-    }
-  }
-  return null;
-}
-
-// ─── 4. Anomalous Behavior Monitoring ───────────────────────────────────
-
-/***
- * מעדכן פרופיל התנהגות משתמש — נקרא בכל עסקה/פעולה
- */
-export function updateUserBehavior(
-  account: string,
-  symbol: string,
-  volume: number
-): AttackSignal | null {
-  const profile = getOrCreateProfile(account);
-  const nowMs = now();
-  
-  // ניקוי חלון
-  profile.txTimestamps = pruneOldEntries(
-    profile.txTimestamps.map(ts => ({ timestamp: ts })),
-    DEFAULT_CONFIG.anomalyWindowMs
-  ).map(e => e.timestamp);
-  
-  profile.txTimestamps.push(nowMs);
-  profile.txCountWindow = profile.txTimestamps.length;
-  profile.volumeWindow += volume;
-  profile.uniqueSymbols.add(symbol);
-  profile.lastUpdate = nowMs;
-  
-  // חשב מרווח ממוצע
-  if (profile.txTimestamps.length >= 2) {
-    const intervals = [];
-    for (let i = 1; i < profile.txTimestamps.length; i++) {
-      intervals.push(profile.txTimestamps[i] - profile.txTimestamps[i-1]);
-    }
-    profile.avgTxInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-  }
-  
-  // חשב risk score
-  const newScore = calculateRiskScore(profile);
-  const prevRisk = riskLevelFromScore(profile.riskScore);
-  const newRisk = riskLevelFromScore(newScore);
-  profile.riskScore = newScore;
-  
-  // דגל אם עליית דרגה
-  const riskOrder = { LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 };
-  if (riskOrder[newRisk] > riskOrder[prevRisk]) {
-    const flag = `risk_escalation_${prevRisk}_to_${newRisk}`;
-    if (!profile.flags.includes(flag)) profile.flags.push(flag);
-    
-    const signal: AttackSignal = {
-      type: "ANOMALOUS_BEHAVIOR",
-      risk: newRisk,
-      account,
-      details: {
-        txCount: profile.txCountWindow,
-        volume: profile.volumeWindow,
-        uniqueSymbols: profile.uniqueSymbols.size,
-        avgIntervalMs: Math.round(profile.avgTxInterval),
-        riskScore: newScore,
-        flags: profile.flags,
-        prevRisk,
-        newRisk,
+  riskLevel: 'low' | 'medium' | 'high' | 'critical';
+  flags: {
+    reentrancy: boolean;
+    frontRunning: boolean;
+    sandwichAttack: boolean;
+    highFrequency: boolean;
+  };
+  recommendations: string[];
+} {
+  const activity = userActivities.get(userId);
+  if (!activity) {
+    return {
+      userId,
+      timestamp: Date.now(),
+      riskLevel: 'low',
+      flags: {
+        reentrancy: false,
+        frontRunning: false,
+        sandwichAttack: false,
+        highFrequency: false,
       },
-      timestamp: nowMs,
+      recommendations: [],
     };
-    if (shouldReport(account)) emitSignal(signal);
-    return signal;
   }
-  
-  return null;
-}
 
-// ─── 5. Reporting & Query API ───────────────────────────────────────────
+  let riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'low';
+  const flags = activity.suspiciousFlags;
+  const recommendations: string[] = [];
 
-export interface SuspiciousActivityReport {
-  account: string;
-  riskLevel: RiskLevel;
-  signals: AttackSignal[];
-  profile: UserBehaviorProfile;
-  generatedAt: number;
-}
+  // Calculate risk level based on flags
+  if (flags.reentrancy) {
+    riskLevel = riskLevel === 'critical' ? 'critical' : 'high';
+    recommendations.push('Implement reentrancy guard in smart contracts');
+  }
 
-export function generateReport(account: string): SuspiciousActivityReport | null {
-  const profile = userProfiles.get(account);
-  if (!profile) return null;
-  
-  // אסוף סיגנלים אחרונים לחשבון (מ-logs או ממטמון ייעודי — כאן מפרופיל)
-  const signals: AttackSignal[] = []; // בפרודקשן: שליפה ממאגר סיגנלים
-  
+  if (flags.frontRunning) {
+    riskLevel = riskLevel === 'critical' ? 'critical' : 'high';
+    recommendations.push('Consider implementing commit-reveal schemes');
+  }
+
+  if (flags.sandwichAttack) {
+    riskLevel = riskLevel === 'critical' ? 'critical' : 'high';
+    recommendations.push('Implement batch auctions or time-based execution');
+  }
+
+  if (flags.highFrequency) {
+    riskLevel = riskLevel === 'high' ? 'high' : 'medium';
+    recommendations.push('Monitor for unusual trading patterns');
+  }
+
   return {
-    account,
-    riskLevel: riskLevelFromScore(profile.riskScore),
-    signals,
-    profile: { ...profile, uniqueSymbols: new Set(profile.uniqueSymbols) },
-    generatedAt: now(),
+    userId,
+    timestamp: Date.now(),
+    riskLevel,
+    flags,
+    recommendations,
   };
 }
 
-export function getAllHighRiskAccounts(riskThreshold: RiskLevel = "HIGH"): string[] {
-  const order = { LOW: 0, MEDIUM: 1, HIGH: 2, CRITICAL: 3 };
-  const threshold = order[riskThreshold];
-  return [...userProfiles.entries()]
-    .filter(([, p]) => order[riskLevelFromScore(p.riskScore)] >= threshold)
-    .map(([account]) => account);
+/**
+ * Middleware function to detect suspicious activity
+ * @param request - Next.js request object
+ * @param next - Next.js next function
+ * @returns Next.js response
+ */
+export async function securityMiddleware(request: NextRequest, next: () => Promise<NextResponse>) {
+  // Extract user identifier (could be IP, session ID, or wallet address)
+  const userId = request.headers.get('x-user-id') || 
+                 request.ip || 
+                 'anonymous';
+  
+  // Extract transaction details if present
+  const transactionDetails = {
+    amount: parseFloat(request.nextUrl.searchParams.get('amount') || '0'),
+    price: parseFloat(request.nextUrl.searchParams.get('price') || '0'),
+    type: (request.nextUrl.searchParams.get('type') || 'buy') as 'buy' | 'sell',
+  };
+
+  // Initialize user activity if not exists
+  if (!userActivities.has(userId)) {
+    userActivities.set(userId, {
+      userId,
+      ip: request.ip || '',
+      lastAction: Date.now(),
+      actionCount: 0,
+      suspiciousFlags: {
+        reentrancy: false,
+        frontRunning: false,
+        sandwichAttack: false,
+        highFrequency: false,
+      },
+      transactions: [],
+    });
+  }
+
+  // Detect suspicious activities
+  const isReentrancy = detectReentrancy(userId, request.nextUrl.pathname);
+  const isFrontRunning = transactionDetails.amount > 0 && detectFrontRunning(userId, transactionDetails);
+  const isSandwichAttack = transactionDetails.amount > 0 && detectSandwichAttack(userId, transactionDetails);
+  const isHighFrequency = detectHighFrequency(userId);
+
+  // Update user activity
+  updateUserActivity(userId, transactionDetails);
+
+  // If any suspicious activity detected, log it
+  if (isReentrancy || isFrontRunning || isSandwichAttack || isHighFrequency) {
+    const report = generateSecurityReport(userId);
+    
+    // In production, send this to a security monitoring system
+    console.log('Suspicious activity detected:', JSON.stringify(report, null, 2));
+    
+    // Add security headers to response
+    const response = await next();
+    response.headers.set('X-Security-Status', 'monitored');
+    response.headers.set('X-Risk-Level', report.riskLevel);
+    
+    return response;
+  }
+
+  return await next();
 }
 
-export function resetAccountProfile(account: string): boolean {
-  return userProfiles.delete(account);
+/**
+ * API endpoint to generate security reports
+ * @param request - Next.js request object
+ * @returns Next.js response with security report
+ */
+export async function GET(request: NextRequest) {
+  const userId = request.nextUrl.searchParams.get('userId');
+  
+  if (!userId) {
+    return NextResponse.json(
+      { error: 'User ID is required' },
+      { status: 400 }
+    );
+  }
+
+  const report = generateSecurityReport(userId);
+  return NextResponse.json(report);
 }
 
-export function getConfig(): DetectionConfig {
-  return { ...DEFAULT_CONFIG };
-}
-
-export function updateConfig(partial: Partial<DetectionConfig>): void {
-  Object.assign(DEFAULT_CONFIG, partial);
-}
-
-// ─── Test Helpers (לבדיקות יחידה בלבד) ────────────────────────────────
-
-export function __testOnly_resetState(): void {
-  callStack.clear();
-  userProfiles.clear();
-  recentReports.clear();
-  priceHistory.clear();
-  recentTrades.clear();
-}
-
-export function __testOnly_getProfile(account: string): UserBehaviorProfile | undefined {
-  return userProfiles.get(account);
-}
-
-export function __testOnly_getCallStack(account: string, fn: string): CallFrame[] {
-  return callStack.get(`${account}:${fn}`) ?? [];
+/**
+ * Unit tests for security detection mechanisms
+ */
+if (process.env.NODE_ENV === 'test') {
+  // Mock user activity for testing
+  const testUserId = 'test-user';
+  
+  // Test reentrancy detection
+  function testReentrancyDetection() {
+    // Simulate rapid function calls
+    for (let i = 0; i < 5; i++) {
+      detectReentrancy(testUserId, 'test-function');
+    }
+    
+    const activity = userActivities.get(testUserId);
+    const isSuspicious = activity?.suspiciousFlags.reentrancy || false;
+    
+    console.log(`Reentrancy detection test: ${isSuspicious ? 'PASSED' : 'FAILED'}`);
+    return isSuspicious;
+  }
+  
+  // Test front-running detection
+  function testFrontRunningDetection() {
+    // Simulate price movement before a large trade
+    updateUserActivity(testUserId, { amount: 1000, price: 100, type: 'buy' });
+    updateUserActivity(testUserId, { amount: 1000, price: 101, type: 'sell' });
+    
+    const isFrontRunning = detectFrontRunning(testUserId, { amount: 10000, type: 'buy' });
+    
+    console.log(`Front-running detection test: ${isFrontRunning ? 'PASSED' : 'FAILED'}`);
+    return isFrontRunning;
+  }
+  
+  // Test sandwich attack detection
+  function testSandwichAttackDetection() {
+    // Simulate sandwich attack pattern
+    updateUserActivity(testUserId, { amount: 1000, price: 100, type: 'buy' });
+    updateUserActivity(testUserId, { amount: 10000, price: 101, type: 'sell' });
+    updateUserActivity(testUserId, { amount: 1000, price: 100.5, type: 'buy' });
+    
+    const isSandwichAttack = detectSandwichAttack(testUserId, { amount: 1000, price: 100, type: 'sell' });
+    
+    console.log(`Sandwich attack detection test: ${isSandwichAttack ? 'PASSED' : 'FAILED'}`);
+    return isSandwichAttack;
+  }
+  
+  // Test high-frequency trading detection
+  function testHighFrequencyDetection() {
+    // Simulate high-frequency trading
+    for (let i = 0; i < 15; i++) {
+      updateUserActivity(testUserId, { amount: 10, price: 100, type: i % 2 === 0 ? 'buy' : 'sell' });
+    }
+    
+    const isHighFrequency = detectHighFrequency(testUserId);
+    
+    console.log(`High-frequency trading detection test: ${isHighFrequency ? 'PASSED' : 'FAILED'}`);
+    return isHighFrequency;
+  }
+  
+  // Run tests
+  testReentrancyDetection();
+  testFrontRunningDetection();
+  testSandwichAttackDetection();
+  testHighFrequencyDetection();
 }
