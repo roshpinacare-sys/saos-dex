@@ -32,7 +32,7 @@ import path from "path";
  * האחרונה-שלא-מוקשה בקוד (עד-כה רק שער-workflow). החוק-המעוגן ב-Domain/steem:
  * כל-חותם שואל את-הבלם בטרם-חתימה — fail-closed, קריאה-טרייה בכל-ריצה. */
 import { stasisHalt } from "./grids/brake.mjs";
-import { policyCycleGate, policyGate } from "./grids/policy.mjs"; // DECISIONS #17 · SAOS-POLICY-ENGINE/1 (agentic-wallet pattern, owner trace 1a137c5876e963e9)
+import { policyCycleGate, policyGate, effectiveCycleCap } from "./grids/policy.mjs"; // DECISIONS #17 · SAOS-POLICY-ENGINE/1 (agentic-wallet pattern, owner trace 1a137c5876e963e9) · trim-to-cap (owner approve trace 1a1629f96941f20d)
 /* 9-c (2026-10-11) · שער-המפתח: אימות שה-WIF גוזר בדיוק את רשות-ה-active החיה לפני-כל-שידור.
  * המדידה-החיה (twin run 38144052862 · 2026-10-11T13:39Z): WIF-ישן בכספת (רוטציית-בעלים
  * last_owner_update 2026-10-08T17:29:09Z) → 18 שידורים-נדונים ("broadcast answered without id")
@@ -319,7 +319,17 @@ async function main(): Promise<void> {
   const polSbdReturned = snap.openOrders.filter((o) => o.sell.includes("SBD")).reduce((s, o) => s + polAmt(o.sell), 0);
   const polNotionalUpper = Math.max(0, snap.balances.steem + polSteemReturned - LIVE_MIN_KEEP_STEEM) * LIVE_COMMIT_PCT * (parity ?? 0)
     + Math.max(0, snap.balances.sbd + polSbdReturned) * LIVE_COMMIT_PCT;
-  const polGate = policyCycleGate({ tool: "grid-beat:steem", lane: "grid", account: ACCOUNT, opsEst: snap.openOrders.length + LIVE_ASK_LEVELS + LIVE_BID_LEVELS, notionalSbdUpper: polNotionalUpper, chain: "steem" });
+  /* Trim-to-cap (2026-10-22, owner approve trace 1a1629f96941f20d): חריגת-תקרת-מחזור לא תזרוק
+   * HALT-מלא — הגריד מתאים-את-עצמו מטה (גורם-התאמה ≤1) אל-תוך התקרה. המשמעת-הון-נשמרת
+   * במלואה (פחות-הון-על-השולחן, לעולם-לא-יותר) והמלכודת (בלי-הצבות → אין-קבלות-ACTED
+   * → הילוך-לא-עולה → cap-צמוד-לנצח) נסגרת. גורם-ההתאמה-מפורסם-בכנות בלוג ובספר. */
+  const cycleCapSbd = effectiveCycleCap("grid");
+  let commitScale = 1;
+  if (cycleCapSbd != null && polNotionalUpper > cycleCapSbd && polNotionalUpper > 0) {
+    commitScale = Math.max(0, cycleCapSbd / polNotionalUpper);
+    console.log(`[grid-beat] POLICY-FIT (trim-to-cap): cycle upper ${polNotionalUpper.toFixed(3)} SBD > cap ${cycleCapSbd} SBD — commit scaled ×${commitScale.toFixed(3)} (down only; gearbox climbs on receipts)`);
+  }
+  const polGate = policyCycleGate({ tool: "grid-beat:steem", lane: "grid", account: ACCOUNT, opsEst: snap.openOrders.length + LIVE_ASK_LEVELS + LIVE_BID_LEVELS, notionalSbdUpper: polNotionalUpper * commitScale, chain: "steem" });
   if (!polGate.allow) blocker.push(`POLICY-HALT (steem leg): ${polGate.reasons.join(" ; ")} — atomic refresh skipped, ladder untouched`);
 
   /* 9-c · שער-המפתח (fail-closed לפני-כל-שידור): WIF שאינו גוזר את רשות-ה-active החיה
@@ -421,7 +431,7 @@ async function main(): Promise<void> {
     // EDGE-FLOOR (2026-10-21): ומעל בסיס-עלות-המלאי + 100bps — אף-מכירה מתחת-לעלות (הדימום-המדוד: edge -2%)
     const steemReturned = ourAsks.reduce((s, a) => s + a.steem, 0);
     const steemAvail = snap.balances.steem + steemReturned - LIVE_MIN_KEEP_STEEM;
-    const steemCommit = Math.max(0, Math.floor(steemAvail * LIVE_COMMIT_PCT * 1000) / 1000);
+    const steemCommit = Math.max(0, Math.floor(steemAvail * LIVE_COMMIT_PCT * commitScale * 1000) / 1000); // commitScale: trim-to-cap (owner approve 1a1629f96941f20d)
     const invBasis = inventoryCostBasis(ledger.fills, "steem");
     const costFloor = invBasis.avgCostSbd != null ? invBasis.avgCostSbd * (1 + MIN_ASK_EDGE_BPS / 10_000) : 0;
     if (steemCommit >= LIVE_MIN_LEVEL_STEEM * LIVE_ASK_LEVELS) {
@@ -461,7 +471,7 @@ async function main(): Promise<void> {
     // מדף-הקנייה: מתחת לביד הטוב — כולן מעל-ערך מדוד מול הציון (עיקרון 2)
     // Z-81: גם-כאן — ה-SBD הנעול בבידים-שבוטלו חוזר לפני-ההצבה
     const sbdReturned = ourBids.reduce((s, b) => s + b.sbd, 0);
-    const sbdCommit = Math.max(0, Math.floor((snap.balances.sbd + sbdReturned) * LIVE_COMMIT_PCT * 1000) / 1000);
+    const sbdCommit = Math.max(0, Math.floor((snap.balances.sbd + sbdReturned) * LIVE_COMMIT_PCT * commitScale * 1000) / 1000); // commitScale: trim-to-cap (owner approve 1a1629f96941f20d)
     if (sbdCommit >= LIVE_MIN_LEVEL_SBD * LIVE_BID_LEVELS && snap.book.bestBid) {
       const per = Math.floor((sbdCommit / LIVE_BID_LEVELS) * 1000) / 1000;
       for (let k = 1; k <= LIVE_BID_LEVELS; k++) {

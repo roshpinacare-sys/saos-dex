@@ -186,6 +186,23 @@ export function applyGear(laneName, laneCfg) {
 }
 
 /**
+ * התקרה-האפקטיבית של מחזור-הגריד (אחרי gearbox+kelly) — נגזרת מאותו-מסלול מדויק של policyGate.
+ * Trim-to-cap (2026-10-22, owner approve trace 1a1629f96941f20d): HALT-מלא על חריגת-תקרה
+ * = מלכודת-מוות כלכלית (בלי הצבות אין קבלות-ACTED → הילוך לא עולה → cap צמוד לנצח).
+ * ההתאמה מותרת מטה-בלבד: הגריד רשאי להקטין את המחזור שלו אל-תוך התקרה; מעליה — אסור בשום
+ * תרחיש, והשער-עצמו נשאר השופט האחרון. null = fail-closed (אין תקרה מדודה = אין התאמה).
+ */
+export function effectiveCycleCap(laneName) {
+  const lp = loadPolicy();
+  if (lp.haltAll || !lp.policy) return null;
+  const base = lp.policy?.lanes?.[String(laneName)];
+  if (!base || typeof base !== "object") return null;
+  const cfg = applyGear(String(laneName), base);
+  const cap = cfg?.maxCycleNotionalSbd;
+  return typeof cap === "number" && Number.isFinite(cap) && cap > 0 ? cap : null;
+}
+
+/**
  * R329: ladder-receipt driven gearbox — הקבלה-היא-ההילוך.
  * verdict containing ACTED (LADDER-ACTED / ARMY-ACTED) = green: streak++
  * verdict containing ACTS-FAILED or POLICY-HALTED = instant reset: streak=0, gear=1
