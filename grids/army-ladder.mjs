@@ -119,6 +119,44 @@ export function validatePlan(plan) {
   return { ok: true };
 }
 
+/* ── סימוני-חוץ חיים (R-GRID-WAR תיקון-הדימום 2026-10-22):
+ * חוק-הבית "לעולם לא למכור STEEM מתחת לערך-החוץ שלו" דורש סימון-פאריטי חי.
+ * נמדד-חי: army-ladder הציב אסקים סביב מרכז-הספר (0.1031..0.1040 = פאריטי−325..−452bps)
+ * ומכר את ה-STEEM של האוצר מתחת לשוויו החוץ — דימום-אמת, לא רווח. התיקון:
+ * רצפת-מכירה = פאריטי×(1+floor) · תקרת-קנייה = פאריטי · אין-סימון = ידיים-בכיסים. ── */
+const ARMY_ASK_FLOOR_BPS = 80; // עקבי עם LIVE_ASK_STEP_BPS של grid-beat — קו-ערך אחד לבית
+export async function measureParity() {
+  const vals = { steem: [], sbd: [] }; // חציון-חוצה-מקורות — אותו-משפט כמו price-proof
+  const srcs = { steem: [], sbd: [] };
+  const tryFetch = async (where, url, parse) => {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 8_000);
+    try {
+      const r = await fetch(url, { signal: ac.signal, cache: "no-store", headers: { accept: "application/json" } });
+      if (!r.ok) throw new Error(`${where} ${r.status}`);
+      const o = parse(await r.json());
+      if (o.steem > 0) { vals.steem.push(o.steem); srcs.steem.push(where); }
+      if (o.sbd > 0) { vals.sbd.push(o.sbd); srcs.sbd.push(where); }
+    } catch { /* כנות: מקור-שנפל לא תורם */ } finally { clearTimeout(t); }
+  };
+  await Promise.all([
+    tryFetch("coingecko", "https://api.coingecko.com/api/v3/simple/price?ids=steem,steem-dollars&vs_currencies=usd",
+      (j) => ({ steem: num(j?.steem?.usd), sbd: num(j?.["steem-dollars"]?.usd) })),
+    tryFetch("saos-anchor", "https://roshpinacare-sys.github.io/Console/dex/feed.json",
+      (j) => {
+        const published = Date.parse(String(j?.publishedAt ?? ""));
+        if (!(published > 0) || Date.now() - published > 30 * 60_000) return {}; // פיד-ישן — אפס-תרומה
+        return { steem: num(j?.prices?.steem?.usd), sbd: num(j?.prices?.sbd?.usd) };
+      }),
+  ]);
+  const medianOf = (xs) => { const s = [...xs].sort((a, b) => a - b); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const steemUsd = vals.steem.length ? medianOf(vals.steem) : null;
+  const sbdUsd = vals.sbd.length ? medianOf(vals.sbd) : null;
+  const parity = steemUsd > 0 && sbdUsd > 0 ? steemUsd / sbdUsd : null;
+  if (!parity) return null;
+  return { steemUsd, sbdUsd, parity, src: { steem: srcs.steem.join("+"), sbd: srcs.sbd.join("+") } };
+}
+
 /* ── מיד-חי (אמת בלבד; קבוצת-צמתים-שנייה כנפילה-כנה) ────────────────────────────── */
 export async function measureMid() {
   let bestBid = null, bestAsk = null;
@@ -188,7 +226,7 @@ export function readArbTilt() {
 }
 
 /* ── תכנון-רגליים לחשבון (היפר-גריד: stagger לפי-אינדקס-החשבון) ─────────────────── */
-export function planAccountLegs({ plan, account, accountIndex, mid, traderSteem, traderSbd, lockedSteem }) {
+export function planAccountLegs({ plan, account, accountIndex, mid, traderSteem, traderSbd, lockedSteem, paritySbdPerSteem }) {
   const t = plan.traders.find((x) => x.account === account) || {};
   const per = t.maxPerLegSteem != null ? num(t.maxPerLegSteem) : num(plan.maxPerLegSteem);
   const openCap = t.maxOpenSteem != null ? num(t.maxOpenSteem) : num(plan.maxOpenSteem);
@@ -203,16 +241,20 @@ export function planAccountLegs({ plan, account, accountIndex, mid, traderSteem,
     if (j >= CAPS.maxLegs) break;
     if (budget < 0.05) break;
     const size = Math.min(per * (1 + tilt), budget, num(leg?.sizeSteem) || per * (1 + tilt)); // tilt>0 → אסקים-גדולים (עד-cap; גם-ברירת-המחדל נושמת)
-    const price = mid * (1 + (edge / 10000) * (j + 1));
-    legs.push({ legId: `sell-${j + 1}`, side: "sell", sizeSteem: dp3(size), priceSbd: Number(price.toFixed(6)), edgeBps: Math.round(edge * (j + 1)) });
+    const midPrice = mid * (1 + (edge / 10000) * (j + 1));
+    // R-GRID-WAR רצפת-ערך: אסק מעולם לא מתחת לפאריטי-החוץ (הדימום-המדוד 0.1031..0.1040 מול 0.10804)
+    const price = paritySbdPerSteem > 0 ? Math.max(midPrice, paritySbdPerSteem * (1 + ARMY_ASK_FLOOR_BPS / 10000)) : midPrice;
+    legs.push({ legId: `sell-${j + 1}`, side: "sell", sizeSteem: dp3(size), priceSbd: Number(price.toFixed(6)), edgeBps: Math.round(edge * (j + 1)), parityFloored: paritySbdPerSteem > 0 && price > midPrice });
     budget -= size;
   }
   // SBD→נזילות: רגל-קנייה רק-מ-SBD שנצבר-ממילויים (לא-הון-חדש)
   const buyOn = t.reinvestBuyLegs != null ? !!t.reinvestBuyLegs : !!plan.reinvestBuyLegs;
   const minSbd = num(plan.minSbdForBuyLeg) > 0 ? num(plan.minSbdForBuyLeg) : 1.0;
   if (buyOn && traderSbd >= minSbd) {
-    const buyPrice = mid * (1 - edge / 10000);
-    legs.push({ legId: "buy-1", side: "buy", sizeSteem: dp3(Math.max(0, Math.min(per, (traderSbd * 0.9) / buyPrice)) * (1 - tilt)), priceSbd: Number(buyPrice.toFixed(6)), edgeBps: Math.round(edge) });
+    // תקרת-ערך לקנייה: לעולם לא לקנות מעל פאריטי-החוץ (פרמיה = הפסד-מדוד)
+    const rawBuy = mid * (1 - edge / 10000);
+    const buyPrice = paritySbdPerSteem > 0 ? Math.min(rawBuy, paritySbdPerSteem) : rawBuy;
+    legs.push({ legId: "buy-1", side: "buy", sizeSteem: dp3(Math.max(0, Math.min(per, (traderSbd * 0.9) / buyPrice)) * (1 - tilt)), priceSbd: Number(buyPrice.toFixed(6)), edgeBps: Math.round(edge), parityCapped: paritySbdPerSteem > 0 && buyPrice < rawBuy });
   }
   return legs;
 }
@@ -244,6 +286,9 @@ async function run(keysFile) {
 
   const m = await measureMid();
   if (!m) { console.log("[army] no honest mid measurement — hands in pockets (by law)"); process.exit(0); }
+  const parityMarks = await measureParity().catch(() => null);
+  if (!parityMarks) { console.log("[army] no external parity marks (feeds down) — no signing (fail-closed: never trade without the value line)"); process.exit(0); }
+  console.log(`[army] parity ${parityMarks.parity.toFixed(6)} SBD/STEEM (steemUsd ${parityMarks.steemUsd} · sbdUsd ${parityMarks.sbdUsd} · src ${parityMarks.src.steem}/${parityMarks.src.sbd}) — ask floor ${ARMY_ASK_FLOOR_BPS}bps over parity`);
 
   let fk = {};
   if (keysFile && existsSync(keysFile)) fk = JSON.parse(readFileSync(keysFile, "utf8")) || {};
@@ -331,7 +376,7 @@ async function run(keysFile) {
       if (plan.anchorMid && KILL_LAW(m.mid, num(plan.anchorMid), CAPS.maxKillMidMovePct)) {
         for (const o of liveOrders) if (myIds.has(Number(o.orderid))) actions.push({ action: "cancel", orderId: Number(o.orderid), why: "kill-law: mid moved beyond canary band" });
       } else {
-        const legs = planAccountLegs({ plan, account, accountIndex: i, mid: m.mid, traderSteem, traderSbd, lockedSteem })
+        const legs = planAccountLegs({ plan, account, accountIndex: i, mid: m.mid, traderSteem, traderSbd, lockedSteem, paritySbdPerSteem: parityMarks.parity })
           .map((l) => ({ ...l, orderId: legOrderId(account, l.legId) }));
         for (const t of legs) {
           if (t.side === "sell" && m.bestBid != null && t.priceSbd <= m.bestBid) t.blocked = `crossing-forbidden (sell ${t.priceSbd} ≤ best-bid ${m.bestBid})`;
@@ -406,6 +451,12 @@ async function run(keysFile) {
               catch (ce) { throw new Error(`replace-cancel failed: ${String(ce?.message ?? ce).slice(0, 90)}`); }
             }
             const exp = new Date(Date.now() + num(plan.expiryDays) * 86400000).toISOString().slice(0, 19);
+            // R-GRID-WAR רצפת-ריצה-שנייה (defense in depth): אפילו אם-תכנון-ישן חמק — שידור-מכירה
+            // מתחת לקו-הערך נבלם כאן. זה-השער-האחרון לפני-השרשרת.
+            if (a.leg.side === "sell" && a.leg.priceSbd < parityMarks.parity * (1 + ARMY_ASK_FLOOR_BPS / 10000) - 1e-9) {
+              executed.push({ ...a, cancelTxid, state: "PARITY-FLOOR-SKIP", why: `sell ${a.leg.priceSbd} < parity-floor ${(parityMarks.parity * (1 + ARMY_ASK_FLOOR_BPS / 10000)).toFixed(6)}` });
+              continue;
+            }
             const op = a.leg.side === "sell"
               ? ["limit_order_create", { owner: account, orderid: a.leg.orderId, amount_to_sell: `${a.leg.sizeSteem.toFixed(3)} STEEM`, min_to_receive: `${(a.leg.sizeSteem * a.leg.priceSbd).toFixed(3)} SBD`, fill_or_kill: false, expiration: exp }]
               : ["limit_order_create", { owner: account, orderid: a.leg.orderId, amount_to_sell: `${(a.leg.sizeSteem * a.leg.priceSbd).toFixed(3)} SBD`, min_to_receive: `${a.leg.sizeSteem.toFixed(3)} STEEM`, fill_or_kill: false, expiration: exp }];
@@ -533,6 +584,19 @@ export async function selftest() {
   assert(legT[0].sizeSteem <= 3.0 + 1e-9, "tilt never exceeds code per-leg cap (W5: 3.0)");
   const sym = planAccountLegs({ plan: { ...basePlan, __arbTilt: 0 }, account: "hcsoldier6", accountIndex: 0, mid: 0.103, traderSteem: 5.0, traderSbd: 0, lockedSteem: 0 });
   assert(sym[0].sizeSteem === leg0[0].sizeSteem, "tilt 0 → symmetric ladder unchanged");
+
+  // R-GRID-WAR (2026-10-22) — רצפת-פאריטי על מכירות · תקרת-פאריטי על קניות (תיקון-הדימום-המדוד):
+  // army-ladder מכר STEEM סביב מרכז-הספר (0.1031..0.1040) מתחת לפאריטי-החוץ (0.10804) — דימום-אמת.
+  const PAR = 0.10804;
+  const pf0 = planAccountLegs({ plan: basePlan, account: "hcsoldier4", accountIndex: 0, mid: 0.103, traderSteem: 0.4, traderSbd: 0, lockedSteem: 0, paritySbdPerSteem: PAR });
+  assert(pf0.length === 2, "parity era: sell legs still planned (floor, not mute)");
+  assert(pf0.every((l) => l.priceSbd >= PAR * (1 + ARMY_ASK_FLOOR_BPS / 10000) - 1e-6), "parity floor: every sell leg ≥ parity×(1+floor) − 6dp rounding — never below external value"); // toFixed(6) עלול לחתוך עד 5e-7 (0.05bps — זניח)
+  assert(pf0.some((l) => l.parityFloored === true), "floor active marker set when mid-price below the value line");
+  const pfNoParity = planAccountLegs({ plan: basePlan, account: "hcsoldier4", accountIndex: 0, mid: 0.103, traderSteem: 0.4, traderSbd: 0, lockedSteem: 0 });
+  assert(pfNoParity[0].priceSbd < PAR, "no parity passed → legacy mid-anchored price (main flow fail-closes before this — unit-only path)");
+  const pfBuy = planAccountLegs({ plan: { ...basePlan, reinvestBuyLegs: true, minSbdForBuyLeg: 1.0 }, account: "hcsoldier6", accountIndex: 2, mid: 0.115, traderSteem: 1.0, traderSbd: 1.2, lockedSteem: 0, paritySbdPerSteem: PAR });
+  const pbLeg = pfBuy.find((l) => l.side === "buy");
+  assert(pbLeg && pbLeg.priceSbd <= PAR + 1e-9 && pbLeg.parityCapped === true, "parity cap: buy leg never above external value (premium = measured loss)");
 
   const d = diffOrders({ liveOrders: [{ orderid: oid, real_price: "0.100000" }], targetLegs: [{ legId: "sell-1", orderId: oid, priceSbd: 0.11 }], knownIds: new Set([oid]) });
   assert(d.some((a) => a.action === "replace"), "stale price → replace");

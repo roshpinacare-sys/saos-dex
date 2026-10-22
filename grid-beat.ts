@@ -352,8 +352,13 @@ async function main(): Promise<void> {
      *     צילום-מצב לפני-ביטול → 24 STEEM נעולים נראו "אפס-דלק" → האסקים
      *     נבלעו והסולם נשאר בלי-צד-מכירה שעות. */
     const amtOfStr = (s: string): number => parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) || 0;
-    const ourAsks = snap.openOrders.filter((o) => o.sell.includes("STEEM")).map((o) => ({ id: o.id, px: amtOfStr(o.receive) / amtOfStr(o.sell), steem: amtOfStr(o.sell) }));
-    const ourBids = snap.openOrders.filter((o) => o.sell.includes("SBD")).map((o) => ({ id: o.id, px: amtOfStr(o.sell) / amtOfStr(o.receive), sbd: amtOfStr(o.sell) }));
+    /* R-GRID-WAR תיקון-מלחמה-עצמית (2026-10-22): "ourAsks" כללה את כל הפקודות-על-החשבון —
+     * כולל אסקים-מתחת-לפאריטי של army-ladder/אחרים → bestOurAsk הורעל → ladderIntact שקרי
+     * → cancel-all שנתן-מכות לכל-הספר בכל-ריצה. עתה: רק פקודות-ידועות-בפנקס נחשבות-שלנו;
+     * זרים-תואמי-מדיניות לא נוגעים; חוק-מעל-הכל: אסק-מתחת-לפאריטי = דימום-אמת ומבוטל בהגנה. */
+    const ledgerKnownIds = new Set(ledger.orders.filter((o) => (o.chain ?? "steem") === "steem").map((o) => o.id));
+    const ourAsks = snap.openOrders.filter((o) => o.sell.includes("STEEM") && ledgerKnownIds.has(o.id)).map((o) => ({ id: o.id, px: amtOfStr(o.receive) / amtOfStr(o.sell), steem: amtOfStr(o.sell) }));
+    const ourBids = snap.openOrders.filter((o) => o.sell.includes("SBD") && ledgerKnownIds.has(o.id)).map((o) => ({ id: o.id, px: amtOfStr(o.sell) / amtOfStr(o.receive), sbd: amtOfStr(o.sell) }));
     const bestOurAsk = ourAsks.length ? Math.min(...ourAsks.map((a) => a.px)) : null;
     const bestOurBid = ourBids.length ? Math.max(...ourBids.map((b) => b.px)) : null;
     const TOUCH_EPS = 1e-4; // סובלנות-השוואת-מגע (0.01%)
@@ -364,22 +369,31 @@ async function main(): Promise<void> {
 
     if (ladderIntact) {
       console.log(`[grid-beat] ladder intact & above value line — queue preserved · ask ${bestOurAsk?.toFixed(5)} ≥ ${askValueLine.toFixed(5)} · bid ${bestOurBid?.toFixed(5)} ≤ parity ${parity.toFixed(5)} · ${snap.openOrders.length} orders untouched`);
-    } else {
-    /* 1) ביטול ההזמנות שלנו — רענון אטומי */
-    for (const o of snap.openOrders) {
-      bcAttempted++;
-      try {
-        await realCancelOrder(o.id);
-        cancelled++;
-        const rec = ledger.orders.find((x) => x.id === o.id);
-        if (rec) { rec.status = "cancelled"; rec.lastSeenAt = new Date().toISOString(); }
-        console.log(`[grid-beat] cancelled #${o.id} (${o.sell} -> ${o.receive})`);
-      } catch (e) {
-        bcFailed++;
-        console.warn(`[grid-beat] cancel #${o.id} failed: ${String(e).slice(0, 80)}`);
+    }
+    /* R-GRID-WAR הגנת-ערך (רצה-בכל-מחזור, גם-כשהסולם-שלם): אסק-פתוח-מתחת-לפאריטי =
+     * מכירת-STEEM מתחת לשוויו-החוץ = דימום-אוצר. מבוטל-מיידי בלי-קשר למי-הציב אותו —
+     * המדיניות כובלת את-החשבון, לא את-הכותב. ראיות-מלאות בפנקס. */
+    if (parity > 0) {
+      for (const o of snap.openOrders) {
+        const sellAmt = amtOfStr(o.sell), recvAmt = amtOfStr(o.receive);
+        const isAsk = o.sell.includes("STEEM");
+        const px = isAsk ? recvAmt / sellAmt : sellAmt / recvAmt;
+        if (isAsk && px < parity) {
+          bcAttempted++;
+          try {
+            await realCancelOrder(o.id);
+            cancelled++;
+            const rec = ledger.orders.find((x) => x.id === o.id);
+            if (rec) { rec.status = "cancelled"; rec.lastSeenAt = new Date().toISOString(); }
+            console.log(`[grid-beat] VALUE-GUARD cancel #${o.id}: ask @${px.toFixed(6)} < parity ${parity.toFixed(6)} (${(((px - parity) / parity) * 10000).toFixed(0)}bps) — sub-parity bleed stopped`);
+          } catch (e) {
+            bcFailed++;
+            console.warn(`[grid-beat] value-guard cancel #${o.id} failed: ${String(e).slice(0, 80)}`);
+          }
+        }
       }
     }
-
+    if (!ladderIntact) {
     /* Z-81 התאמת-מעקה: פקודה שנרשמה פתוחה אבל כבר לא על-השרשרת (נאכלה/
      * פגה/בוטלה ע"י-רץ-אח) — נחשפת בכנות כ-unknown, לא ממשיכה להיספר פתוחה. */
     for (const rec of ledger.orders) {
