@@ -89,7 +89,24 @@ export function activeWif(): string | null {
   return w.length >= 51 ? w : null;
 }
 
-export async function signAndBroadcast(ops: [string, Record<string, unknown>][]): Promise<{ txid: string; block: number | null }> {
+/* N2 (2026-10-22, owner approve trace 1a1629f96941f20d): החוסם-המדוד "broadcast answered
+ * without id" — הצומת-ענה-200 אך בלי-id; נמדדו-2/15-שידורים-פגועים בכל-ריצה. הסיכון-האמיתי:
+ * השידור-ייתכן-שנחת-על-השרשרת (אבד-רק-ה-id-בתשובה) → זריקה-כנה-אך-הפקודה-חיה = זומבי.
+ * התרופה-הכנה: (א) בדיקה-על-השרשרת — אם-הפקודה-בעלת-ה-orderid פתוחה-בעצם → השידור-הצליח,
+ * מוחזר-txid-מסומן-בכנות recovered-orderid-N; (ב) רק-אם-לא-נמצא — סבב-חוזר-על-שאר-הצמתים
+ * (limit_order_create-עם-orderid-זהה מחליף-ואינו-משכפל-על-STEEM); (ג) בדיקת-השתקמות-סופית
+ * → רק-אז-זריקה-כנה. אף-פעם-לא-מצהירים-הצלחה-בלי-ראיה-על-השרשרת. */
+async function orderExistsOnChain(orderid: number): Promise<boolean> {
+  try {
+    const orders = await rpcAny<{ orderid: number | string }[]>("condenser_api.get_open_orders", [ACCOUNT]);
+    return Array.isArray(orders) && orders.some((o) => Number(o?.orderid) === Number(orderid));
+  } catch { return false; }
+}
+
+export async function signAndBroadcast(
+  ops: [string, Record<string, unknown>][],
+  opts: { recoverOrderId?: number } = {},
+): Promise<{ txid: string; block: number | null; recovered?: boolean }> {
   const wif = activeWif();
   if (!wif) throw new Error("STEEM_ACTIVE_WIF missing — fail-closed (אין-חתימה, אין-שידור)");
   const dgp = await rpcAny<Record<string, unknown>>("condenser_api.get_dynamic_global_properties", []);
@@ -113,12 +130,27 @@ export async function signAndBroadcast(ops: [string, Record<string, unknown>][])
   } finally {
     try { steem.config.set("chain_id", prev ?? STEEM_CHAIN_ID); } catch { /* keep */ }
   }
-  const res = await rpcAny<{ id?: string; block_num?: number }>(
-    "condenser_api.broadcast_transaction_synchronous",
-    [{ ...signed }],
-  );
-  if (!res?.id) throw new Error("broadcast answered without id (honest)");
-  return { txid: res.id, block: res.block_num ?? null };
+  const noIdErrs: string[] = [];
+  for (let i = 0; i < STEEM_NODES.length; i++) {
+    const node = STEEM_NODES[i];
+    let res: { id?: string; block_num?: number } | null = null;
+    try {
+      res = await rpc<{ id?: string; block_num?: number }>(node, { jsonrpc: "2.0", id: 1, method: "condenser_api.broadcast_transaction_synchronous", params: [{ ...signed }] });
+    } catch (e) {
+      noIdErrs.push(`${new URL(node).host}: ${e instanceof Error ? e.message : String(e)}`);
+      continue; // צומת-מת — הצומת-הבא (השידור-לא-ניסה-להיחתם שם בכלל)
+    }
+    if (res?.id) return { txid: res.id, block: res.block_num ?? null };
+    // תשובה-בלי-id — המדוד: ייתכן-שנחת. אימות-על-השרשרת לפני-כל-ניסיון-חוזר:
+    if (opts.recoverOrderId != null && (await orderExistsOnChain(opts.recoverOrderId))) {
+      return { txid: `recovered-orderid-${opts.recoverOrderId}`, block: null, recovered: true };
+    }
+    noIdErrs.push(`${new URL(node).host}: answered without id`);
+  }
+  if (opts.recoverOrderId != null && (await orderExistsOnChain(opts.recoverOrderId))) {
+    return { txid: `recovered-orderid-${opts.recoverOrderId}`, block: null, recovered: true };
+  }
+  throw new Error(`broadcast answered without id (honest, ${noIdErrs.length} node attempts: ${noIdErrs.join(" | ").slice(0, 200)})`);
 }
 
 /* ── תמונת-מצב אמת ───────────────────────────────────────────────────────── */
@@ -350,7 +382,7 @@ export async function realPlaceOrder(params: {
     min_to_receive: params.minToReceive,
     fill_or_kill: params.fillOrKill ?? false,
     expiration,
-  }]]);
+  }]], { recoverOrderId: params.orderid });
 }
 
 export async function realCancelOrder(orderid: number): Promise<{ txid: string; block: number | null }> {
