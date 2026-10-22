@@ -1,7 +1,7 @@
 {
   "protocol": "SAOS-GRID-PARAMS/1",
-  "sealedAt": "2026-10-22T05:50:00Z",
-  "sealedBy": "zai-agent round-24 (N1 spread-tightening) · owner approve trace 1a1629f96941f20d",
+  "sealedAt": "2026-10-22T12:45:00Z",
+  "sealedBy": "zai-agent round-26 (N1 tier ladder wiring + N2 duplicate-proof) · owner approve trace 1a1629f96941f20d",
   "source": "measured 2026-10-22: value-guard active since 9e359fed (cancel cycle ~3s in CI runs 39723306632), 118-fill ledger tape, parity drift sigma ~11bps/day (9-c series), book spread 229bps vs external parity 0.1058",
   "rationale": {
     "steemAskStepBps": "askStep 80→60bps: the drift-protection that justified 80bps (9-c) is now mechanical — the value-guard cancels any sub-parity ask every beat (measured 5 cancels in run 39723306632), so max adverse-selection exposure is drift between ~3s beats, not 4-day drift. 60bps keeps expected maker edge >= 0 by construction (value line) while moving level-1 ask 20bps closer to the touch; cost floor (avgCost+100bps) still overrides when basis demands.",
@@ -10,7 +10,8 @@
     "levels": "3x3 kept: book depth is thin (touch sizes ≈ tens of STEEM); more levels fragment the queue and raise RC burn per refresh without measurable fill gain on a book that traded 72 fills in 38 days.",
     "hiveAskMinRecvHbd": "0.2 HBD kept — R99 measured price-fidelity law unchanged; HIVE leg stays honestly inventory-gated (0.034 HIVE / 0.003 HBD live) until fills accumulate price-grade fuel.",
     "expectedFill": "STEEM: bid side expected 0.1–0.4 fills/week per level at 150bps (σ_daily ≈ 11bps measured, weekly range ≈ 77bps); ask side fills concentrate at level-1 (touch) ≈ 0.5–2/week when SBD demand lifts. Adverse selection bound: ask fills ≥ -0bps vs parity by construction (value line), bid fills ≥ +120bps surplus.",
-    "honesty": "fill-rate figures are estimates from a 72-fill tape and 7-day parity series, not promises; the ledger keeps marking every fill's live edge (marked-at-detection) so the next proposal re-fits from receipts."
+    "honesty": "fill-rate figures are estimates from a 72-fill tape and 7-day parity series, not promises; the ledger keeps marking every fill's live edge (marked-at-detection) so the next proposal re-fits from receipts.",
+    "spreadTiers": "N1 tier ladder (round-26): these sealed values are the T0 base and the hard ceiling — the live steps derive per-run in grids/spread-tiers.mjs, tightening only as third-party fills accumulate on the ledger tape (T1 ≥2 fills → 45/80, T2 ≥5 → 30/60, T3 ≥12 → 18/45 double-digit). Wash fills (selfCross) and zero-edge fills never count as evidence. Floors from grids/validate-params.mjs (ask≥10/bid≥25) hold absolutely; the ladder never widens above this base."
   },
   "steem": {
     "commitPct": 0.85,

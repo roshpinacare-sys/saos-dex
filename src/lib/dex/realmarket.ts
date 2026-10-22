@@ -145,13 +145,27 @@ export async function signAndBroadcast(
     try { steem.config.set("chain_id", prev ?? STEEM_CHAIN_ID); } catch { /* keep */ }
   }
   const noIdErrs: string[] = [];
+  /* N2-c (2026-10-22 · cycle 26): הוכחת-חתימה-כפולה. כשהרץ משדר את אותו-tx-חתום
+   * לצומת-שני (אחרי תשובה-בלי-id-מהראשון) והצומת-עונה "Duplicate transaction" /
+   * "already in block chain" — זו **הוכחה על-השרשרת שהשידור נחת** (הצומת ראה את
+   * אותו-tx-בדיוק בעבר). הקוד-הישן בלע את-השגיאה והמשיך כאילו-כלום — הוכחת-חיים
+   * נזרקה. עתה: txid מחולץ-מהודעה כשאפשר, אחרת סימון-כנה recovered-duplicate.
+   * אפס-שקר: duplicate הוא ראיה-חד-משמעית — אותו-tx-חתום בדיוק. */
+  const dupProof = (msg: string): { txid: string } | null => {
+    if (!/duplicate transaction|already in block|tx-txid-dup|same transaction/i.test(msg)) return null;
+    const m = msg.match(/\b[0-9a-f]{40,64}\b/i); // txid אם-הצומת הדפיס-אותו בהודעה
+    return { txid: m ? m[0] : "recovered-duplicate" };
+  };
   for (let i = 0; i < STEEM_NODES.length; i++) {
     const node = STEEM_NODES[i];
     let res: { id?: string; block_num?: number } | null = null;
     try {
       res = await rpc<{ id?: string; block_num?: number }>(node, { jsonrpc: "2.0", id: 1, method: "condenser_api.broadcast_transaction_synchronous", params: [{ ...signed }] });
     } catch (e) {
-      noIdErrs.push(`${new URL(node).host}: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      const dup = dupProof(msg);
+      if (dup) return { txid: dup.txid, block: null, recovered: true }; // הוכחת-חתימה — לא כישלון
+      noIdErrs.push(`${new URL(node).host}: ${msg}`);
       continue; // צומת-מת — הצומת-הבא (השידור-לא-ניסה-להיחתם שם בכלל)
     }
     if (res?.id) return { txid: res.id, block: res.block_num ?? null };

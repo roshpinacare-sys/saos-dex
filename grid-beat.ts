@@ -39,6 +39,11 @@ import { policyCycleGate, policyGate, effectiveCycleCap } from "./grids/policy.m
  * ופרסום-שקר verdict=ARMED-STABLE · blocker=null. מעתה: אימות-לפני-חתימה (fail-closed)
  * + כשלי-שידור מפורסמים בכנות ב-verdict. */
 import { activeAuthorityOk } from "./grids/key-gate.mjs";
+/* N1-חוק-המדרגות (2026-10-22, owner approve trace 1a1629f96941f20d · cycle 26): סולם-הידוק-
+ * מבוסס-ראיות — המרווח מתהדק רק כשמילויי-חוץ-אמת (לא-wash, edge≠0) מצטברים-בפנקס.
+ * T0=בסיס-חתום → T1(≥2)=45/80 → T2(≥5)=30/60 → T3(≥12)=18/45 דו-ספרתי. רצפות-השומר
+ * (ask≥10/bid≥25) לעולם לא נחצות; לעולם לא מעל-הבסיס; המדרגה מפורסמת-בגלוי בכל-ריצה. */
+import { deriveSpreadTiers } from "./grids/spread-tiers.mjs";
 /* 9-c · פרמטרי-גריד נכנסים למנוע רק דרך השומר (grids/validate-params.mjs — fail-closed):
  * grids/state/grid-params.json תקין → הפרמטרים-החיים; חסר/נדחה → ברירות-המחדל-המדודות
  * למטה + הערה-גלויה בפרסום. פרמטרים-רעים לעולם לא מדורגים לספר. */
@@ -290,6 +295,12 @@ async function main(): Promise<void> {
   const ledger = loadLedger();
   const armed = !!activeWif();
 
+  /* N1 · המדרגה-החיה: נגזרת-מהראיות-בפנקס (מילויי-חוץ מצטברים) מעל הבסיס-החתום.
+   * הערכים-החיים של רגל-STEEM: אסקים/בידים נפרשים לפי TIER, לא לפי הבסיס ישירות —
+   * כך ההידוק-אל-דו-ספרתי-bps קורה רק כשהשוק-החוץ באמת משלם. */
+  const TIER = deriveSpreadTiers(ledger.fills, { askStepBps: LIVE_ASK_STEP_BPS, bidStepBps: LIVE_BID_STEP_BPS }, "steem");
+  console.log(`[grid-beat] SPREAD-TIER ${TIER.tier}: ask ${TIER.askStepBps}bps / bid ${TIER.bidStepBps}bps (base ${TIER.baseAskStepBps}/${TIER.baseBidStepBps}) · ${TIER.evidence}${TIER.nextTier ? ` · next: ${TIER.nextTier.name} after ${TIER.nextTier.needs} more third-party fills` : " · at top tier"}`);
+
   /* 9-c · כנות-ספר: פקודות-פתוחות-על-השרשרת שהמעקה לא מכיר (זומבים — ריצה שהמעקה-שלה
    * אבד ב-push-מקביל, או סוחר-אחר בחשבון). לא משנים-התנהגות — רק מפרסמים את-הסתירה,
    * כדי שהריצה-הבאה תדע שהמעקה והשרשרת לא מסונכרנים (הסירון-השקט של 10-08..10-11). */
@@ -378,7 +389,7 @@ async function main(): Promise<void> {
     const TOUCH_EPS = 1e-4; // סובלנות-השוואת-מגע (0.01%)
     const ownsAsk = bestOurAsk != null && Math.abs(bestOurAsk - snap.book.bestAsk) <= snap.book.bestAsk * TOUCH_EPS;
     const ownsBid = bestOurBid != null && Math.abs(bestOurBid - snap.book.bestBid) <= snap.book.bestBid * TOUCH_EPS;
-    const askValueLine = parity * (1 + LIVE_ASK_STEP_BPS / 10_000);
+    const askValueLine = parity * (1 + TIER.askStepBps / 10_000); // N1: מדרגה-חיה מבוססת-ראיות
     const ladderIntact = ownsAsk && ownsBid && bestOurAsk !== null && bestOurAsk >= askValueLine && bestOurBid !== null && bestOurBid <= parity;
 
     if (ladderIntact) {
@@ -441,9 +452,9 @@ async function main(): Promise<void> {
        * כלפי-מעלה מהבסיס-המהודק — אף-אסק לא נופל מתחת ל-bestAsk (אין-taker-דימום).
        * EDGE-FLOOR: הבסיס מרים גם את רצפת-העלות — אסק שלם לא נפרש מתחתיה. */
       const touchAsk = snap.book.bestAsk ?? 0;
-      const baseAsk = Math.max(parity * (1 + LIVE_ASK_STEP_BPS / 10_000), touchAsk, costFloor);
+      const baseAsk = Math.max(parity * (1 + TIER.askStepBps / 10_000), touchAsk, costFloor);
       for (let k = 1; k <= LIVE_ASK_LEVELS; k++) {
-        const px = baseAsk * (1 + (LIVE_ASK_STEP_BPS * (k - 1)) / 10_000);
+        const px = baseAsk * (1 + (TIER.askStepBps * (k - 1)) / 10_000);
         const sellAmt = per;
         const recv = Math.floor(sellAmt * px * 1000) / 1000;
         if (recv < LIVE_MIN_LEVEL_SBD) continue;
@@ -459,7 +470,7 @@ async function main(): Promise<void> {
           const r = await realPlaceOrder({ orderid: id, amountToSell: `${dp3(sellAmt)} STEEM`, minToReceive: `${dp3(recv)} SBD`, expirationDays: LIVE_EXPIRY_DAYS });
           placed++;
           ledger.orders.push({ id, at: new Date().toISOString(), txid: r.txid, side: "ask", sell: `${dp3(sellAmt)} STEEM`, receive: `${dp3(recv)} SBD`, priceSbdPerSteem: sbdPerSteemOf(sellAmt, recv), status: "open", lastSeenAt: new Date().toISOString() });
-          console.log(`[grid-beat] ask #${id}: ${dp3(sellAmt)} STEEM -> ${dp3(recv)} SBD @${px.toFixed(6)} (parity+${(LIVE_ASK_STEP_BPS * k) / 100}%${costFloor > 0 && baseAsk === costFloor ? ` · cost-floor ${invBasis.avgCostSbd?.toFixed(6)}+${MIN_ASK_EDGE_BPS}bps` : ""}) txid ${r.txid.slice(0, 12)}`);
+          console.log(`[grid-beat] ask #${id}: ${dp3(sellAmt)} STEEM -> ${dp3(recv)} SBD @${px.toFixed(6)} (parity+${(TIER.askStepBps * k) / 100}% · tier ${TIER.tier}${costFloor > 0 && baseAsk === costFloor ? ` · cost-floor ${invBasis.avgCostSbd?.toFixed(6)}+${MIN_ASK_EDGE_BPS}bps` : ""}) txid ${r.txid.slice(0, 12)}`);
         } catch (e) {
           bcFailed++;
           console.warn(`[grid-beat] ask #${id} rejected: ${String(e).slice(0, 90)}`);
@@ -477,7 +488,7 @@ async function main(): Promise<void> {
       const per = Math.floor((sbdCommit / LIVE_BID_LEVELS) * 1000) / 1000;
       for (let k = 1; k <= LIVE_BID_LEVELS; k++) {
         // Z-80: ביד לא עולה על המגע — תמיד (כפול-ביטחון; הנוסחה כבר מתחתיו)
-        const px = Math.min(snap.book.bestBid * (1 - (LIVE_BID_STEP_BPS * k) / 10_000), snap.book.bestBid);
+        const px = Math.min(snap.book.bestBid * (1 - (TIER.bidStepBps * k) / 10_000), snap.book.bestBid); // N1: מדרגה-חיה
         const recv = Math.floor(per / px * 1000) / 1000; // STEEM
         if (recv < LIVE_MIN_LEVEL_STEEM) continue;
         const perOpNotional = per; // ערך-SBD של ההצבה הבודדת (ה-BID מוכר SBD)
@@ -529,6 +540,9 @@ async function main(): Promise<void> {
         direction: recvSteem ? "bought-steem" : "sold-steem",
         paid: f.paid, received: f.received, steemUsd, sbdUsd, paidUsd, recvUsd,
         edgeBps: wash ? 0 : edgeBps,
+        // N1 · הדגל-המכריע: wash-מילויים מסומנים-על-הפנקס — סולם-המדרגות (spread-tiers)
+        // סופר-רק מילויי-חוץ-אמת; בלי-הדגל ההיסטוריה-הישנה תישאר עמומה. fail-honest.
+        ...(wash ? { selfCross: true as const } : {}),
       });
       const oid = f.openOrderid ?? f.currentOrderid;
       if (oid) {
@@ -689,6 +703,7 @@ async function main(): Promise<void> {
           direction: recvHive ? "bought-hive" : "sold-hive",
           paid: f.paid, received: f.received, steemUsd: hiveUsd, sbdUsd: hbdUsd, paidUsd, recvUsd,
           edgeBps: wash ? 0 : edgeBps,
+          ...(wash ? { selfCross: true as const } : {}), // N1: הדגל-המכריע גם-על-רגל-HIVE
         });
         const oid = f.openOrderid ?? f.currentOrderid;
         if (oid) {
@@ -758,6 +773,8 @@ async function main(): Promise<void> {
       principle: "never sell STEEM below its external USD value; every buy below parity is measured surplus",
       commitPct: LIVE_COMMIT_PCT, bidLevels: LIVE_BID_LEVELS, bidStepBps: LIVE_BID_STEP_BPS,
       askLevels: LIVE_ASK_LEVELS, askStepBps: LIVE_ASK_STEP_BPS, expiryDays: LIVE_EXPIRY_DAYS,
+      /* N1 · המדרגה-החיה מפורסמת-בגלוי: tier/steps/evidence — אין-הידוק-סמוי */
+      spreadTiers: TIER,
       hiveCommitPct: HIVE_COMMIT_PCT,
       paramsSource: GP.note ?? "grids/state/grid-params.json (validated fail-closed by grids/validate-params.mjs before every run)",
       directiveR24: "powerdown is read-only here: never opened, never replaced, fleet RC is sacred",
