@@ -225,6 +225,10 @@ async function pushWithRetry(dir: string, branch: string, tries = 3): Promise<bo
         execSync(`git pull --rebase --autostash origin ${branch}`, { encoding: "utf8", cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
       } catch (e2) {
         console.error(`[grid-beat] rebase try ${i + 1} failed: ${String((e2 as { stderr?: string }).stderr ?? e2).split("\n").slice(-2).join(" | ").slice(0, 200)}`);
+        // R-GRID-WAR (2026-10-22, measured live 04:33Z): ריבייט-כושל משאיר rebase-in-progress
+        // → הצעדים-הבאים ב-workflow (evidence commits) נופלים על "unresolved conflict" בכל-ריצה.
+        // עתה: abort → עץ-נקי; הקבלה-שלנו נשארת-קומיט-מקומי — הריצה-הבאה מריבייטת מחדש.
+        try { execSync(`git rebase --abort`, { encoding: "utf8", cwd: dir, stdio: ["ignore", "pipe", "pipe"] }); console.error(`[grid-beat] rebase aborted — tree clean for next steps`); } catch { /* אין-ריבייט-פעיל */ }
       }
       await new Promise((r) => setTimeout(r, 1_500));
     }
