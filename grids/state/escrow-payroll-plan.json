@@ -1,17 +1,17 @@
 {
- "protocol": "SAOS-ESCROW-PAYROLL-PLAN/1",
- "sealedAt": "2026-10-12T02:05:00Z",
- "authority": "owner mandate IM trace 1a12dbe9812eff11 ('תצית תפתור תפעיל שלא יהיו חסימות · הריבונות מורשית להשתמש בבלוקצ'יין להקים פרויקטים ולבצע ולפתח') + R30 full-lift (lane general open, trace 1a12d295c7da9241)",
- "law": "canary-first: dust amounts only; hard caps in code (amount ≤ 1.000 SBD, fee ≤ 0.100 SBD); every signer verified against its live active authority; chain-history idempotency; the payer is a fleet account the machine holds LIVE keys for (measured in key-census-probe 2026-10-12 — the treasury headcorner stays owner-keyed until the owner delivers the 10-08 rotation key); raising caps or switching payer to headcorner = owner word",
- "lanes": [
-  {
-   "id": "canary-1",
-   "from": "cashmachine",
-   "to": "hcsoldier4",
-   "agent": "hcsoldier5",
-   "amountSbd": 0.05,
-   "feeSbd": 0.01,
-   "purpose": "canary payroll cycle — proves escrow_transfer/approve/release end-to-end between fleet accounts; the released 0.050 SBD stays inside the fleet; worst-case cost = 0.010 SBD fee"
-  }
- ]
+  "protocol": "SAOS-ESCROW-PAYROLL-PLAN/1",
+  "sealedAt": "2026-10-12T02:05:00Z",
+  "authority": "owner mandate IM trace 1a12dbe9812eff11 ('תצית תפתור תפעיל שלא יהיו חסימות · הריבונות מורשית להשתמש בבלוקצ'יין להקים פרויקטים ולבצע ולפתח') + R30 full-lift (lane general open, trace 1a12d295c7da9241)",
+  "law": "canary-first: dust amounts only; hard caps in code (amount ≤ 1.000 SBD, fee ≤ 0.100 SBD); every signer verified against its live active authority; chain-history idempotency; the payer is a fleet account the machine holds LIVE keys for (measured in key-census-probe 2026-10-12 — the treasury headcorner stays owner-keyed until the owner delivers the 10-08 rotation key); raising caps or switching payer to headcorner = owner word · W39 measured payer switch: cashmachine active key absent post-ROT2 (escrow run #26 fail-closed evidence) → payer = hcsoldier5 (ROT2-covered, fuel measured 15.6 STEEM)",
+  "lanes": [
+    {
+      "id": "canary-1",
+      "from": "hcsoldier5",
+      "to": "hcsoldier4",
+      "agent": "hcsoldier6",
+      "amountSbd": 0.05,
+      "feeSbd": 0.01,
+      "purpose": "canary payroll cycle — proves escrow_transfer/approve/release end-to-end between fleet accounts; the released 0.050 SBD stays inside the fleet; worst-case cost = 0.010 SBD fee"
+    }
+  ]
 }
