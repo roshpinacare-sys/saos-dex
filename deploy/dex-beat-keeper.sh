@@ -27,9 +27,21 @@ if [ "$(git branch --show-current)" != "main" ]; then
 fi
 
 # 1) the home is the repo — start from canonical state, never a stale tree
+#    W38 (trace 1a1619c722f4fd59) RACE-RECONCILE LADDER: measured this day —
+#    local unpushed receipts (own beat, push lost to the fleet pacemaker)
+#    made every later `pull --ff-only` diverge → the ENTIRE clock slot was
+#    burned on "honest skip" while the chain starved. The step-5 doctrine
+#    (rebase favoring incoming, the chain home is canonical) now runs BEFORE
+#    the beat too: autostash the dirty runtime state, rebase ours onto
+#    origin with -X theirs, retry ff once. Force is still forbidden; if even
+#    the ladder loses, the honest skip remains the last resort.
 if ! git pull --ff-only -q origin main 2>/dev/null; then
-  echo "[dex-beat-keeper] pull failed — skipping beat (honest, no force)"
-  exit 0
+  if git pull --rebase -X theirs --autostash -q origin main 2>/dev/null && git pull --ff-only -q origin main 2>/dev/null; then
+    echo "[dex-beat-keeper] ff race — reconciled via rebase -X theirs (W38: the clock never skips for a race)"
+  else
+    echo "[dex-beat-keeper] pull failed — skipping beat (honest, no force)"
+    exit 0
+  fi
 fi
 
 # 1.2) integrity gate (W1.5; measured a6d7806-class outage 17.10 17:31→20:00Z:
