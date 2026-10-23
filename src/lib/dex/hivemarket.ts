@@ -138,37 +138,81 @@ function hiveLegacyWireOps(ops: [string, Record<string, unknown>][]): [string, R
 
 export async function hiveSignAndBroadcast(
   ops: [string, Record<string, unknown>][]
-): Promise<{ txid: string; block: number | null }> {
+): Promise<{ txid: string; block: number | null; recovered?: boolean }> {
   const wif = hiveActiveWif();
   if (!wif) throw new Error("HIVE_ACTIVE_WIF missing — fail-closed (אין-חתימה, אין-שידור)");
-  const dgp = await hiveRpcAny<Record<string, unknown>>("condenser_api.get_dynamic_global_properties", []);
-  const headBlockNumber = Number(dgp.head_block_number);
-  const headBlockId = String(dgp.head_block_id);
-  const headTime = new Date(String(dgp.time) + "Z").getTime();
-  const tx: GrapheneTx = {
-    ref_block_num: headBlockNumber & 0xffff,
-    ref_block_prefix: Buffer.from(headBlockId, "hex").readUInt32LE(4),
-    expiration: new Date(headTime + 60_000).toISOString().slice(0, 19),
-    operations: ops,
-    extensions: [],
+  /* N2 · התאוששות-שידור (cycle 28, מדוד 2/15 "answered without id" ברגל-STEEM): HIVE
+   * חשופה לאותו-ערפל-צומת — תשובה-בלי-id אינה ידיעה-על-גורל-העסקה. החוק: אימות-
+   * הכלה מול get_account_history (owner+orderid מזהים-ביט-מול-ביט על הפקודות-שלנו),
+   * backoff מעריכי (1.5s×2ⁿ+jitter) ×4 ניסיונות עם חתימה-טרייה לכל-ניסיון
+   * (ref-block חי — אין-פקיעה), "duplicate" = עדות-הכלה → התאוששות-ולא-כישלון.
+   * fail-closed אחרי-הניסיון-האחרון: שגיאה-כנה, אפס-פנטום. */
+  const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const [opType, opBody] = ops[0] ?? ["", {}];
+  const sinceMs = Date.now() - 5 * 60_000;
+  const recoverTxid = async (): Promise<{ txid: string; block: number | null; recovered: true } | null> => {
+    try {
+      const hist = await hiveRpcAny<[number, { op: [string, Record<string, unknown>]; timestamp: string; trx_id: string }][]>(
+        "condenser_api.get_account_history", [ACCOUNT, -1, 200],
+      );
+      if (!Array.isArray(hist)) return null;
+      for (let i = hist.length - 1; i >= 0; i--) {
+        const [, e] = hist[i]!;
+        if (e.op[0] !== opType) continue;
+        if (String(e.op[1].owner ?? "") !== String(opBody.owner ?? ACCOUNT)) continue;
+        if (opBody.orderid != null && String(e.op[1].orderid ?? "") !== String(opBody.orderid)) continue;
+        const tsRaw = String(e.timestamp ?? "");
+        const ts = Date.parse(tsRaw + (tsRaw.endsWith("Z") ? "" : "Z"));
+        if (!Number.isFinite(ts) || ts < sinceMs) continue;
+        if (/^0+$/.test(e.trx_id ?? "")) continue; // וירטואלי — לא-עדות
+        return { txid: e.trx_id, block: null, recovered: true };
+      }
+    } catch { /* התאוששות מיטבית — כישלון-כנה שקט */ }
+    return null;
   };
-  // החתימה על הצורה הממופה (STEEM/SBD) — הדיגסט שהצומת יחשב; השידור עם השמות האמיתיים
-  const wireTx: GrapheneTx = { ...tx, operations: hiveLegacyWireOps(ops) };
-  const prev = steem.config.get("chain_id");
-  steem.config.set("chain_id", HIVE_CHAIN_ID);
-  let signed: GrapheneTx & { signatures?: string[] };
-  try {
-    signed = steem.auth.signTransaction(wireTx, [wif]);
-  } finally {
-    try { steem.config.set("chain_id", prev ?? "0000000000000000000000000000000000000000000000000000000000000000"); } catch { /* keep */ }
+  let lastWhy = "";
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const dgp = await hiveRpcAny<Record<string, unknown>>("condenser_api.get_dynamic_global_properties", []);
+    const headBlockNumber = Number(dgp.head_block_number);
+    const headBlockId = String(dgp.head_block_id);
+    const headTime = new Date(String(dgp.time) + "Z").getTime();
+    const tx: GrapheneTx = {
+      ref_block_num: headBlockNumber & 0xffff,
+      ref_block_prefix: Buffer.from(headBlockId, "hex").readUInt32LE(4),
+      expiration: new Date(headTime + 60_000).toISOString().slice(0, 19),
+      operations: ops,
+      extensions: [],
+    };
+    // החתימה על הצורה הממופה (STEEM/SBD) — הדיגסט שהצומת יחשב; השידור עם השמות האמיתיים
+    const wireTx: GrapheneTx = { ...tx, operations: hiveLegacyWireOps(ops) };
+    const prev = steem.config.get("chain_id");
+    steem.config.set("chain_id", HIVE_CHAIN_ID);
+    let signed: GrapheneTx & { signatures?: string[] };
+    try {
+      signed = steem.auth.signTransaction(wireTx, [wif]);
+    } finally {
+      try { steem.config.set("chain_id", prev ?? "0000000000000000000000000000000000000000000000000000000000000000"); } catch { /* keep */ }
+    }
+    const broadcastBody = { ...tx, signatures: signed.signatures };
+    try {
+      const res = await hiveRpcAny<{ id?: string; block_num?: number }>(
+        "condenser_api.broadcast_transaction_synchronous",
+        [broadcastBody],
+      );
+      if (res?.id) return { txid: res.id, block: res.block_num ?? null };
+      lastWhy = "hive broadcast answered without id (honest) — verifying inclusion via chain history";
+    } catch (e) {
+      lastWhy = String(e instanceof Error ? e.message : e).slice(0, 140);
+      if (/duplicate/i.test(lastWhy)) {
+        const rec = await recoverTxid();
+        if (rec) return rec; // עדות-הכלה: כבר-על-השרשרת מניסיון-קודם
+      }
+    }
+    const rec = await recoverTxid();
+    if (rec) return rec;
+    if (attempt < 4) await sleepMs(1500 * 2 ** attempt + Math.floor(Math.random() * 400));
   }
-  const broadcastBody = { ...tx, signatures: signed.signatures };
-  const res = await hiveRpcAny<{ id?: string; block_num?: number }>(
-    "condenser_api.broadcast_transaction_synchronous",
-    [broadcastBody],
-  );
-  if (!res?.id) throw new Error("hive broadcast answered without id (honest)");
-  return { txid: res.id, block: res.block_num ?? null };
+  throw new Error(`hive broadcast failed after 4 attempts (${opType}): ${lastWhy || "unknown"}`);
 }
 
 /* ── תמונת-מצב אמת ───────────────────────────────────────────────────────── */
@@ -374,7 +418,7 @@ export async function hivePlaceOrder(params: {
   minToReceive: string;   // "0.001200 HBD"
   fillOrKill?: boolean;
   expirationDays?: number;
-}): Promise<{ txid: string; block: number | null }> {
+}): Promise<{ txid: string; block: number | null; recovered?: boolean }> {
   const days = Math.min(Math.max(params.expirationDays ?? 27, 1), 27);
   const expiration = new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 19);
   ht().data = null; // אילץ-רענון-אחרי-מוטציה
@@ -388,7 +432,7 @@ export async function hivePlaceOrder(params: {
   }]]);
 }
 
-export async function hiveCancelOrder(orderid: number): Promise<{ txid: string; block: number | null }> {
+export async function hiveCancelOrder(orderid: number): Promise<{ txid: string; block: number | null; recovered?: boolean }> {
   ht().data = null;
   return hiveSignAndBroadcast([["limit_order_cancel", { owner: ACCOUNT, orderid }]]);
 }
