@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-10-23T22:24:33.611Z",
+ "publishedAt": "2026-10-23T22:40:24.705Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -9,30 +9,26 @@
  ],
  "real": true,
  "armed": true,
- "verdict": "ARMED-WAITING",
- "blocker": [
-  "broadcast failing: 6/6 chain ops rejected this run (\"broadcast answered without id\") — stale key/authority or node fault; verdict cannot be stable until signing succeeds"
- ],
+ "verdict": "ARMED-LIVE",
+ "blocker": null,
  "keyGate": {
   "ok": true,
   "authorityOk": true
  },
  "zombieOrders": {
-  "count": 7,
+  "count": 5,
   "ids": [
    1792777794,
    1792777795,
    1792782363,
    1792782364,
-   1792782369,
-   2100000083,
-   2100000084
+   1792782369
   ],
   "note": "open on-chain but not known-open in the ledger — ledger/chain drift surfaced honestly (lost concurrent push, or another actor trading this account)"
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-10-23T22:24:33.610Z",
+  "publishedAt": "2026-10-23T22:40:24.704Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": true,
@@ -49,20 +45,20 @@
    "hive buy-side waiting for HBD inventory: 0.002 HBD commitable < 0.003 needed"
   ],
   "marks": {
-   "hiveUsd": 0.04961851965167463,
-   "hbdUsd": 1.39,
-   "parityHbdPerHive": 0.035696776727823475
+   "hiveUsd": 0.04920053691781616,
+   "hbdUsd": 1.35,
+   "parityHbdPerHive": 0.0364448421613453
   },
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.622695517285727
+   "hp": 21.622713812181626
   },
   "book": {
-   "bestBid": 0.0492208285822881,
+   "bestBid": 0.04906985366279196,
    "bestAsk": 0.04936293583581292,
-   "mid": 0.04929188220905051,
-   "spreadBps": 28
+   "mid": 0.049216394749302436,
+   "spreadBps": 59
   },
   "openOrdersNow": 0,
   "run": {
@@ -103,50 +99,50 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.051881492448455885,
-  "sbdUsd": 0.486565,
-  "paritySbdPerSteem": 0.10662808144534827
+  "steemUsd": 0.05163187438246582,
+  "sbdUsd": 0.486564,
+  "paritySbdPerSteem": 0.10611527852957847
  },
  "priceTruth": {
   "verdict": "TRIANGLE-ARMED",
   "valueLineSbdPerSteem": 0.10407898,
   "marks": {
    "chainFeedSbdPerSteem": 0.10407898,
-   "usdParitySbdPerSteem": 0.10662808,
-   "globalSteemUsd": 0.051881492448455885,
-   "measuredSbdUsd": 0.486565,
-   "impliedSbdUsdFromFeed": 0.49848196,
-   "sbdDepegBps": -239,
+   "usdParitySbdPerSteem": 0.10611528,
+   "globalSteemUsd": 0.05163187438246582,
+   "measuredSbdUsd": 0.486564,
+   "impliedSbdUsdFromFeed": 0.49608361,
+   "sbdDepegBps": -192,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-10-23T22:24:29.644Z",
+  "measuredAt": "2026-10-23T22:40:06.169Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 0.0002500969124642412,
+  "weeklySp": 0.00025009709625777195,
   "weeklyUsd": 0,
-  "remainingSp": 1000.3870291535771,
+  "remainingSp": 1000.3877643272441,
   "remainingWeeks": 3999998,
   "nextPayout": "2026-10-25T01:40:51",
-  "rcFuelSp": 150.41505192643686
+  "rcFuelSp": 150.41516246484056
  },
  "inventory": {
-  "steem": 19.099,
-  "sbd": 2.957
+  "steem": 127.548,
+  "sbd": 19.709
  },
  "book": {
-  "bestBid": 0.10381174640217813,
-  "bestAsk": 0.10411852657333152,
-  "mid": 0.10396513648775482,
-  "spreadBps": 29
+  "bestBid": 0.10382059800664452,
+  "bestAsk": 0.10401915868388172,
+  "mid": 0.10391987834526312,
+  "spreadBps": 19
  },
- "openOrdersNow": 13,
+ "openOrdersNow": 5,
  "run": {
-  "placed": 0,
+  "placed": 6,
   "cancelled": 0,
-  "placedTotal": 491,
+  "placedTotal": 497,
   "cancelledTotal": 355,
   "filledTotal": 244
  },
@@ -323,78 +319,6 @@
  ],
  "orders": [
   {
-   "id": 2342311225,
-   "at": "2026-10-23T20:55:05.842Z",
-   "txid": "ff1cd4413f1800527a524efd9f114b4a22ab2a93",
-   "side": "ask",
-   "sell": "23.963 STEEM",
-   "receive": "2.510 SBD",
-   "priceSbdPerSteem": 0.10474481492300629,
-   "status": "unknown",
-   "lastSeenAt": "2026-10-23T21:24:33.864Z",
-   "chain": "steem"
-  },
-  {
-   "id": 2342311242,
-   "at": "2026-10-23T20:55:08.715Z",
-   "txid": "df7bd18fe74c5b28502e7bbec3ec11b11d3b2bf2",
-   "side": "ask",
-   "sell": "23.963 STEEM",
-   "receive": "2.513 SBD",
-   "priceSbdPerSteem": 0.10487000792889037,
-   "status": "unknown",
-   "lastSeenAt": "2026-10-23T21:24:33.864Z",
-   "chain": "steem"
-  },
-  {
-   "id": 2342311267,
-   "at": "2026-10-23T20:55:12.454Z",
-   "txid": "520577ea0abfd3763dc9b0be83d08b26af29123e",
-   "side": "ask",
-   "sell": "23.963 STEEM",
-   "receive": "2.515 SBD",
-   "priceSbdPerSteem": 0.10495346993281308,
-   "status": "unknown",
-   "lastSeenAt": "2026-10-23T21:24:33.864Z",
-   "chain": "steem"
-  },
-  {
-   "id": 2342311300,
-   "at": "2026-10-23T20:55:14.814Z",
-   "txid": "f00ff3cde81f318e0651b3380221de46fbc98bd7",
-   "side": "bid",
-   "sell": "4.664 SBD",
-   "receive": "44.922 STEEM",
-   "priceSbdPerSteem": 0.10382217090069285,
-   "status": "unknown",
-   "lastSeenAt": "2026-10-23T21:24:33.864Z",
-   "chain": "steem"
-  },
-  {
-   "id": 2342311317,
-   "at": "2026-10-23T20:55:17.787Z",
-   "txid": "6b496e20a82eca865b13db4e66c7b4d72e7742f7",
-   "side": "bid",
-   "sell": "4.664 SBD",
-   "receive": "45.035 STEEM",
-   "priceSbdPerSteem": 0.10356261547344112,
-   "status": "unknown",
-   "lastSeenAt": "2026-10-23T21:24:33.864Z",
-   "chain": "steem"
-  },
-  {
-   "id": 2342311342,
-   "at": "2026-10-23T20:55:20.728Z",
-   "txid": "c9121751311a530d8c2eaa96581d4a64c73c2ca3",
-   "side": "bid",
-   "sell": "4.664 SBD",
-   "receive": "45.148 STEEM",
-   "priceSbdPerSteem": 0.10330306004618937,
-   "status": "unknown",
-   "lastSeenAt": "2026-10-23T21:24:33.864Z",
-   "chain": "steem"
-  },
-  {
    "id": 2342318289,
    "at": "2026-10-23T21:09:47.811Z",
    "txid": "0738ea5cfbdc9fe1cef2cf8e00de0c1afc31827e",
@@ -546,8 +470,8 @@
    "sell": "35.129 STEEM",
    "receive": "3.683 SBD",
    "priceSbdPerSteem": 0.10484215320675226,
-   "status": "open",
-   "lastSeenAt": "2026-10-23T22:09:47.917Z",
+   "status": "unknown",
+   "lastSeenAt": "2026-10-23T22:40:06.229Z",
    "chain": "steem"
   },
   {
@@ -558,8 +482,8 @@
    "sell": "35.129 STEEM",
    "receive": "3.686 SBD",
    "priceSbdPerSteem": 0.10492755273420822,
-   "status": "open",
-   "lastSeenAt": "2026-10-23T22:09:50.710Z",
+   "status": "unknown",
+   "lastSeenAt": "2026-10-23T22:40:06.229Z",
    "chain": "steem"
   },
   {
@@ -570,8 +494,8 @@
    "sell": "35.129 STEEM",
    "receive": "3.690 SBD",
    "priceSbdPerSteem": 0.10504141877081614,
-   "status": "open",
-   "lastSeenAt": "2026-10-23T22:09:53.786Z",
+   "status": "unknown",
+   "lastSeenAt": "2026-10-23T22:40:06.229Z",
    "chain": "steem"
   },
   {
@@ -582,8 +506,8 @@
    "sell": "5.584 SBD",
    "receive": "53.838 STEEM",
    "priceSbdPerSteem": 0.10371677740863787,
-   "status": "open",
-   "lastSeenAt": "2026-10-23T22:09:56.867Z",
+   "status": "unknown",
+   "lastSeenAt": "2026-10-23T22:40:06.229Z",
    "chain": "steem"
   },
   {
@@ -594,8 +518,8 @@
    "sell": "5.584 SBD",
    "receive": "53.973 STEEM",
    "priceSbdPerSteem": 0.10345748546511628,
-   "status": "open",
-   "lastSeenAt": "2026-10-23T22:09:59.750Z",
+   "status": "unknown",
+   "lastSeenAt": "2026-10-23T22:40:06.229Z",
    "chain": "steem"
   },
   {
@@ -606,9 +530,75 @@
    "sell": "5.584 SBD",
    "receive": "54.109 STEEM",
    "priceSbdPerSteem": 0.10319819352159468,
-   "status": "open",
-   "lastSeenAt": "2026-10-23T22:10:02.672Z",
+   "status": "unknown",
+   "lastSeenAt": "2026-10-23T22:40:06.229Z",
    "chain": "steem"
+  },
+  {
+   "id": 2342361649,
+   "at": "2026-10-23T22:40:08.913Z",
+   "txid": "ef3973c02dad5102ff7624971a4cefc1c8589b04",
+   "side": "ask",
+   "sell": "35.996 STEEM",
+   "receive": "3.774 SBD",
+   "priceSbdPerSteem": 0.10484498277586397,
+   "status": "open",
+   "lastSeenAt": "2026-10-23T22:40:08.913Z"
+  },
+  {
+   "id": 2342361666,
+   "at": "2026-10-23T22:40:11.910Z",
+   "txid": "3435aea048449a23f2b6e05c95f7ed74168c5048",
+   "side": "ask",
+   "sell": "35.996 STEEM",
+   "receive": "3.777 SBD",
+   "priceSbdPerSteem": 0.1049283253694855,
+   "status": "open",
+   "lastSeenAt": "2026-10-23T22:40:11.910Z"
+  },
+  {
+   "id": 2342361691,
+   "at": "2026-10-23T22:40:14.718Z",
+   "txid": "b5d63dc52b8b7865fac42e3c67dc5b6ad9c6bfbb",
+   "side": "ask",
+   "sell": "35.996 STEEM",
+   "receive": "3.781 SBD",
+   "priceSbdPerSteem": 0.10503944882764751,
+   "status": "open",
+   "lastSeenAt": "2026-10-23T22:40:14.718Z"
+  },
+  {
+   "id": 2342361716,
+   "at": "2026-10-23T22:40:17.765Z",
+   "txid": "33bcd154d73492100fbc07cee9f327825e07e63e",
+   "side": "bid",
+   "sell": "5.584 SBD",
+   "receive": "53.838 STEEM",
+   "priceSbdPerSteem": 0.10371677740863787,
+   "status": "open",
+   "lastSeenAt": "2026-10-23T22:40:17.766Z"
+  },
+  {
+   "id": 2342361741,
+   "at": "2026-10-23T22:40:20.802Z",
+   "txid": "e1f5ae2650539390dff1e8b0dadb24a8c981d76b",
+   "side": "bid",
+   "sell": "5.584 SBD",
+   "receive": "53.973 STEEM",
+   "priceSbdPerSteem": 0.10345748546511628,
+   "status": "open",
+   "lastSeenAt": "2026-10-23T22:40:20.802Z"
+  },
+  {
+   "id": 2342361766,
+   "at": "2026-10-23T22:40:23.786Z",
+   "txid": "216ece92595be560fbb6fd5a11a677a789fe760e",
+   "side": "bid",
+   "sell": "5.584 SBD",
+   "receive": "54.109 STEEM",
+   "priceSbdPerSteem": 0.10319819352159468,
+   "status": "open",
+   "lastSeenAt": "2026-10-23T22:40:23.786Z"
   }
  ],
  "vault": {
