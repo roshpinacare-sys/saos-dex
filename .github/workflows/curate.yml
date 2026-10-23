@@ -1,0 +1,64 @@
+# curate — פעימת-הקיורציה-הריבונית (N4 · owner trace 1a16429cb29ef8d1 "חייב מילוי חוץ")
+# ═══════════════════════════════════════════════════════════════════════════════
+# השורש-המדוד: ה-SP-החי (כ-4.4K$ הון) נתן 8 הצבות/יום במשקל 2% = 0.32% כוח-
+# הצבעה-יומי — שכיב-מוות-כלכלי, ו-0.0096$/24ש׳ קיורציה. המגבר (cycle 28):
+# 20 הצבות/פעימה × משקל עד 10% · פעימה כל 6 שעות = עד 80 הצבות/יוממה × 10%
+# = 16% כוח-הצבעה/יום מול-רגנרציה 20%/יום — קיימות-מלאה (שולי-בטיחות 1.25×),
+# אפס-שינוי-סמכות, אפס-העברת-הון, אפס-מפתח-חדש. ההון-הקיים עובד.
+#
+# המנוע: grids/curate-beat.mjs — תכנון-דטרמיניסטי-חסר-מפתחות (curate.mjs) +
+# ביצוע-חי עם מפתח-הפרסום-הייעודי (secrets.STEEM_POSTING_WIF, key-gate מול
+# רשות-הפרסום-החיה לפני-כל-שידור; fail-closed בלי-מפתח → KEYLESS-PLAN-ONLY).
+# דוקטרינה: אפס-הצבעה-עצמית · ≤2 פר-מחבר · dedup-24ש׳ מול-הקבלות.
+# ראיות: כל-הצבעה = txid על-השרשרת → grids/state/curate-receipts.jsonl (נאטם בגיט).
+# N2: שידור בלי-id → אימות-הכלה מול-get_account_history + backoff מעריכי ×4.
+name: curate
+
+on:
+  schedule:
+    - cron: '17 */6 * * *' # 4 פעימות-אצירה ביממה — ה-SP החי עובד גם-בהצבעה
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: curate
+  cancel-in-progress: false
+
+jobs:
+  votes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Curation beat (deterministic plan + key-gated execution)
+        env:
+          STEEM_POSTING_WIF: ${{ secrets.STEEM_POSTING_WIF }}
+        run: node grids/curate-beat.mjs --once
+
+      - name: Seal receipts to git (single lane, [skip ci] against storms)
+        run: |
+          git config user.name "curate-beat[bot]"
+          git config user.email "curate-beat[bot]@users.noreply.github.com"
+          git add grids/state/curate-receipts.jsonl
+          if git diff --cached --quiet; then
+            echo "no receipts — honest skip (keyless or all-dup)"
+          else
+            git commit -m "curate-beat: curation votes executed · $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
+            ok=0
+            for i in 1 2 3; do
+              if git -c rebase.autoStash=true pull --rebase origin main && git push origin HEAD:main; then ok=1; break; fi
+              echo "push attempt $i failed (concurrent commits on main) — re-pulling"
+              git rebase --abort 2>/dev/null || true
+              sleep 10
+            done
+            [ "$ok" = "1" ] && echo "curate receipts pushed" || { echo "receipts push failed — honest failure"; exit 1; }
+          fi
