@@ -597,6 +597,10 @@ async function main(): Promise<void> {
   const hiveParity = hiveUsd && hbdUsd && hiveUsd > 0 && hbdUsd > 0 ? hiveUsd / hbdUsd : null; // HBD ל-1-HIVE בזהות-חוץ
   let hivePlaced = 0, hiveCancelled = 0;
   const hiveBlocker: string[] = [];
+  /* N3 · כנות-הצהרתית (cycle 28): שוק-שבור אינו "המתנה" — הוא נחמה-מפורשת.
+   * הרגל אינה נכשלת כשהיא מסרבת לסחור בשוק-שבור: היא מכריזה DISARMED-
+   * BROKEN-MARKET עם חוק-ריארמון אוטומטי (אין-מגע-ידני, אין-שקר של ARMED-WAITING). */
+  let hiveMarketBroken = false;
   let hiveLeg: Record<string, unknown>;
   const hsnapRaw = await hm.hiveSnapshotSoft();
   if (!("ok" in hsnapRaw) || hsnapRaw.ok !== true) {
@@ -616,7 +620,10 @@ async function main(): Promise<void> {
     if (!hs.book.bestBid || !hs.book.bestAsk) hiveBlocker.push("hive public book one-sided or unreachable");
     if (hiveParity && hs.book.mid) {
       const devBps = Math.floor(((hs.book.mid - hiveParity) / hiveParity) * 10_000);
-      if (Math.abs(devBps) > HIVE_PARITY_BAND_BPS) hiveBlocker.push(`hive book mid deviates ${devBps}bps from external parity: refusing to trade a broken market`);
+      if (Math.abs(devBps) > HIVE_PARITY_BAND_BPS) {
+        hiveMarketBroken = true; // N3: מסרבים-בגלוי לסחור בשוק-שבור — זו כנות, לא-כישלון
+        hiveBlocker.push(`hive book mid deviates ${devBps}bps from external parity: refusing to trade a broken market`);
+      }
     }
 
     /* POLICY-ENGINE (SAOS-POLICY-ENGINE/1, DECISIONS #17) · שער-מחזור גם על רגל-ה-HIVE —
@@ -760,7 +767,16 @@ async function main(): Promise<void> {
       armed: hiveArmed,
       authorityOk: hs.authorityOk,
       rc: hs.rc,
-      verdict: !hiveArmed ? "DISARMED-NO-KEY" : hivePlaced > 0 ? "ARMED-LIVE" : hiveBlocker.length ? "ARMED-WAITING" : "ARMED-STABLE",
+      verdict: !hiveArmed ? "DISARMED-NO-KEY"
+        : hiveMarketBroken ? "DISARMED-BROKEN-MARKET" // N3: הצהרה-מפורשת — לא ARMED-WAITING שקרי
+        : hivePlaced > 0 ? "ARMED-LIVE"
+        : hiveBlocker.length ? "ARMED-WAITING"
+        : "ARMED-STABLE",
+      /* N3 · חוק-הריארמון: הרגל חוזרת-לחיים לבד בפעימה-הבאה כשהשוק מתיישר —
+       * אפס-מגע-ידני, ההצהרה עצמה היא-החוזה. */
+      reArm: hiveMarketBroken
+        ? "leg re-arms automatically on the next beat when |bookMid − externalParity| ≤ parity band — declarative honesty, zero manual intervention"
+        : null,
       blocker: hiveBlocker.length ? hiveBlocker : null,
       marks: { hiveUsd, hbdUsd, parityHbdPerHive: hiveParity },
       inventory: { hive: hs.balances.hive, hbd: hs.balances.hbd, hp: hs.balances.hpOwn },
