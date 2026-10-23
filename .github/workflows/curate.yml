@@ -60,6 +60,8 @@ jobs:
             cat /tmp/local-rec.jsonl grids/state/curate-receipts.jsonl | awk '!seen[$0]++' > grids/state/curate-receipts.jsonl
             echo "receipt union applied (append-only law)"
           fi
+          # marker-sanitize law (measured live run 6/7: autostash-conflict markers leaked into the jsonl)
+          grep -v '^<<<<<<<\|^=======$\|^>>>>>>>' grids/state/curate-receipts.jsonl > /tmp/rec-san && mv /tmp/rec-san grids/state/curate-receipts.jsonl
           git add grids/state/curate-receipts.jsonl
           if git diff --cached --quiet; then
             echo "no receipts — honest skip (keyless or all-dup)"
