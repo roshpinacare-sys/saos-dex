@@ -3,9 +3,9 @@
  "verdict": "COUNTER-GRID-BLOCKED",
  "blockers": [
   "sell side below dust: ladder sum 0 STEEM < minLevel 1 — waiting for fuel (honest)",
-  "invariant violation in plan math — refusing to publish (fail-closed)"
+  "buy side below dust: ladder sum 0 SBD < minLevel 0.05 — waiting for fuel (honest)"
  ],
- "nowIso": "2026-10-23T16:00:59.925Z",
+ "nowIso": "2026-10-23T18:32:56.456Z",
  "bias": {
   "value": -0.346179,
   "source": "measured-from-real-fills",
@@ -13,61 +13,25 @@
   "askShare": 0.67309
  },
  "partitions": {
-  "sellCapitalSteem": 2.728,
-  "buyCapitalSbdTotal": 2.084,
-  "askCapitalSteem": 1.836,
-  "bidCapitalSbd": 0.681,
-  "buyReserveSbd": 1.403,
-  "sellReserveSteem": 0.892
+  "sellCapitalSteem": 17.634,
+  "buyCapitalSbdTotal": 0.035,
+  "askCapitalSteem": 11.869,
+  "bidCapitalSbd": 0.011,
+  "buyReserveSbd": 0.024,
+  "sellReserveSteem": 5.765
  },
  "book": {
-  "bestAsk": 0.10378440366972477,
-  "bestBid": 0.10369887263579615,
-  "mid": 0.103742
+  "bestAsk": 0.10411244143675169,
+  "bestBid": 0.10353241924238903,
+  "mid": 0.103822
  },
- "anchor": 0.111159,
+ "anchor": 0.109047,
  "plan": {
   "asks": [],
-  "bids": [
-   {
-    "side": "bid",
-    "level": 1,
-    "priceSbdPerSteem": 0.103699,
-    "spendSbd": 0.051,
-    "sizeSteem": 0.491
-   },
-   {
-    "side": "bid",
-    "level": 2,
-    "priceSbdPerSteem": 0.101625,
-    "spendSbd": 0.077,
-    "sizeSteem": 0.757
-   },
-   {
-    "side": "bid",
-    "level": 3,
-    "priceSbdPerSteem": 0.099551,
-    "spendSbd": 0.116,
-    "sizeSteem": 1.165
-   },
-   {
-    "side": "bid",
-    "level": 4,
-    "priceSbdPerSteem": 0.097477,
-    "spendSbd": 0.174,
-    "sizeSteem": 1.785
-   },
-   {
-    "side": "bid",
-    "level": 5,
-    "priceSbdPerSteem": 0.095403,
-    "spendSbd": 0.261,
-    "sizeSteem": 2.735
-   }
-  ],
+  "bids": [],
   "totals": {
    "askSteem": 0,
-   "bidSbd": 0.679
+   "bidSbd": 0
   }
  },
  "invariants": {
@@ -78,7 +42,7 @@
   "asksMonotonicUp": true,
   "bidsMonotonicDown": true,
   "asksAboveTouch": true,
-  "bidsBelowTouch": false,
+  "bidsBelowTouch": true,
   "sideSeparation": true
  },
  "execution": "none — plan-only (Z-87a): peg/mover execution paths untouched",
