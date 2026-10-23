@@ -51,8 +51,13 @@ export function scorePost(post, { now = Date.now(), topics = TOPICS } = {}) {
   return { score, reason: reasons.join(" · ") };
 }
 
-/* ── טהור: תוכנית-הצבעות — מכסה, דדופ, אפס-הצבעה-עצמית, משקלי-רצועות ────── */
-export function planVotes({ posts, account = ACCOUNT, dailyLimit = 8, maxWeightPct = 2, minScore = 1, now = Date.now(), topics = TOPICS } = {}) {
+/* ── טהור: תוכנית-הצבעות — מכסה, דדופ, אפס-הצבעה-עצמית, משקלי-רצועות ──────
+ * N4 מגבר-האצירה (owner trace 1a16429cb29ef8d1 "חייב מילוי חוץ" · cycle 28):
+ * מדוד: 8 הצבות/יום במשקל 2% שרפו 0.32% כוח-הצבעה-יומי — ה-SP היה שכיב-מוות
+ * כלכלי. המגבר: 20 הצבות/פעימה במשקל עד 10% → 80 הצבות/יוממה × 10% = 16%
+ * כוח-הצבעה ביום מול-רגנרציה 20%/יום — קיימות-מלאה (שולי-בטיחות 1.25×) עם
+ * אפס-שינוי-סמכות, אפס-העברת-הון, אפס-מפתח-חדש. רק ההון-הקיים עובד. */
+export function planVotes({ posts, account = ACCOUNT, dailyLimit = 20, maxWeightPct = 10, minScore = 1, now = Date.now(), topics = TOPICS } = {}) {
   const seen = {};
   const votes = [];
   for (const post of posts ?? []) {
@@ -119,12 +124,42 @@ async function rpcAny(method, params) {
 }
 
 /* ── חסר-מפתחות: תוכנית מה-feed החי ──────────────────────────────────────── */
-export async function planCurations({ account = ACCOUNT, dailyLimit = 8, maxWeightPct = 2 } = {}) {
+export async function planCurations({ account = ACCOUNT, dailyLimit = 20, maxWeightPct = 10 } = {}) {
   const candidates = await fetchCandidates();
   return planVotes({ posts: candidates, account, dailyLimit, maxWeightPct, now: Date.now() });
 }
 
-/* ── ביצוע — posting-WIF מהסביבה בלבד; אותו-נתיב-חתימה מוכח של mover.mjs ─── */
+/* ── ביצוע — posting-WIF מהסביבה בלבד; אותו-נתיב-חתימה מוכח של mover.mjs ───
+ * N2 · התאוששות-שידור (cycle 28, מדוד 2/15 "broadcast answered without id"):
+ * הצומת משיב 200 בלי-id גם-כשהעסקה נכנסה (וגם-כשנפלה) — שתי-התשובות
+ * אינדטרמינטיות, ולא מותר לשקר עליהן. החוק החדש: תשובה בלי-id → לא נזרוק
+ * כישלון מיידי אלא נאמת-הכלה מול get_account_history (ההצבעה חתומה-עצמית —
+ * voter/author/permlink מזהים-ביט-מול-ביט) → trx_id אמת מהשרשרת; רק אם הראיה
+ * לא נמצאה — backoff מעריכי (1.2s×2ⁿ + jitter) וניסיון-חוזר (×4).
+ * "Duplicate transaction" = העדות-שהעסקה-כבר-על-השרשרת — מתאוששים, לא-נכשלים.
+ * fail-closed אחרי-הניסיון-האחרון: שגיאה-כנה עם-הסיבה, אפס-פנטום. */
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function recoverVoteTrxid(account, author, permlink, sinceMs) {
+  try {
+    const hist = await rpcAny("condenser_api.get_account_history", [account, -1, 200]);
+    if (!Array.isArray(hist)) return null;
+    for (let i = hist.length - 1; i >= 0; i--) {
+      const [blk, item] = hist[i];
+      const o = item?.op;
+      if (!Array.isArray(o) || o[0] !== "vote") continue;
+      const d = o[1] ?? {};
+      if (d.voter !== account || d.author !== author || d.permlink !== permlink) continue;
+      const tsRaw = String(item.timestamp ?? "");
+      const ts = Date.parse(tsRaw + (tsRaw.endsWith("Z") ? "" : "Z"));
+      if (!Number.isFinite(ts) || ts < sinceMs) continue;
+      if (/^0+$/.test(item.trx_id ?? "")) continue; // op-וירטואלי — לא-עדות
+      return { txid: item.trx_id, block: blk, recovered: true };
+    }
+  } catch { /* התאוששות מיטבית — כישלון-כנה שקט */ }
+  return null;
+}
+
 export async function executeVotes(plan, { wif } = {}) {
   if (!wif) throw new Error("posting WIF required for execution (fail-closed) — keyless plan only");
   const steem = (await import("steem")).default;
@@ -132,18 +167,37 @@ export async function executeVotes(plan, { wif } = {}) {
   let executed = 0;
   for (const v of plan.votes) {
     const ops = [["vote", { voter: plan.account, author: v.author, permlink: v.permlink, weight: v.weightSteemUnits }]];
-    const dgp = await rpcAny("condenser_api.get_dynamic_global_properties", []);
-    const tx = {
-      ref_block_num: Number(dgp.head_block_number) & 0xffff,
-      ref_block_prefix: Buffer.from(String(dgp.head_block_id), "hex").readUInt32LE(4),
-      expiration: new Date(new Date(String(dgp.time) + "Z").getTime() + 60_000).toISOString().slice(0, 19),
-      operations: ops,
-      extensions: [],
-    };
-    const signed = steem.auth.signTransaction(tx, [wif]);
-    const res = await rpcAny("condenser_api.broadcast_transaction_synchronous", [{ ...signed }]);
-    if (!res?.id) throw new Error(`vote broadcast answered without id (${v.author}/${v.permlink}) (honest)`);
-    txids.push({ author: v.author, permlink: v.permlink, txid: res.id, weight: v.weightSteemUnits });
+    const sinceMs = Date.now() - 5 * 60_000; // חלון-התאוששות: 5 דקות-אחורה
+    let done = null;
+    let lastWhy = "";
+    for (let attempt = 1; attempt <= 4 && !done; attempt++) {
+      const dgp = await rpcAny("condenser_api.get_dynamic_global_properties", []);
+      const tx = {
+        ref_block_num: Number(dgp.head_block_number) & 0xffff,
+        ref_block_prefix: Buffer.from(String(dgp.head_block_id), "hex").readUInt32LE(4),
+        expiration: new Date(new Date(String(dgp.time) + "Z").getTime() + 60_000).toISOString().slice(0, 19),
+        operations: ops,
+        extensions: [],
+      };
+      const signed = steem.auth.signTransaction(tx, [wif]);
+      try {
+        const res = await rpcAny("condenser_api.broadcast_transaction_synchronous", [{ ...signed }]);
+        if (res?.id) { done = { txid: res.id, block: res.block_num ?? null, recovered: false }; break; }
+        lastWhy = "broadcast answered without id (honest) — verifying inclusion via chain history";
+      } catch (e) {
+        lastWhy = String(e?.message ?? e).slice(0, 140);
+        if (/duplicate/i.test(lastWhy)) {
+          // עדות-הכלה: העסקה-כבר-על-השרשרת מניסיון-קודם — מתאוששים, לא-נכשלים
+          const rec = await recoverVoteTrxid(plan.account, v.author, v.permlink, sinceMs);
+          if (rec) { done = rec; break; }
+        }
+      }
+      const rec = await recoverVoteTrxid(plan.account, v.author, v.permlink, sinceMs);
+      if (rec) { done = rec; break; }
+      if (attempt < 4) await sleepMs(1200 * 2 ** attempt + Math.floor(Math.random() * 400));
+    }
+    if (!done) throw new Error(`vote broadcast failed after 4 attempts (${v.author}/${v.permlink}): ${lastWhy || "unknown"}`);
+    txids.push({ author: v.author, permlink: v.permlink, txid: done.txid, block: done.block ?? null, weight: v.weightSteemUnits, recovered: !!done.recovered });
     executed += 1;
   }
   return { executed, txids };

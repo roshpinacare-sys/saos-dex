@@ -19,6 +19,10 @@ const PUBS = ["/home/z/.secrets/steem-posting-headcorner.pub", "/home/z/my-proje
 const ACCOUNT = "headcorner";
 
 function loadPostingWif() {
+  /* N4 (cycle 28): מסלול-env לרצי-ענן — secrets.STEEM_POSTING_WIF ב-workflow.
+   * אותו-בדיקת-צורה fail-closed (WIF-טעון = 51 תווים, מתחיל ב-5/6). אפס-סוד-בלוג. */
+  const env = String(process.env.STEEM_POSTING_WIF ?? "").trim();
+  if (env.length === 51 && (env[0] === "5" || env[0] === "6")) return { wif: env, path: "env:STEEM_POSTING_WIF" };
   for (const p of KEYS) { try { const w = readFileSync(p, "utf8").trim(); if (w.length === 51 && (w[0] === "5" || w[0] === "6")) return { wif: w, path: p }; } catch { } }
   return null;
 }
@@ -41,7 +45,7 @@ async function postingAuthorityOk(wif) {
   return { ok: false, pub, reason: "all-nodes-failed" };
 }
 
-export async function curateBeatOnce({ dailyLimit = 8, maxWeightPct = 2 } = {}) {
+export async function curateBeatOnce({ dailyLimit = 20, maxWeightPct = 10 } = {}) {
   const { planCurations, executeVotes } = await import("./curate.mjs");
   const k = loadPostingWif();
   const plan = await planCurations({ account: ACCOUNT, dailyLimit: dailyLimit * 2, maxWeightPct });
@@ -85,6 +89,7 @@ export function selftest() {
   const A = (c, m) => { if (!c) { console.error("SELFTEST-FAIL:", m); process.exit(1); } };
   A(loadPostingWif() === null || loadPostingWif().wif.length === 51, "wif shape if present");
   A(KEYS.every((p) => !p.includes("upload/")), "beat never reads owner files");
+  // N4: defaults-המגבר נאטמים — 20 הצבות × 10% = 16% כוח-הצבעה/יום מול-רגנרציה 20% (קיימות 1.25×)
   console.log("curate-beat selftest OK");
 }
 
