@@ -48,6 +48,15 @@ jobs:
         run: |
           git config user.name "curate-beat[bot]"
           git config user.email "curate-beat[bot]@users.noreply.github.com"
+          # append-only union law (measured live 2026-10-23): concurrent receipt writers
+          # (local beats + this lane) collide on rebase — union the jsonl, never lose a vote
+          cp grids/state/curate-receipts.jsonl /tmp/local-rec.jsonl
+          if ! git -c rebase.autoStash=true pull --rebase origin main; then
+            git rebase --abort 2>/dev/null || true
+            git reset --hard origin/main
+            cat /tmp/local-rec.jsonl grids/state/curate-receipts.jsonl | awk '!seen[$0]++' > grids/state/curate-receipts.jsonl
+            echo "receipt union applied (append-only law)"
+          fi
           git add grids/state/curate-receipts.jsonl
           if git diff --cached --quiet; then
             echo "no receipts — honest skip (keyless or all-dup)"
