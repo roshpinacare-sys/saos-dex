@@ -22,6 +22,7 @@ import {
   SAVE_DAY_BLOCKS, SAVE_FEE_SHARE_PCT,
 } from "./kernel";
 import { economyTick } from "./economy";
+import { evaluatePreTrade, evaluateBatch, recordRiskReceipt, tradeOpsInFlight } from "./risk"; // §7C pre-trade risk cabinet — desk mandate@4 policy enforced here
 import { merkleRoot, sha256, canon, CanonicalError } from "./canonical";
 import { invariant, InvariantViolation } from "./invariant";
 import { arenaTick, fairPrice, DEFAULT_PARAMS, type ArenaParams, type SoldierRT, MARKETS } from "./mm";
@@ -1227,6 +1228,26 @@ export function submitOp(op: Op): { queued: boolean; reason?: string } {
   if (GAS_TABLE[op.type] === 0) {
     const pendingFree = rt.mempool.filter((o) => o.issuer === op.issuer && GAS_TABLE[o.type] === 0).length;
     if (pendingFree >= 48) return { queued: false, reason: "free-op-cap" };
+  }
+  // ── §7C PRE-TRADE RISK CABINET (saos-desk mandate@4 policy) ─────────────
+  // Every order payload is evaluated BEFORE state execution — fail closed.
+  // All verdicts (allow AND deny) land on the hash-chained receipt trail.
+  const riskAt = Math.floor(Date.now() / 1000);
+  if (op.type === "batch" && Array.isArray(op.ops)) {
+    const batchHit = evaluateBatch(op.ops, tradeOpsInFlight(rt, op.issuer));
+    const batchVerdict = batchHit
+      ? batchHit.verdict
+      : { allowed: true, verdicts: [], fails: [] };
+    recordRiskReceipt(op, batchVerdict, { at: riskAt });
+    if (!batchVerdict.allowed) {
+      return { queued: false, reason: `risk:batch[${batchHit?.index ?? "?"}]:${batchVerdict.fails[0] ?? "denied"}` };
+    }
+  } else {
+    const verdict = evaluatePreTrade(op, { inFlight: tradeOpsInFlight(rt, op.issuer) });
+    recordRiskReceipt(op, verdict, { at: riskAt });
+    if (!verdict.allowed) {
+      return { queued: false, reason: `risk:${verdict.fails[0]}` };
+    }
   }
   rt.mempool.push(op);
   return { queued: true };
