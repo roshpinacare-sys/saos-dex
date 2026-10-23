@@ -115,13 +115,21 @@ function loadWatermark() {
 }
 function saveWatermark(w) { w.runs = (w.runs ?? 0) + 1; w.savedAt = new Date().toISOString(); writeFileSync(WATERMARK_PATH, JSON.stringify(w, null, 1) + "\n"); }
 
-/* ── סריקת-התגשמות לחשבון-אחד (מהווטרמארק; בלי-המצאה) ───────────────────── */
+/* ── סריקת-התגשמות לחשבון-אחד (מהווטרמארק; בלי-המצאה) ─────────────────────
+ * N4-תיקון-עומק (cycle 28, מדוד-חי): headcorner שורף ~30k-ops/יוממה (הגריד-החי
+ * מציב-מבטל בפעימת-3ש׳) — הסריקה-הישנה (40 עמודים × 100) הגיעה רק ~0.8ש׳
+ * לעומק על-החשבון-הפעיל, ולכן "24ש׳" נמדד-בפועל על-חלון-שעות-בודדות (ה-0.0096$
+ * של-אתמול היה חלון-מזל-שפגע-באירוע-פרס; האפס-של-היום הוא-אמת-מדידה, לא-שקר).
+ * החוק-החדש: 400 עמודים × 100-ops = 40k-ops-עומק (~32ש׳ על-החשבון-הפעיל —
+ * מגבלת-הצמתים-המדודה: limit≤100-בלבד — 300+ מקבל upper-bound) + עצירה-מוקדמת.
+ * ההתחלה נשארת head-block-number (מדוד-חי: condenser מצמצם אותו לאינדקס-הסוף
+ * של-החשבון — start=-1 החזיר-חלונות-כפולים-מדוד). אפס-המצאה — רק-עומק-אמת. */
 export async function scanAccountAccruals(account, sinceIso) {
   const out = [];
-  let start = 110628799; // head-block-אמת נלקח-בכל-ריצה
+  let start = 110628799; // head-block-אמת נלקח-בכל-ריצה (condenser מצמצם לאינדקס-החשבון)
   try { const dgp = await rpcAny("condenser_api.get_dynamic_global_properties", []); start = dgp.head_block_number; } catch { }
   const seen = new Set();
-  for (let page = 0; page < 40; page++) {
+  for (let page = 0; page < 400; page++) {
     let ops;
     try { ops = await rpcAny("condenser_api.get_account_history", [account, start, 100]); }
     catch { break; }
@@ -155,7 +163,7 @@ export async function scanAccountAccruals(account, sinceIso) {
       }
     }
     if (reached || oldest < Date.parse(sinceIso.slice(0, 19))) break;
-    start = ops[ops.length - 1][0] - 1;
+    start = ops[0][0] - 1; // מערך-עולה (ישן→חדש) — ההמשך-אחורה הוא מהאינדקס-הנמוך ביותר (ה-bug-המדוד: ops[last] דיפדף-במקום על-אותו-חלון-ראשון)
     if (start <= 0) break;
   }
   return out;
