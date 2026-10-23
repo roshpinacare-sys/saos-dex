@@ -13,6 +13,8 @@
 //   T1 (≥2 מילויי-חוץ)        ask 45 / bid 80
 //   T2 (≥5 מילויי-חוץ)        ask 30 / bid 60
 //   T3 (≥12 מילויי-חוץ)       ask 18 / bid 45   ← דו-ספרתי
+//   T4 (≥20 מילויי-חוץ)       ask 12 / bid 35   ← דו-ספרתי-עמוק (N1-המשך, cycle 28)
+//   T5 (≥32 מילויי-חוץ)       ask 10 / bid 25   ← רצפות-השומר-בדיוק — היעד-הסופי
 //
 // רצפות-מוחלטות (מתואמות-לשומר): ask ≥ 10bps · bid ≥ 25bps — לעולם לא מתחת.
 // מלמעלה: לעולם לא מעל-הבסיס (הסולם רק מהדק; משמעת-חד-כיוונית).
@@ -32,6 +34,8 @@ const BID_FLOOR_BPS = 25;
 export const EVIDENCE_WINDOW_CUT = "2026-10-22T01:43:00Z";
 
 const TIERS = [
+  { name: "T5", minThirdPartyFills: 32, askStepBps: 10, bidStepBps: 25 },
+  { name: "T4", minThirdPartyFills: 20, askStepBps: 12, bidStepBps: 35 },
   { name: "T3", minThirdPartyFills: 12, askStepBps: 18, bidStepBps: 45 },
   { name: "T2", minThirdPartyFills: 5, askStepBps: 30, bidStepBps: 60 },
   { name: "T1", minThirdPartyFills: 2, askStepBps: 45, bidStepBps: 80 },
@@ -109,7 +113,7 @@ export function deriveSpreadTiers(fills, base, chain = "steem") {
     evidenceWindow: `>= ${EVIDENCE_WINDOW_CUT}`,
     nextTier: nextTier && nextTier.needs > 0 ? { name: nextTier.name, needs: nextTier.needs } : null,
     evidence: `${thirdParty} third-party fills counted on the ${chain} ledger tape (window >= ${EVIDENCE_WINDOW_CUT} — pre-law bot-war era is ambiguous, never evidence; selfCross excluded, edge≠0 only)`,
-    note: `N1 evidence-gated ladder: tier ${tier} · ladder tightens only as post-law third-party fills accumulate (T1≥2 → 45/80, T2≥5 → 30/60, T3≥12 → 18/45); never below validator floors (ask≥${ASK_FLOOR_BPS}, bid≥${BID_FLOOR_BPS}); never above the sealed base`,
+    note: `N1 evidence-gated ladder: tier ${tier} · ladder tightens only as post-law third-party fills accumulate (T1≥2 → 45/80, T2≥5 → 30/60, T3≥12 → 18/45, T4≥20 → 12/35, T5≥32 → 10/25 = validator floors exactly); never below validator floors (ask≥${ASK_FLOOR_BPS}, bid≥${BID_FLOOR_BPS}); never above the sealed base`,
   };
 }
 
