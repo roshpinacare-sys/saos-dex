@@ -16,6 +16,7 @@
  */
 import { canon, sha256, stateRootOf } from "./canonical";
 import { createHtlc, claimHtlc, refundHtlc, type HtlcRecord } from "./htlc"; // G70 §7.2 · הגשר-האטומי-הפנימי
+import { recordHtlcReceipt, type HtlcReceipt } from "./htlc-receipts"; // W49-b · קבלות-השרשרת של-הגשר-האטומי (hash-chained)
 import { invariant } from "./invariant"; // EXEC-CD-8 · cancel_all — אותו-ברזל-אסקרו של-book.ts
 import { cancelOrder, matchBook, gcOrders, sortBook, type BookOrder } from "./book";
 import { poolAdd, poolSwap, poolRm, LP_ASSET_PREFIX } from "./amm";
@@ -477,6 +478,10 @@ export interface DexState {
   // G70 §7.2 · הגשר-האטומי-הפנימי (HTLC): חוזי-מפתח-סוד+מגבלת-גובה.
   // רשות (תמונות-מצב-ישנות = undefined→{}) — אותו-דפוס סובלנות-התמונות של-extBack?/bookFeesMu?.
   htlcs?: Record<string, HtlcRecord>;
+  // W49-b · קבלות-השרשרת של-הגשר-האטומי: קבלה-אחת לכל-מעבר-מוצלח (create/claim/refund)
+  // hash = sha256(prevHash + canon(body)) — טמפר-אווידנט, קנוני, דטרמיניסטי (at = גובה).
+  // רשות (תמונות-מצב-ישנות = undefined→[]) — אותו-דפוס סובלנות של-htlcs? מעלה.
+  htlcReceipts?: HtlcReceipt[];
   // FIX(Roast-67 · ZFB-gas-tank): Σקרדיטים-שמומנו-לארנק-הדלק-מהעמלות-שנמדדו
   // (revenueCycle, 10%-מהמחזור, בסמנטיקות-mint_fuel-המלאות) — טלמטריית-ריצה.
   gasFundedMu?: number;
@@ -2805,16 +2810,27 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
     // שער-נכס-ידוע כאן בדלת (אותו-knownAsset של-הגרעין) ──
     case "htlc_create": {
       if (!knownAsset(st, op.asset)) return { ok: false, err: "unknown-asset", gas: 0 };
+      // W49-b · חוק-היחידות בדלת: amount חייב להיות שלם-חיובי (µ) — ממתינה-טיפוסית
+      // לפני-consume; move() היה זורק חריגה על-שבר עשרוני (Roast-65-a L2 — דחייה-טיפוסית במקום-זריקה).
+      const amt = op.amount;
+      if (typeof amt !== "number" || !Number.isSafeInteger(amt) || amt <= 0)
+        return { ok: false, err: "bad-amount", gas: 0 };
       const r = createHtlc(st, op, consume);
-      return r.ok ? { ok: true, gas } : { ok: false, err: r.err, gas: 0 };
+      if (!r.ok) return { ok: false, err: r.err, gas: 0 };
+      recordHtlcReceipt(st, "htlc_create", String(op.htlcId ?? "")); // W49-b — קבלה-אטומית-עם-המעבר
+      return { ok: true, gas };
     }
     case "htlc_claim": {
       const r = claimHtlc(st, op, consume);
-      return r.ok ? { ok: true, gas } : { ok: false, err: r.err, gas: 0 };
+      if (!r.ok) return { ok: false, err: r.err, gas: 0 };
+      recordHtlcReceipt(st, "htlc_claim", String(op.htlcId ?? "")); // W49-b — העד (preimage) נאטם-בקבלה
+      return { ok: true, gas };
     }
     case "htlc_refund": {
       const r = refundHtlc(st, op, consume);
-      return r.ok ? { ok: true, gas } : { ok: false, err: r.err, gas: 0 };
+      if (!r.ok) return { ok: false, err: r.err, gas: 0 };
+      recordHtlcReceipt(st, "htlc_refund", String(op.htlcId ?? "")); // W49-b — החזר-נאטם-בקבלה
+      return { ok: true, gas };
     }
     default:
       return { ok: false, err: "unhandled-op", gas: 0 };
