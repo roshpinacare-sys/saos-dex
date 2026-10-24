@@ -1,0 +1,42 @@
+{
+ "protocol": "SAOS-KELLY/1",
+ "verdict": "NO-EDGE",
+ "fractionBps": 0,
+ "fullKellyBps": -422,
+ "p": 0.5392670157068062,
+ "b": 0.7923955623639528,
+ "trades": 191,
+ "wins": 103,
+ "losses": 88,
+ "source": {
+  "file": "db/grid-ledger.json",
+  "field": "fills[].recvUsd − fills[].paidUsd (USD per-fill mark, stamped at fill time)",
+  "rawFills": 285,
+  "washFillsExcluded": 94,
+  "noProfitFills": 0,
+  "zeroProfitFills": 0,
+  "malformedLines": 0,
+  "avgWinUsd": 0.01588881180236773,
+  "avgLossUsd": 0.02005161633536495,
+  "sumProfitUsd": -0.1279946218682384
+ },
+ "measuredAt": "2026-10-24T16:55:10.554Z",
+ "observability": {
+  "enforcement": "observe-only — policy.mjs caps govern; enforcement transition needs owner word",
+  "why": null,
+  "capBps": 10000,
+  "capNote": "policyCaps.capBps=10000",
+  "counters": {
+   "extraction": {
+    "deltaUsd": 191,
+    "profitField": 0
+   }
+  },
+  "policyContext": {
+   "lane": "grid",
+   "maxNotionalPerOpSbd": 25,
+   "ownerGateNotionalSbd": 100,
+   "note": "enforcement stays in policy.mjs — kelly output is advisory (observe mode)"
+  }
+ }
+}
