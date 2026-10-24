@@ -15,6 +15,7 @@
  * טכני-פתוח, לא-מוסתר.
  */
 import { canon, sha256, stateRootOf } from "./canonical";
+import { createHtlc, claimHtlc, refundHtlc, type HtlcRecord } from "./htlc"; // G70 §7.2 · הגשר-האטומי-הפנימי
 import { invariant } from "./invariant"; // EXEC-CD-8 · cancel_all — אותו-ברזל-אסקרו של-book.ts
 import { cancelOrder, matchBook, gcOrders, sortBook, type BookOrder } from "./book";
 import { poolAdd, poolSwap, poolRm, LP_ASSET_PREFIX } from "./amm";
@@ -112,6 +113,11 @@ export const GAS_TABLE = {
   ve_lock: 40,   // נעילת-SAOS→veSAOS (Aerodrome vote-escrow, 1..208 שבועות)
   ve_unlock: 30, // פריקה-אחרי-תום-התקופה
   ve_vote: 20,   // הצבעת-גייג' — לאיזו בריכה זורמת קרן-התגמולים
+  // ── G70 §7.2 · הגשר-האטומי-הפנימי (HTLC · wave 19.82) — אפס-אמון-בצד-שני,
+  // אפס-RPC-חוץ לסליקה; ה-preimage-הנחשף-על-השרשרת הוא העד-הציבורי ──
+  htlc_create: 40, // נעילת-רגל: מפתח-סוד + מגבלת-גובה (אותו-משפחת-גז של ve_lock/dca_create)
+  htlc_claim: 20,  // מימוש-עם-preimage — העד-נרשם-על-השרשרת
+  htlc_refund: 20, // החזר-אחרי-פקיעה — רשת-הבטיחות של היוזם
   bond_buy: 80,  // BONDS-2.0 — קניית-SAOS-בהנחה-3%, נעול-ve-12שב' (Olympus-POL בלי-מלכודת-ההדפסה)
   // ── Task 56 · מסחר-אוטומטי-חסר-קיפרים (GMX TP/SL בלי-keepers · Jupiter DCA) ──
   dca_create: 40,  // תוכנית-DCA: הפקדה-מלאה-מראש, פרוסה-אוטומטית-כל-K-בלוקים
@@ -468,6 +474,9 @@ export interface DexState {
   // pools===feeMeter+profit+minted נשברת-נצחית מהמחזור-הראשון שבו-הראוטר שורף
   // (המדידה-בבריכות אינה יורדת). רשויות: תמונות-מצב-ישנות (undefined→0).
   feesSpentMu?: number;
+  // G70 §7.2 · הגשר-האטומי-הפנימי (HTLC): חוזי-מפתח-סוד+מגבלת-גובה.
+  // רשות (תמונות-מצב-ישנות = undefined→{}) — אותו-דפוס סובלנות-התמונות של-extBack?/bookFeesMu?.
+  htlcs?: Record<string, HtlcRecord>;
   // FIX(Roast-67 · ZFB-gas-tank): Σקרדיטים-שמומנו-לארנק-הדלק-מהעמלות-שנמדדו
   // (revenueCycle, 10%-מהמחזור, בסמנטיקות-mint_fuel-המלאות) — טלמטריית-ריצה.
   gasFundedMu?: number;
@@ -979,6 +988,11 @@ export interface Op {
   owner?: string;        // vault_liquidate / vault_backstop: בעל-הכספת המטופלת
   // דבר-גורר-דבר (SETTLE-12): תתי-ops של batch — כל-תת-op חייב-issuer זהה למנפיק-ה-batch
   ops?: Op[];
+  // G70 §7.2 · הגשר-האטומי-הפנימי (HTLC): htlc_create/claim/refund
+  htlcId?: string;   // מזהה-החוזה (חד-פעמי-לנצח, [A-Za-z0-9_-]{8,64})
+  hashlock?: string; // 64-hex · sha256(preimage) — קשירת-הסוד
+  preimage?: string; // הסוד-הנחשף-בתביעה (העד-הציבורי על השרשרת)
+  timeoutH?: number; // גובה-פקיעה (שעון-הבלוקים — אפס-שעון-קיר)
 }
 
 /** נכס-מוכר לגרעין: רשימת-הריצה הקבועה או נכס-רשום (השקות-שהוגרו, asset_list). */
@@ -2786,6 +2800,21 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       };
       st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "lend_liquidate", note: `liquidated ${owner}: paid ${pay}µ ${asset} · seized ${seizeMu}µ ${colAsset} (+5% bonus) · HF was ${lendHealthFactor(st, owner) / 100}` });
       return { ok: true, gas };
+    }
+    // ── G70 §7.2 · הגשר-האטומי-הפנימי (HTLC) — הלוגיקה ב-htlc.ts (אפס-מעגל-ריצה);
+    // שער-נכס-ידוע כאן בדלת (אותו-knownAsset של-הגרעין) ──
+    case "htlc_create": {
+      if (!knownAsset(st, op.asset)) return { ok: false, err: "unknown-asset", gas: 0 };
+      const r = createHtlc(st, op, consume);
+      return r.ok ? { ok: true, gas } : { ok: false, err: r.err, gas: 0 };
+    }
+    case "htlc_claim": {
+      const r = claimHtlc(st, op, consume);
+      return r.ok ? { ok: true, gas } : { ok: false, err: r.err, gas: 0 };
+    }
+    case "htlc_refund": {
+      const r = refundHtlc(st, op, consume);
+      return r.ok ? { ok: true, gas } : { ok: false, err: r.err, gas: 0 };
     }
     default:
       return { ok: false, err: "unhandled-op", gas: 0 };
