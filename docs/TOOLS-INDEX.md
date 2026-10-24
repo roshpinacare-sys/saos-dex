@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-22T10:40:55.213Z · 160 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-24T02:01:57.208Z · 164 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -104,6 +104,8 @@
 | `grids/policy-selftest.mjs` | POLICY-ENGINE SELFTEST — מוכיח את חוקי SAOS-POLICY-ENGINE/1 על מדינה-מבודדת (tmp) |
 | `grids/policy.mjs` | POLICY-ENGINE — שכבת-הכסף של הרשת (SAOS-POLICY-ENGINE/1) |
 | `grids/position-sizing.mjs` | POSITION-SIZING — שער-הגודל-היחסי של סילות-השוק (SAOS-RISK-SIZE/1) |
+| `grids/price-truth-selftest.mjs` | PRICE-TRUTH-SELFTEST — N8 · בטריית-החוקים הטהורים (round-27 · העולם-המדוד-13:49Z) |
+| `grids/price-truth.mjs` | PRICE-TRUTH — N8 · משמעת-קו-הערך-המשולש (round-27 · owner mandate trace 1a163d4124276b39) |
 | `grids/profit-floor.mjs` | PROFIT-FLOOR — שער-רצפת-הרווח של רגלי-הסולם (SAOS-PROFIT-FLOOR/1) |
 | `grids/route-receipt.mjs` | ROUTE-RECEIPT — המסלול-הראשון STEEM↔HIVE (Wave-2 סעיף 3 · מתוכנן-במלואו, לא-מבוצע) |
 | `grids/rules.mjs` | RULES — מנוע-הכללים: דבר-גורר-דבר (DAG טריגרים חסום-עומק) |
@@ -112,6 +114,8 @@
 | `grids/sim/volume-sim.mjs` | VOLUME-SIM — סימולטור-הווליום של מנוע-העליונות (דטרמיניסטי, חתום-SIM) |
 | `grids/sovereign-pulse.mjs` | SOVEREIGN-PULSE — הדופק-הריבוני על-השרשרת (R16-a · owner mandate trace 1a12dbe9812eff11) |
 | `grids/split-router.mjs` | SPLIT-ROUTER — מתכנן-פיצול-לעומק לסכומים-גדולים (Z-87a · plan-only · audit-Z86c פער-d) |
+| `grids/spread-tiers-selftest.mjs` | SPREAD-TIERS-SELFTEST — כלל-הזהב: בלי-ראיות → בסיס; ראיות-חוץ-אחרי-החוק → הידוק; רצפות-שומ |
+| `grids/spread-tiers.mjs` | SPREAD-TIERS — N1 · סולם-הידוק-המרווח-מבוסס-ראיות (owner approve trace 1a1629f96941f20d) |
 | `grids/strategies.mjs` | STRATEGIES — המיקרו-גרידים: הסוכנים-כמבצעים-כלכליים |
 | `grids/supremacy-selftest.mjs` | SUPREMACY-SELFTEST — אינווריאנטות-ברזל של מנוע-העליונות (שער-CI) |
 | `grids/treasury-ladder.mjs` | TREASURY-LADDER — מסילת-הכנסה של-האוצר על-הספר הציבורי (R16-b · owner trace 1a12defa203993 |
