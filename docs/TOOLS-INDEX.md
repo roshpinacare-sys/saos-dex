@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-24T02:01:57.208Z · 164 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-25T10:14:43.063Z · 170 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -84,6 +84,8 @@
 | `grids/fee-harvest.mjs` | !/usr/bin/env node |
 | `grids/fleet-grow.mjs` | FLEET-GROW — צמיחת-הצי הריבונית: רה-סולם של חיילי-העליונות על סולם-רוחבים ייחודי |
 | `grids/internal-pnl.mjs` | !/usr/bin/env node |
+| `grids/kelly-selftest.mjs` | !/usr/bin/env node |
+| `grids/kelly.mjs` | ═══════════════════════════════════════════════════════════════════════════ |
 | `grids/key-gate.mjs` | KEY-GATE — שער-אימות-מפתח מול רשות-ה-active החיה (מסילת-הגריד) |
 | `grids/liquidity-bootstrap.mjs` | LIQUIDITY-BOOTSTRAP — מסילת-הזרקת-נזילות לספרים (9-c · 2026-10-11 · owner mandate trace 1a |
 | `grids/liquidity-selftest.mjs` | LIQUIDITY-SELFTEST — וקטורים דטרמיניסטיים אופליין למסילת-הזרקת-הנזילות (9-c) |
@@ -141,6 +143,8 @@
 | `harness/anchor-continuity.ts` | * |
 | `harness/battery-core.ts` | * |
 | `harness/bmc.ts` | * |
+| `harness/hft-test.ts` | * |
+| `harness/htlc-test.ts` | * |
 | `harness/insider-suite.ts` | * |
 | `harness/invariant-fuzzer.ts` | * |
 | `harness/jepsen-http.ts` | * |
@@ -149,10 +153,12 @@
 | `harness/pool-fuel-test.ts` | * |
 | `harness/proof-runner.ts` | * |
 | `harness/redteam-probes.ts` | * |
+| `harness/risk-gate-test.ts` | * |
 | `harness/slo-probe.ts` | * |
 | `harness/sovereign-gateway/index.ts` | * |
 | `harness/sovereign-gateway/selftest.mjs` | !/usr/bin/env bun |
 | `harness/supply-chain.ts` | * |
+| `mini-services/hft-loop/index.ts` | * |
 | `audit-package/src/amm.ts` | * |
 | `audit-package/src/book.ts` | * |
 | `audit-package/src/canonical.ts` | * |
