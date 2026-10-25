@@ -2,49 +2,18 @@
  "ok": false,
  "verdict": "COUNTER-GRID-BLOCKED",
  "blockers": [
-  "sell side below dust: ladder sum 0 STEEM < minLevel 1 — waiting for fuel (honest)",
-  "buy side below dust: ladder sum 0 SBD < minLevel 0.05 — waiting for fuel (honest)"
+  "STEEM balance 0.001 ≤ reserve 0.5 — sell side has no real inventory"
  ],
- "nowIso": "2026-10-25T15:07:54.154Z",
- "bias": {
-  "value": -0.346179,
-  "source": "measured-from-real-fills",
-  "bidShare": 0.326911,
-  "askShare": 0.67309
- },
+ "bias": -0.346179,
  "partitions": {
-  "sellCapitalSteem": 0.564,
-  "buyCapitalSbdTotal": 0.431,
-  "askCapitalSteem": 0.379,
-  "bidCapitalSbd": 0.14,
-  "buyReserveSbd": 0.291,
-  "sellReserveSteem": 0.185
+  "sellCapitalSteem": 0,
+  "buyCapitalSbdTotal": 0.026,
+  "askShare": 0.6730895,
+  "bidShare": 0.3269105,
+  "askCapitalSteem": 0,
+  "bidCapitalSbd": 0.008
  },
- "book": {
-  "bestAsk": 0.10221813349688234,
-  "bestBid": 0.10205,
-  "mid": 0.102134
- },
- "anchor": 0.099716,
- "plan": {
-  "asks": [],
-  "bids": [],
-  "totals": {
-   "askSteem": 0,
-   "bidSbd": 0
-  }
- },
- "invariants": {
-  "asksWithinSellCapital": true,
-  "sellCapitalWithinInventory": true,
-  "bidsWithinBuyCapital": true,
-  "buyCapitalWithinBalance": true,
-  "asksMonotonicUp": true,
-  "bidsMonotonicDown": true,
-  "asksAboveTouch": true,
-  "bidsBelowTouch": true,
-  "sideSeparation": true
- },
- "execution": "none — plan-only (Z-87a): peg/mover execution paths untouched",
- "law": "opposing ladders with side-scoped capital partition; capital conservation proven per plan; book-law clamps by construction"
+ "plan": null,
+ "nowIso": "2026-10-25T16:34:14.268Z",
+ "execution": "none — plan-only (Z-87a): peg/mover execution paths untouched"
 }
