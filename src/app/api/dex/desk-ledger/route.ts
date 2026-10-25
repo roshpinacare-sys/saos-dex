@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { canon, sha256 } from "@/lib/dex/canonical";
+import { operatorAuth } from "@/lib/operator-auth"; // §1 lockdown (directive 1a173c6ac120ccb1): identity moved to the operator gate
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,6 +12,10 @@ export const runtime = "nodejs";
 // exec34: ההון דרך ה-ledger שלנו, לא דרך ברוקר. הקונסולה של saos-desk שולחת
 // לכל רשומה חתומה (SAOS-DEX-LEDGER/1: deposit · escrow_lock · settle · withdraw)
 // והדקס מנעל אותה כקבלה:
+//  • זהות (§1, directive 1a173c6ac120ccb1): operatorAuth — כותרת x-saos-operator
+//    מול DEX_OPERATOR_TOKEN (timing-safe, fail-closed 503 בלי-טוקן). החתימה sig8
+//    היא פונקציה-ציבורית (sha256(canon)) ולכן אינה אימות — היא חוק-שלמות-השרשרת
+//    בלבד (idempotency + prevSig); מי-שלא מאומת — לא נועל כלום.
 //  • אימות-עצמאי fail-closed: sig8(canon(payload-without-sig)) === sig
 //  • סוג-מוכר בלבד, שלמים-בלבד בשדות-המדידה
 //  • idempotency: sig כפול = 200 כנה (כבר ננעל)
@@ -25,6 +30,8 @@ function sig8(payload: unknown): string {
 }
 
 export async function POST(req: Request) {
+  const oa = operatorAuth(req); // §1 — זהות-המפעיל קודם-לכל (החתימה sig8 אינה אימות)
+  if (oa) return oa;
   let body: { record?: Record<string, unknown> };
   try {
     body = await req.json();
