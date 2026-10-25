@@ -48,6 +48,15 @@ export const KELLY_FRACTION = 0.25;
 export const HFT_MAX_FRACTION = 0.5;
 /** Dust floor in µ — orders below this are rejected before emission. ≥ kernel RAIL_DUST_MU (300). */
 export const HFT_DUST_MU = 1000;
+/** Cold-start bootstrap size in µ (§1 anti-paralysis, trace 1a173c66121fa1f5): with ZERO
+ * fill evidence the Kelly guard would refuse forever (b=0 → size 0 → no trades → no
+ * evidence — a deadlock measured live 2026-10-25: 2976 ticks, emitted=0). Until the
+ * first fill lands, a REAL arb signal (spread ≥ minEdge after fees — measured, not
+ * assumed) sizes at this conservative fixed notional (≪ HFT_MAX_FRACTION of any
+ * funded equity), receipted as `bootstrap-size:<market>:<µ>`. Evidence arrives →
+ * Kelly takes over automatically. Never a bypass of the risk cabinet: every bootstrap
+ * leg still passes evaluatePreTrade (C1–C4) and the engine's own operator funnel. */
+export const HFT_BOOTSTRAP_SIZE_MU = 25_000;
 /** Anti-runaway: max ops emitted per tick (each arb pair = 2 ops). */
 export const HFT_MAX_OPS_PER_TICK = 8;
 /** Default minimum edge in bps — fees-aware: pool leg 30bps (inside quoteOut) + book taker 30bps (in-kind, NOT inside maker price) + 5bps buffer. */
@@ -237,6 +246,8 @@ export interface HftLoopConfig {
   haltAfterConsecutive?: number;
   /** minOut tolerance for pool legs (bps). Default HFT_SLIPPAGE_TOL_BPS. */
   slippageTolBps?: number;
+  /** Cold-start fixed notional (µ) while the stats hold zero fills. 0 disables. Default HFT_BOOTSTRAP_SIZE_MU. */
+  bootstrapSizeMu?: number;
   /** Open-trade count for the cabinet's C3 velocity budget — organ wires the engine's mempool count. */
   inFlight?: () => number;
   /** The engine funnel: production wires submitOp (chain.ts) or the HTTP order/swap routes; tests inject a recorder. */
@@ -263,7 +274,7 @@ export class HftLoop {
   phase: HftPhase = "running";
   consecutiveFailures = 0;
   readonly stats: HftStats;
-  private readonly cfg: Required<Pick<HftLoopConfig, "issuer" | "seed" | "minEdgeBps" | "maxOpsPerTick" | "haltAfterConsecutive" | "slippageTolBps" | "submit">> &
+  private readonly cfg: Required<Pick<HftLoopConfig, "issuer" | "seed" | "minEdgeBps" | "maxOpsPerTick" | "haltAfterConsecutive" | "slippageTolBps" | "bootstrapSizeMu" | "submit">> &
     Pick<HftLoopConfig, "inFlight">;
   private readonly prng: () => number;
   private readonly runId: string;
@@ -280,6 +291,7 @@ export class HftLoop {
       maxOpsPerTick: cfg.maxOpsPerTick ?? HFT_MAX_OPS_PER_TICK,
       haltAfterConsecutive: cfg.haltAfterConsecutive ?? HFT_HALT_THRESHOLD,
       slippageTolBps: cfg.slippageTolBps ?? HFT_SLIPPAGE_TOL_BPS,
+      bootstrapSizeMu: Math.max(0, Math.floor(cfg.bootstrapSizeMu ?? HFT_BOOTSTRAP_SIZE_MU)),
       inFlight: cfg.inFlight,
       submit: cfg.submit,
     };
@@ -382,8 +394,21 @@ export class HftLoop {
         const availQuote = Math.max(0, Math.floor(m.invQuoteMu) - (usedQuote.get(m.quote) ?? 0));
         const baseValueMu = Math.floor((availBase * sig.sellPriceMu) / 1000);
         const equityMu = Math.min(availQuote, baseValueMu);
-        const size = kellySizeMu(p, b, equityMu);
-        if (size <= 0) {
+        const size0 = kellySizeMu(p, b, equityMu);
+        let size: number;
+        if (size0 > 0) {
+          size = size0;
+        } else if (this.stats.fillCount() === 0 && this.cfg.bootstrapSizeMu > 0) {
+          // §1 anti-paralysis bootstrap (trace 1a173c66121fa1f5): a live arb signal with
+          // zero fill history — Kelly's b=0 guard would freeze the loop forever. Size the
+          // FIRST trades at the conservative fixed notional, receipted. Still gated by
+          // evaluatePreTrade + the engine funnel below; evidence → Kelly resumes.
+          size = Math.min(this.cfg.bootstrapSizeMu, equityMu);
+          if (size < HFT_DUST_MU) {
+            decisions.push(`skip-dust:${m.key}`);
+            continue;
+          }
+        } else {
           decisions.push(`skip-dust:${m.key}`); // kelly guard or dust floor — never trade negative/no evidence
           continue;
         }
@@ -492,7 +517,7 @@ export class HftLoop {
           pairOk++;
         }
         if (pairOk === 2) {
-          decisions.push(`arb:${m.key}:spread=${sig.spreadBps}:notional=${size}`);
+          decisions.push(`arb:${m.key}:spread=${sig.spreadBps}:notional=${size}${size0 <= 0 ? ":bootstrap" : ""}`);
           this.consecutiveFailures = 0;
           this.stats.recordSpread(sig.spreadBps);
           if (sig.sellVenue === "pool" || sig.sellVenue === "book") {
