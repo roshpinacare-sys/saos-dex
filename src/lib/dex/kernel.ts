@@ -1610,6 +1610,13 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const asset = a as Asset; // EXEC-CD-43: knownAsset מאמת גם-נכסים-דינמיים (asset_list) — הצרה-מקומית-בלבד
       const to = String(op.to ?? "");
       if (!to || to === issuer || !(amt > 0)) return { ok: false, err: "bad-xfer", gas: 0 };
+      // FIX(vault-pot-escrow · measured h1638300 HALT): xfer_free מ-vault-pot שירת הטבעת-מלאי
+      // (e75cda7: 200kµ WSTEEM → hft-soldier) בזמן-שכספת-ארנה-פתוחה טענה את-אותו-בטחון —
+      // הפוט נשאר חיובי (204,827) והביקורת ירוקה, אך התביעות (404,827) כבר לא היו מגובות.
+      // כש-vaultTick פירע-את-כספת-הארנה, חיוב-הפוט ירד מתחת-לאפס ו-seal עצר את השרשרת
+      // (INVARIANT-VIOLATION: vault-pot.WSTEEM=-45173). חשבון-העד אינו נייד: שחרור-בטחונות
+      // עובר רק דרך vault_repay/vault_liquidate (עם בדיקות-יחס-עקומה) — לא דרך העברה-חופשית.
+      if (issuer === VAULT_POT) return { ok: false, err: "escrow-protected (vault-pot backs open vault collateral — release only via vault_repay/liquidate)", gas: 0 };
       if (amt > FREE_XFER_CAP) return { ok: false, err: "xfer-exceeds-cap", gas: 0 };
       if (avail(st, issuer, asset) < amt) return { ok: false, err: "insufficient", gas: 0 };
       pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — החינם הוא היתרון
@@ -2414,6 +2421,9 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
         const colVal = vaultColValueMu(st, newCol);
         if (Math.floor((colVal * 100) / newEff) < VAULT_MIN_CR_PCT) return { ok: false, err: "collateral-ratio", gas: 0 };
       }
+      // FIX(vault-pot-avail · measured h1638300 HALT): אותו-הגנה כמו-נתיבי-lend (pot-short) —
+      // שחרור-בטחונות שעולה על הפוט נדחה-כנה במקום לחייב את חשבון-העד לשלילי ולעצור את השרשרת ב-seal.
+      if (wd > 0 && avail(st, VAULT_POT, VAULT_COLLATERAL) < wd) return { ok: false, err: "pot-short", gas: 0 };
       const c = consume(); if (c) return c;
       addBal(st, issuer, "USDS", -pay);
       if (interestPart > 0) addBal(st, "treasury", "USDS", interestPart); // ריבית = הכנסת-אוצר (לא-הוטבעה-מעולם)
@@ -2454,6 +2464,8 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       const seizeVal = Math.floor((eff * (10_000 + VAULT_LIQ_BONUS_BPS)) / 10_000);
       const seizeMu = Math.min(v.colMu, Math.floor((seizeVal * 1000) / ref));
       if (avail(st, issuer, "USDS") < eff) return { ok: false, err: "insufficient-usds", gas };
+      // FIX(vault-pot-avail · same class as vault_repay): נזילות על פוט שאינו מספיק = דחייה-כנה, לא ספר-שלילי.
+      if (avail(st, VAULT_POT, VAULT_COLLATERAL) < seizeMu) return { ok: false, err: "pot-short", gas: 0 };
       const c = consume(); if (c) return c;
       addBal(st, issuer, "USDS", -eff);
       const interestPart = eff - v.debtMu; // כל-הריבית-שנצברה (הונפה + חדשה)
@@ -2486,6 +2498,8 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       if (eff <= 0) return { ok: false, err: "no-debt", gas: 0 };
       if (Math.floor((colVal * 100) / eff) >= 100) return { ok: false, err: "not-underwater", gas: 0 };
       if (avail(st, "treasury", "USDS") < v.debtMu) return { ok: false, err: "treasury-short", gas };
+      // FIX(vault-pot-avail · same class as vault_repay): גם-ה-backstop אינו רשאי לחייב את הפוט לשלילי.
+      if (avail(st, VAULT_POT, VAULT_COLLATERAL) < v.colMu) return { ok: false, err: "pot-short", gas: 0 };
       const c = consume(); if (c) return c;
       addBal(st, "treasury", "USDS", -v.debtMu); // הקרן-המוטבעת נשרפת-מיתרת-האוצר
       addBal(st, VAULT_POT, VAULT_COLLATERAL, -v.colMu);
