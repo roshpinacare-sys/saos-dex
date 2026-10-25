@@ -70,6 +70,11 @@ jobs:
           node grids/peg-selftest.mjs
           node grids/observe-selftest.mjs
           node grids/policy-selftest.mjs
+          # EMERGENCY DIRECTIVE §5 (2026-10-25, trace 1a173c95d5ec1431): the two
+          # army-lane selftests were runnable but never wired into CI — the exact
+          # lane that went 10/13 KEY-STASIS had zero red signal. Wired now:
+          node grids/army-ladder.mjs --selftest
+          node grids/volume-verify.mjs --selftest
           node grids/daily-budget.mjs --selftest
           node grids/position-sizing.mjs --selftest
           node grids/profit-floor.mjs --selftest
