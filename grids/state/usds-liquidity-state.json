@@ -1,0 +1,86 @@
+{
+  "protocol": "SAOS-USDS-LIQUIDITY/1",
+  "generatedAt": "2026-10-26T16:27:13.067Z",
+  "trace": "1a178c614313ad05",
+  "wave": "#82",
+  "engineUnreachable": true,
+  "source": {
+    "kind": "repo-snapshot",
+    "path": "db/state-snapshot.json",
+    "savedAt": "2026-10-26T14:56:33.826Z",
+    "stale": true,
+    "note": "live engine unreachable — measured snapshot published honestly"
+  },
+  "treasury": {
+    "floatMu": {
+      "SAOS": 30002482,
+      "USDS": 1051,
+      "WSBD": 0,
+      "WSTEEM": 46621
+    },
+    "note": "avail = balance − locked (kernel law); the free float is the ONLY funding source — no minting, no negatives"
+  },
+  "pools": [
+    {
+      "key": "SAOS/USDS",
+      "ra": 98841561,
+      "rb": 100504064,
+      "usdsSideMu": 100504064,
+      "mid": 983,
+      "anchorMid": 986,
+      "premBps": -31,
+      "verdict": "healthy",
+      "usdsSide": "b"
+    },
+    {
+      "key": "USDS/WSTEEM",
+      "ra": 455100,
+      "rb": 9049615,
+      "usdsSideMu": 455100,
+      "mid": 50,
+      "anchorMid": 50,
+      "premBps": 0,
+      "verdict": "healthy",
+      "usdsSide": "a"
+    },
+    {
+      "key": "USDS/WSBD",
+      "ra": 11937,
+      "rb": 1,
+      "usdsSideMu": 11937,
+      "mid": 11937000,
+      "anchorMid": 473,
+      "premBps": 252357864,
+      "verdict": "dead",
+      "usdsSide": "a"
+    }
+  ],
+  "plan": [],
+  "planGatedBy": "arm file missing (SAOS-USDS-LIQUIDITY-ARM/1) — measurement published, delta plan withheld until the owner arms the lane",
+  "executed": [],
+  "executedSkipped": [],
+  "skipped": [
+    {
+      "pair": "USDS/WSBD",
+      "reason": "seed-dust(arm-min=0)"
+    }
+  ],
+  "counts": {
+    "healthy": 2,
+    "thin": 0,
+    "offAnchor": 0,
+    "dead": 1,
+    "missing": 0,
+    "noAnchor": 0,
+    "executable": 0,
+    "skipped": 1
+  },
+  "law": {
+    "kernelOps": "pool_open (kernel.ts:2098 Roast-71) · pool_reseed (kernel.ts:2192 G76-a dead-pool revival on anchor) · pool_add (amm.ts:54 ratio-preserving) · pool_repeg (kernel.ts:2148 R26, beat-owned)",
+    "kernelOpDecision": "existing kernel op family covers nourish: pool_open (kernel.ts:2098) + pool_reseed (kernel.ts:2192, dead-pool revival on anchor) + pool_add (amm.ts:54, ratio-preserving deepening) + pool_repeg (kernel.ts:2148, beat-owned) — no new kernel op (pool_nourish would duplicate pool_add and violate the no-double-activation doctrine)",
+    "armLaw": "grids/liquidity-bootstrap.mjs law: arm file missing = honest refusal exit 0; malformed/foreign = exit 2 fail-closed",
+    "operatorSeam": "src/lib/operator-auth.ts x-saos-operator == DEX_OPERATOR_TOKEN (timing-safe) + src/lib/dex/guard.ts x-saos-dex-console: 1; token from env or the wave-80 vault file — never logged, never serialized",
+    "plansOnly": "the grid box prepares payloads and publishes receipts; real broadcast happens where the engine lives (engine-side submitOp), gated by the owner arm + operator token",
+    "units": "µ = micro-units · mid = mµ-of-a per 1 unit b (kernel poolMid orientation) · refPrice = mµ-USDS per 1 unit"
+  }
+}
