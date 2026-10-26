@@ -173,6 +173,18 @@ function saveLedger(l: GridLedger): void {
   fs.renameSync(tmp, LEDGER_FILE);
 }
 
+/* ── G76-a · מדידת-אמת-מצטברת: ledger.fills חלון-נע (slice(-300)) — הודעת-הקומיט
+ * "300 fills counted" הייתה מציגה-את-התקרה ולא-את-הפעילות האמת. המונה-המצטבר
+ * האמיתי (observe.mjs → feeMeter.realFills, מוזן-מילויי-fill_order של-השרשרת)
+ * חי ב-grids/state/state.json — קריאה-בלבד, fail-honest ל-0 על-קובץ-חסר. */
+function realFillsCumulative(): number {
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(ROOT, "grids", "state", "state.json"), "utf8")) as { feeMeter?: { realFills?: number } };
+    const v = Number(s?.feeMeter?.realFills);
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+  } catch { return 0; }
+}
+
 /* ── EDGE-FLOOR (2026-10-21 · מהמדידה-החיה) ────────────────────────────────────
  * המדידה שחשפה את הדימום: pnl-desk (Domain dex/pnl-desk.json 2026-10-20):
  * sellVwap 0.100346 < buyVwap 0.102346 = edge -2% מדוד — הגריד מכר זול יותר
@@ -852,6 +864,8 @@ async function main(): Promise<void> {
     openOrdersNow: openNow,
     run: { placed, cancelled, placedTotal: ledger.placedTotal, cancelledTotal: ledger.cancelledTotal, filledTotal: ledger.fills.length },
     externalFlowUsd: ledger.externalFlowUsd,
+    // G76-a · מדידת-אמת: החלון-הנע מוצג-לצד-המונה-המצטבר (אפס-הסתרת-פעילות):
+    realFillsCumulative: realFillsCumulative(),
     fills: ledger.fills.slice(-12),
     orders: ledger.orders.slice(-24),
     vault: {
@@ -908,7 +922,7 @@ async function main(): Promise<void> {
   }
   const staged = git("diff --cached --name-only", { allowFail: true });
   if (staged) {
-    const cRes = gitLoud(`commit -m "grid-beat: ${placed + hivePlaced} placed (steem ${placed} / hive ${hivePlaced}) · ${cancelled + hiveCancelled} cancelled · ${ledger.fills.length} fills counted · ${new Date().toISOString().slice(0, 16)}Z"`);
+    const cRes = gitLoud(`commit -m "grid-beat: ${placed + hivePlaced} placed (steem ${placed} / hive ${hivePlaced}) · ${cancelled + hiveCancelled} cancelled · ${ledger.fills.length} fills in window · ${realFillsCumulative()} realFills cumulative · ${new Date().toISOString().slice(0, 16)}Z"`);
     const ok = await pushWithRetry(ROOT, "main");
     console.log(`[grid-beat] ledger lane: coreAdd=${coreAddOk ? "ok" : "FAILED"} · staged=[${staged.split("\n").join(",")}] · commit=${cRes.ok ? "ok" : "FAILED"} · push=${ok ? "ok" : "FAILED — next run rebases and continues"}`);
     if (!ok) console.warn("[grid-beat] ledger push rejected (concurrent run) — next run rebases and continues");
