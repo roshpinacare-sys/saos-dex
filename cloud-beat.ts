@@ -705,6 +705,56 @@ async function main(): Promise<void> {
     console.warn(`[cloud-beat] R26-ALL anchor policy skipped: ${String(e).slice(0, 80)}`);
   }
 
+  /* ── [G77-c · USDS-LIQUIDITY-LIVE] missing-pool open-seed + thin-corridor fund ──
+   * נמדד-חי (h993 · 2026-10-26T15:40Z, השרשרת-המקומית אחרי-הג'נזיס): אחרי-הג'נזיס
+   * שלושת-זוגות-ה-USDS הקנוניים (USDS/WSBD · ENERGY/USDS · PHIVE/USDS) **חסרים**
+   * מהמצב — plan של G76-a מדווח "pool-missing" בלי-נתיב, וה-fund של מסדרון-חי
+   * (USDS/WSTEEM) מתפרסם-בלי-להתבצע. השלמת-החוק: קבלת-הנזילות הטהורה
+   * (liquidity-receipt.ts) מחשבת לכל-זוג קנוני פעולה-אחת (open-seed/fund/reseed/
+   * repeg) עם חסר-מדויק במיקרו; הפעימה מבצעת **רק-מה שבר-ביצוע** (אוצר-בלבד,
+   * הגרעין אוכף-הכל fail-closed) ומפרסם-את-החסומים עם החסר-המדויק — כל-ריצה,
+   * עד-שהדלק מגיע (אפס-נזילות-מדומה). אידמפוטנטי: at-target/covered = כבר-שבצע. */
+  try {
+    const { liquidityReceipt, openSeedForMissing } = await import("./src/lib/dex/liquidity-receipt");
+    const rec = liquidityReceipt(rt.st as never);
+    const fired: string[] = [];
+    const blockedLines: string[] = [];
+    for (const p of rec.pairs) {
+      if (p.verdict === "missing") {
+        const s = openSeedForMissing(rt.st as never, p.pair, nextNonce("oseed"));
+        if (s.executable && s.op) {
+          const r = submitOp(s.op as unknown as Record<string, unknown>);
+          if (r.queued) {
+            await stepOnce();
+            const p2 = (rt.st as unknown as { pools: Record<string, { ra: number; rb: number }> }).pools[p.pair];
+            fired.push(`${p.pair} OPEN-SEEDED ${p2 ? `${p2.ra}/${p2.rb}µ` : "?"} (seed ${s.seedA}/${s.seedB}µ)`);
+          } else blockedLines.push(`${p.pair} open-seed rejected: ${r.reason ?? "?"}`);
+        } else {
+          const miss = (s.missing ?? []).filter((m) => m.missingMu > 0).map((m) => `${m.missingMu}µ ${m.asset}`).join(" + ");
+          blockedLines.push(`${p.pair} missing-pool · seed ${s.seedA}/${s.seedB}µ · BLOCKED: ${s.blocked.join(" | ")}${miss ? ` · missing ${miss}` : ""}`);
+        }
+        continue;
+      }
+      if (p.action === "fund" && p.verdict === "thin") {
+        const addA = p.addA ?? 0;
+        if (p.executable && addA > 0) {
+          const r = submitOp({ type: "pool_add", issuer: "treasury", nonce: nextNonce("cfund"), pair: p.pair, amount: addA });
+          if (r.queued) {
+            await stepOnce();
+            fired.push(`${p.pair} FUNDED +${addA}µ/${p.addB ?? 0}µ`);
+          } else blockedLines.push(`${p.pair} fund rejected: ${r.reason ?? "?"}`);
+        } else {
+          const miss = (p.missing ?? []).filter((m) => m.missingMu > 0).map((m) => `${m.missingMu}µ ${m.asset}`).join(" + ");
+          blockedLines.push(`${p.pair} thin-fund +${addA}µ/${p.addB ?? 0}µ BLOCKED: ${p.blocked.join(" | ")}${miss ? ` · missing ${miss}` : ""}`);
+        }
+      }
+    }
+    if (fired.length > 0) console.log(`[cloud-beat] G77-C USDS-LIQUIDITY fired: ${fired.join(" · ")}`);
+    if (blockedLines.length > 0) console.log(`[cloud-beat] G77-C USDS-LIQUIDITY blockers (fail-honest): ${blockedLines.join(" · ")}`);
+  } catch (e) {
+    console.warn(`[cloud-beat] G77-C liquidity receipt skipped: ${String(e).slice(0, 80)}`);
+  }
+
   /* ── R42 · THE-SBD-RAIL — הגלגל-החיצוני-של-דבר-גורר-דבר ────────────────────
    * השלמת-המעגל שנמדדה-חיה: הגריד-החוץ מוכר-STEEM מעל-קו-הזהות ← SBD-אמת
    * מצטבר-ב-headcorner ← אבל-שם-הוא-מת. מכאן: כל-פעימה עוטפת-את-כל-העודף
