@@ -1,0 +1,327 @@
+{
+  "schema": "SAOS-SOLDIER-FLEET-STATUS/1",
+  "at": "2026-10-26T15:51:27.798Z",
+  "cycle": 36,
+  "task": "36-f all-soldier parallel loops (grid + curation)",
+  "roster": [
+    {
+      "account": "headcorner",
+      "keysAvailable": {
+        "activeWif": true,
+        "postingWif": true,
+        "evidence": "A-set; active pub STM5HhJD5WUX… = headcorner/active, posting pub STM8m3rBLd8CA2… = headcorner/posting (verified vs chain 2026-10-26)"
+      },
+      "loopRunning": {
+        "armed": true,
+        "pids": [],
+        "note": "sandbox reaper law: loop re-armed per window (boot-services hook + one-liner in worklog)"
+      },
+      "beats": [
+        {
+          "at": "2026-10-26T15:37:36.354Z",
+          "action": "curation",
+          "result": "DRY-PLAN",
+          "detail": "planned=1 (dry — zero broadcast)",
+          "sha256": "ff434782192c819ea475aee793e272aa049aa8ecbfe3779bf515ac9feb285ef2"
+        },
+        {
+          "at": "2026-10-26T15:37:36.797Z",
+          "action": "grid",
+          "result": "BLOCKER-CUSTODY-BAN",
+          "error": "headcorner is a forever-forbidden trader (army-ladder.mjs L92 FORBIDDEN_TRADERS — owner custody boundary; parity-verified in code) · refusal IS the law, not a failure",
+          "sha256": "8dcb46806afeb92cf8e9dd903ae3996850816dac8e30c58425db30faced6e2ce"
+        },
+        {
+          "at": "2026-10-26T15:38:05.989Z",
+          "action": "curation",
+          "result": "VOTED",
+          "txId": "a54621d25c0be2041d76e724f83ac32ff0d9a322",
+          "sha256": "3687632173bd8152ffc8393aafd7f2e0c418624c5068839cb9edc2f9d2d05e16"
+        },
+        {
+          "at": "2026-10-26T15:38:06.597Z",
+          "action": "grid",
+          "result": "BLOCKER-CUSTODY-BAN",
+          "error": "headcorner is a forever-forbidden trader (army-ladder.mjs L92 FORBIDDEN_TRADERS — owner custody boundary; parity-verified in code) · refusal IS the law, not a failure",
+          "sha256": "9b659ec1bb991ba0cfdc21d3ce3b8e56c08885b55dbfadd3ef583d0a26d92afe"
+        },
+        {
+          "at": "2026-10-26T15:48:20.816Z",
+          "action": "curation",
+          "result": "VOTED",
+          "txId": "5294c087bc8775c4281c9282c15831ed9728ba49",
+          "sha256": "a5195b79d92813f53074773f0646a756ee8fdceb98ef99c5269234d7ac1b3287"
+        },
+        {
+          "at": "2026-10-26T15:48:21.082Z",
+          "action": "grid",
+          "result": "BLOCKER-CUSTODY-BAN",
+          "error": "headcorner is a forever-forbidden trader (army-ladder.mjs L92 FORBIDDEN_TRADERS — owner custody boundary; parity-verified in code) · refusal IS the law, not a failure",
+          "sha256": "26744825aafc347ceb1550eb1d2d9361926553ccbb0cc31ec754ddcd041113a3"
+        }
+      ],
+      "balanceSpent": {
+        "steem": 0,
+        "sbd": 0,
+        "note": "curation votes cost zero liquid balance; VP cost ~0.04%/vote at 2% weight"
+      }
+    },
+    {
+      "account": "saos-0001",
+      "keysAvailable": {
+        "activeWif": false,
+        "postingWif": false,
+        "evidence": "no key env mapping; vault B-set (STEEM_*_WIF_B) derived fingerprints match no on-chain authority across 20 fleet accounts (measured 2026-10-26)"
+      },
+      "loopRunning": {
+        "armed": false,
+        "note": "no usable keys — blocker receipts only, no loop (honest)"
+      },
+      "beats": [
+        {
+          "at": "2026-10-26T15:37:37.055Z",
+          "action": "boot",
+          "result": "BLOCKER-NO-KEY-MAPPING",
+          "error": "no key env mapping for saos-0001 (vault B-set unbound — derived fingerprints match no on-chain authority; measured 2026-10-26) · honest blocker, zero fabrication",
+          "sha256": "7826c8844f6b5b56ecec9d244df7afcd71283436f3af4cf4cb778096f8587c0b"
+        },
+        {
+          "at": "2026-10-26T15:37:37.065Z",
+          "action": "curation",
+          "result": "BLOCKER-NO-POSTING-KEY",
+          "error": "no posting WIF env mapped for saos-0001 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "2e67e11a601f9a827f1a2f72acc0877436734dd4a6bed6f011d3434acec355ab"
+        },
+        {
+          "at": "2026-10-26T15:37:37.067Z",
+          "action": "grid",
+          "result": "BLOCKER-NO-ACTIVE-KEY",
+          "error": "no active WIF env mapped for saos-0001 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "77ac8567c1a44d2312e0f9c9dffa10c7b812b747faaf79aa6937227533927089"
+        },
+        {
+          "at": "2026-10-26T15:40:03.591Z",
+          "action": "boot",
+          "result": "BLOCKER-NO-KEY-MAPPING",
+          "error": "no key env mapping for saos-0001 (vault B-set unbound — derived fingerprints match no on-chain authority; measured 2026-10-26) · honest blocker, zero fabrication",
+          "sha256": "35a0c2c4acbbea1aaefc493ae503129c1afda0dee9c58b24e0c818c34f7e09c8"
+        },
+        {
+          "at": "2026-10-26T15:40:03.593Z",
+          "action": "curation",
+          "result": "BLOCKER-NO-POSTING-KEY",
+          "error": "no posting WIF env mapped for saos-0001 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "d06b0be6515afc8627d8935d0b22e0b507df462d066de4cf72e5ad59378df5c7"
+        },
+        {
+          "at": "2026-10-26T15:40:03.594Z",
+          "action": "grid",
+          "result": "BLOCKER-NO-ACTIVE-KEY",
+          "error": "no active WIF env mapped for saos-0001 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "4a7a5a3acf288d9ce3eb86b0b1bc844565640cebf8898d1b47be009453b6582d"
+        }
+      ],
+      "balanceSpent": null
+    },
+    {
+      "account": "saos-0002",
+      "keysAvailable": {
+        "activeWif": false,
+        "postingWif": false,
+        "evidence": "same as saos-0001 — B-set unbound"
+      },
+      "loopRunning": {
+        "armed": false,
+        "note": "no usable keys — blocker receipts only, no loop (honest)"
+      },
+      "beats": [
+        {
+          "at": "2026-10-26T15:37:37.485Z",
+          "action": "boot",
+          "result": "BLOCKER-NO-KEY-MAPPING",
+          "error": "no key env mapping for saos-0002 (vault B-set unbound — derived fingerprints match no on-chain authority; measured 2026-10-26) · honest blocker, zero fabrication",
+          "sha256": "129dcedf7c584fc0a6c2f76ed68a439905cca15126f63fe8d1fcb1f2422662ed"
+        },
+        {
+          "at": "2026-10-26T15:37:37.487Z",
+          "action": "curation",
+          "result": "BLOCKER-NO-POSTING-KEY",
+          "error": "no posting WIF env mapped for saos-0002 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "059e9d18ad28885b24c38fe17f5dd029e3677f1a1516dc8b5c461661ba2b30ba"
+        },
+        {
+          "at": "2026-10-26T15:37:37.488Z",
+          "action": "grid",
+          "result": "BLOCKER-NO-ACTIVE-KEY",
+          "error": "no active WIF env mapped for saos-0002 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "5acbedf06d79786ab625a9349a24e2cd92d4914e5f1ec686714e6f8187a034f8"
+        },
+        {
+          "at": "2026-10-26T15:40:03.768Z",
+          "action": "boot",
+          "result": "BLOCKER-NO-KEY-MAPPING",
+          "error": "no key env mapping for saos-0002 (vault B-set unbound — derived fingerprints match no on-chain authority; measured 2026-10-26) · honest blocker, zero fabrication",
+          "sha256": "73428bbfda5a347eab70aad8c3042141214644ab218817d97788f6c05b40798c"
+        },
+        {
+          "at": "2026-10-26T15:40:03.770Z",
+          "action": "curation",
+          "result": "BLOCKER-NO-POSTING-KEY",
+          "error": "no posting WIF env mapped for saos-0002 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "2a2bc5d234f76199e4a2220542d1ec5c5b5f6fb4f21c82c9aab96682fcdcbcd3"
+        },
+        {
+          "at": "2026-10-26T15:40:03.771Z",
+          "action": "grid",
+          "result": "BLOCKER-NO-ACTIVE-KEY",
+          "error": "no active WIF env mapped for saos-0002 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "5114dddb7a9aaa4c944b5819f7a67272b2ceb5851c69a5960bf703a9c7b645ea"
+        }
+      ],
+      "balanceSpent": null
+    },
+    {
+      "account": "saos-0003",
+      "keysAvailable": {
+        "activeWif": false,
+        "postingWif": false,
+        "evidence": "same as saos-0001 — B-set unbound"
+      },
+      "loopRunning": {
+        "armed": false,
+        "note": "no usable keys — blocker receipts only, no loop (honest)"
+      },
+      "beats": [
+        {
+          "at": "2026-10-26T15:37:37.959Z",
+          "action": "boot",
+          "result": "BLOCKER-NO-KEY-MAPPING",
+          "error": "no key env mapping for saos-0003 (vault B-set unbound — derived fingerprints match no on-chain authority; measured 2026-10-26) · honest blocker, zero fabrication",
+          "sha256": "643fd66e61032befddd599b98db5e7a8ba6475a8cd9267d40ca028d317beb3e0"
+        },
+        {
+          "at": "2026-10-26T15:37:37.968Z",
+          "action": "curation",
+          "result": "BLOCKER-NO-POSTING-KEY",
+          "error": "no posting WIF env mapped for saos-0003 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "87c5e3d3feb76a5e72cc1ad34628b90f7d12e5ce300df4d3ee94f838f16c8927"
+        },
+        {
+          "at": "2026-10-26T15:37:37.973Z",
+          "action": "grid",
+          "result": "BLOCKER-NO-ACTIVE-KEY",
+          "error": "no active WIF env mapped for saos-0003 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "f9f02dbc7e4ac17109fd38269d988987a75ce3e6ad1f9b660b2002001199c305"
+        },
+        {
+          "at": "2026-10-26T15:40:04.013Z",
+          "action": "boot",
+          "result": "BLOCKER-NO-KEY-MAPPING",
+          "error": "no key env mapping for saos-0003 (vault B-set unbound — derived fingerprints match no on-chain authority; measured 2026-10-26) · honest blocker, zero fabrication",
+          "sha256": "22ac0cdff2e7003a5a36f04cb4cdc7f6a064b5a2bfc18da1c98837a4a362d91e"
+        },
+        {
+          "at": "2026-10-26T15:40:04.040Z",
+          "action": "curation",
+          "result": "BLOCKER-NO-POSTING-KEY",
+          "error": "no posting WIF env mapped for saos-0003 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "3e53c2795de200fce9e2ee5849a561f7333d4c026e27580cbea88febfc151cea"
+        },
+        {
+          "at": "2026-10-26T15:40:04.041Z",
+          "action": "grid",
+          "result": "BLOCKER-NO-ACTIVE-KEY",
+          "error": "no active WIF env mapped for saos-0003 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "640a2bbc99544c8506debebc7e4ffa11b6474d04b581915ddd154e33dc75ebf7"
+        }
+      ],
+      "balanceSpent": null
+    },
+    {
+      "account": "saos-0004",
+      "keysAvailable": {
+        "activeWif": false,
+        "postingWif": false,
+        "evidence": "same as saos-0001 — B-set unbound"
+      },
+      "loopRunning": {
+        "armed": false,
+        "note": "no usable keys — blocker receipts only, no loop (honest)"
+      },
+      "beats": [
+        {
+          "at": "2026-10-26T15:37:38.271Z",
+          "action": "boot",
+          "result": "BLOCKER-NO-KEY-MAPPING",
+          "error": "no key env mapping for saos-0004 (vault B-set unbound — derived fingerprints match no on-chain authority; measured 2026-10-26) · honest blocker, zero fabrication",
+          "sha256": "2996fff71ae3d92e69d331bf6b59e17a1d49ebf2d7d0e3f0a6c980a91cb23096"
+        },
+        {
+          "at": "2026-10-26T15:37:38.279Z",
+          "action": "curation",
+          "result": "BLOCKER-NO-POSTING-KEY",
+          "error": "no posting WIF env mapped for saos-0004 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "9f4994123aada016d451c5e7bc3a5b25ede94bba0e034b3232dfd6b3af991b10"
+        },
+        {
+          "at": "2026-10-26T15:37:38.286Z",
+          "action": "grid",
+          "result": "BLOCKER-NO-ACTIVE-KEY",
+          "error": "no active WIF env mapped for saos-0004 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "3d862ea2699fb5e39a3968077437f0aca1c405c4edc3234a6313c58f62185ecc"
+        },
+        {
+          "at": "2026-10-26T15:40:04.247Z",
+          "action": "boot",
+          "result": "BLOCKER-NO-KEY-MAPPING",
+          "error": "no key env mapping for saos-0004 (vault B-set unbound — derived fingerprints match no on-chain authority; measured 2026-10-26) · honest blocker, zero fabrication",
+          "sha256": "9d723d7ab99eb5fcd518ef303999db5afabd922d452f25e946f7f3d37e2ccc6a"
+        },
+        {
+          "at": "2026-10-26T15:40:04.249Z",
+          "action": "curation",
+          "result": "BLOCKER-NO-POSTING-KEY",
+          "error": "no posting WIF env mapped for saos-0004 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "8f831ecf8eacc73b7cb981aa30c3ab1c06dd09b1cda0ab2d3c5146eae77bca85"
+        },
+        {
+          "at": "2026-10-26T15:40:04.250Z",
+          "action": "grid",
+          "result": "BLOCKER-NO-ACTIVE-KEY",
+          "error": "no active WIF env mapped for saos-0004 (KEY_ENV_MAP; B-set unbound — measured 2026-10-26) · fail-closed, zero fabrication",
+          "sha256": "36a0f9fa4aaff91563f1d4febac59fe0e3823261a61fd55f41e8cf685acee9d9"
+        }
+      ],
+      "balanceSpent": null
+    }
+  ],
+  "realBroadcasts": [
+    {
+      "account": "headcorner",
+      "action": "vote",
+      "author": "lyh5926",
+      "permlink": "3lq1of",
+      "weight": 200,
+      "txId": "a54621d25c0be2041d76e724f83ac32ff0d9a322",
+      "block": 110776419,
+      "verified": "condenser_api.get_transaction on api.steemit.com"
+    },
+    {
+      "account": "headcorner",
+      "action": "vote",
+      "author": "ppomppu",
+      "permlink": "261026",
+      "weight": 200,
+      "txId": "5294c087bc8775c4281c9282c15831ed9728ba49",
+      "block": 110776624,
+      "verified": "condenser_api.get_transaction on api.steemit.com"
+    }
+  ],
+  "honestBlockers": [
+    "headcorner/grid: forever-forbidden trader (army-ladder.mjs L92 FORBIDDEN_TRADERS custody boundary; parity-verified in soldier-loop selftest) + grid lane single-flight owned by local-beat-runner + inventory below grid-beat dust floors (0.327 STEEM < 1.0; 0.038 SBD < 0.05)",
+    "saos-0001..0004 (all lanes): no private keys held — vault B-set is UNBOUND (derived public fingerprints match no on-chain authority, measured 2026-10-26 across 20 fleet accounts); their on-chain keys (saos-0001 active STM879azEuRV… etc.) are not in our custody → blocker receipts, zero fabrication",
+    "sandbox reaper law (boot-services.sh measured 2026-10-12): spawned background loops are reaped when the creating tool-call window ends → soldier-loop.sh re-armed per window via boot-services hook + documented one-liner"
+  ],
+  "keysLaw": "A-set (owner/active/posting/memo) = headcorner, verified vs chain · B-set = second full key set, UNBOUND (spare) · HIVE-C = hive posting (different chain) · key env: /home/z/.secrets/.env.local (0600), loaded at runtime only, never printed/committed",
+  "sha256": "60a34ab208eac1afd38ea8367bddfc9b3fc10ede74f99fe3a6e545a371827824"
+}
