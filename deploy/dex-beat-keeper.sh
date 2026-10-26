@@ -26,6 +26,24 @@ if [ "$(git branch --show-current)" != "main" ]; then
   fi
 fi
 
+# 0.9) UU pre-pull guard [E13, 2026-10-26]: a recurring UU db/state-snapshot.json
+#      (leftover conflict while the engine rewrites the snapshot continuously — a
+#      stale conflicted blob carries zero truth) bricks BOTH pulls of the W38
+#      ladder ("unmerged files" / "not concluded your merge") and the beat
+#      honest-skips forever. Resolve --ours + stage, conclude any unfinished
+#      merge, and let the ladder below run. All failures stay honest: the
+#      existing fail-closed skips remain the last resort.
+if git status --porcelain | grep -q '^UU'; then
+  git checkout --ours db/state-snapshot.json && git add db/state-snapshot.json \
+    && echo "[dex-beat-keeper] UU guard: db/state-snapshot.json resolved (--ours) + staged (E13)" \
+    || echo "[dex-beat-keeper] UU guard: resolve failed — pull may honest-skip (E13)"
+fi
+if [ -f .git/MERGE_HEAD ]; then
+  git commit --no-edit -q \
+    && echo "[dex-beat-keeper] UU guard: concluded unfinished merge (E13)" \
+    || echo "[dex-beat-keeper] UU guard: merge conclude failed — pull may honest-skip (E13)"
+fi
+
 # 1) the home is the repo — start from canonical state, never a stale tree
 #    W38 (trace 1a1619c722f4fd59) RACE-RECONCILE LADDER: measured this day —
 #    local unpushed receipts (own beat, push lost to the fleet pacemaker)
