@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-10-26T14:00:45.336Z",
+ "publishedAt": "2026-10-26T14:03:22.571Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -9,13 +9,13 @@
  ],
  "real": true,
  "armed": true,
- "verdict": "ARMED-WAITING",
+ "verdict": "ARMED-KEY-STALE",
  "blocker": [
-  "broadcast failing: 6/6 chain ops rejected this run (\"broadcast answered without id\") — stale key/authority or node fault; verdict cannot be stable until signing succeeds"
+  "key gate: STEEM_ACTIVE_WIF does NOT derive the live active authority of headcorner (stale key) — refusing to sign (fail-closed); owner action: update the vault secret"
  ],
  "keyGate": {
-  "ok": true,
-  "authorityOk": true
+  "ok": false,
+  "authorityOk": false
  },
  "zombieOrders": {
   "count": 5,
@@ -30,30 +30,31 @@
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-10-26T14:00:45.335Z",
+  "publishedAt": "2026-10-26T14:03:22.568Z",
   "chain": "HIVE-internal-market",
   "real": true,
-  "armed": true,
-  "authorityOk": true,
+  "armed": false,
+  "authorityOk": null,
   "rc": {
    "ok": true,
    "mana": 42848564398,
    "max": 42848564398
   },
-  "verdict": "DISARMED-BROKEN-MARKET",
-  "reArm": "leg re-arms automatically on the next beat when |bookMid − externalParity| ≤ parity band — declarative honesty, zero manual intervention",
+  "verdict": "DISARMED-NO-KEY",
+  "reArm": null,
   "blocker": [
-   "hive book mid deviates 8071bps from external parity: refusing to trade a broken market"
+   "HIVE_ACTIVE_WIF secret missing (R99: או שהרץ הזה מקומי בלי הסוד, או שהכספת נקתה — כנות, לא סימולציה)",
+   "external USD marks unavailable (hive/hbd feeds down): no marking, no trading"
   ],
   "marks": {
-   "hiveUsd": 0.047633115539177005,
-   "hbdUsd": 1.79,
-   "parityHbdPerHive": 0.026610679072165924
+   "hiveUsd": 0.047733669750529784,
+   "hbdUsd": null,
+   "parityHbdPerHive": null
   },
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.62711059672819
+   "hp": 21.627113690500554
   },
   "book": {
    "bestBid": 0.04806077568972411,
@@ -100,34 +101,34 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.050282548863844485,
-  "sbdUsd": 0.474516,
-  "paritySbdPerSteem": 0.10596597135574877
+  "steemUsd": 0.050373181729750374,
+  "sbdUsd": null,
+  "paritySbdPerSteem": null
  },
  "priceTruth": {
-  "verdict": "TRIANGLE-ARMED",
+  "verdict": "CHAIN-ONLY",
   "valueLineSbdPerSteem": 0.10407857,
   "marks": {
    "chainFeedSbdPerSteem": 0.10407857,
-   "usdParitySbdPerSteem": 0.10596597,
-   "globalSteemUsd": 0.050282548863844485,
-   "measuredSbdUsd": 0.474516,
-   "impliedSbdUsdFromFeed": 0.48312107,
-   "sbdDepegBps": -178,
+   "usdParitySbdPerSteem": null,
+   "globalSteemUsd": 0.050373181729750374,
+   "measuredSbdUsd": null,
+   "impliedSbdUsdFromFeed": 0.48399188,
+   "sbdDepegBps": null,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-10-26T14:00:40.691Z",
+  "measuredAt": "2026-10-26T14:03:20.039Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 0.0002501417081440296,
+  "weeklySp": 0.0002501417387512151,
   "weeklyUsd": 0,
-  "remainingSp": 1000.5662117615545,
+  "remainingSp": 1000.5663341902207,
   "remainingWeeks": 3999998,
   "nextPayout": "2026-11-01T01:40:51",
-  "rcFuelSp": 150.4419932606383
+  "rcFuelSp": 150.44201166862806
  },
  "inventory": {
   "steem": 0.327,
@@ -623,7 +624,7 @@
  "vault": {
   "steemActive": true,
   "steemPosting": false,
-  "hiveActive": true,
+  "hiveActive": false,
   "hivePosting": false,
   "blurtActive": false
  },
