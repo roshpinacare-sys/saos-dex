@@ -637,6 +637,43 @@ async function main(): Promise<void> {
     feeds = ((f as { ok?: boolean; usd?: Record<string, number | null> })?.ok ? (f as { usd: Record<string, number | null> }).usd : {}) as Record<string, number>;
   } catch (e) { console.warn(`[cloud-beat] extFeeds unavailable: ${String(e).slice(0, 60)}`); }
 
+  /* ── G77-e · TREASURY-REFLOAT §1 — מיחזור-פקודות-אוצר-מתות-מבנית ─────────────
+   * נמדד-חי (h1753690): הצף-החופשי-של-האוצר אפס — כל-המלאי נעול בשתי-פקודות-ספר
+   * מ-2026-10-20 שמחירן ±5,000bps ומעלה מהעוגן (WSBD/USDS sell @7,164,802µ =
+   * 15,147x-העוגן — מלכודת-מחיר-חיה מול-קונה-תמים; ENERGY/USDS buy @54,636µ =
+   * 437x-העוגן — פצצת-הדמדומים: כל-מוכר שייכנס יגבה-מהאוצר 437x). פקודה כזו
+   * אינה-ציטוט-כשר (רצפת-הפרסה 60bps · רצועת-העוגן 1000bps) ולעולם-לא-תחצה-
+   * כחוק — op-`cancel`-אוצר-פר-פקודה (הגרעין תומך-ביטול, owner-check fail-closed),
+   * הנעילה חוזרת-לצף, Σ נשמר — וכך ה-reseed/fund שבהמשך-הפעימה מקבלים-דלק אמת. */
+  try {
+    const { recycleOpsFor } = await import("./src/lib/dex/usds-refloat");
+    const rec = recycleOpsFor(rt.st as never);
+    if (rec.ops.length === 0) {
+      console.log("[cloud-beat] G77-e recycle: no offbook treasury orders (book clean)");
+    } else {
+      const freed: Record<string, number> = {};
+      let recycled = 0;
+      const ordersNow = () => (rt.st as unknown as { orders?: { id: number; live: boolean }[] }).orders ?? [];
+      for (const r of rec.ops) {
+        const rr = submitOp(r.op as unknown as Record<string, unknown>);
+        if (!rr.queued) { console.warn(`[cloud-beat] G77-e recycle #${r.orderId} rejected by queue: ${rr.reason ?? "?"}`); continue; }
+        await stepOnce(); // אופ-אחד-לבלוק (חוק-הבלוק) — אחר-כך נמדד-הנחיתה-אמת
+        const landed = !ordersNow().find((o) => o.live && o.id === r.orderId);
+        if (landed) {
+          freed[r.freedAsset] = (freed[r.freedAsset] ?? 0) + r.freedMu;
+          recycled++;
+          console.log(`[cloud-beat] G77-e recycle: canceled offbook treasury order #${r.orderId} (${r.op.nonce.split(":")[1] ?? ""} prem ${(rec.rows.find((x) => x.orderId === r.orderId)?.premBps ?? 0) >= 0 ? "+" : ""}${rec.rows.find((x) => x.orderId === r.orderId)?.premBps ?? 0}bps) — freed ${r.freedMu}µ ${r.freedAsset} to float`);
+        } else {
+          console.warn(`[cloud-beat] G77-e recycle #${r.orderId} did NOT land in block — left for the next beat (honest)`);
+        }
+      }
+      const freedTxt = Object.entries(freed).map(([a, mu]) => `${mu}µ ${a}`).join(" + ") || "0";
+      console.log(`[cloud-beat] G77-E RECYCLED ${recycled}/${rec.ops.length} · float freed: ${freedTxt}`);
+    }
+  } catch (e) {
+    console.warn(`[cloud-beat] G77-e recycle phase skipped: ${String(e).slice(0, 80)}`);
+  }
+
   /* ── R26 · מדיניות-עוגן-ברירה (standing anchor policy) ──────────────────────
    * אחרי-הטיקים: אם בריכת-המסדרון (USDS/WSTEEM) סוטה-מהעוגן-האורקלי בלמעלה-מ-10%
    * (מעל/מתחת) — סימון-מחדש ריבוני אל-העוגן (pool_repeg · treasury · אפס-הטבעה,
@@ -676,7 +713,22 @@ async function main(): Promise<void> {
         const { reseedOpFor } = await import("./src/lib/dex/usds-activation");
         const rs = reseedOpFor(rt.st as never, key, nextNonce("rseed"));
         if (!rs.executable) {
-          console.log(`[cloud-beat] G76-a reseed ${key} BLOCKED (fail-honest): ${rs.blocked.join(" | ")}`);
+          // [G77-e · TREASURY-REFLOAT §2] רוחב-חלקי: הזרע-המלא חסום-מלאי → זריעה
+          // שומרת-יחס בגודל-הצף-האמיתי (שער-אבק 10,000µ-צד-b fail-closed):
+          const { partialReseedOpFor } = await import("./src/lib/dex/usds-refloat");
+          const pr = partialReseedOpFor(rt.st as never, key, nextNonce("preseed"));
+          if (pr.executable && pr.op) {
+            const rp = submitOp(pr.op as unknown as Record<string, unknown>);
+            if (rp.queued) {
+              await stepOnce();
+              const p2 = stx.pools[key];
+              const mid2 = p2 ? Math.floor((p2.ra * 1000) / p2.rb) : 0;
+              reseeded.push(`${key} ${mid}→${mid2}µ (PARTIAL ${pr.widthPct}% seed ${pr.seedA}/${pr.seedB}µ)`);
+              continue;
+            }
+            console.warn(`[cloud-beat] G77-e partial-reseed ${key} rejected: ${rp.reason ?? "?"}`);
+          }
+          console.log(`[cloud-beat] G77-e reseed ${key} BLOCKED (fail-honest, full+partial): full: ${rs.blocked.join(" | ")} · partial: ${pr.blocked.join(" | ")}`);
           continue;
         }
         const r = submitOp(rs.op as unknown as Record<string, unknown>);
@@ -744,15 +796,31 @@ async function main(): Promise<void> {
             fired.push(`${p.pair} FUNDED +${addA}µ/${p.addB ?? 0}µ`);
           } else blockedLines.push(`${p.pair} fund rejected: ${r.reason ?? "?"}`);
         } else {
+          // [G77-e · TREASURY-REFLOAT §3] נפילה-לרוחב-חלקי: יעד-העומק-המלא חסום-מלאי
+          // → pool_add-שומר-יחס ברוחב-הצף-החופשי-באמת (מחיר-הבריכה לא-זז; שער-אבק
+          // 10,000µ-צד-a fail-closed). חסום-גם-הרוחב-החלקי = פרסום-כנה של-שני-
+          // הגירעונות (המלא והמינימלי-החוקי) כל-פעימה עד-שהדלק-מגיע:
+          const { partialFundOpFor } = await import("./src/lib/dex/usds-refloat");
+          const pf = partialFundOpFor(rt.st as never, p.pair, nextNonce("pfund"));
+          if (pf.executable && pf.op) {
+            const rf = submitOp(pf.op as unknown as Record<string, unknown>);
+            if (rf.queued) {
+              await stepOnce();
+              const p2 = (rt.st as unknown as { pools: Record<string, { ra: number; rb: number }> }).pools[p.pair];
+              fired.push(`${p.pair} FUNDED(PARTIAL ${pf.widthPct}%) +${pf.addA}µ/${pf.addB}µ → ra ${p2?.ra ?? "?"}µ`);
+              continue;
+            }
+            blockedLines.push(`${p.pair} partial-fund rejected: ${rf.reason ?? "?"}`);
+          }
           const miss = (p.missing ?? []).filter((m) => m.missingMu > 0).map((m) => `${m.missingMu}µ ${m.asset}`).join(" + ");
-          blockedLines.push(`${p.pair} thin-fund +${addA}µ/${p.addB ?? 0}µ BLOCKED: ${p.blocked.join(" | ")}${miss ? ` · missing ${miss}` : ""}`);
+          blockedLines.push(`${p.pair} thin-fund +${addA}µ/${p.addB ?? 0}µ BLOCKED: full: ${p.blocked.join(" | ")}${miss ? ` · missing ${miss}` : ""}${pf.executable ? "" : ` · partial(≥10000µ-A dust floor): ${pf.blocked.join(" | ")}`}`);
         }
       }
     }
-    if (fired.length > 0) console.log(`[cloud-beat] G77-C USDS-LIQUIDITY fired: ${fired.join(" · ")}`);
-    if (blockedLines.length > 0) console.log(`[cloud-beat] G77-C USDS-LIQUIDITY blockers (fail-honest): ${blockedLines.join(" · ")}`);
+    if (fired.length > 0) console.log(`[cloud-beat] G77-C/G77-E USDS-LIQUIDITY fired: ${fired.join(" · ")}`);
+    if (blockedLines.length > 0) console.log(`[cloud-beat] G77-C/G77-E USDS-LIQUIDITY blockers (fail-honest): ${blockedLines.join(" · ")}`);
   } catch (e) {
-    console.warn(`[cloud-beat] G77-C liquidity receipt skipped: ${String(e).slice(0, 80)}`);
+    console.warn(`[cloud-beat] G77-C/G77-E liquidity receipt skipped: ${String(e).slice(0, 80)}`);
   }
 
   /* ── R42 · THE-SBD-RAIL — הגלגל-החיצוני-של-דבר-גורר-דבר ────────────────────
