@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-10-26T14:16:08.170Z",
+ "publishedAt": "2026-10-26T14:18:50.307Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -9,13 +9,13 @@
  ],
  "real": true,
  "armed": true,
- "verdict": "ARMED-KEY-STALE",
+ "verdict": "ARMED-WAITING",
  "blocker": [
-  "key gate: STEEM_ACTIVE_WIF does NOT derive the live active authority of headcorner (stale key) — refusing to sign (fail-closed); owner action: update the vault secret"
+  "broadcast failing: 6/6 chain ops rejected this run (\"broadcast answered without id\") — stale key/authority or node fault; verdict cannot be stable until signing succeeds"
  ],
  "keyGate": {
-  "ok": false,
-  "authorityOk": false
+  "ok": true,
+  "authorityOk": true
  },
  "zombieOrders": {
   "count": 5,
@@ -30,7 +30,7 @@
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-10-26T14:16:08.168Z",
+  "publishedAt": "2026-10-26T14:18:50.299Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": false,
@@ -47,14 +47,14 @@
    "external USD marks unavailable (hive/hbd feeds down): no marking, no trading"
   ],
   "marks": {
-   "hiveUsd": 0.04795209338541317,
+   "hiveUsd": 0.04800209338541317,
    "hbdUsd": null,
    "parityHbdPerHive": null
   },
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.62712841179967
+   "hp": 21.627131561111042
   },
   "book": {
    "bestBid": 0.04806330695543524,
@@ -101,7 +101,7 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.05035652891934306,
+  "steemUsd": 0.05038652891934306,
   "sbdUsd": null,
   "paritySbdPerSteem": null
  },
@@ -111,24 +111,24 @@
   "marks": {
    "chainFeedSbdPerSteem": 0.10407857,
    "usdParitySbdPerSteem": null,
-   "globalSteemUsd": 0.05035652891934306,
+   "globalSteemUsd": 0.05038652891934306,
    "measuredSbdUsd": null,
-   "impliedSbdUsdFromFeed": 0.48383188,
+   "impliedSbdUsdFromFeed": 0.48412013,
    "sbdDepegBps": null,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-10-26T14:16:05.231Z",
+  "measuredAt": "2026-10-26T14:18:36.758Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 0.0002501418884610083,
+  "weeklySp": 0.0002501419173741945,
   "weeklyUsd": 0,
-  "remainingSp": 1000.5669330290219,
+  "remainingSp": 1000.5670486816949,
   "remainingWeeks": 3999998,
   "nextPayout": "2026-11-01T01:40:51",
-  "rcFuelSp": 150.44210170814952
+  "rcFuelSp": 150.44211909732223
  },
  "inventory": {
   "steem": 0.327,
