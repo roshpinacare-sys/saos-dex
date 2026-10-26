@@ -656,6 +656,7 @@ async function main(): Promise<void> {
     // ENERGY/USDS 173×-מהעוגן) נשאבו-ע"י-הארביטרז' — ה-repeg מיישר-את-המחיר-אל-העוגן
     // ומחזיר-את-העודף-לאוצר (Σ נשמר, אפס-הטבעה — אותו-חוק R26).
     const repgged: string[] = [];
+    const reseeded: string[] = [];
     for (const [key, p] of Object.entries(stx.pools ?? {})) {
       if (p.owner && p.owner !== "treasury") continue; // בריכת-אזרח — אסור
       const refA = stx.assets[p.a]?.refPrice ?? 0;
@@ -664,6 +665,29 @@ async function main(): Promise<void> {
       const mid = Math.floor((p.ra * 1000) / p.rb);
       const premBps = Math.floor(((mid - refB / refA * 1000) * 10_000) / (refB / refA * 1000));
       if (Math.abs(premBps) < 1_000) continue;
+      // [G76-a · USDS-AMM-ACTIVATION] dead-pool branch: כשמתמטיקת-ה-repeg אינה
+      // מסוגלת (raNew = refB×rb/refA ≤ 0 — rb-אבק) או שהבריכה מעל ±10,000bps
+      // מהעוגן — ה-repeg נדחה-מבנית כל-פעימה (kernel "bad-anchor"/dust-add על
+      // USDS/WSBD המדוד: rb=1µ). pool_reseed הוא הנתיב-החוקי-היחיד: זריעה
+      // דו-צדדית מדויקת-על-העוגן ממלאי-אוצר-חופשי (fail-closed; חסום-בכנות
+      // עם-הסיבה כל-עוד הצף-ריק — הפעימה מפרסמת, אף-המצאה).
+      const raRepeg = Math.floor((refB * p.rb) / refA);
+      if (raRepeg <= 0 || Math.abs(premBps) >= 10_000) {
+        const { reseedOpFor } = await import("./src/lib/dex/usds-activation");
+        const rs = reseedOpFor(rt.st as never, key, nextNonce("rseed"));
+        if (!rs.executable) {
+          console.log(`[cloud-beat] G76-a reseed ${key} BLOCKED (fail-honest): ${rs.blocked.join(" | ")}`);
+          continue;
+        }
+        const r = submitOp(rs.op as unknown as Record<string, unknown>);
+        if (r.queued) {
+          await stepOnce();
+          const p2 = stx.pools[key];
+          const mid2 = p2 ? Math.floor((p2.ra * 1000) / p2.rb) : 0;
+          reseeded.push(`${key} ${mid}→${mid2}µ (seed ${rs.seedA}/${rs.seedB}µ)`);
+        } else console.warn(`[cloud-beat] G76-a reseed ${key} rejected: ${r.reason ?? "?"}`);
+        continue;
+      }
       const r = submitOp({ type: "pool_repeg", issuer: "treasury", nonce: nextNonce("rpeg"), pair: key });
       if (r.queued) {
         await stepOnce();
@@ -674,8 +698,9 @@ async function main(): Promise<void> {
         console.warn(`[cloud-beat] R26-ALL repeg ${key} rejected: ${r.reason ?? "?"}`);
       }
     }
+    if (reseeded.length > 0) console.log(`[cloud-beat] G76-A RESEEDED ${reseeded.length} dead pools: ${reseeded.join(" · ")}`);
     if (repgged.length > 0) console.log(`[cloud-beat] R26-ALL anchored ${repgged.length} pools: ${repgged.join(" · ")}`);
-    else console.log("[cloud-beat] R26-ALL: all treasury pools within the 1000bps band");
+    else if (reseeded.length === 0) console.log("[cloud-beat] R26-ALL: all treasury pools within the 1000bps band");
   } catch (e) {
     console.warn(`[cloud-beat] R26-ALL anchor policy skipped: ${String(e).slice(0, 80)}`);
   }

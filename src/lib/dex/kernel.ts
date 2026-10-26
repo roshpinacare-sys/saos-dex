@@ -58,6 +58,15 @@ export const GAS_TABLE = {
   // אפס-גז — אותה-משפחת-ערוצים-ריבוניים (מבנה-המגן: אוצר-בלבד + pair-קנוני +
   // אורקל-קיים; לא-מחיר). זה-לא-swap — ההחלפה-היא-בסימון-בלבד (Σ נשמר).
   pool_repeg: 0,
+  // G76-a · POOL-RESEED — החייאה דו-צדדית של בריכת-USDS מתה על-העוגן (מנדט §4:
+  // USDS trading pairs + AMM liquidity pools). נמדד-חי (h1750085): USDS/WSBD נשאב
+  // עד rb=1µ — ה-repeg מחשב raNew=refB×rb/refA=0 → "bad-anchor" נדחה-כל-פעימה,
+  // ו-pool_add נופל-ב-dust (amountB=floor(1×addA/11937)=0). אין-נתיב-חוקי-קיים.
+  // ה-reseed מחזיר-רזרבות-לאוצר, שורף-LP-אוצר (נעול-לצמיתות ממילא), וזורע-שני-צדדים
+  // ביחס-העוגן המדויק ממלאי-חופשי-בלבד (fail-closed). אפס-גז — משפחת-הערוצים
+  // הריבוניים (pool_open/pool_repeg): המגן-המבני הוא אוצר-בלבד + LP-אזרחי-אסור +
+  // שער-"בריכה-מתה" (רק מעל 10,000bps מהעוגן או raRepeg≤0) + זרע-עוגן-מדויק.
+  pool_reseed: 0,
   pool_swap: 1,
   pool_rmw: 120,
   pool_xAdd: 180,
@@ -365,6 +374,9 @@ export const RESERVE_PHASES: ReservePhase[] = [
 export const DYN_FEE_MIN_BPS = 4;       // עמלה-דינמית: רצפה
 export const DYN_FEE_MAX_BPS = 1_500;   // עמלה-דינמית: תקרה
 export const DYN_FEE_K = 4;             // fee = base + vol/4 (0.25bps-ל-bps-תנודה)
+// G76-a · שער-ה"בריכה-המתה" עבור pool_reseed: מעבר-ל-10,000bps מהעוגן (או כשה-repeg
+// מחשב raNew≤0) ה-repeg אינו-מסוגל — רק זריעה-דו-צדדית-מחודשת מחייה (usds-activation).
+export const POOL_RESEED_TRIGGER_BPS = 10_000;
 // ── Task 55 · ALE (מנוע-הנזילות-האוטונומית) — POL שצומח-מהעמלים עצמם, בלי-משתמשים ──
 export const ALE_EVERY = 100;           // מחזור-הזרעה-כל-100-בלוקים (5 דק' בטיק-3s)
 export const ALE_SEED_PCT = 25;         // % מהחופשי-מעל-הרצפה שיוזרע-כ-POL
@@ -2175,6 +2187,75 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       else { p.ra += delta; addBal(st, "treasury", p.a, -delta); }
       const midNew = Math.floor((p.ra * 1000) / p.rb);
       st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "pool_repeg", note: `${canon} mid ${midOld}→${midNew}µ (anchor refB/refA=${Math.floor((refB * 1000) / refA) / 1000}) · ${delta > 0 ? "+" : ""}${delta}µ ${p.a} ${delta > 0 ? "treasury→pool" : "pool→treasury"} · Σ נשמר` });
+      return { ok: true, gas };
+    }
+    case "pool_reseed": {
+      // G76-a · POOL-RESEED — החייאה דו-צדדית של בריכת-USDS מתה (מנדט §4).
+      // הבעיה-החיה (h1750085): USDS/WSBD נשאב עד rb=1µ — ה-repeg מחשב
+      // raNew = refB×rb/refA = 0 → "bad-anchor" (נדחה-כל-פעימה), ו-pool_add
+      // נופל-ב-dust-add. הבריכה מפורסמת-אך-בלתי-ניתנת-לציטוט. ה-reseed הוא
+      // הנתיב-הכנה היחיד: הרזרבות-הישנות (עדות-האפס) חוזרות-לאוצר, ה-LP
+      // (אוצר-בלבד — LP-אזרחי אסור, נבדק fail-closed) נשרף ונולד-מחדש √k,
+      // ושני-הצדדים נזרעים ממלאי-אוצר **חופשי** ביחס-העוגן המדויק:
+      //   seedA === floor(seedB × refB / refA)  (עוגן-מחייב — אין-זריעה-הפוכה)
+      // Σ(balances+reserves) נשמר בדיוק (רזרבות-חוזרות = זרע-יוצא, נטו-בלבד).
+      // שער-ה"בריכה-מתה": ה-op מתקבל רק כשה-repeg אינו-מסוגל (raNew≤0) או
+      // |premBps| ≥ POOL_RESEED_TRIGGER_BPS — בריכה-בריאה/דקה נדחית.
+      if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
+      const rsKey = String(op.pair ?? "");
+      if (!rsKey) return { ok: false, err: "pair-required", gas: 0 };
+      const rsParts = rsKey.split("/");
+      if (rsParts.length !== 2 || !rsParts[0] || !rsParts[1]) return { ok: false, err: "bad-pair", gas: 0 };
+      const rsCanon = poolKey(rsParts[0], rsParts[1]);
+      if (rsKey !== rsCanon) return { ok: false, err: "non-canonical-pair", gas: 0 };
+      const rp = st.pools[rsCanon];
+      if (!rp) return { ok: false, err: "pool-not-found", gas: 0 };
+      if (rp.owner && rp.owner !== "treasury") return { ok: false, err: "citizen-pool-no-reseed", gas: 0 };
+      const rsRefA = st.assets[rp.a]?.refPrice ?? 0;
+      const rsRefB = st.assets[rp.b]?.refPrice ?? 0;
+      if (!(rsRefA > 0) || !(rsRefB > 0)) return { ok: false, err: "no-anchor", gas: 0 };
+      // מגן-LP-אזרחי: סריקת-יתרות-LP-חיות — כל-מחזיק-שאינו-אוצר = דחייה (אסור
+      // לדלל-כסף-אזרח בסימון-מחדש; ה-LP-האוצר נעול-לצמיתות מהג'נזיס ממילא).
+      const rsLpKey = LP_ASSET_PREFIX + rsCanon;
+      for (const [who, wallet] of Object.entries(st.balances)) {
+        if (who === "treasury") continue;
+        if ((wallet[rsLpKey] ?? 0) > 0) return { ok: false, err: "citizen-lp-present", gas: 0 };
+      }
+      const seedB = op.amountB ?? 0;
+      const seedA = op.amount ?? 0;
+      if (!(seedB > 0) || !(seedA > 0)) return { ok: false, err: "bad-amount", gas: 0 };
+      // שער-הבריכה-המתה — אותו-חישוב של R26-ALL בפעימה (שלמים-בלבד):
+      const rsMid = rp.rb > 0 ? Math.floor((rp.ra * 1000) / rp.rb) : 0;
+      const rsAnchorMid = Math.floor((rsRefB * 1000) / rsRefA);
+      const rsPremBps = rsMid > 0 ? Math.floor(((rsMid - rsAnchorMid) * 10_000) / rsAnchorMid) : 10_000;
+      const rsRaRepeg = Math.floor((rsRefB * rp.rb) / rsRefA);
+      if (rsRaRepeg > 0 && Math.abs(rsPremBps) < POOL_RESEED_TRIGGER_BPS) {
+        return { ok: false, err: "pool-not-dead", gas: 0 };
+      }
+      // עוגן-מחייב: seedA חייב להיות הנגזרת המדויקת של seedB (שלמים, זהה-בריפליי):
+      const rsSeedA = Math.floor((rsRefB * seedB) / rsRefA);
+      if (seedA !== rsSeedA) return { ok: false, err: "off-anchor-seed", gas: 0 };
+      if (!(rsSeedA > 0)) return { ok: false, err: "seed-dust", gas: 0 };
+      // מימון fail-closed: הרזרבות-הישנות חוזרות-לאוצר לפני-הזריעה — הנטו-הוא
+      // מה-שנבדק; אין-הטבעה ואין-שאילה.
+      if (avail(st, "treasury", rp.a) + rp.ra < seedA) return { ok: false, err: "insufficient-treasury", gas: 0 };
+      if (avail(st, "treasury", rp.b) + rp.rb < seedB) return { ok: false, err: "insufficient-treasury", gas: 0 };
+      const rsOldLp = st.balances["treasury"]?.[rsLpKey] ?? 0;
+      const c = consume(); if (c) return c;
+      const rsMidOld = rsMid;
+      // 1) הרזרבות-הישנות + הזרע-החדש — נטו-אחד (שני-הצדדים):
+      addBal(st, "treasury", rp.a, rp.ra - seedA);
+      addBal(st, "treasury", rp.b, rp.rb - seedB);
+      // 2) LP-ישן נשרף, LP-חדש √k נולד לאוצר (נעול-לצמיתות — מורשת pool_lock):
+      if (rsOldLp > 0) addBal(st, "treasury", rsLpKey, -rsOldLp);
+      rp.ra = seedA; rp.rb = seedB;
+      rp.lp = sqrtLp(seedA, seedB);
+      addBal(st, "treasury", rsLpKey, rp.lp);
+      // 3) פעמון-העמלה-הדינמית נולד-מחדש — חוק-הבסיס 30bps (ההיסטוריה של
+      //    feeAccruedTreasury/swaps נשמרת — מדידה לא-נמחקת):
+      rp.volBpsEwma = 0;
+      rp.dynFeeBps = FEE_BPS;
+      st.journal.push({ h: st.height, t: nowMs, soldier: "treasury", action: "pool_reseed", note: `${rsCanon} reseed dead-pool (mid was ${rsMidOld}µ, anchor ${rsAnchorMid}µ, prem ${rsPremBps}bps) → ${seedA}µ ${rp.a} / ${seedB}µ ${rp.b} on-anchor · LP ${rsOldLp}→${rp.lp} · Σ נשמר` });
       return { ok: true, gas };
     }
     case "pool_add":
