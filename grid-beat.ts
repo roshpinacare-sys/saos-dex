@@ -48,6 +48,9 @@ import { deriveSpreadTiers } from "./grids/spread-tiers.mjs";
  * grids/state/grid-params.json תקין → הפרמטרים-החיים; חסר/נדחה → ברירות-המחדל-המדודות
  * למטה + הערה-גלויה בפרסום. פרמטרים-רעים לעולם לא מדורגים לספר. */
 import { validateParams } from "./grids/validate-params.mjs";
+/* גל-81 · משטר-החתך-HBD (trace 1a1787f32fee7401 §3/§4): הדוקטרינה-מ-route-receipt.mjs
+ * ("hbdUsd: 1 משטר-החתך") מיושמת-ברגל-ה-HIVE — החותם-הגולמי-מפרסם-את-עצמו לצידו. */
+import { hbdMarkRegime } from "./grids/hbd-regime.mjs";
 
 /* ── סביבה לפני-כל-ייבוא-מנוע (אותו-כוח-ולא-ב-??= של-cloud-beat): שומר-ה-db
  * מאמת בטעינת-מודול (שרשרת-הייבוא של-realmarket מגיעה אליו דרך-fleet).
@@ -593,8 +596,12 @@ async function main(): Promise<void> {
   /* ── R99 · רגל-HIVE — אותה דוקטרינה, אותו חוק, שוק-פנימי אמת שני ─────────── */
   const hm = await import("./src/lib/dex/hivemarket");
   const hiveUsd = feeds?.usd.hive ?? null;
-  const hbdUsd = feeds?.usd.hbd ?? null;
-  const hiveParity = hiveUsd && hbdUsd && hiveUsd > 0 && hbdUsd > 0 ? hiveUsd / hbdUsd : null; // HBD ל-1-HIVE בזהות-חוץ
+  /* גל-81 · משטר-החתך (measured live 14:00Z): החותם-הגולמי-1.79$ (פרמיה-שוק-דק)
+   * ניתק-בשווא-את-הרגל-כולה (8071bps-מדומים) בזמן-שהסטייה-מול-ההדפסה ~96bps.
+   * HBD=נכס-הדפסה-ל-1$ — החותם-הכן-הוא-הפגיון; הגולמי-מפורסם-לביקורת (hbdUsdRaw). */
+  const hbdRegime = hbdMarkRegime(feeds?.usd.hbd ?? null);
+  const hbdUsd = hbdRegime.mark;
+  const hiveParity = hiveUsd && hbdUsd && hiveUsd > 0 && hbdUsd > 0 ? hiveUsd / hbdUsd : null; // HBD ל-1-HIVE בזהות-חוץ (משטר-החתך)
   let hivePlaced = 0, hiveCancelled = 0;
   const hiveBlocker: string[] = [];
   /* N3 · כנות-הצהרתית (cycle 28): שוק-שבור אינו "המתנה" — הוא נחמה-מפורשת.
@@ -778,7 +785,7 @@ async function main(): Promise<void> {
         ? "leg re-arms automatically on the next beat when |bookMid − externalParity| ≤ parity band — declarative honesty, zero manual intervention"
         : null,
       blocker: hiveBlocker.length ? hiveBlocker : null,
-      marks: { hiveUsd, hbdUsd, parityHbdPerHive: hiveParity },
+      marks: { hiveUsd, hbdUsd, hbdUsdRaw: hbdRegime.raw, hbdRegime: `${hbdRegime.regime} (raw dev ${hbdRegime.devBps}bps)`, parityHbdPerHive: hiveParity },
       inventory: { hive: hs.balances.hive, hbd: hs.balances.hbd, hp: hs.balances.hpOwn },
       book: hs.book,
       openOrdersNow: hs.openOrders.length,
