@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-25T10:14:43.063Z · 170 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-27T22:19:09.388Z · 182 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -21,6 +21,7 @@
 | `scripts/install-pre-push-gate.sh` | !/usr/bin/env bash |
 | `scripts/lend-debug.ts` | — (תיעוד חסר) |
 | `scripts/lend-proof.ts` | scripts/lend-proof.ts — R44 · הוכחה-מקומית-מבודדת של שוק-הכספים |
+| `scripts/measure-usds-liquidity.ts` | * |
 | `scripts/owner-purge-soldiers.ts` | * |
 | `scripts/peg-selftest.ts` | * |
 | `scripts/place-wif.ts` | PLACE-WIF r210b — headcorner.active (מהכספת-החיה) → ~/.sovereign/vault/secrets |
@@ -43,6 +44,7 @@
 | `scripts/sweep-cycle.ts` | * |
 | `scripts/t15-truthgate-selftest.ts` | * |
 | `scripts/t37-laws-selftest.ts` | * |
+| `scripts/usds-sides-once.ts` | * |
 | `scripts/verify-anchor.ts` | ═══════════════════════════════════════════════════════════════════════════ |
 | `scripts/verify-headcorner-key.ts` | * |
 | `scripts/verify-owner-key.ts` | VERIFY-OWNER-KEY — אימות-מצב-אב של מקור-המפתח (upload/headcorner.txt) |
@@ -83,6 +85,8 @@
 | `grids/external-profit.mjs` | !/usr/bin/env node |
 | `grids/fee-harvest.mjs` | !/usr/bin/env node |
 | `grids/fleet-grow.mjs` | FLEET-GROW — צמיחת-הצי הריבונית: רה-סולם של חיילי-העליונות על סולם-רוחבים ייחודי |
+| `grids/hbd-regime-selftest.mjs` | !/usr/bin/env bun |
+| `grids/hbd-regime.mjs` | * |
 | `grids/internal-pnl.mjs` | !/usr/bin/env node |
 | `grids/kelly-selftest.mjs` | !/usr/bin/env node |
 | `grids/kelly.mjs` | ═══════════════════════════════════════════════════════════════════════════ |
@@ -92,6 +96,8 @@
 | `grids/llm/llm-call.mjs` | * |
 | `grids/llm/llm-providers.mjs` | * |
 | `grids/llm/llm-selftest.mjs` | * |
+| `grids/local-beat-once.sh` | !/bin/bash |
+| `grids/local-beat-runner.sh` | !/bin/bash |
 | `grids/mm-supremacy.mjs` | MM-SUPREMACY — מנוע-העליונות: להיות מייקר-הגריד הגדול ביותר על הרשתות שלנו |
 | `grids/mover.mjs` | MOVER — מבצע-ההצעה (A-5 · fleet/r130): offer.json → פקודות-אמת על ספר-STEEM |
 | `grids/observe-selftest.mjs` | OBSERVE-SELFTEST — וקטורים דטרמיניסטיים אופליין לצופה-המילויים-אמת (A-9) |
@@ -114,6 +120,9 @@
 | `grids/run.mjs` | RUN — CLI של רשת-הטריגרים |
 | `grids/self-deposit.mjs` | SELF-DEPOSIT — מנוע-ההפקדה-העצמית של הריבונות (SAOS-SELF-DEPOSIT/1) |
 | `grids/sim/volume-sim.mjs` | VOLUME-SIM — סימולטור-הווליום של מנוע-העליונות (דטרמיניסטי, חתום-SIM) |
+| `grids/soldier-loop-once.sh` | !/bin/bash |
+| `grids/soldier-loop.sh` | !/bin/bash |
+| `grids/soldier-loop.ts` | soldier-loop.ts — SAOS-SOLDIER-BEAT/1 — per-soldier fleet beat: CURATION + GRID, hash-chai |
 | `grids/sovereign-pulse.mjs` | SOVEREIGN-PULSE — הדופק-הריבוני על-השרשרת (R16-a · owner mandate trace 1a12dbe9812eff11) |
 | `grids/split-router.mjs` | SPLIT-ROUTER — מתכנן-פיצול-לעומק לסכומים-גדולים (Z-87a · plan-only · audit-Z86c פער-d) |
 | `grids/spread-tiers-selftest.mjs` | SPREAD-TIERS-SELFTEST — כלל-הזהב: בלי-ראיות → בסיס; ראיות-חוץ-אחרי-החוק → הידוק; רצפות-שומ |
@@ -122,6 +131,8 @@
 | `grids/supremacy-selftest.mjs` | SUPREMACY-SELFTEST — אינווריאנטות-ברזל של מנוע-העליונות (שער-CI) |
 | `grids/treasury-ladder.mjs` | TREASURY-LADDER — מסילת-הכנסה של-האוצר על-הספר הציבורי (R16-b · owner trace 1a12defa203993 |
 | `grids/truth-gate.mjs` | TRUTH-GATE — שער-אמת על מילויים (Wave-2 סעיף 1 · מנדט-הבעלים #11 "בורסת-אמת") |
+| `grids/usds-liquidity-selftest.mjs` | !/usr/bin/env node |
+| `grids/usds-liquidity.mjs` | !/usr/bin/env node |
 | `grids/validate-params.mjs` | VALIDATE-PARAMS — שומר-סף-פרמטרי-הגריד (fail-closed; 9-c · 2026-10-11) |
 | `grids/venues/blurt-quote.mjs` | BLURT-QUOTE — רגל-תכנון-בלרט חסרת-מפתחות (Z-87a · BRIDGE · plan-only) |
 | `grids/volume-verify.mjs` | VOLUME-VERIFY — VERIFIED-VS-CHAIN: אמת-מול-שרשרת על-כל-קבלה וכל-מילוי (R323) |
@@ -143,6 +154,7 @@
 | `harness/anchor-continuity.ts` | * |
 | `harness/battery-core.ts` | * |
 | `harness/bmc.ts` | * |
+| `harness/drought-fountain-test.ts` | * |
 | `harness/hft-test.ts` | * |
 | `harness/htlc-test.ts` | * |
 | `harness/insider-suite.ts` | * |
