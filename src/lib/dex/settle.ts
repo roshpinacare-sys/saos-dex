@@ -241,11 +241,17 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
   // (החלטת-בעלים מדודה) מוחסרת-מזהות-העמלות; רשויות: undefined → נגזר מהדגל.
   const reprimePortion = st.reprimeMu ?? (st.reprimeUsed ? REPRIME_MU : 0);
   const bookGasPortion = st.bookGasRecycledMu ?? 0;
-  const declared = primerPortion + reprimePortion + bookGasPortion;
-  if (declared > (st.feeMinted ?? 0)) errors.push(`minted-declared: primer${primerPortion}+reprime${reprimePortion}+bookgas${bookGasPortion} > minted ${st.feeMinted ?? 0}`);
+  // G105 · THE-DROUGHT-FOUNTAIN: דלי-מוצהר רביעי — µ-דלק שהוטבעו-מ-revAux
+  // (הכנסת-ארב-מדודה) מעולם-לא-היו עמלות-בריכות/ספר (revAux מחוץ-לאגף-השמאלי
+  // ממילא) → כל-µ-כזה מוחסר-מזהות-העמלות בדיוק-כמו-פריימר/ריפריים/בוקגז.
+  // רשויות: undefined → 0 (תמונות-ישנות-בלעדיו). רשויות-הגרעין: רק-mint_fuel
+  // בבצורת-מדודה נוגע-בדלי (profit→meter→aux סדר-קנוני, כל-µ-נגרע-מדידה-אמת).
+  const revAuxMintedPortion = Math.max(0, st.revAuxMintedMu ?? 0);
+  const declared = primerPortion + reprimePortion + bookGasPortion + revAuxMintedPortion;
+  if (declared > (st.feeMinted ?? 0)) errors.push(`minted-declared: primer${primerPortion}+reprime${reprimePortion}+bookgas${bookGasPortion}+revaux${revAuxMintedPortion} > minted ${st.feeMinted ?? 0}`);
   const feesRhs = st.feeMeter + st.treasuryProfit + ((st.feeMinted ?? 0) - declared) + feesSpentMu;
   const feesOk = poolsTreasury + bookFeesMu === feesRhs;
-  if (!feesOk) errors.push(`fees: pools${poolsTreasury}+book${bookFeesMu} ≠ feeMeter+profit+minted−primer${primerPortion}−reprime${reprimePortion}−bookgas${bookGasPortion}+spent ${feesRhs}`);
+  if (!feesOk) errors.push(`fees: pools${poolsTreasury}+book${bookFeesMu} ≠ feeMeter+profit+minted−primer${primerPortion}−reprime${reprimePortion}−bookgas${bookGasPortion}−revaux${revAuxMintedPortion}+spent ${feesRhs}`);
 
   return {
     ok: errors.length === 0 && negatives.length === 0,

@@ -201,6 +201,30 @@ export const FUEL_ASK_MIN = 2_000; // FIX(roast-81): סף-בקשה-מועילה 
 export const FUEL_FUNDERS = ["treasury", "arena", "bot-a", "bot-b", "bot-c", "operator", "wash", "sweeper", "rail", "bot-e"] as const; // ממני-דלק: האוצר (עמלות) + המייצב (רזרבה-עמוקה — "arena funds the floor") + הבוטים (מחזיקי-רזרבה) + המפעיל-האנושי (רזרבת-ג'נזיס שלו — קו-הגנה-האחרון, SETTLE-5) + השטיפה (SETTLE-19-c · רזרבת-הדלק-העומדת — ממומנת-מראש; המושך-ממנה-מחויב-ברצפת-ה-1M שלה בקריאה — העברה-טהורה, Σ נשמר) + T37-d: הסורק/המסילה/בוט-התרגיל (רזרבות-עומדות — זורמות-רק-דרך-reserveFunderAfford: על-צד-האסק-המת בלבד, רצפות-מסלול-שלמות)
 export const LADDER_FUEL_FLOOR = 8_000; // סולם-הערך דורש feeMeter≥8000 להרמה — המטבע לא ירעיב-אותו
 export const MINT_FUEL_CAP = 100_000; // תקרת-הטבעת-דלק-פר-פקודה — מגובה-בנוסף בעמלות-מדודות
+// ── G105 (trace 1a17ded5ebeb520d · ABSOLUTE §1/§5) · THE-DROUGHT-FOUNTAIN ────
+// נמדד-חי 2026-10-27T15:16Z: feeMeter 3,346µ כלוא-מתחת-לרצפה 8,000 · Σcredits
+// כל-המשק 11,220µ · ארנה (שורש-שרשרת-המימון + המייקר-העמוק ביותר) 0µ → 13
+// דחיות/בלוק · ובמקביל revAux.protorevMu 20,303,080µ הכנסת-ארב-מדודה כלואה
+// (הראוטר מנוע: אוצר-USDS 400k < רצפת-1M, lastH 804,000). מוות-מבני-מטבע:
+// הרצפה 8,000 נועדה-לגבות-את-תשלום-סולם-הערך — אבל הסולם ממילא לא-יורה
+// מתחת-ל-8,000 (ladderCheck דורש feeMeter≥stepCost) → בבצורת הרצפה היא
+// הון-מת שגווע-את-השוק-שמייצר-את-העמלות. התיקון: בבצורת-מדודה (isFuelDrought)
+// הרצפה יורדת-זמנית ל-DROUGHT_FLOOR, ו-revAux (הכנסת-ארב-מדודה — לא עמלת-בריכה)
+// נכנסת-כגיבוי-שלישי. כל-µ מוטבע-נגרע-מדידה-אמת (profit→meter→aux, סדר-קנוני)
+// — אין-הטבעה-מכסף-אוויר: האינווריאנטה Σcredits+gasUsed−feeMinted===ג'נזיס
+// וביקורת-העמלות (settle (d) + דלי-מוצהר revAuxMintedMu, כמו-פריימר/ריפריימ)
+// ממשיכות-לעמוד-בדיוק. הגרעין הוא-האוכף-היחיד (fail-closed).
+export const DROUGHT_FLOOR = 200; // רצפת-המד-בבצורת — זרע-מינימלי לסולם; ברגע-שהמד חוזר-מעל 8,000 המשטר-הרגיל-חוזר
+export const DROUGHT_ARENA_MIN = 10_000; // ארנה מתחת-לזה = שורש-שרשרת-המימון-מת (אותו-סף-כמו-מזרקת-mm)
+export function isFuelDrought(st: DexState): boolean {
+  const aboveFloor = Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
+  return (st.credits["arena"] ?? 0) < DROUGHT_ARENA_MIN
+    && Math.max(0, st.treasuryProfit ?? 0) === 0
+    && aboveFloor === 0;
+}
+export function auxAvailMu(st: DexState): number {
+  return Math.max(0, st.revAux?.protorevMu ?? 0) + Math.max(0, st.revAux?.launchpadMu ?? 0);
+}
 
 /* ── T37-d · סרוו-עומק-הספר (book-depth servo) ──────────────────────────────
  * נמדד-חי (h155706 · 2026-10-14): הספר-הריבוני USDS/WSTEEM מת-צד-אחד שוב
@@ -601,6 +625,7 @@ export interface DexState {
   launch?: Record<string, Launch>;    // השקות חיות/שהוגרו
   launchSeq?: number;                 // מונה-השקות
   revAux?: { protorevMu: number; launchpadMu: number; runs?: number; cycles?: number; rejections?: number; lastH?: number }; // פנקס-הכנסה-נלווית (מחוץ-לאינווריאנטה-d — הרווח אינו עמלת-סוואפ)
+  revAuxMintedMu?: number; // G105 · דלי-מוצהר: Σ µ-דלק שהוטבעו-מ-revAux בבצורת (מחוץ-לביקורת-העמלות-ממילא — זהות-מוצהרת כמו-פריימר/ריפריימ; settle (d) מחסיר-אותו)
   cow?: CowOrder[];                   // הזמנות-אצווה-פתוחות (נסגרות-בסוף-הבלוק)
   cowSeq?: number;                    // מונה-הזמנות-אצווה
   cowStats?: { matched: number; batches: number; surplusMu: number; fallbackPool: number; fallbackBook: number }; // מדידת-CoW
@@ -1722,20 +1747,44 @@ export function applyOp(st: DexState, op: Op, nowMs: number): OpResult {
       // מוטבע-נגרע-בדיוק-פעם-אחת מהמדידה (אין-הטבעה-כפולה של-אותה-עמלה) —
       // ביקורת-העמלות (pools===feeMeter+profit) והאינווריאנטה
       // Σcredits+gasUsed−feeMinted===ג'נזיס ממשיכות-לעמוד-בדיוק.
+      // ── G105 · THE-DROUGHT-FOUNTAIN ── בבצורת-מדודה (isFuelDrought: ארנה-מתה +
+      // רווח-0 + אפס-מד-מעל-רצפה) הרצפה יורדת-זמנית ל-DROUGHT_FLOOR (הסולם ממילא
+      // לא-יורה מתחת-ל-stepCost → הרצפה היא הון-מת שגווע-את-השוק) ו-revAux
+      // (הכנסת-ארב-מדודה) נכנסת-כגיבוי-שלישי — סדר-קנוני profit→meter→aux;
+      // כל-µ-מ-revAux נרשם-בדלי-המוצהר revAuxMintedMu (settle (d) מחסיר-אותו —
+      // אפס-שבירת-ביקורת). מחוץ-לבצורת: החוק-הישן-במלואו, מילים-במילים.
       if (issuer !== "treasury") return { ok: false, err: "treasury-only", gas: 0 };
       const fAmt = op.amount ?? 0, fTo = String(op.to ?? issuer);
       if (!(fAmt > 0) || !fTo) return { ok: false, err: "bad-amount", gas: 0 };
       if (fAmt > MINT_FUEL_CAP) return { ok: false, err: "mint-exceeds-cap", gas: 0 };
+      const drought = isFuelDrought(st);
+      const meterFloor = drought ? DROUGHT_FLOOR : LADDER_FUEL_FLOOR;
       const fromProfit = Math.min(fAmt, Math.max(0, st.treasuryProfit));
-      const fromMeter = fAmt - fromProfit;
-      const meterAvail = Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
-      if (fromMeter > meterAvail) return { ok: false, err: "mint-exceeds-measured-fees", gas: 0 };
+      let rem = fAmt - fromProfit;
+      const meterAvail = Math.max(0, (st.feeMeter ?? 0) - meterFloor);
+      const fromMeter = Math.min(rem, meterAvail);
+      rem -= fromMeter;
+      let fromAux = 0;
+      if (rem > 0) {
+        const auxAvail = drought ? auxAvailMu(st) : 0;
+        fromAux = Math.min(rem, auxAvail);
+        rem -= fromAux;
+      }
+      if (rem > 0) return { ok: false, err: "mint-exceeds-measured-fees", gas: 0 };
       pushNonce(st, dedupeKey); st.stats.opsTotal++; // אפס-גז — כמו relay
       st.treasuryProfit -= fromProfit;
       st.feeMeter -= fromMeter;
+      if (fromAux > 0) {
+        const aux = st.revAux ?? (st.revAux = { protorevMu: 0, launchpadMu: 0 });
+        const pr = Math.min(Math.max(0, aux.protorevMu), fromAux);
+        aux.protorevMu = (aux.protorevMu ?? 0) - pr;
+        const lp = Math.min(Math.max(0, aux.launchpadMu ?? 0), fromAux - pr);
+        aux.launchpadMu = (aux.launchpadMu ?? 0) - lp;
+        st.revAuxMintedMu = (st.revAuxMintedMu ?? 0) + fromAux;
+      }
       st.feeMinted = (st.feeMinted ?? 0) + fAmt;
       st.credits[fTo] = (st.credits[fTo] ?? 0) + fAmt;
-      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "mint_fuel", note: `+${fAmt}µ credits →${fTo} (fees-backed: profit ${fromProfit} + meter ${fromMeter})` });
+      st.journal.push({ h: st.height, t: nowMs, soldier: issuer, action: "mint_fuel", note: `+${fAmt}µ credits →${fTo} (fees-backed: profit ${fromProfit} + meter ${fromMeter} + aux ${fromAux}${drought ? ` · drought-floor ${DROUGHT_FLOOR}` : ""})` });
       return { ok: true, gas: 0 };
     }
     case "primer": {

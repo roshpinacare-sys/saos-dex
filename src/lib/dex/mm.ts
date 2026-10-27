@@ -12,7 +12,7 @@
  * (שורד-תמונות-מצב; רשויות-ישנות = undefined → 0-כנה).
  */
 import type { DexState, Op, Asset } from "./kernel";
-import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDER, funderAfford, RESERVE_FUNDERS, reserveFunderAfford, poolKey, avail, notional, maxNonceSuffix, nonceExists } from "./kernel";
+import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDER, funderAfford, RESERVE_FUNDERS, reserveFunderAfford, poolKey, avail, notional, maxNonceSuffix, nonceExists, isFuelDrought, DROUGHT_FLOOR, DROUGHT_ARENA_MIN, auxAvailMu } from "./kernel"; // G105: מזרקת-הבצורת — גרעין-מקור-אמת-יחיד
 import { sortBook } from "./book";
 import { poolMid, poolMidFor, getPool, quoteOut } from "./amm";
 import { railTick, RAIL_OWNED_POOLS, RAIL_DUST_MU } from "./rail";
@@ -469,8 +469,18 @@ export function arenaTick(
     // נמדד h830516: batch(treasury):batch-self-enrich-forbidden). התיקון: להטביע-ישר-לארנה —
     // שורש-שרשרת-המימון (funderFor: arena→בוטים→אוצר→מפעיל) — הארנה-מממנת-את-הכל-בעצמה.
     // הגרעין-ממשיך-לאכוף-בעצמו: גיבוי-כפול (profit-ראשון) + רצפת-8k + תקרה-100k.
-    const fuelAvail = Math.max(0, st.treasuryProfit) + Math.max(0, (st.feeMeter ?? 0) - LADDER_FUEL_FLOOR);
-    if ((st.credits["arena"] ?? 0) < 10_000 && fuelAvail > 1_000) {
+    // ── G105 · THE-DROUGHT-FOUNTAIN (trace 1a17ded5ebeb520d) ── נמדד-חי
+    // 2026-10-27T15:16Z: feeMeter 3,346 כלוא-מתחת-לרצפה · Σcredits 11,220 · ארנה 0
+    // → 13 דחיות/בלוק, ובמקביל revAux.protorevMu 20.3M מדוד-וכלוא (ראוטר-מנוע).
+    // בבצורת (isFuelDrought — גרעין-מקור-אמת-יחיד): רצפת-המד DROUGHT_FLOOR + revAux
+    // כגיבוי-שלישי. הגרעין עדיין-האוכף-היחיד: כל-µ-מוטבע-נגרע-מדידה-אמת
+    // (profit→meter→aux), ודחייה-כנה-אם-הגרעין-לא-מאשר (fail-closed).
+    const drought = isFuelDrought(st);
+    const meterFloor = drought ? DROUGHT_FLOOR : LADDER_FUEL_FLOOR;
+    const fuelAvail = Math.max(0, st.treasuryProfit)
+      + Math.max(0, (st.feeMeter ?? 0) - meterFloor)
+      + (drought ? auxAvailMu(st) : 0);
+    if ((st.credits["arena"] ?? 0) < DROUGHT_ARENA_MIN && fuelAvail > 1_000) {
       const mint = Math.min(60_000, MINT_FUEL_CAP, fuelAvail);
       if (mint > 0) pushOp({ type: "mint_fuel", issuer: "treasury", nonce: `fountain-h${st.height}`, to: "arena", amount: mint });
     }
