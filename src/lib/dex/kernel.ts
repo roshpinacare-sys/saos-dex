@@ -404,7 +404,13 @@ export type FuelFunder = (typeof FUEL_FUNDERS)[number];
  * FIX(roast-79 · fuel-death-spiral): סדר-הקדימות הוא-התרופה. היה: ארנה→אוצר→מפעיל —
  * נמדד-חי: שלושתם מתים (25.9k שאינו-עובר-מבחן-amt+10k · 8 · 2k) בזמן-שהבוטים
  * מחזיקים 1.65M. עכשיו: ארנה → בוטים (מרווח לבריאות-המממן) → אוצר → מפעיל. */
-export const FUNDER_ORDER: FuelFunder[] = ["arena", "bot-a", "bot-b", "bot-c", "treasury", "operator"];
+// G104 (trace 1a17d5314095aa65 · §1/§3): rail/bot-e/wash נוספו-לסולם-המימון — נמדד-חי
+// 2026-10-27T13:50Z: rail מחזיק 8,873µ credits מחוץ-לסולם (הפצע-המתועד בהערה-למטה:
+// "מחוץ-ל-FUNDER_ORDER-הישן ולכן-מתות-בזמן-שהספר-מת") → funderFor נופל-ל-operator
+ // (419µ) → refuel נדחה-בבלוק (insufficient-credits) → שיתוק-מלא של-האוטופיילוט.
+ // rail/bot-e/wash כבר-חוקיים-ב-FUEL_FUNDERS-של-הגרעין — הוספה-כאן מיישרת-את-סולם-
+ // המסלול עם-חוק-הגרעין. אפס-הנפקה: העברה-טהורה, Σcredits נשמר.
+export const FUNDER_ORDER: FuelFunder[] = ["arena", "bot-a", "bot-b", "bot-c", "treasury", "operator", "rail", "bot-e", "wash"];
 /** FIX(roast-81 · afford-single-source): יכולת-המימון-המקסימלית של ממנה — אותם-מרווחי-
  * ברזל של-funderFor (ארנה/בוטים שומרים-רצפת-10k לבריאות-המממן; האוצר/המפעיל ניתנים-עד-
  * תום-היתרה). SETTLE-9 dedup: המרווחים חיים-פה-בלבד — הדריפט-פה = דליפה-כלכלית. */

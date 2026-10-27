@@ -269,8 +269,14 @@ export function middleware(req: NextRequest): NextResponse {
     }
   }
 
-  // ── הליבה: EXEC-CD-44 מילה-במילה ──
-  const isPublic = req.headers.has("x-forwarded-for");
+  // ── הליבה: EXEC-CD44 מילה-במילה + G104 (trace 1a17d5314095aa65 · §3 תיקון-נגישות) ──
+  // נמדד-חי 2026-10-27T13:40Z: שכבת-ה-proxy הפנימית מזריקה XFF לכל-בקשה — גם-תעבורת
+  // רשת-מקומית-טהורה (organs/harness/probes מ-127.0.0.1) נשפטה-ציבורית (240/דק') וה-hft-loop
+  // לבדו (~120-240/דק') שיתק את-כל-המש (429 מתמשך: army/seed/probes). כוונת-המדרגות
+  // המקורית (2,000/דק' לתעבורת-רשת-מקומית) נשמרת: XFF שקצהו-האחרון לופבק = גייטוויי
+  // מקומי = מדרגה-פנימית. XFF חיצוני-אמיתי נשאר 240/דק'. אפס-שינוי-מהליבה-עצמה.
+  const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+  const isPublic = req.headers.has("x-forwarded-for") ? !LOOPBACK.has(clientIp(req)) : false;
   const limit = isPublic ? LIMIT_PUBLIC : LIMIT_INTERNAL;
 
   const now = Date.now();
