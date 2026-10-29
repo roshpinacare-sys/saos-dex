@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-29T10:03:18.992Z · 189 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-29T18:30:20.737Z · 190 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -155,6 +155,7 @@
 | `markets/tests/prng.test.ts` | — (תיעוד חסר) |
 | `markets/tests/state.test.ts` | גנזיס: הון-פתיחה == גנזיס מוצהר |
 | `markets/tests/volume.test.ts` | מרווח-מייקר: bid ≤ mid ≤ ask (רק-מייקרים — טייקים חוצים-מכוון) |
+| `ops/custody-census/census-all.mjs` | census-all.mjs — GENERIC crown census: scan EVERY env value for WIF-shaped |
 | `ops/custody-census/census.mjs` | census.mjs — crown-custody census (chain is the only judge; fingerprints only in logs) |
 | `ops/custody-census/relay-seal.mjs` | relay-seal.mjs — seal verified map to vault-home + PUT LIVE_FLEET_KEYS secrets |
 | `ops/dex-daemon-hardened.ts` | * |
