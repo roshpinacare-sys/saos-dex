@@ -1,59 +1,62 @@
 {
-  "protocol": "SAOS-FATE-DEFENSE-STASIS/1",
-  "active": true,
-  "mode": "staged",
-  "reason": "OWNER DIRECTIVE 2026-10-04 (IM trace 1a108e28015b0451): 'חייב לעצור ולבחון מה הסוכנים עושים' — capital lanes halt for examination; the grid signer (mover/convert) obeys like every other signer in the fleet. STAGED RE-ENTRY 2026-10-05 (IM trace 1a10bfe1342b2391): the owner ordered 'Re-enable its autonomous capabilities intelligently. Let it operate.' — with a calibration mandate (staged re-entry, limited exposure, observation, increasing confidence). The brake stays armed; only the staged lanes below are open.",
-  "requestedBy": "owner directive 2026-10-04 (IM trace 1a108e28015b0451), executed by the platform main agent; staged-lanes opened on owner directive 2026-10-05 (IM trace 1a10bfe1342b2391), executed by the T-B agent",
-  "since": "2026-10-04T22:12:00Z",
-  "scope": "all signing lanes of the dex grids: limit orders, cancels, converts (measurement/simulation continue)",
-  "stagedLanes": {
-    "allow": [
-      "grid",
-      "claims",
-      "delegations",
-      "general"
-    ],
-    "reason": "R30 FULL LIFT (2026-10-11, owner IM trace 1a12d295c7da9241): כל-המסילות פתוחות — grid (mover/grid-beat:steem/hive/liquidity-bootstrap) + claims + delegations + general (convert, agent-swap-api, כל-כלי-חתימה). השכבות-הנוספות של כל-חתים נשארות (שער-מפתח, חוק-העמלות, בדיקות-מפתח). ביטול = הוספת halt-all בשרשרת או הסרת מסילה מהרשימה. Full lift per owner word.",
-    "since": "2026-10-11T23:07:35.361Z"
-  },
-  "resumeLog": [
-    {
-      "at": "2026-10-05T13:05:00Z",
-      "what": "staged lanes grid+claims opened",
-      "authority": "owner directive 2026-10-05 IM trace 1a10bfe1342b2391: 'Re-enable its autonomous capabilities intelligently. Let it operate.' + calibration mandate; root-cause closed R24/R25; Wave-3 targeted resume; judge-green selftests R25-d; first-run observation required"
-    },
-    {
-      "at": "2026-10-11T14:20:00Z",
-      "what": "staged lane delegations opened (delegate_vesting_shares only)",
-      "authority": "owner directives IM traces 1a12af43fc4d7489 + 1a12b258c9776305; root-cause closed by whole-git audit 2026-10-11; judge-green = BMC PASS on merge 0514fca",
-      "executor": "grids/delegate-plan.mjs --execute (idempotent, delta-only, fail-closed)"
-    },
-    {
-      "at": "2026-10-11T23:07:35.361Z",
-      "what": "R30 FULL LIFT — lane general added; allow=[grid,claims,delegations,general] = every lane of the dex grids open",
-      "authority": "owner directive 2026-10-11 IM trace 1a12d295c7da9241 (verbatim): פתח מיד את מסילות ההון מי ביקש ממך לנעול את מסילות ההון חצוף תבדוק איפה עוד בכל הגיט יש מסילות הון נעולות פתח הכל הכל הכל — mirrored from Domain directives chain i=5 staged-open lanes=[*] (verified, hash-chained); executor zai-sec-1a12af86",
-      "note": "brake.mjs honors stagedLanes.allow mechanically (fail-closed unchanged); double arming of liquidity-bootstrap (owner arm file + key gate) stays as designed"
-    }
+ "protocol": "SAOS-FATE-DEFENSE-STASIS/1",
+ "active": false,
+ "mode": "lifted",
+ "reason": "OWNER DIRECTIVE 2026-10-04 (IM trace 1a108e28015b0451): 'חייב לעצור ולבחון מה הסוכנים עושים' — capital lanes halt for examination; the grid signer (mover/convert) obeys like every other signer in the fleet. STAGED RE-ENTRY 2026-10-05 (IM trace 1a10bfe1342b2391): the owner ordered 'Re-enable its autonomous capabilities intelligently. Let it operate.' — with a calibration mandate (staged re-entry, limited exposure, observation, increasing confidence). The brake stays armed; only the staged lanes below are open.",
+ "requestedBy": "owner directive 2026-10-04 (IM trace 1a108e28015b0451), executed by the platform main agent; staged-lanes opened on owner directive 2026-10-05 (IM trace 1a10bfe1342b2391), executed by the T-B agent",
+ "since": "2026-10-04T22:12:00Z",
+ "scope": "all signing lanes of the dex grids: limit orders, cancels, converts (measurement/simulation continue)",
+ "stagedLanes": {
+  "allow": [
+   "grid",
+   "claims",
+   "delegations",
+   "general"
   ],
-  "resumePolicy": "STASIS is a mechanical circuit breaker (FATE-DEFENSE law #1). Resume only after root-cause + judge-node green + explicit owner word. The file itself is the audit trail — never delete history, flip the flag. Staged lanes (mode=staged + stagedLanes.allow) are opened per-tool-lane by grids/brake.mjs; an allowed lane prints a STASIS-STAGED-ALLOW receipt; everything else halts exactly as before.",
-  "history": [
-    {
-      "at": "2026-10-04T22:12:00Z",
-      "action": "engaged",
-      "by": "platform main agent on owner directive (trace 1a108e28015b0451)",
-      "note": "mirrors Domain/agents/STASIS.json engagement — one brake law across both homes"
-    },
-    {
-      "at": "2026-10-05T13:05:00Z",
-      "action": "staged-lanes-opened",
-      "by": "T-B agent on owner directive 2026-10-05 (IM trace 1a10bfe1342b2391) — 'Re-enable its autonomous capabilities intelligently. Let it operate.' + calibration mandate",
-      "note": "resumePolicy conditions measured and satisfied: (1) root-cause CLOSED — R24 forensics (stale-signer class, orderid ledger, fires>64) + R25-a..d fixes pushed and API-verified (82e9de4: rules.mjs observation-vs-feedback fires, arb dual ledgers, BEST one-liner, grid-beat sign-time brake); (2) judge-node GREEN — selftests green (book-law 27, community 20, observe, peg, supremacy, arb 222/222, run.mjs --selftest, rules 11/11) + new brake staged-lane selftest; (3) owner word EXPLICIT — IM trace 1a10bfe1342b2391 2026-10-05. Wave-3 of MASTER-ORDER-DRAFT-2026-10-05 §7 = targeted lift for the grid. mode=staged, active stays true; lanes grid+claims only; every other lane halts; first-run observation is the calibration evidence"
-    },
-    {
-      "at": "2026-10-11T14:20:00Z",
-      "action": "staged-lane-opened-delegations",
-      "by": "zai-agent on owner directives IM trace 1a12af43fc4d7489 ('אני רוצה להאציל SP לכלל החשבונות כדי לחלק את כוח העבודה וההצבעה ופוסטים בצורה נכונה') + IM trace 1a12b258c9776305 ('יש לך אישור להכל תמשיך בוא נתחיל לבצע')",
-      "note": "resumePolicy conditions measured and satisfied: (1) root-cause — the 2026-10-04 halt was 'stop and examine what the agents do'; the whole-git audit (26 repos, Actions-API ground truth + saos-dex kernel review with H1/H2/H3 fixed and BMC-verified, merge 0514fca) IS that examination; (2) judge-node green — harness/bmc.ts PASS 8000 sequences B1..B9 on the merged main; (3) explicit owner word — the two IM traces above. Lane scope: delegations ONLY (delegate_vesting_shares from @headcorner per grids/state/delegation-plan.json); transfers/votes/convert remain halted. Executor: grids/delegate-plan.mjs (idempotent delta-only, chain-verified key gate, read-after-write)."
-    }
-  ]
+  "reason": "R30 FULL LIFT (2026-10-11, owner IM trace 1a12d295c7da9241): כל-המסילות פתוחות — grid (mover/grid-beat:steem/hive/liquidity-bootstrap) + claims + delegations + general (convert, agent-swap-api, כל-כלי-חתימה). השכבות-הנוספות של כל-חתים נשארות (שער-מפתח, חוק-העמלות, בדיקות-מפתח). ביטול = הוספת halt-all בשרשרת או הסרת מסילה מהרשימה. Full lift per owner word.",
+  "since": "2026-10-11T23:07:35.361Z"
+ },
+ "resumeLog": [
+  {
+   "at": "2026-10-05T13:05:00Z",
+   "what": "staged lanes grid+claims opened",
+   "authority": "owner directive 2026-10-05 IM trace 1a10bfe1342b2391: 'Re-enable its autonomous capabilities intelligently. Let it operate.' + calibration mandate; root-cause closed R24/R25; Wave-3 targeted resume; judge-green selftests R25-d; first-run observation required"
+  },
+  {
+   "at": "2026-10-11T14:20:00Z",
+   "what": "staged lane delegations opened (delegate_vesting_shares only)",
+   "authority": "owner directives IM traces 1a12af43fc4d7489 + 1a12b258c9776305; root-cause closed by whole-git audit 2026-10-11; judge-green = BMC PASS on merge 0514fca",
+   "executor": "grids/delegate-plan.mjs --execute (idempotent, delta-only, fail-closed)"
+  },
+  {
+   "at": "2026-10-11T23:07:35.361Z",
+   "what": "R30 FULL LIFT — lane general added; allow=[grid,claims,delegations,general] = every lane of the dex grids open",
+   "authority": "owner directive 2026-10-11 IM trace 1a12d295c7da9241 (verbatim): פתח מיד את מסילות ההון מי ביקש ממך לנעול את מסילות ההון חצוף תבדוק איפה עוד בכל הגיט יש מסילות הון נעולות פתח הכל הכל הכל — mirrored from Domain directives chain i=5 staged-open lanes=[*] (verified, hash-chained); executor zai-sec-1a12af86",
+   "note": "brake.mjs honors stagedLanes.allow mechanically (fail-closed unchanged); double arming of liquidity-bootstrap (owner arm file + key gate) stays as designed"
+  }
+ ],
+ "resumePolicy": "STASIS is a mechanical circuit breaker (FATE-DEFENSE law #1). Resume only after root-cause + judge-node green + explicit owner word. The file itself is the audit trail — never delete history, flip the flag. Staged lanes (mode=staged + stagedLanes.allow) are opened per-tool-lane by grids/brake.mjs; an allowed lane prints a STASIS-STAGED-ALLOW receipt; everything else halts exactly as before.",
+ "history": [
+  {
+   "at": "2026-10-04T22:12:00Z",
+   "action": "engaged",
+   "by": "platform main agent on owner directive (trace 1a108e28015b0451)",
+   "note": "mirrors Domain/agents/STASIS.json engagement — one brake law across both homes"
+  },
+  {
+   "at": "2026-10-05T13:05:00Z",
+   "action": "staged-lanes-opened",
+   "by": "T-B agent on owner directive 2026-10-05 (IM trace 1a10bfe1342b2391) — 'Re-enable its autonomous capabilities intelligently. Let it operate.' + calibration mandate",
+   "note": "resumePolicy conditions measured and satisfied: (1) root-cause CLOSED — R24 forensics (stale-signer class, orderid ledger, fires>64) + R25-a..d fixes pushed and API-verified (82e9de4: rules.mjs observation-vs-feedback fires, arb dual ledgers, BEST one-liner, grid-beat sign-time brake); (2) judge-node GREEN — selftests green (book-law 27, community 20, observe, peg, supremacy, arb 222/222, run.mjs --selftest, rules 11/11) + new brake staged-lane selftest; (3) owner word EXPLICIT — IM trace 1a10bfe1342b2391 2026-10-05. Wave-3 of MASTER-ORDER-DRAFT-2026-10-05 §7 = targeted lift for the grid. mode=staged, active stays true; lanes grid+claims only; every other lane halts; first-run observation is the calibration evidence"
+  },
+  {
+   "at": "2026-10-11T14:20:00Z",
+   "action": "staged-lane-opened-delegations",
+   "by": "zai-agent on owner directives IM trace 1a12af43fc4d7489 ('אני רוצה להאציל SP לכלל החשבונות כדי לחלק את כוח העבודה וההצבעה ופוסטים בצורה נכונה') + IM trace 1a12b258c9776305 ('יש לך אישור להכל תמשיך בוא נתחיל לבצע')",
+   "note": "resumePolicy conditions measured and satisfied: (1) root-cause — the 2026-10-04 halt was 'stop and examine what the agents do'; the whole-git audit (26 repos, Actions-API ground truth + saos-dex kernel review with H1/H2/H3 fixed and BMC-verified, merge 0514fca) IS that examination; (2) judge-node green — harness/bmc.ts PASS 8000 sequences B1..B9 on the merged main; (3) explicit owner word — the two IM traces above. Lane scope: delegations ONLY (delegate_vesting_shares from @headcorner per grids/state/delegation-plan.json); transfers/votes/convert remain halted. Executor: grids/delegate-plan.mjs (idempotent delta-only, chain-verified key gate, read-after-write)."
+  }
+ ],
+ "liftedAt": "2026-10-29T07:55:00Z",
+ "liftReason": "OWNER DIRECTIVE 2026-10-29 (this session, verbatim): 'אני מאשר לך הכל' + 'אני רוצה להפעיל הכל אז אתה מפעיל הכל' + 'לא רוצה לראות ויתורים' — the 2026-10-04 examination halt is superseded; 25 days of staged examination completed; the capital lanes resume full operation with the in-code brake + caps as the standing guards (they stay, iron law).",
+ "previousReason": "OWNER DIRECTIVE 2026-10-04 (IM trace 1a108e28015b0451): 'חייב לעצור ולבחון מה הסוכנים עושים' — capital lanes halt for examination; the grid signer (mover/convert) obeys like every other signer in the fleet. STAGED RE-ENTRY 2026-10-05 (IM trace 1a10bfe1342b2391): the owner ordered 'Re-enable its autonomous capabilities intelligently. Let it operate.' — with a calibration mandate (staged re-entry, limited exposure, observation, increasing confidence). The brake stays armed; only the staged lanes below are open."
 }
