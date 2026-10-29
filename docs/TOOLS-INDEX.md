@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-27T22:19:09.388Z · 182 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-10-29T10:03:18.992Z · 189 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -98,6 +98,8 @@
 | `grids/llm/llm-selftest.mjs` | * |
 | `grids/local-beat-once.sh` | !/bin/bash |
 | `grids/local-beat-runner.sh` | !/bin/bash |
+| `grids/maker-rebate-selftest.mjs` | MAKER-REBATE-SELFTEST — ביקורת-הברזל של פנקס-הריבייטים (SAOS-MAKER-REBATE/1) |
+| `grids/maker-rebate.mjs` | MAKER-REBATE — פנקס-צבירת-הריבייטים-למייקרים של הרשת-הריבונית (SAOS-MAKER-REBATE/1) |
 | `grids/mm-supremacy.mjs` | MM-SUPREMACY — מנוע-העליונות: להיות מייקר-הגריד הגדול ביותר על הרשתות שלנו |
 | `grids/mover.mjs` | MOVER — מבצע-ההצעה (A-5 · fleet/r130): offer.json → פקודות-אמת על ספר-STEEM |
 | `grids/observe-selftest.mjs` | OBSERVE-SELFTEST — וקטורים דטרמיניסטיים אופליין לצופה-המילויים-אמת (A-9) |
@@ -115,7 +117,10 @@
 | `grids/price-truth-selftest.mjs` | PRICE-TRUTH-SELFTEST — N8 · בטריית-החוקים הטהורים (round-27 · העולם-המדוד-13:49Z) |
 | `grids/price-truth.mjs` | PRICE-TRUTH — N8 · משמעת-קו-הערך-המשולש (round-27 · owner mandate trace 1a163d4124276b39) |
 | `grids/profit-floor.mjs` | PROFIT-FLOOR — שער-רצפת-הרווח של רגלי-הסולם (SAOS-PROFIT-FLOOR/1) |
+| `grids/route-graph.mjs` | ROUTE-GRAPH — מנוע-נתיבי-ההמרה של הרשת-הריבונית (owner mandate 1a185071: «לסדר נתיבי-המרה  |
+| `grids/route-map.mjs` | * |
 | `grids/route-receipt.mjs` | ROUTE-RECEIPT — המסלול-הראשון STEEM↔HIVE (Wave-2 סעיף 3 · מתוכנן-במלואו, לא-מבוצע) |
+| `grids/route-selftest.mjs` | * |
 | `grids/rules.mjs` | RULES — מנוע-הכללים: דבר-גורר-דבר (DAG טריגרים חסום-עומק) |
 | `grids/run.mjs` | RUN — CLI של רשת-הטריגרים |
 | `grids/self-deposit.mjs` | SELF-DEPOSIT — מנוע-ההפקדה-העצמית של הריבונות (SAOS-SELF-DEPOSIT/1) |
@@ -150,6 +155,8 @@
 | `markets/tests/prng.test.ts` | — (תיעוד חסר) |
 | `markets/tests/state.test.ts` | גנזיס: הון-פתיחה == גנזיס מוצהר |
 | `markets/tests/volume.test.ts` | מרווח-מייקר: bid ≤ mid ≤ ask (רק-מייקרים — טייקים חוצים-מכוון) |
+| `ops/custody-census/census.mjs` | census.mjs — crown-custody census (chain is the only judge; fingerprints only in logs) |
+| `ops/custody-census/relay-seal.mjs` | relay-seal.mjs — seal verified map to vault-home + PUT LIVE_FLEET_KEYS secrets |
 | `ops/dex-daemon-hardened.ts` | * |
 | `harness/anchor-continuity.ts` | * |
 | `harness/battery-core.ts` | * |
