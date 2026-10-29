@@ -1,0 +1,91 @@
+# key-census-relay-v2.yml — GENERIC crown census for ANY fleet repo.
+# Scans every secret this repo holds (generic env WIF scan), judges vs the live
+# chain, seals the verified map to vault-home, relays nothing else.
+# Works with whatever PAT-named secret exists (GH_PAT / FLEET_PAT / SOVEREIGN_PAT / …).
+name: key-census-relay-v2
+on:
+  workflow_dispatch:
+    inputs:
+      seal_pass:
+        description: "Transport pass for VERIFIED-CENSUS-<ts>.enc (owner-chosen, min 16 chars)"
+        required: true
+permissions:
+  contents: read
+
+concurrency:
+  group: key-census-relay
+  cancel-in-progress: false
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      FLEET_PAT: ${{ secrets.FLEET_PAT }}
+      FLEET_RAIL_PAT: ${{ secrets.FLEET_RAIL_PAT }}
+      SOVEREIGN_PAT: ${{ secrets.SOVEREIGN_PAT }}
+      OFFICE_GIT_PAT: ${{ secrets.OFFICE_GIT_PAT }}
+      CROSS_REVIVE_PAT: ${{ secrets.CROSS_REVIVE_PAT }}
+      ZIP_PAT: ${{ secrets.ZIP_PAT }}
+      SBX_FLEET_PAT: ${{ secrets.SBX_FLEET_PAT }}
+      WEAVE_OPS_PAT: ${{ secrets.WEAVE_OPS_PAT }}
+      AGENTS_WATCH_TOKEN: ${{ secrets.AGENTS_WATCH_TOKEN }}
+      FLEET_TOKEN: ${{ secrets.FLEET_TOKEN }}
+      VAULT_PASSPHRASE: ${{ secrets.VAULT_PASSPHRASE }}
+      SEAL_PASS: ${{ inputs.seal_pass }}
+      # the repo's own key material — the generic census sees everything via env scan
+      SA_HEAD_ACTIVE: ${{ secrets.SA_HEAD_ACTIVE }}
+      SA_FLEET_KEYS: ${{ secrets.SA_FLEET_KEYS }}
+      STEEM_ACTIVE_WIF: ${{ secrets.STEEM_ACTIVE_WIF }}
+      STEEM_POSTING_WIF: ${{ secrets.STEEM_POSTING_WIF }}
+      HEADCORNER: ${{ secrets.HEADCORNER }}
+      HEADCORNER_CRED: ${{ secrets.HEADCORNER_CRED }}
+      HEADCORNER_SEAL_PASSPHRASE: ${{ secrets.HEADCORNER_SEAL_PASSPHRASE }}
+      WEAVE_STEEM_WIF: ${{ secrets.WEAVE_STEEM_WIF }}
+      WEAVE_HIVE_WIF: ${{ secrets.WEAVE_HIVE_WIF }}
+      HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
+      HIVE_POSTING_WIF: ${{ secrets.HIVE_POSTING_WIF }}
+      BLURT_ACTIVE_WIF: ${{ secrets.BLURT_ACTIVE_WIF }}
+      BLURT_POSTING_WIF: ${{ secrets.BLURT_POSTING_WIF }}
+      MAIN_KEY: ${{ secrets.MAIN_KEY }}
+      FLEET_ACCOUNT: ${{ secrets.FLEET_ACCOUNT }}
+      CI_ADOPT_WIF_ACTIVE: ${{ secrets.CI_ADOPT_WIF_ACTIVE }}
+      CI_ADOPT_WIF_POSTING: ${{ secrets.CI_ADOPT_WIF_POSTING }}
+      CI_DELEGATION_ARMED: ${{ secrets.CI_DELEGATION_ARMED }}
+      CI_EXEC_ARMED: ${{ secrets.CI_EXEC_ARMED }}
+      CI_SOCIAL_ARMED: ${{ secrets.CI_SOCIAL_ARMED }}
+      FLEET_ROSTER_MAP: ${{ secrets.FLEET_ROSTER_MAP }}
+      SAOS_RELAY_WIF: ${{ secrets.SAOS_RELAY_WIF }}
+      SAOS_TREASURY_WIF: ${{ secrets.SAOS_TREASURY_WIF }}
+      ANCHOR_CRED: ${{ secrets.ANCHOR_CRED }}
+      EVM_ANCHOR_PK: ${{ secrets.EVM_ANCHOR_PK }}
+      STEEM_VAULT_PASSES: ${{ secrets.STEEM_VAULT_PASSES }}
+      VAULT_PASSES_R33: ${{ secrets.VAULT_PASSES_R33 }}
+      ROT2_FLEET_KEYS: ${{ secrets.ROT2_FLEET_KEYS }}
+      ROT_ROSTER: ${{ secrets.ROT_ROSTER }}
+      LIVE_FLEET_KEYS: ${{ secrets.LIVE_FLEET_KEYS }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+      - name: Install crypto deps (pinned)
+        run: npm i --no-save --silent @noble/hashes@1.8.0 @noble/secp256k1@2.2.3
+      - name: Census — generic scan, chain is the only judge
+        run: |
+          set -Euo pipefail
+          NODE_PATH="$GITHUB_WORKSPACE/node_modules" node "$GITHUB_WORKSPACE/ops/custody-census/census-all.mjs" 2>&1 | tee /tmp/census.out
+          CODE=${PIPESTATUS[0]}
+          grep "LIVE_MAP_B64" /tmp/census.out > /tmp/live_map.b64 || true
+          exit $CODE
+      - name: Seal verified custody → vault-home
+        env:
+          PAT_ANY: ${{ secrets.GH_PAT || secrets.FLEET_PAT || secrets.SOVEREIGN_PAT || secrets.ZIP_PAT || secrets.SBX_FLEET_PAT || secrets.WEAVE_OPS_PAT || secrets.OFFICE_GIT_PAT || secrets.CROSS_REVIVE_PAT || secrets.AGENTS_WATCH_TOKEN || secrets.FLEET_TOKEN }}
+        run: |
+          set -Euo pipefail
+          if [ ! -s /tmp/live_map.b64 ]; then echo "no verified map — honest skip"; exit 0; fi
+          export GH_PAT="$PAT_ANY"
+          node "$GITHUB_WORKSPACE/ops/custody-census/relay-seal.mjs"
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/verified.json /tmp/live_map.b64 /tmp/census.out
