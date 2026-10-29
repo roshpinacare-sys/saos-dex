@@ -15,3 +15,9 @@ c5e70f293de7da5cf0dc17a5da052b7787fbfcbf:agent/vault/recovery-meta-2026-09-12.js
 # evidence survives its silencing.
 dc70edc63772f97ec965b72a866f73cc9835a759:agent/vault/recovery-meta-2026-09-12.json:generic-api-key:3
 agent/vault/recovery-meta-2026-09-12.json:generic-api-key:3
+
+# triaged 2026-10-29 [route-graph wave, trace 1a185071c4aab695]: HTLC test fixture —
+# deterministic hash preimage (SECRET) for the atomic-swap unit tests. Public by design:
+# a test preimage, no key material, never used outside htlc.test.ts. 2 findings on one
+# line (gitleaks counts the string twice). fingerprint file:rule:line for --no-git scans.
+src/lib/dex/htlc.test.ts:generic-api-key:25
