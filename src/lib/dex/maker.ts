@@ -68,7 +68,11 @@ export function makerFeed(events: TradeEvent[] | undefined, h: number): void {
   for (const ev of events) {
     if (ev.kind !== "fill" || !ev.maker) continue; // רק-מילויים-עם-ייחוס-מייקר
     const who = String(ev.maker);
-    const volMu = Math.max(0, Math.floor((ev.price ?? 0) * (ev.amountMu ?? 0)));
+    // FIX(SCALE-R1 · trace 1a185071c4aab695): נומינל-ציטוט בחוק-ה-kernel — notional =
+    // floor(price × amountMu / 1000) (kernel.ts חוק-ה-notional). קודם-לכן חסר-ה-/1000
+    // ניפח-את-volMu ×1000 והיה-משלם-ריבייט-×1000 מעבר-לקרן-האוצר. נמדד: ΣpaidMu=0
+    // עד-היום — אפס-חוב-היסטורי, התיקון-נקי.
+    const volMu = Math.max(0, Math.floor(((ev.price ?? 0) * (ev.amountMu ?? 0)) / 1000));
     if (volMu <= 0) continue;
     const rec = r.recs[who] ?? { fills: 0, volMu: 0, lastAt: 0, lastH: 0 };
     rec.fills += 1;
