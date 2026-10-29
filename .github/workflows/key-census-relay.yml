@@ -1,0 +1,75 @@
+# key-census-relay.yml (Domain) — THE CROWN-CUSTODY CENSUS & RELAY
+# ══════════════════════════════════════════════════════════════════════════════
+# Owner law: "find ALL the keys — one clean custody, easy for the sovereignty;
+# the chain is the only judge; no more vault chaos."
+#   1. Census every WIF-shaped value in the key-secrets of this repo.
+#   2. Judge each against the LIVE steem+hive authorities.
+#   3. Seal the VERIFIED map → vault-home custody-intake/VERIFIED-CENSUS-<ts>.enc
+#   4. Relay it as Actions secret LIVE_FLEET_KEYS → saos-runtime/Domain/saos-dex/steem
+#   5. Log the verdict matrix (sha256 fingerprints ONLY — never WIFs).
+name: key-census-relay
+on:
+  workflow_dispatch:
+    inputs:
+      seal_pass:
+        description: "Passphrase to seal the verified-custody blob into vault-home (owner-chosen, min 16 chars)"
+        required: true
+permissions:
+  contents: read
+
+concurrency:
+  group: key-census-relay
+  cancel-in-progress: false
+
+jobs:
+  census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      SA_HEAD_ACTIVE: ${{ secrets.SA_HEAD_ACTIVE }}
+      SA_FLEET_KEYS: ${{ secrets.SA_FLEET_KEYS }}
+      STEEM_ACTIVE_WIF: ${{ secrets.STEEM_ACTIVE_WIF }}
+      STEEM_POSTING_WIF: ${{ secrets.STEEM_POSTING_WIF }}
+      HEADCORNER: ${{ secrets.HEADCORNER }}
+      HEADCORNER_CRED: ${{ secrets.HEADCORNER_CRED }}
+      WEAVE_STEEM_WIF: ${{ secrets.WEAVE_STEEM_WIF }}
+      WEAVE_HIVE_WIF: ${{ secrets.WEAVE_HIVE_WIF }}
+      HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
+      HIVE_POSTING_WIF: ${{ secrets.HIVE_POSTING_WIF }}
+      BLURT_ACTIVE_WIF: ${{ secrets.BLURT_ACTIVE_WIF }}
+      BLURT_POSTING_WIF: ${{ secrets.BLURT_POSTING_WIF }}
+      MAIN_KEY: ${{ secrets.MAIN_KEY }}
+      FLEET_ACCOUNT: ${{ secrets.FLEET_ACCOUNT }}
+      CI_ADOPT_WIF_ACTIVE: ${{ secrets.CI_ADOPT_WIF_ACTIVE }}
+      CI_ADOPT_WIF_POSTING: ${{ secrets.CI_ADOPT_WIF_POSTING }}
+      CI_DELEGATION_ARMED: ${{ secrets.CI_DELEGATION_ARMED }}
+      FLEET_ROSTER_MAP: ${{ secrets.FLEET_ROSTER_MAP }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22 }
+
+      - name: Install crypto deps (pinned)
+        run: npm i --no-save --silent @noble/hashes@1.8.0 @noble/secp256k1@2.2.3
+
+      - name: Census — judge every secret key against the live chain
+        run: |
+          set -Eeuo pipefail
+          NODE_PATH="$GITHUB_WORKSPACE/node_modules" node ops/custody-census/census.mjs > /tmp/census.out 2>&1 || CODE=$?
+          CODE=${CODE:-0}
+          grep -v "LIVE_MAP_B64" /tmp/census.out || true
+          grep "LIVE_MAP_B64" /tmp/census.out > /tmp/live_map.b64 || true
+          exit $CODE
+
+      - name: Seal verified custody → vault-home + relay as LIVE_FLEET_KEYS
+        env:
+          SEAL_PASS: ${{ inputs.seal_pass }}
+        run: |
+          set -Eeuo pipefail
+          if [ ! -s /tmp/live_map.b64 ]; then echo "no verified map — honest skip"; exit 0; fi
+          node ops/custody-census/relay-seal.mjs
+
+      - name: Cleanup
+        if: always()
+        run: rm -f /tmp/verified.json /tmp/live_map.b64 /tmp/census.out
