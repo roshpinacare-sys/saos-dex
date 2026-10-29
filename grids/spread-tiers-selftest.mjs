@@ -55,7 +55,14 @@ t("5 post-law third-party fills → T2 30/60", r2.tier === "T2" && r2.askStepBps
 const twelve = Array.from({ length: 12 }, (_, i) => ({ chain: "steem", edgeBps: 60, at: `2026-10-22T${String(i + 2).padStart(2, "0")}:00:00` }));
 const r3 = deriveSpreadTiers(twelve, { askStepBps: 60, bidStepBps: 100 });
 t("12 post-law third-party fills → T3 18/45 (double-digit ask)", r3.tier === "T3" && r3.askStepBps === 18 && r3.bidStepBps === 45);
-t("T3 is top — no next tier", r3.nextTier === null);
+t("T3 next is T4 needing 8 more", r3.nextTier?.name === "T4" && r3.nextTier?.needs === 8);
+const twenty = Array.from({ length: 20 }, (_, i) => ({ chain: "steem", edgeBps: 60, at: `2026-10-22T${String(i + 2).padStart(2, "0")}:00:00` }));
+const r4 = deriveSpreadTiers(twenty, { askStepBps: 60, bidStepBps: 100 });
+t("20 post-law fills → T4 12/35", r4.tier === "T4" && r4.askStepBps === 12 && r4.bidStepBps === 35);
+const thirtyTwo = Array.from({ length: 32 }, (_, i) => ({ chain: "steem", edgeBps: 60, at: `2026-10-22T${String(i % 22 + 2).padStart(2, "0")}:00:00` }));
+const r5 = deriveSpreadTiers(thirtyTwo, { askStepBps: 60, bidStepBps: 100 });
+t("32 post-law fills → T5 10/25 (validator floors exactly)", r5.tier === "T5" && r5.askStepBps === 10 && r5.bidStepBps === 25);
+t("T5 is top — no next tier", r5.nextTier === null);
 
 /* 7) חד-כיווניות: הסולם לעולם לא מרחיב-מעל-הבסיס (בסיס-הדוק מהמדרגה נשאר) */
 const tight = deriveSpreadTiers(twelve, { askStepBps: 12, bidStepBps: 30 });
@@ -70,4 +77,4 @@ t("null fills → T0 honestly", deriveSpreadTiers(null, { askStepBps: 60, bidSte
 t("garbage entries skipped", countThirdPartyFills([null, 3, "x", {}], "steem") === 0);
 
 if (failed) { console.error(`spread-tiers-selftest: FAILED (${failed})`); process.exit(1); }
-console.log("spread-tiers-selftest: PASS (14 laws)");
+console.log("spread-tiers-selftest: PASS (17 laws)");
