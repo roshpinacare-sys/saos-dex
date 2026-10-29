@@ -35,6 +35,13 @@ import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+/* עזר-שגיאה — קריאה-בטוחה מ-unknown (catch strict) ללא-any */
+function errMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  try { return JSON.stringify(e) ?? String(e); } catch { return String(e); }
+}
 const ENV_FILE = "/home/z/.secrets/.env.local";
 const SCHEMA = "SAOS-SOLDIER-BEAT/1";
 
@@ -73,7 +80,7 @@ function custodyBanParity(): { ok: boolean; onChainSet: string[]; err?: string }
     const names = m[1].split(",").map(s => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
     const same = names.length === CUSTODY_FORBIDDEN_TRADERS.length && names.every(n => CUSTODY_FORBIDDEN_TRADERS.includes(n));
     return { ok: same, onChainSet: names, err: same ? undefined : `mismatch: army-ladder=${names.join("|")} vs soldier-loop=${CUSTODY_FORBIDDEN_TRADERS.join("|")}` };
-  } catch (e) { return { ok: false, onChainSet: [], err: String(e?.message ?? e).slice(0, 120) }; }
+  } catch (e) { return { ok: false, onChainSet: [], err: errMsg(e).slice(0, 120) }; }
 }
 
 /* ── hash-chained receipts ───────────────────────────────────────────────────────────────────────────── */
@@ -193,7 +200,7 @@ async function curationBeat(account: string, opts: { votesPerBeat: number; weigh
     return appendReceipt(account, { action: "curation", result: "NOTHING-TO-VOTE", detail: "planner found no fresh qualifying posts (age/engagement/topic filters)" });
   }
   if (opts.dry) {
-    return appendReceipt(account, { action: "curation", result: "DRY-PLAN", detail: `planned=${plan.votes.length} (dry — zero broadcast)`, votes: plan.votes.map((v: { author: string; permlink: string; weightSteemUnits: number }) => ({ author: v.author, permlink: v.permlink, weight: v.weightSteemUnits })) });
+    return appendReceipt(account, { action: "curation", result: "DRY-PLAN", detail: `planned=${plan.votes.length} (dry — zero broadcast)`, votes: plan.votes.map((v: { author: string; permlink: string; score: number }) => ({ author: v.author, permlink: v.permlink, weight: v.score })) });
   }
   try {
     const r = await executeVotes(plan, { wif: postingWif });
@@ -202,7 +209,7 @@ async function curationBeat(account: string, opts: { votesPerBeat: number; weigh
       votes: r.txids.map((t: { author: string; permlink: string; txid: string; weight: number; recovered: boolean }) => ({ author: t.author, permlink: t.permlink, txid: t.txid, weight: t.weight, recovered: t.recovered })),
     });
   } catch (e) {
-    return appendReceipt(account, { action: "curation", result: "ERROR", error: String(e?.message ?? e).slice(0, 220) });
+    return appendReceipt(account, { action: "curation", result: "ERROR", error: errMsg(e).slice(0, 220) });
   }
 }
 
@@ -281,7 +288,7 @@ async function gridBeat(account: string, opts: { dry: boolean }): Promise<Record
     const r = await signAndBroadcast(activeWif, [op]);
     return appendReceipt(account, { action: "grid", result: "ORDER-PLACED", txId: r.txid, block: r.block ?? undefined, detail: JSON.stringify(op).slice(0, 160) });
   } catch (e) {
-    return appendReceipt(account, { action: "grid", result: "ERROR", error: String(e?.message ?? e).slice(0, 220) });
+    return appendReceipt(account, { action: "grid", result: "ERROR", error: errMsg(e).slice(0, 220) });
   }
 }
 
@@ -342,7 +349,7 @@ if (argv.includes("--selftest")) {
     // summary only: results carry account/action/result/txId/error — never key material
     console.log(JSON.stringify(r.results.map(x => ({ action: x.action, result: x.result, txId: x.txId, error: x.error }))));
   } catch (e) {
-    console.error(`[soldier-loop] fail-honest: ${String(e?.message ?? e).slice(0, 200)}`);
+    console.error(`[soldier-loop] fail-honest: ${errMsg(e).slice(0, 200)}`);
     process.exit(1);
   }
 }
