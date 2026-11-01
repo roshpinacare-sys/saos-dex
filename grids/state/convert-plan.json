@@ -1,11 +1,11 @@
 {
- "ok": true,
- "verdict": "CONVERT-PLAN",
- "at": "2026-10-31T22:23:58.607Z",
+ "ok": false,
+ "verdict": "CONVERT-HOLD",
+ "at": "2026-11-01T06:27:20.733Z",
  "account": "headcorner",
- "amountSbd": 5.621,
- "liquidSbd": 19.19,
- "pendingSbd": 4.379,
+ "amountSbd": 0,
+ "liquidSbd": 13.569,
+ "pendingSbd": 10,
  "pendingRequests": [
   {
    "requestid": 1793460316,
@@ -13,17 +13,26 @@
    "conversion_date": "2026-11-04T03:25:18",
    "id": 136207,
    "owner": "headcorner"
+  },
+  {
+   "requestid": 1793485438,
+   "amount": "5.621 SBD",
+   "conversion_date": "2026-11-04T10:24:00",
+   "id": 136208,
+   "owner": "headcorner"
   }
  ],
- "capLeft": 5.621,
+ "capLeft": 0,
  "discountBps": 5253,
  "marks": {
-  "steemUsd": 0.04904305,
-  "sbdUsd": 0.47475
+  "steemUsd": 0.050817,
+  "sbdUsd": 0.474743
  },
- "expectedSteem": 114.613,
+ "expectedSteem": null,
  "lockDays": 3.5,
- "gates": [],
+ "gates": [
+  "convertible 0.000 SBD (liquid 13.569 − reserve 0.5 ≤ cap-left 0.000) < 1 — below-threshold/dust"
+ ],
  "policy": {
   "MIN_EDGE_BPS": 1500,
   "MIN_CONVERT_SBD": 1,
@@ -31,24 +40,17 @@
   "MAX_PENDING_SBD": 10
  },
  "maturityEstimate": {
-  "pendingSbd": 4.379,
-  "medianNow": 0.10407368566746814,
-  "estimate": 42.075,
+  "pendingSbd": 10,
+  "medianNow": 0.1040735091646788,
+  "estimate": 96.085,
   "rawMedianNow": 0.049,
   "band": null,
   "semantics": "payout = amount / ADJUSTED median-at-maturity (steem database.cpp process_conversions) — ESTIMATE, floats until conversion_date"
  },
  "evidence": {
-  "at": "2026-10-31T22:23:58.607Z",
+  "at": "2026-11-01T06:27:20.733Z",
   "mode": "execute",
-  "note": null,
-  "txids": [
-   {
-    "requestid": 1793485438,
-    "amount": "5.621 SBD",
-    "txid": "b5ec9ff5925662cdd17f2140a4a72221ba9dd1da",
-    "block": 110927792
-   }
-  ]
+  "note": "honest hold — convertible 0.000 SBD (liquid 13.569 − reserve 0.5 ≤ cap-left 0.000) < 1 — below-threshold/dust",
+  "txids": []
  }
 }
