@@ -32,6 +32,7 @@ import path from "path";
  * האחרונה-שלא-מוקשה בקוד (עד-כה רק שער-workflow). החוק-המעוגן ב-Domain/steem:
  * כל-חותם שואל את-הבלם בטרם-חתימה — fail-closed, קריאה-טרייה בכל-ריצה. */
 import { stasisHalt } from "./grids/brake.mjs";
+import { planJanitor } from "./grids/zombie-janitor.mjs"; // ZOMBIE-JANITOR (2026-11-01): reclaim dead capital — measured crisis: 60 open orders, ~52.4 SBD locked
 import { policyCycleGate, policyGate, effectiveCycleCap } from "./grids/policy.mjs"; // DECISIONS #17 · SAOS-POLICY-ENGINE/1 (agentic-wallet pattern, owner trace 1a137c5876e963e9) · trim-to-cap (owner approve trace 1a1629f96941f20d)
 /* 9-c (2026-10-11) · שער-המפתח: אימות שה-WIF גוזר בדיוק את רשות-ה-active החיה לפני-כל-שידור.
  * המדידה-החיה (twin run 38144052862 · 2026-10-11T13:39Z): WIF-ישן בכספת (רוטציית-בעלים
@@ -338,6 +339,9 @@ async function main(): Promise<void> {
 
   /* ── הפעולות (רק כשחמוש וכשהספר והמדדים חיים) ── */
   let placed = 0, cancelled = 0;
+  /* ZOMBIE-JANITOR outputs — function scope so the public book publishes them after the armed block */
+  let janitorFreedSbd = 0, janitorFreedSteem = 0;
+  const janitorCancelled: Array<{ id: number; why: string; cls: string; txid?: string }> = [];
   const blocker: string[] = [];
   if (!armed) blocker.push("STEEM_ACTIVE_WIF secret missing: one operator action to arm the external grid");
   /* N8: קו-ערך-חי מספיק — גם CHAIN-ONLY (ה-USD-פידים-נפלו, ה-feed-הרפואי-חי) עדיין מצייר
@@ -455,6 +459,47 @@ async function main(): Promise<void> {
         }
       }
     }
+    /* ── ZOMBIE-JANITOR (2026-11-01, measured crisis): the 9-c law only PUBLISHED
+     * ledger-unknown zombies while 60 open orders locked ~52.4 SBD (79% of treasury SBD)
+     * at prices the strategy would never place today (bids @0.1013 vs desired 0.1040) —
+     * the grid starved on its own locked capital. The janitor is the reclaim arm:
+     * DEDUP (triplet bug) → VALLEAK (bid above value line) → OUTTOUCH (>24h beyond the
+     * strategy's desired price). Bounded per beat; freed capital feeds THIS beat's fuel. */
+    const janPlan = planJanitor({
+      openOrders: snap.openOrders.map((o) => ({ id: o.id, sell: o.sell, receive: o.receive, created: o.created })),
+      ledgerKnownIds: ledgerKnownIds,
+      nowMs: Date.now(),
+      valueLine,
+      bestBid: snap.book.bestBid,
+      bestAsk: snap.book.bestAsk,
+      desiredBid: snap.book.bestBid ? Math.min(snap.book.bestBid * (1 - Math.min(LIVE_BID_TOUCH_HUG_BPS, TIER.bidStepBps) / 10_000), valueLine) : null,
+      desiredAsk: Math.max(valueLine * (1 + TIER.askStepBps / 10_000), snap.book.bestAsk ?? 0),
+    });
+    for (const jc of janPlan.cancels) {
+      bcAttempted++;
+      try {
+        const r = await realCancelOrder(jc.id);
+        cancelled++;
+        const rec = ledger.orders.find((x) => x.id === jc.id);
+        if (rec) { rec.status = "cancelled"; rec.lastSeenAt = new Date().toISOString(); }
+        const freedO = snap.openOrders.find((o) => o.id === jc.id);
+        // no double-count: ledger-KNOWN cancels are already inside the ourAsks/ourBids
+        // snapshot sums (Z-81 fuel law); the janitor adds only the unknown echoes it reclaims
+        if (freedO && !ledgerKnownIds.has(jc.id)) {
+          if (freedO.sell.includes("STEEM")) janitorFreedSteem += amtOfStr(freedO.sell);
+          else janitorFreedSbd += amtOfStr(freedO.sell);
+        }
+        janitorCancelled.push({ id: jc.id, why: jc.why, cls: jc.cls, txid: r.txid });
+        console.log(`[grid-beat] JANITOR ${jc.cls} cancel #${jc.id}: ${jc.why} · freed to this beat's fuel · txid ${r.txid.slice(0, 26)}`);
+      } catch (e) {
+        bcFailed++;
+        console.warn(`[grid-beat] janitor cancel #${jc.id} failed: ${String(e).slice(0, 90)}`);
+      }
+    }
+    if (janPlan.cancels.length) {
+      console.log(`[grid-beat] JANITOR sweep: ${janPlan.cancels.length} cancelled this beat (cap ${12}) · freed ${janPlan.freedSellSbd.toFixed(3)} SBD + ${janPlan.freedSellSteem.toFixed(3)} STEEM · ${Math.max(0, janPlan.groups.reduce((s, g) => s + g.count - 1, 0) - janPlan.cancels.filter((c) => c.cls === "DEDUP").length)} dup-groups queued for next beats`);
+    }
+
     if (!ladderIntact) {
     /* Z-81 התאמת-מעקה: פקודה שנרשמה פתוחה אבל כבר לא על-השרשרת (נאכלה/
      * פגה/בוטלה ע"י-רץ-אח) — נחשפת בכנות כ-unknown, לא ממשיכה להיספר פתוחה. */
@@ -483,13 +528,14 @@ async function main(): Promise<void> {
     // מדף-המכירה: מעל קו-הזהות החיצוני — אף-פעם לא מתחת (עיקרון 1)
     // Z-81: הדלק = נזיל-עכשיו + מה שהביטולים-שביצענו-מעלה מחזירים (אסקים נעולים)
     // EDGE-FLOOR (2026-10-21): ומעל בסיס-עלות-המלאי + 100bps — אף-מכירה מתחת-לעלות (הדימום-המדוד: edge -2%)
-    const steemReturned = ourAsks.reduce((s, a) => s + a.steem, 0);
+    const steemReturned = ourAsks.reduce((s, a) => s + a.steem, 0) + janitorFreedSteem;
     const steemAvail = snap.balances.steem + steemReturned - LIVE_MIN_KEEP_STEEM;
     const steemCommit = Math.max(0, Math.floor(steemAvail * LIVE_COMMIT_PCT * commitScale * 1000) / 1000); // commitScale: trim-to-cap (owner approve 1a1629f96941f20d)
     const invBasis = inventoryCostBasis(ledger.fills, "steem");
     const costFloor = invBasis.avgCostSbd != null ? invBasis.avgCostSbd * (1 + MIN_ASK_EDGE_BPS / 10_000) : 0;
     if (steemCommit >= LIVE_MIN_LEVEL_STEEM * LIVE_ASK_LEVELS) {
       const per = Math.floor((steemCommit / LIVE_ASK_LEVELS) * 1000) / 1000;
+      const beatAskPrices = new Set<string>(); // TRIPLET-CURE: a level whose rounded price equals an already-placed level is the same order — never fire it twice (measured: 3 identical bids 3s apart = 3× capital lock)
       /* Z-80 חוק-הספר: רמה-1 נהדקת אל המגע-החי אם-הפאריטי מתחתיו; הרמות נפרשות
        * כלפי-מעלה מהבסיס-המהודק — אף-אסק לא נופל מתחת ל-bestAsk (אין-taker-דימום).
        * EDGE-FLOOR: הבסיס מרים גם את רצפת-העלות — אסק שלם לא נפרש מתחתיה. */
@@ -500,6 +546,9 @@ async function main(): Promise<void> {
         const sellAmt = per;
         const recv = Math.floor(sellAmt * px * 1000) / 1000;
         if (recv < LIVE_MIN_LEVEL_SBD) continue;
+        const askKey = `${dp3(sellAmt)}|${dp3(recv)}`;
+        if (beatAskPrices.has(askKey)) continue; // collapsed-spread guard: same order twice = capital lock
+        beatAskPrices.add(askKey);
         const perOpNotional = sellAmt * px; // ערך-SBD של ההצבה הבודדת
         const opGate = perOpAllow("grid-beat:steem", ACCOUNT, "steem", "ask", perOpNotional, px, sellAmt);
         if (!opGate.allow) {
@@ -524,7 +573,7 @@ async function main(): Promise<void> {
 
     // מדף-הקנייה: מתחת לביד הטוב — כולן מעל-ערך מדוד מול הציון (עיקרון 2)
     // Z-81: גם-כאן — ה-SBD הנעול בבידים-שבוטלו חוזר לפני-ההצבה
-    const sbdReturned = ourBids.reduce((s, b) => s + b.sbd, 0);
+    const sbdReturned = ourBids.reduce((s, b) => s + b.sbd, 0) + janitorFreedSbd;
     const sbdCommit = Math.max(0, Math.floor((snap.balances.sbd + sbdReturned) * LIVE_COMMIT_PCT * commitScale * 1000) / 1000); // commitScale: trim-to-cap (owner approve 1a1629f96941f20d)
     if (sbdCommit >= LIVE_MIN_LEVEL_SBD * LIVE_BID_LEVELS && snap.book.bestBid) {
       const per = Math.floor((sbdCommit / LIVE_BID_LEVELS) * 1000) / 1000;
@@ -534,11 +583,15 @@ async function main(): Promise<void> {
        * תקרת-הדוקטרינה-נשמרת: אף-ביד מעל קו-הערך (valueLine) לא-יוצא-לעולם. */
       const hugBps = Math.min(LIVE_BID_TOUCH_HUG_BPS, TIER.bidStepBps);
       const bidBase = Math.min(snap.book.bestBid * (1 - hugBps / 10_000), valueLine);
+      const beatBidPrices = new Set<string>(); // TRIPLET-CURE (same law as the ask side)
       for (let k = 1; k <= LIVE_BID_LEVELS; k++) {
         // Z-80: ביד לא עולה על המגע — תמיד (כפול-ביטחון; bidBase כבר מתחתיו)
         const px = Math.min(bidBase * (1 - (TIER.bidStepBps * (k - 1)) / 10_000), snap.book.bestBid); // N8-b: התחבקות-מגע + N1 מדרגה-חיה
         const recv = Math.floor(per / px * 1000) / 1000; // STEEM
         if (recv < LIVE_MIN_LEVEL_STEEM) continue;
+        const bidKey = `${dp3(per)}|${dp3(recv)}`;
+        if (beatBidPrices.has(bidKey)) continue; // collapsed-spread guard: same order twice = capital lock
+        beatBidPrices.add(bidKey);
         const perOpNotional = per; // ערך-SBD של ההצבה הבודדת (ה-BID מוכר SBD)
         const opGate = perOpAllow("grid-beat:steem", ACCOUNT, "steem", "bid", perOpNotional, px, per);
         if (!opGate.allow) {
@@ -836,6 +889,14 @@ async function main(): Promise<void> {
     blocker: blocker.length ? blocker : null,
     keyGate: keyGate ? { ok: keyGate.ok, authorityOk: keyGate.authorityOk } : null,
     zombieOrders: zombieOrders.length ? { count: zombieOrders.length, ids: zombieOrders.slice(0, 12), note: "open on-chain but not known-open in the ledger — ledger/chain drift surfaced honestly (lost concurrent push, or another actor trading this account)" } : null,
+    janitor: janitorCancelled.length ? {
+      cancelledThisBeat: janitorCancelled.length,
+      freedSbd: Math.round(janitorFreedSbd * 1000) / 1000,
+      freedSteem: Math.round(janitorFreedSteem * 1000) / 1000,
+      classes: janitorCancelled.reduce((m, cc) => { m[cc.cls] = (m[cc.cls] ?? 0) + 1; return m; }, {} as Record<string, number>),
+      ids: janitorCancelled.slice(0, 12).map((cc) => cc.id),
+      note: "ZOMBIE-JANITOR (2026-11-01): dead capital reclaimed — DEDUP triplet locks, VALLEAK bids above the value line, OUTTOUCH quotes the strategy would never place today. Freed amounts feed the same beat's fuel (Z-81).",
+    } : { cancelledThisBeat: 0, note: "no dead capital this beat — the book is clean" },
     hive: hiveLeg,
     policy: {
       principle: "never sell STEEM below its external USD value; every buy below parity is measured surplus",
