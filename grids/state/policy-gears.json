@@ -11,7 +11,8 @@
   "scope honesty: the gears re-price the policy.json lane caps (per-op / cycle notional) — the army estate capital cap (estateCapSteem) is a different axis (capital exposure) and stays at its canary law until its own measured ladder is earned",
   "ownerGate is untouched: any per-op notional above the gate still requires the arm file — the top gear tops out AT the gate, never past it",
   "R330 KELLY-CAP: gears earn speed from RELIABILITY (green streaks); the kelly filter prices speed from MEASURED EXPECTANCY (realized SBD deltas per trader, read from the git receipts) — effective cap = min(gear row, kelly); kelly can only TIGHTEN the table row, never loosen, never exceed it",
-  "kelly fail-safes: < minBeats informative fills = hard probation (half cap, owner law); unreadable metrics = floor 25; broken/disabled kelly block = inert (table caps stand, road never stalls); idle beats (no fill) carry no edge information and stay out of the sample; maker-only law means a negative-edge shadow costs exposure, not burned money — the maker stays alive to measure recovery"
+  "kelly fail-safes: < minBeats informative fills = hard probation (half cap, owner law); unreadable metrics = floor 25; broken/disabled kelly block = inert (table caps stand, road never stalls); idle beats (no fill) carry no edge information and stay out of the sample; maker-only law means a negative-edge shadow costs exposure, not burned money — the maker stays alive to measure recovery",
+  "ladder extension 2026-11-01 (owner directive this session: the architecture must grow itself — receipt-driven expansion per DECISIONS #14/#15): gears 4–5 added on MEASURED receipts (greenStreak 15 earned on gear 3, 121 lifetime real fills, value-guard conservation-HOLDS); every gear ≥4 keeps per-op pinned AT the ownerGate (100 SBD — the top gear tops out at the gate, never past it) and grows ONLY the cycle cap (velocity axis per DECISIONS #12); kelly still tightens every row"
  ],
  "gears": [
   {
@@ -47,6 +48,30 @@
     "grid": {
      "maxNotionalPerOpSbd": 100,
      "maxCycleNotionalSbd": 480
+    }
+   }
+  },
+  {
+   "gear": 4,
+   "require": {
+    "greenStreak": 18
+   },
+   "laneOverrides": {
+    "grid": {
+     "maxNotionalPerOpSbd": 100,
+     "maxCycleNotionalSbd": 960
+    }
+   }
+  },
+  {
+   "gear": 5,
+   "require": {
+    "greenStreak": 27
+   },
+   "laneOverrides": {
+    "grid": {
+     "maxNotionalPerOpSbd": 100,
+     "maxCycleNotionalSbd": 1440
     }
    }
   }
