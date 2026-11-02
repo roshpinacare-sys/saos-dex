@@ -247,11 +247,16 @@ export function ledgerAudit(st: DexState, totals: GenesisTotals): LedgerAudit {
   // רשויות: undefined → 0 (תמונות-ישנות-בלעדיו). רשויות-הגרעין: רק-mint_fuel
   // בבצורת-מדודה נוגע-בדלי (profit→meter→aux סדר-קנוני, כל-µ-נגרע-מדידה-אמת).
   const revAuxMintedPortion = Math.max(0, st.revAuxMintedMu ?? 0);
-  const declared = primerPortion + reprimePortion + bookGasPortion + revAuxMintedPortion;
-  if (declared > (st.feeMinted ?? 0)) errors.push(`minted-declared: primer${primerPortion}+reprime${reprimePortion}+bookgas${bookGasPortion}+revaux${revAuxMintedPortion} > minted ${st.feeMinted ?? 0}`);
+  // A43-FAMINE-FIX 2026-11-02 · דלי-מוצהר חמישי — treasuryGasMintedMu: µ-גז שהוטבעו
+  // לאוצר בזמן-אופס במדידה ריקה (chargeGas, kernel) כדי ששומר-הסף (SETTLE-17-c)
+  // לא ירעב. לא היו ולא נבראו מעמלות-בריכות/ספר → מוחסר מזהות-העמלות בדיוק
+  // כמו פריימר/ריפריים/בוקגז/revaux. זהות-הקרדיטים מדויקת ממילא (credits↑===feeMinted↑).
+  const treasuryGasPortion = Math.max(0, st.treasuryGasMintedMu ?? 0);
+  const declared = primerPortion + reprimePortion + bookGasPortion + revAuxMintedPortion + treasuryGasPortion;
+  if (declared > (st.feeMinted ?? 0)) errors.push(`minted-declared: primer${primerPortion}+reprime${reprimePortion}+bookgas${bookGasPortion}+revaux${revAuxMintedPortion}+tgas${treasuryGasPortion} > minted ${st.feeMinted ?? 0}`);
   const feesRhs = st.feeMeter + st.treasuryProfit + ((st.feeMinted ?? 0) - declared) + feesSpentMu;
   const feesOk = poolsTreasury + bookFeesMu === feesRhs;
-  if (!feesOk) errors.push(`fees: pools${poolsTreasury}+book${bookFeesMu} ≠ feeMeter+profit+minted−primer${primerPortion}−reprime${reprimePortion}−bookgas${bookGasPortion}−revaux${revAuxMintedPortion}+spent ${feesRhs}`);
+  if (!feesOk) errors.push(`fees: pools${poolsTreasury}+book${bookFeesMu} ≠ feeMeter+profit+minted−primer${primerPortion}−reprime${reprimePortion}−bookgas${bookGasPortion}−revaux${revAuxMintedPortion}−tgas${treasuryGasPortion}+spent ${feesRhs}`);
 
   return {
     ok: errors.length === 0 && negatives.length === 0,

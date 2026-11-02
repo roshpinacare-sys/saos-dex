@@ -16,6 +16,7 @@ import { LADDER_FUEL_FLOOR, MINT_FUEL_CAP, REFUEL_CAP, FUEL_ASK_MIN, FUNDER_ORDE
 import { sortBook } from "./book";
 import { poolMid, poolMidFor, getPool, quoteOut } from "./amm";
 import { railTick, RAIL_OWNED_POOLS, RAIL_DUST_MU } from "./rail";
+import { anchorBookPxMu } from "./usds-refloat"; // A43-FAMINE-FIX · עוגן-המיחזור
 
 export const MARKETS: { base: Asset; quote: Asset }[] = [
   { base: "SAOS", quote: "USDS" },
@@ -1036,10 +1037,30 @@ export function arenaTick(
     // שמישהו-אחר מספק-את-הצד — השומר מבטל-את-ציטוטו. fail-closed: אין-מלאי
     // ואין-מה לעטוף → אין-ציטוט (עומק-מזויף = אסור). אפס-מקור-נסתר, Σשומר.
     if (params.enabled) {
+      // [A43-FAMINE-FIX 2026-11-02 · recycle lane · measured] פקודות-אוצר ישנות מחוץ-לשוק-הנוכחי
+      // (2026-10-20: ENERGY/USDS buy @437x · WSBD/USDS sell @15,147x) נועלות את כל-הצף
+      // (999,948µ USDS + 99,230µ WSBD) — ה-refloat (G77-e) קבע: פקודת-אוצר ±5,000bps
+      // מהעוגן אינה ציטוט-כשר; מיחזור. הרץ פעם-אחת-לטיק (שוק-המוצר הראשון בלבד) ורק
+      // על שווקים אחרים — השוק-הנוכחי מנוהל על-ידי שומר-הסף שמטה (אפס-כפילות-ביטולים).
+      if (m === MARKETS[0]) {
+        for (const o of st.orders) {
+          if (!o.live || o.owner !== "treasury") continue;
+          if (o.base === m.base && o.quote === m.quote) continue;
+          const anchor = anchorBookPxMu(st, o.base, o.quote);
+          if (!(anchor > 0)) continue;
+          const devBps = Math.abs(((o.price - anchor) / anchor) * 10_000);
+          if (devBps > 5_000) {
+            submit(rt, st, "treasury", { type: "cancel", orderId: o.id }, pushOp);
+          }
+        }
+      }
       const minGapK = Math.max(1, Math.floor((fair * 5) / 10_000)); // ≥5bps סביב-הפייר
       const keeperOrders = st.orders.filter((o) => o.live && o.owner === "treasury" && o.base === m.base && o.quote === m.quote);
-      const keeperAsk = keeperOrders.find((o) => o.side === "sell");
-      const keeperBid = keeperOrders.find((o) => o.side === "buy");
+      // [A43-FAMINE-FIX · zombie-guard] פקודה שנאכלה עד-תום נשארת live=true — שומר
+      // שרואה אותה כ"טובה" לא מציב חדשה והספר מתרוקן (נמדד: probe t44 tSellOrders=1
+      // · bestAsk=0). רק נותר-אמת > 0 נחשב ציטוט-חי.
+      const keeperAsk = keeperOrders.find((o) => o.side === "sell" && o.amount - o.filled > 0);
+      const keeperBid = keeperOrders.find((o) => o.side === "buy" && o.amount - o.filled > 0);
       const bookAsks = sortBook(st, m.base, m.quote, "sell");
       const bookBids = sortBook(st, m.base, m.quote, "buy");
       const stillGoodK = (o: { price: number }, px: number): boolean =>
@@ -1052,6 +1073,18 @@ export function arenaTick(
           const natSteem = avail(st, "treasury", "STEEM");
           if (m.base === "WSTEEM" && natSteem > 0) {
             pushOp({ type: "wrap_mint", issuer: "treasury", nonce: `keeper-rearm-h${st.height}`, wrapAsset: "WSTEEM", amount: Math.min(natSteem, 20_000) });
+          } else if (m.base === "WSTEEM") {
+            // [A43-FAMINE-FIX 2026-11-02 · measured] re-arm בן-העטיפה מת כשאין STEEM
+            // טבעי (snapshot @h2373313: treasury STEEM=0) — האוצר נשאר בלי מלאי אסקים
+            // לנצח וה-A43 נשבר (truth-gate 41448140905). מקור-המלאי הכן: הבריכה שלו
+            // עצמה — pool_swap USDS→WSTEEM (אותו משמעת: ≤20Kµ/פרוסה, 16-טיק, מלאי
+            // חופשי אמת בלבד). אפס-עומק-מזויף: ה-WSTEEM שמתקבל הוא גיבוי אמת לציטוט.
+            const pk = poolKey("WSTEEM", "USDS");
+            const pool = st.pools[pk];
+            const freeUsds = avail(st, "treasury", "USDS");
+            if (pool && (pool.rb ?? 0) > 0 && freeUsds >= 20_000) {
+              pushOp({ type: "pool_swap", issuer: "treasury", nonce: `keeper-rearm-swap-h${st.height}`, pair: pk, assetIn: "USDS", amount: Math.min(freeUsds, 20_000) });
+            }
           }
         }
         // מחזור-מלאי — נמדד-חי ונפסל: מילוי-שוק-קנייה חוצה-אסקים (הצד-שריק —

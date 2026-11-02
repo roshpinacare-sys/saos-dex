@@ -626,6 +626,7 @@ export interface DexState {
   launchSeq?: number;                 // מונה-השקות
   revAux?: { protorevMu: number; launchpadMu: number; runs?: number; cycles?: number; rejections?: number; lastH?: number }; // פנקס-הכנסה-נלווית (מחוץ-לאינווריאנטה-d — הרווח אינו עמלת-סוואפ)
   revAuxMintedMu?: number; // G105 · דלי-מוצהר: Σ µ-דלק שהוטבעו-מ-revAux בבצורת (מחוץ-לביקורת-העמלות-ממילא — זהות-מוצהרת כמו-פריימר/ריפריימ; settle (d) מחסיר-אותו)
+  treasuryGasMintedMu?: number; // A43-FAMINE-FIX 2026-11-02 · דלי-מוצהר חמישי: Σ µ-גז שהוטבעו לאוצר (keeper-of-last-resort) בזמן-אופס במדידה ריקה — credits↑===feeMinted↑ (זהות-קרדיטים מדויקת) ו-settle (d) מחסיר-אותו מזהות-העמלות (כמו-פריימר/ריפריים/בוקגז/revaux)
   cow?: CowOrder[];                   // הזמנות-אצווה-פתוחות (נסגרות-בסוף-הבלוק)
   cowSeq?: number;                    // מונה-הזמנות-אצווה
   cowStats?: { matched: number; batches: number; surplusMu: number; fallbackPool: number; fallbackBook: number }; // מדידת-CoW
@@ -788,6 +789,23 @@ function releaseLockClean(st: DexState, who: string, a: string, mu: number, pre:
   if (!pre.hadWho && Object.keys(w).length === 0) delete st.locked[who];
 }
 export function chargeGas(st: DexState, who: string, gas: number): boolean {
+  // [A43-FAMINE-FIX 2026-11-02 · measured] treasury credits hit 0 (snapshot
+  // @h2373313: credits.treasury=0) → every treasury op rejected
+  // (insufficient-credits) → SETTLE-17-c keeper-of-last-resort dead →
+  // USDS/WSTEEM bestAsk=0 → A43 red (truth-gate run 41448140905, 5/6).
+  // The fee meter is the ONLY sanctioned mint (Σcredits+gasUsed−feeMinted===
+  // genesis stays EXACT: credits↑ === feeMinted↑, same law as mint_fuel).
+  // The treasury is the book-keeper of last resort — it must never starve:
+  // gas shortfalls are minted from the fee meter at op time, honestly counted.
+  if (who === "treasury") {
+    const have = st.credits["treasury"] ?? 0;
+    if (have < gas) {
+      const shortfall = gas - have;
+      st.credits["treasury"] = have + shortfall;
+      st.feeMinted = (st.feeMinted ?? 0) + shortfall;
+      st.treasuryGasMintedMu = (st.treasuryGasMintedMu ?? 0) + shortfall; // דלי-מוצהר — settle (d) מחסיר
+    }
+  }
   if ((st.credits[who] ?? 0) < gas) return false;
   st.credits[who] = (st.credits[who] ?? 0) - gas;
   st.gasUsed += gas;
