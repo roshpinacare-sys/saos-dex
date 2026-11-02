@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-01T06:13:04.931Z · 190 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-02T06:54:25.557Z · 192 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -141,6 +141,8 @@
 | `grids/validate-params.mjs` | VALIDATE-PARAMS — שומר-סף-פרמטרי-הגריד (fail-closed; 9-c · 2026-10-11) |
 | `grids/venues/blurt-quote.mjs` | BLURT-QUOTE — רגל-תכנון-בלרט חסרת-מפתחות (Z-87a · BRIDGE · plan-only) |
 | `grids/volume-verify.mjs` | VOLUME-VERIFY — VERIFIED-VS-CHAIN: אמת-מול-שרשרת על-כל-קבלה וכל-מילוי (R323) |
+| `grids/zombie-janitor-selftest.mjs` | ZOMBIE-JANITOR SELFTEST — fixtures are the LIVE measured chain state of 2026-11-01: |
+| `grids/zombie-janitor.mjs` | ZOMBIE-JANITOR (2026-11-01 · measured crisis: 60 open orders on the custody |
 | `markets/run/cycle.ts` | * |
 | `markets/src/bridge.ts` | * |
 | `markets/src/engine.ts` | * |
