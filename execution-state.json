@@ -1,20 +1,20 @@
 {
   "schema": "SAOS-EXECUTION-LEDGER/1",
-  "at": "2026-11-04T22:46:53.470Z",
+  "at": "2026-11-04T23:26:35.526Z",
   "generator": "local-engine/exec-ledger.ts (trigger:schedule) · ליבה-מקומית-חיה-לאחר-השבתת fleet-runner (מחזור-37 · 2026-11-02T13:12Z)",
   "sourceWorklog": "giant worklog task-55 (directive 42, trace 1a178c71bcb7ddad)",
   "law": "אין-ראיה = לא-קרה · כל-מספר נמדד-מהקרקע בזמן-החידוש · מורשת-מאומתת-לעולם-לא-נמחקת",
   "freshness": {
     "staleAfterHours": 48,
-    "verifiedAt": "2026-11-04T22:46:53.470Z",
+    "verifiedAt": "2026-11-04T23:26:35.526Z",
     "renewedBy": "local-engine exec-ledger-renew (schedule) · lineage-preserving",
     "howToVerify": "compare .at against commit SHAs on saos-dex/Domain main (pushed in pairs); history rows append-only"
   },
   "measuredSnapshot": {
-    "engine": "decisions=15 directivesOpen=14 runs24h=241 workOpen=36",
-    "chain": "height=111042915 headcorner={\"steem\":58.657,\"sbd\":0.136,\"vests\":6784242.513463} lastOp={\"type\":\"custom_json_operation\",\"at\":\"2026-11-04T22:33:51.000Z\"}",
-    "treasuryFloor": "{\"floor\":3000,\"measured\":58.657,\"verdict\":\"BELOW-FLOOR\"}",
-    "github": "repos=41 pushed24h=27 domainFails30=3 mirror=1h status=4h",
+    "engine": "decisions=13 directivesOpen=13 runs24h=9 workOpen=15",
+    "chain": "height=111043706 headcorner={\"steem\":30.706,\"sbd\":0.136,\"vests\":6808582.196863} lastOp={\"type\":\"limit_order_create_operation\",\"at\":\"2026-11-04T23:17:09.000Z\"}",
+    "treasuryFloor": "{\"floor\":3000,\"measured\":30.706,\"verdict\":\"BELOW-FLOOR\"}",
+    "github": "repos=41 pushed24h=27 domainFails30=2 mirror=1h status=5h",
     "services": "fleet-runner:3031-DOWN (legacy) · ledger:3032-DOWN (legacy) · market:3033-DOWN (legacy) · local-engine:3000-UP (scheduler+apply+exec-ledger)",
     "gridVerdict": "MEASURED-BY-CHAIN (see cycle blocks) · legacy runner verdict ARMED-LIVE retained as history",
     "valueGuard": "conservation-checked-per-cycle (treasury floor + fills measured)",
@@ -497,8 +497,8 @@
       "Pulse FLEET_TOKEN 401 → tokenless fallback (orchestrator, in flight)"
     ]
   },
-  "cycle": 58,
-  "generatedAt": "2026-11-04T22:46:53.470Z",
+  "cycle": 59,
+  "generatedAt": "2026-11-04T23:26:35.526Z",
   "cycle33": {
     "at": "2026-10-26T15:40:52Z",
     "worker": "G77-b (execution-ledger lane · swarm G77)",
@@ -2214,6 +2214,88 @@
         "directivesOpen": 14,
         "scheduleRuns24h": 241,
         "workItemsOpen": 36
+      }
+    },
+    "open": [
+      "כלכלת-הצי ledger-cycle-32.json (fleet-economy main+branch) — 404 מדוד · דורש-דור-חדש-של-מחזור-כלכלה",
+      "מקורות-mirror.json (Zip/cloud-heart) ו-status.json — זקנים · דורשים-חיזוק-קצב",
+      "המשך-טיפול-בשאר-ה-REM-ים (רצפת-אוצר BELOW-FLOOR נמדדת)"
+    ]
+  },
+  "cycle59": {
+    "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
+    "at": "2026-11-04T23:26:35.526Z",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "measured": {
+      "chain": {
+        "chainHeight": 111043706,
+        "headcorner": {
+          "steem": 30.706,
+          "sbd": 0.136,
+          "vests": 6808582.196863
+        },
+        "cashmachine": {
+          "steem": 1.001,
+          "sbd": 0.101,
+          "vests": 8772.609184
+        },
+        "lastOpHeadcorner": {
+          "type": "limit_order_create_operation",
+          "at": "2026-11-04T23:17:09.000Z"
+        },
+        "treasuryFloor": {
+          "floor": 3000,
+          "measured": 30.706,
+          "verdict": "BELOW-FLOOR"
+        },
+        "measuredAt": "2026-11-04T23:26:37.125Z"
+      },
+      "github": {
+        "measuredAt": "2026-11-04T23:26:36.002Z",
+        "reposTotal": 41,
+        "reposPushedLast24h": 27,
+        "lastPush": [
+          {
+            "name": "sovereign-lighthouse",
+            "pushed_at": "2026-11-04T23:26:09Z"
+          },
+          {
+            "name": "Console",
+            "pushed_at": "2026-11-04T23:26:02Z"
+          },
+          {
+            "name": "Domain",
+            "pushed_at": "2026-11-04T23:22:55Z"
+          },
+          {
+            "name": "Sandbox",
+            "pushed_at": "2026-11-04T23:21:37Z"
+          },
+          {
+            "name": "Autonomy",
+            "pushed_at": "2026-11-04T23:19:08Z"
+          }
+        ],
+        "domainActionsFailsRecent": [
+          "estate-scrub@2026-11-04T22:52",
+          "exposure-gate@2026-11-04T22:49"
+        ],
+        "domainActionsFailCount30": 2,
+        "sealBlock": {
+          "lastGoodRun": "run#502@2026-11-04T22:09:48Z",
+          "latestRun": "run#502@2026-11-04T22:09:48Z:success",
+          "blocked": false,
+          "cause": "BEAT-ERROR: Unsupported state or unable to authenticate data — seal-passphrase בכספת-Domain (MAIN_KEY) אינו מאמת את weave-seal.enc · קבצי-seal ללא-שינוי מ-2026-09-21 (ff3260a0) · תיקון-דורש-מפעיל: עדכון-ערך-הסוד, אין-רוטציה-מפתחות",
+          "measuredAt": "2026-11-04T23:26:38.927Z"
+        },
+        "mirrorJsonAge": "1h",
+        "statusJsonAge": "5h"
+      },
+      "engine": {
+        "decisionsTotal": 13,
+        "directivesOpen": 13,
+        "scheduleRuns24h": 9,
+        "workItemsOpen": 15
       }
     },
     "open": [
