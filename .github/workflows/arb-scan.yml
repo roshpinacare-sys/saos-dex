@@ -12,6 +12,10 @@
 name: arb-scan
 
 on:
+  schedule:
+    # Z-87a: clean minutes 24,54 measured on the Z-70 minute-map — conflict-free with every fleet machine.
+    # Self-running scanner (PLAN/SCAN-ONLY, zero secrets, fail-closed) — ends built-but-not-running (2026-11-05 owner directive: activate).
+    - cron: "24,54 * * * *"
   workflow_dispatch:
 permissions:
   contents: write
