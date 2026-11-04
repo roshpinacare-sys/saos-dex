@@ -1,26 +1,36 @@
 {
   "protocol": "SAOS-POLICY-ENGINE/1",
   "since": "2026-10-14T00:30:00Z",
-  "authority": "owner directive 2026-10-14 IM trace 1a137c5876e963e9 (agentic-wallet PolicyEngine pattern: spending limits + rate limits + program allowlists + owner gate) · DECISIONS #17 saos-dex",
+  "authority": "owner directive 2026-10-14 IM trace 1a137c5876e963e9 (agentic-wallet PolicyEngine pattern: spending limits + rate limits + program allowlists + owner gate) · DECISIONS #17 saos-dex · R367 ops-cap lift 96→128 (owner execution order 2026-11-05 \"בצע מה שחסר ועוד ודחוף\": the grid was HALTed at est 97 > cap 96 — one op over; rate axis still bounded by maxOpsPerHour 400; notional/kelly laws untouched)",
   "mode": "enforce",
   "rateMode": "observe",
   "lanes": {
     "grid": {
-      "kinds": ["grid_cycle_refresh", "limit_order_create", "limit_order_cancel"],
+      "kinds": [
+        "grid_cycle_refresh",
+        "limit_order_create",
+        "limit_order_cancel"
+      ],
       "maxNotionalPerOpSbd": 25,
       "maxCycleNotionalSbd": 120,
-      "maxOpsPerCycle": 96,
+      "maxOpsPerCycle": 128,
       "maxOpsPerHour": 400
     },
     "general": {
-      "kinds": ["convert", "agent_swap", "transfer"],
+      "kinds": [
+        "convert",
+        "agent_swap",
+        "transfer"
+      ],
       "maxNotionalPerOpSbd": 25,
       "maxCycleNotionalSbd": 120,
       "maxOpsPerCycle": 24,
       "maxOpsPerHour": 48
     },
     "delegations": {
-      "kinds": ["delegate_vesting_shares"],
+      "kinds": [
+        "delegate_vesting_shares"
+      ],
       "maxNotionalPerOpSbd": 1000000,
       "maxCycleNotionalSbd": 1000000,
       "maxOpsPerCycle": 24,
@@ -28,7 +38,9 @@
       "note": "vesting shares are not SBD-notional — the huge cap = notional check skipped by design; ops caps still bind"
     },
     "claims": {
-      "kinds": ["claim_rewards"],
+      "kinds": [
+        "claim_rewards"
+      ],
       "maxNotionalPerOpSbd": 1000000,
       "maxCycleNotionalSbd": 1000000,
       "maxOpsPerCycle": 96,
