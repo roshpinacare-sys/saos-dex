@@ -1,30 +1,30 @@
 {
  "schema": "payout-doctrine-v1",
- "at": "2026-10-05T22:01:28Z",
+ "at": "2026-11-04T22:26:02Z",
  "ok": true,
  "inputs": {
   "convert": {
    "source": "grids/state/convert-plan.json",
-   "pendingSbd": 131.856,
-   "pendingCount": 25,
+   "pendingSbd": 10,
+   "pendingCount": 2,
    "maturityWindow": {
-    "earliest": "2026-10-06T00:02:12Z",
-    "latest": "2026-10-07T17:06:39Z"
+    "earliest": "2026-11-07T18:43:18Z",
+    "latest": "2026-11-08T02:54:48Z"
    },
    "payoutEstimate": {
-    "value": 1266.633,
+    "value": 96.087,
     "labeledAs": "הערכה בלבד",
     "semantics": "payout = amount / ADJUSTED median-at-maturity (steem database.cpp process_conversions) — ESTIMATE, floats until conversion_date",
     "law": "payout floats until conversion_date (steem database.cpp process_conversions, Z-89)"
    },
-   "discountBps": 3982
+   "discountBps": 5771
   },
   "custody": {
    "source": "grids/state/custody.json (steem row, ONCHAIN_REAL)",
-   "at": "2026-10-05T22:01:24.774Z",
-   "liquidSteem": 1.377,
-   "liquidSbd": 0.015,
-   "pendingSbdInConvert": 131.856
+   "at": "2026-11-04T22:25:57.456Z",
+   "liquidSteem": 65.165,
+   "liquidSbd": 0.136,
+   "pendingSbdInConvert": 10
   },
   "communityCost": {
    "source": "grids/community.mjs",
@@ -65,14 +65,14 @@
  },
  "projection": {
   "formula": "projectedLiquidSteem = custody.liquidSteem + payoutEstimate",
-  "projectedLiquidSteem": 1268.01,
+  "projectedLiquidSteem": 161.252,
   "labeledAs": "הערכה בלבד",
   "note": "arithmetic on an estimate stays an estimate — never a fact until the chain pays"
  },
  "readiness": {
   "communityCreationReady": true,
-  "basis": "projected 1268.01 STEEM ≥ need 3.1 STEEM (fee 3 + buffer 0.1, grids/community.mjs:78)",
-  "communityCreationReadyBeforePayout": false,
+  "basis": "projected 161.252 STEEM ≥ need 3.1 STEEM (fee 3 + buffer 0.1, grids/community.mjs:78)",
+  "communityCreationReadyBeforePayout": true,
   "counterGridFuelReady": null,
   "counterGridFuelPrecondition": "החלטת-בעלים — no written fuel-allocation doctrine constant exists in the repo (documented search); NEVER invented",
   "fuelAllocations": {
@@ -85,14 +85,14 @@
  },
  "countdown": {
   "minutesUntilEarliest": {
-   "minutes": 120.7,
+   "minutes": 4097.3,
    "passed": false
   },
   "minutesUntilLatest": {
-   "minutes": 2585.2,
+   "minutes": 4588.8,
    "passed": false
   },
-  "asof": "2026-10-05T22:01:28Z"
+  "asof": "2026-11-04T22:26:02Z"
  },
  "armGates": [
   {

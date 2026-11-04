@@ -1,6 +1,6 @@
 {
  "schema": "engine-transfers-v1",
- "at": "2026-10-05T22:01:27.734Z",
+ "at": "2026-11-04T22:26:01.628Z",
  "ok": true,
  "endpoint": {
   "alternativeTo": "POST https://api.hive-engine.com/rpc/contracts find tokens:transfers → {\"result\":null} (measured 2026-10-04, incl. Z-89; table absent from official docs)",
@@ -14,8 +14,8 @@
   "engine": {
    "opsFetched": 2000,
    "pagesFetched": 2,
-   "fromTs": "2026-05-15T14:36:06",
-   "toTs": "2026-10-05T21:30:06",
+   "fromTs": "2026-06-15T12:58:06",
+   "toTs": "2026-11-04T21:30:09",
    "note": "window = the measured fetched page, not all history (issuance history on-chain since 2020-03-30, account id 1373937)"
   },
   "blurtReserve": {
@@ -25,18 +25,18 @@
    "toTs": "2026-05-02T12:46:33"
   },
   "blurtActive": {
-   "opsFetched": 862,
-   "fromTs": "2026-06-13T08:34:39",
-   "toTs": "2026-10-05T21:00:57"
+   "opsFetched": 878,
+   "fromTs": "2026-07-01T23:41:27",
+   "toTs": "2026-11-04T21:14:27"
   }
  },
  "in": {
   "label": "bridge-IN (deposits → engine credits to users)",
   "engineCredits": {
-   "count": 836,
-   "sum": 4512333.670875,
-   "fromTs": "2026-05-15T14:36:06",
-   "toTs": "2026-10-05T21:14:00"
+   "count": 866,
+   "sum": 4586423.063421,
+   "fromTs": "2026-06-15T12:58:06",
+   "toTs": "2026-11-04T21:30:09"
   },
   "engineIntoIssuer": {
    "count": 0,
@@ -52,19 +52,19 @@
    "toTs": "2026-05-02T12:46:33"
   },
   "blurtDepositsActive": {
-   "count": 723,
-   "sum": 3367081.803,
-   "fromTs": "2026-06-13T08:34:39",
-   "toTs": "2026-10-05T21:00:57"
+   "count": 755,
+   "sum": 4319297.54,
+   "fromTs": "2026-07-02T04:28:36",
+   "toTs": "2026-11-04T21:14:27"
   }
  },
  "out": {
   "label": "bridge-OUT (redemptions: engine burn → blurt payouts to users)",
   "blurtPayouts": {
-   "count": 135,
-   "sum": 1911240.932,
-   "fromTs": "2026-06-13T21:33:24",
-   "toTs": "2026-10-04T05:14:06"
+   "count": 119,
+   "sum": 2417884.488,
+   "fromTs": "2026-07-01T23:41:27",
+   "toTs": "2026-11-03T01:00:03"
   },
   "engineBurns": {
    "measured": false,
@@ -73,25 +73,25 @@
  },
  "context": {
   "otherIssuerSymbols": {
-   "SWAP.STEEM": 275,
-   "SWAP.HBD": 121
+   "SWAP.STEEM": 322,
+   "SWAP.HBD": 120
   },
   "reserveMovements": 0,
   "reserveMovementsNote": "Z-89's evidence class (blurt-swap→graphene-swap memos 'Token Conversion from SWAP.BLURT account …') is counted inside blurtDepositsReserve when to=issuer — not double-counted here"
  },
  "haircutIn": {
   "method": "paired single-flow evidence (1 deposit → 1 credit, same user+target, ≤24h) — measured only",
-  "pairCount": 39,
-  "depositsSum": 403346.644,
-  "creditsSum": 400321.544164,
+  "pairCount": 43,
+  "depositsSum": 413542.537,
+  "creditsSum": 410440.967969,
   "ratio": 0.9925,
   "feeBps": 75,
   "commonRatio": 0.9925,
   "note": "supersedes the Z-89 holder-balance surplus inference (1:1) with direct per-flow pairing; bridge terms remain unverified"
  },
  "pairingStats": {
-  "excludedMultiFlow": 97,
-  "excludedPending": 22,
+  "excludedMultiFlow": 91,
+  "excludedPending": 19,
   "excludedDelay": 0
  },
  "honesty": "bridge terms unverified — measured-only: every figure here is a live on-chain measurement, no fee is assumed and none is invented",
