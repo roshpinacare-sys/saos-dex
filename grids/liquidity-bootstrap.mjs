@@ -121,7 +121,7 @@ export function planBootstrap({ balances, ours, book, parity, params, maxOps, to
       const recv = Math.floor(askPer * px * 1000) / 1000;
       if (recv < (s.minLevelSbd ?? 0.05)) { skips.push(`ask L${k}: recv ${recv} SBD < min ${s.minLevelSbd} — skipped honestly`); continue; }
       if (sameLevel("ask", px, askPer, ours.asks)) { skips.push(`ask L${k} @${px.toFixed(6)} already deployed (delta-only) — skipped`); continue; }
-      ops.push({ kind: "place", side: "ask", orderid: nextId(), amountToSell: `${dp3(askPer)} STEEM`, minToReceive: `${dp3(recv)} SBD`, px });
+      ops.push({ kind: "place", side: "ask", orderid: nextId(), amountToSell: `${dp3(askPer).toFixed(3)} STEEM`, minToReceive: `${dp3(recv).toFixed(3)} SBD`, px });
     }
   } else {
     skips.push(`ask side: ${askPer.toFixed(3)} STEEM/level < min ${s.minLevelSteem} — no deployment (fuel law)`);
@@ -136,7 +136,7 @@ export function planBootstrap({ balances, ours, book, parity, params, maxOps, to
       const recv = Math.floor(bidPer / px * 1000) / 1000;
       if (recv < (s.minLevelSteem ?? 1.0)) { skips.push(`bid L${k}: recv ${recv} STEEM < min ${s.minLevelSteem} — skipped honestly`); continue; }
       if (sameLevel("bid", px, bidPer, ours.bids)) { skips.push(`bid L${k} @${px.toFixed(6)} already deployed (delta-only) — skipped`); continue; }
-      ops.push({ kind: "place", side: "bid", orderid: nextId(), amountToSell: `${dp3(bidPer)} SBD`, minToReceive: `${dp3(recv)} STEEM`, px });
+      ops.push({ kind: "place", side: "bid", orderid: nextId(), amountToSell: `${dp3(bidPer).toFixed(3)} SBD`, minToReceive: `${dp3(recv).toFixed(3)} STEEM`, px });
     }
   } else {
     skips.push(`bid side: ${bidPer.toFixed(3)} SBD/level < min ${s.minLevelSbd} — no deployment (fuel law)`);
