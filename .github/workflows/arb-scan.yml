@@ -125,5 +125,16 @@ jobs:
             # מזויף-בכל-ריצה. עתה: "no-edge" = באמת אין-קצה; "ledger-unreadable" = כשל-קריאה כנה.
             BEST=$(node -e 'try{const l=require("./grids/state/arb-ledger.json");const v=(l.entries||[]).filter(e=>!e.degraded&&typeof e.edgeBps==="number").sort((a,b)=>b.edgeBps-a.edgeBps)[0];console.log(v?`${v.edgeBps}bps ${v.pair}`:"no-edge")}catch(e){console.log("ledger-unreadable")}')
             git commit -m "arb-scan: paper-pnl ledger $(date -u +%FT%TZ) · cumulative ${CUM} · best ${BEST} [skip ci]"
-            git push
+            # R369: push-race fix — workflows אחרים (external-profit-publish, dex-beat, engine) דוחפים ל-main במקביל;
+            # push חשוף נדחה ב-"fetch first" והריצה כולה נרשמת failure למרות סריקה תקינה.
+            # rebase מעל החדש + ריטרי 4× — הפנקס אף-פעם לא מאבד קומיט, אבל גם לא מפיל את הריצה.
+            PUSHED=no
+            for i in 1 2 3 4; do
+              git pull --rebase --autostash origin main && git push && PUSHED=yes && break
+              echo "push attempt ${i} rejected — rebasing over remote and retrying"
+              sleep $((i * 5))
+            done
+            if [ "${PUSHED}" != "yes" ]; then
+              echo "::warning::ledger commit exists locally but push rejected after 4 attempts (honest race loss)"
+            fi
           fi
