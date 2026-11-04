@@ -1,20 +1,20 @@
 {
   "schema": "SAOS-EXECUTION-LEDGER/1",
-  "at": "2026-11-04T15:58:48.542Z",
+  "at": "2026-11-04T16:28:55.111Z",
   "generator": "local-engine/exec-ledger.ts (trigger:schedule) · ליבה-מקומית-חיה-לאחר-השבתת fleet-runner (מחזור-37 · 2026-11-02T13:12Z)",
   "sourceWorklog": "giant worklog task-55 (directive 42, trace 1a178c71bcb7ddad)",
   "law": "אין-ראיה = לא-קרה · כל-מספר נמדד-מהקרקע בזמן-החידוש · מורשת-מאומתת-לעולם-לא-נמחקת",
   "freshness": {
     "staleAfterHours": 48,
-    "verifiedAt": "2026-11-04T15:58:48.542Z",
+    "verifiedAt": "2026-11-04T16:28:55.111Z",
     "renewedBy": "local-engine exec-ledger-renew (schedule) · lineage-preserving",
     "howToVerify": "compare .at against commit SHAs on saos-dex/Domain main (pushed in pairs); history rows append-only"
   },
   "measuredSnapshot": {
-    "engine": "decisions=14 directivesOpen=13 runs24h=65 workOpen=33",
-    "chain": "height=111034781 headcorner={\"steem\":79.149,\"sbd\":5.372,\"vests\":6748154.584663} lastOp={\"type\":\"curation_reward_operation\",\"at\":\"2026-11-04T15:49:09.000Z\"}",
-    "treasuryFloor": "{\"floor\":3000,\"measured\":79.149,\"verdict\":\"BELOW-FLOOR\"}",
-    "github": "repos=40 pushed24h=26 domainFails30=5 mirror=16h status=7h",
+    "engine": "decisions=14 directivesOpen=13 runs24h=124 workOpen=33",
+    "chain": "height=111035381 headcorner={\"steem\":186.072,\"sbd\":5.311,\"vests\":6748161.025824} lastOp={\"type\":\"fill_order_operation\",\"at\":\"2026-11-04T16:24:00.000Z\"}",
+    "treasuryFloor": "{\"floor\":3000,\"measured\":186.072,\"verdict\":\"BELOW-FLOOR\"}",
+    "github": "repos=40 pushed24h=26 domainFails30=2 mirror=17h status=7h",
     "services": "fleet-runner:3031-DOWN (legacy) · ledger:3032-DOWN (legacy) · market:3033-DOWN (legacy) · local-engine:3000-UP (scheduler+apply+exec-ledger)",
     "gridVerdict": "MEASURED-BY-CHAIN (see cycle blocks) · legacy runner verdict ARMED-LIVE retained as history",
     "valueGuard": "conservation-checked-per-cycle (treasury floor + fills measured)",
@@ -497,8 +497,8 @@
       "Pulse FLEET_TOKEN 401 → tokenless fallback (orchestrator, in flight)"
     ]
   },
-  "cycle": 44,
-  "generatedAt": "2026-11-04T15:58:48.542Z",
+  "cycle": 45,
+  "generatedAt": "2026-11-04T16:28:55.111Z",
   "cycle33": {
     "at": "2026-10-26T15:40:52Z",
     "worker": "G77-b (execution-ledger lane · swarm G77)",
@@ -1145,6 +1145,81 @@
         "decisionsTotal": 14,
         "directivesOpen": 13,
         "scheduleRuns24h": 65,
+        "workItemsOpen": 33
+      }
+    },
+    "open": [
+      "כלכלת-הצי ledger-cycle-32.json (fleet-economy main+branch) — 404 מדוד · דורש-דור-חדש-של-מחזור-כלכלה",
+      "מקורות-mirror.json (Zip/cloud-heart) ו-status.json — זקנים · דורשים-חיזוק-קצב",
+      "המשך-טיפול-בשאר-ה-REM-ים (רצפת-אוצר BELOW-FLOOR נמדדת)"
+    ]
+  },
+  "cycle45": {
+    "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
+    "at": "2026-11-04T16:28:55.111Z",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "measured": {
+      "chain": {
+        "chainHeight": 111035381,
+        "headcorner": {
+          "steem": 186.072,
+          "sbd": 5.311,
+          "vests": 6748161.025824
+        },
+        "cashmachine": {
+          "steem": 1.001,
+          "sbd": 0.101,
+          "vests": 8772.609184
+        },
+        "lastOpHeadcorner": {
+          "type": "fill_order_operation",
+          "at": "2026-11-04T16:24:00.000Z"
+        },
+        "treasuryFloor": {
+          "floor": 3000,
+          "measured": 186.072,
+          "verdict": "BELOW-FLOOR"
+        },
+        "measuredAt": "2026-11-04T16:28:56.582Z"
+      },
+      "github": {
+        "measuredAt": "2026-11-04T16:28:55.506Z",
+        "reposTotal": 40,
+        "reposPushedLast24h": 26,
+        "lastPush": [
+          {
+            "name": "Console",
+            "pushed_at": "2026-11-04T16:28:33Z"
+          },
+          {
+            "name": "Domain",
+            "pushed_at": "2026-11-04T16:26:40Z"
+          },
+          {
+            "name": "saos-dex",
+            "pushed_at": "2026-11-04T16:26:02Z"
+          },
+          {
+            "name": "Sandbox",
+            "pushed_at": "2026-11-04T16:24:12Z"
+          },
+          {
+            "name": "Autonomy",
+            "pushed_at": "2026-11-04T16:23:22Z"
+          }
+        ],
+        "domainActionsFailsRecent": [
+          "identity-guard@2026-11-04T16:06",
+          "exposure-gate@2026-11-04T16:06"
+        ],
+        "domainActionsFailCount30": 2,
+        "mirrorJsonAge": "17h",
+        "statusJsonAge": "7h"
+      },
+      "engine": {
+        "decisionsTotal": 14,
+        "directivesOpen": 13,
+        "scheduleRuns24h": 124,
         "workItemsOpen": 33
       }
     },
