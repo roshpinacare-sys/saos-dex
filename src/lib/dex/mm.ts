@@ -488,7 +488,14 @@ export function arenaTick(
     // (975/630/850µ) אבל-הארנה-נשארה 3µ — והיא-המממנת-את-בוטי-הרעש (זריעה=transfer
     // שדורש-גז-100µ) ואת-המנעול-ואת-חגורת-הסולם. בלי-גז-ארנה: אפס-זריעה → אפס-רעש →
     // אפס-פילים. הארנה-ראשונה-בתור = מפתח-המפל: גז-ארנה → זריעה → רעש → חציות → עמלות.
-    for (const ag of ["arena", ...soldiers, "bot-a", "bot-b", "bot-c", "bot-e", "rail"]) {
+    // SETTLE-17-d (treasury-gas-alive · נמדד-חי 2026-11-04): האוצר היה-חוץ-לרוסטר-
+    // העירוי וקרדיטי-הגז שלו = 0 לנצח (credits.treasury=0 בתמונת-המצב) → כל-שכבת-
+    // התחזוקה של-הבית מתה בשקט על insufficient-credits: שומר-הסף SETTLE-17-c
+    // (order(treasury):insufficient-credits בשיטפון), קווי-ה-rearm (rearm-sh/uh),
+    // order_gc, חגורת-הסולם, cancel-תחזוקה. העירוי = העברת-קרדיטים טהורה (אפס-
+    // הטבעה, Σנשמר — אותו-ערוץ שהבוטים מקבלים) ולאוצר תפקיד-מבני-חי: בנק-מרכזי,
+    // שומר-סף, מנעול-עוגן. מוסף **בסוף-התור** — סוכני-הבית ממומנים קודם.
+    for (const ag of ["arena", ...soldiers, "bot-a", "bot-b", "bot-c", "bot-e", "rail", "treasury"]) {
       const c = st.credits[ag] ?? 0;
       // FIX(SETTLE-15 fuel-oscillation, נתפס-בלוג-הדחיות): סף-10k = מילוי-מוקדם-בחלון-אחד,
       // אפס-דחיות; זו-העברה-טהורה (אפס-הטבעה) — השריפה-הכוללת-לא-משתנה, רק-התזמון-מוקדם.
@@ -618,14 +625,24 @@ export function arenaTick(
           const quoted = q1 && q1.out > BRIDGE_WINDOW_CAP_WSTEEM
             ? quoteOut(poolW, "USDS", Math.floor(BRIDGE_TRANCHE_USDS / 2))?.out ?? 0
             : q1?.out ?? 0;
-          const out = Math.min(quoted, shortfall); // הסרוו: רק-המחסור-האמת; השאריות-נשארות-באוצר (השומר-מנצל)
-          if (out > 0 && avail(st, "treasury", "USDS") >= BRIDGE_TRANCHE_USDS) {
-            pushOp({ type: "pool_swap", issuer: "treasury", nonce: `bridge-swap-h${st.height}`, pair: "USDS/WSTEEM", assetIn: "USDS", amount: BRIDGE_TRANCHE_USDS });
+          const out = Math.min(quoted, shortfall); // הסרוו: רק-המחסור-האמת
+          // SETTLE-19-c (gas-alive issuer · נמדד-חי 2026-11-04): הסרוו היה מת-גז בשקט —
+          // כל-ה-ops שלו הונפקו ע"י "treasury" ולאוצר 0 קרדיטי-גז (credits.treasury=0
+          // בתמונת-המצב הקנונית; מזרקת-הגז מזינה ארנה+בוטים בלבד — g94/EXEC-CD-46).
+          // pool_swap עולה גז-1 (GAS_TABLE) → insufficient-credits בכל חלון-16 →
+          // אפס-WSTEEM זורם → אפס-אסקים חיים → USDS/WSTEEM חד-צדדי לנצח
+          // (bestAsk=0 · truth-gate P2-A43 אדום רצוף מ-2026-11-02T14:04Z).
+          // התיקון: המנפיק = הארנה (המממנת-העצמית — אותו-מקור-אמת של g94): קרדיטים
+          // חיים + מלאי-USDS אמת. ה-WSTEEM נוחת ישר בארנה (addBal-המנפיק ב-poolSwap)
+          // → op-ההעברה מיותר והוסר (אפס-שאריות-אבק, אפס-דחיות-ניתוב). pool_repeg
+          // נשאר אוצר (0-גז — chargeGas(0) עובר גם-על-0-קרדיטים; חוק אוצר-בלבד נשמר).
+          // אפס-הטבעה · אפס-pool_rmw · משמעת-הבריכה (guard 4M) — הכל נשמר איתן.
+          if (out > 0 && avail(st, "arena", "USDS") >= BRIDGE_TRANCHE_USDS) {
+            pushOp({ type: "pool_swap", issuer: "arena", nonce: `bridge-swap-h${st.height}`, pair: "USDS/WSTEEM", assetIn: "USDS", amount: BRIDGE_TRANCHE_USDS });
             // מישור-העוגן באותו-חלון — הסוואפ הופך-את-הבריכה-יקרה-מהעוגן; ה-repeg
             // (אפס-גז, Σ נשמר) מחזיר-את-העודף-לאוצר ומחזיר-את-ה-mid אל-העוגן (R26).
             pushOp({ type: "pool_repeg", issuer: "treasury", nonce: `bridge-repeg-h${st.height}`, pair: "USDS/WSTEEM" });
-            pushOp({ type: "transfer", issuer: "treasury", nonce: `bridge-w-h${st.height}`, to: "arena", asset: "WSTEEM", amount: out });
-            bridgeAdd(st, out);
+            bridgeAdd(st, out); // טלמטריה: הפלט-בפועל נחתך-מה-swap-עצמו (addBal-מנפיק) — המונה מדידה בלבד
           }
         }
       }
@@ -799,8 +816,17 @@ export function arenaTick(
         }
         for (const o of mine) {
           const d = desired.get(o.price);
-          const stillGood = d && d.side === o.side &&
-            Math.abs(((fair - o.price) / fair) * 10_000) <= params.requoteBps + params.spreadBps;
+          // SETTLE-17-d (requote-flicker cure · נמדד-חי 2026-11-04): הרצועה-הישנה
+          // (requoteBps+spreadBps≈56bps) נלחמה במינ-גאפ האבסולוטי של הסולם-עצמו:
+          // במחיר-50µ המינ-גאפ (1µ) = 200bps — הציטוט שהסולם **רצה** היה-תמיד מחוץ
+          // לרצועה → ביטול→ניסיון-הצבה-נדחה-אסקרו (הביטול עדיין-נעול)→הצבה-מחדש
+          // בטיק-הבא → פליקר נצחי (נמדד-חי ב-probe: ask@51 חי בטיקים-אי-זוגיים
+          // בלבד) → bestAsk=0 ברגעי-מדידה → P2-A43 אדום. הסמנטיקה הנכונה:
+          // פקודה-חיה **במחיר-סולם-רצוי** (d קיים ואותו-צד) היא-ממוקמת בדיוק
+          // כפי-שהסולם מבקש — אין-סטיה-לריקוט. הסטייה-האמיתית = מחיר שנפל-מה-
+          // סולם-החי (d=undefined או-צד-שנצלב) → ביטול כרגיל. הסולם-עצמו
+          // מתרכז-מחדש-סביב-הפייר בכל-טיק — זהו בקר-הסטייה האמיתי.
+          const stillGood = d !== undefined && d.side === o.side;
           if (!stillGood) {
             if (o.live) submit(rt, st, agent, { type: "cancel", orderId: o.id }, pushOp);
           } else {
@@ -1043,7 +1069,11 @@ export function arenaTick(
       const bookAsks = sortBook(st, m.base, m.quote, "sell");
       const bookBids = sortBook(st, m.base, m.quote, "buy");
       const stillGoodK = (o: { price: number }, px: number): boolean =>
-        Math.abs(((fair - o.price) / fair) * 10_000) <= params.requoteBps + params.spreadBps;
+        // SETTLE-17-d (אותו-ריפוי לשומר-הסף): ההשוואה היתה מול-הפייר במקום מול-ה-
+        // px-הרצוי שהשומר-עצמו בחר (fair+minGapK) — במחיר-50µ הפער-הכמוס
+        // (1µ=200bps) היה-תמיד מחוץ-לרצועה (56bps) → פליקר-ביטול/הצבה נצחי.
+        // עכשיו: השוואה מול-ה-px-הרצוי החי, בתוספת-רצועה-יחסית + רצפת-1µ-כנה.
+        Math.abs(o.price - px) <= Math.max(1, Math.floor((px * (params.requoteBps + params.spreadBps)) / 10_000));
       // (א) צד-האסקים
       if (bookAsks.length === 0) {
         let tw = inflightAvail("treasury", m.base);
