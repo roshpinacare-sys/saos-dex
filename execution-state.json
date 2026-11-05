@@ -1,22 +1,23 @@
 {
   "schema": "SAOS-EXECUTION-LEDGER/1",
-  "at": "2026-11-05T00:57:01.453Z",
-  "generator": "local-engine/exec-ledger.ts (trigger:schedule) · ליבה-מקומית-חיה-לאחר-השבתת fleet-runner (מחזור-37 · 2026-11-02T13:12Z)",
+  "at": "2026-11-05T01:03:04.914Z",
+  "generator": "local-engine/exec-ledger.ts (trigger:cron-watchdog) · ליבה-מקומית-חיה-לאחר-השבתת fleet-runner (מחזור-37 · 2026-11-02T13:12Z)",
   "sourceWorklog": "giant worklog task-55 (directive 42, trace 1a178c71bcb7ddad)",
   "law": "אין-ראיה = לא-קרה · כל-מספר נמדד-מהקרקע בזמן-החידוש · מורשת-מאומתת-לעולם-לא-נמחקת",
   "freshness": {
     "staleAfterHours": 48,
-    "verifiedAt": "2026-11-05T00:57:01.453Z",
-    "renewedBy": "local-engine exec-ledger-renew (schedule) · lineage-preserving",
+    "verifiedAt": "2026-11-05T01:03:04.914Z",
+    "renewedBy": "local-engine exec-ledger-renew (cron-watchdog) · lineage-preserving",
     "howToVerify": "compare .at against commit SHAs on saos-dex/Domain main (pushed in pairs); history rows append-only"
   },
   "measuredSnapshot": {
-    "engine": "decisions=16 directivesOpen=14 runs24h=184 workOpen=36",
-    "chain": "height=111045505 headcorner={\"steem\":128.745,\"sbd\":0.106,\"vests\":6808636.94547} lastOp={\"type\":\"custom_json_operation\",\"at\":\"2026-11-05T00:54:15.000Z\"}",
-    "treasuryFloor": "{\"floor\":3000,\"measured\":128.745,\"verdict\":\"BELOW-FLOOR\"}",
-    "github": "repos=41 pushed24h=27 domainFails30=9 mirror=3h status=2h",
+    "engine": "decisions=16 directivesOpen=14 runs24h=195 workOpen=37",
+    "chain": "height=111045627 acct-h-849e9df7={\"steem\":116.735,\"sbd\":0.106,\"vests\":6808636.94547} lastOp={\"type\":\"custom_json_operation\",\"at\":\"2026-11-05T00:54:15.000Z\"}",
+    "treasuryFloor": "{\"floor\":3000,\"measured\":116.735,\"verdict\":\"BELOW-FLOOR\"}",
+    "github": "repos=41 pushed24h=27 domainFails30=8 mirror=3h status=2h",
     "services": "fleet-runner:3031-DOWN (legacy) · ledger:3032-DOWN (legacy) · market:3033-DOWN (legacy) · local-engine:3000-UP (scheduler+apply+exec-ledger)",
     "gridVerdict": "MEASURED-BY-CHAIN (see cycle blocks) · legacy runner verdict ARMED-LIVE retained as history",
+    "liquidityDoctrine": "{\"law\":\"OWNER-LIQUIDITY-DOCTRINE 2026-11-05 (trace 1a1a8e391687a121): 'זה הכסף שיש לא ינעל בסטימיט … שלא יהיה עוד' — הנזילות היא המשאב-היחיד-להתרחבות\",\"fix\":\"commit e6ffe09 (steem@saos-cockpit): operator.allowPowerUp=false · redeploy.powerUpPct=0 · liquidSteemFloor 5→3000 (3 sites) · selftest 1982/1982 PASS\",\"measuredHarm\":\"5 power-ups (~73.9 STEEM) ב-2026-11-01/04 אחרי-היפוך-שער-עצמי 2026-11-04T17:03:42Z · אוצר-נזיל BELOW-FLOOR\",\"dexTruth\":\"fills מדודים-מהשרשרת: ~79% מול-צד-שלישי אמיתי · ~21% שטיפה-עצמית (בזבוז-RC, תוקן-ב-booklaw) · סולם מחובר-ל-parity-חוץ מדוד (0.104 SBD/STEEM · mexc) · רווח-נטו-מצטבר-טרם-הוכח — הפער-הבא-לסגור\",\"center\":\"מרכז-הארכיטקטורה = ריבונות-אוטונומית + הרשת · Steem/Hive = תשתית-היקפית-מתאימה בלבד\",\"recordedAt\":\"2026-11-05T01:03:04.914Z\"}",
     "valueGuard": "conservation-checked-per-cycle (treasury floor + fills measured)",
     "realFillsLifetime": 730,
     "note": "ערכי-legacy (realFillsLifetime=730 וכו') נשמרים-מהמחזור-הקודם-כהיסטוריה; המדידה-החיה-של-עכשיו-נמצאת-בשדות-engine/chain/github/treasuryFloor ובבלוק-המחזור-החדש"
@@ -286,11 +287,11 @@
     {
       "id": "G105-3",
       "title": "dex.db corruption recovered via corroboration-layer birth — zero state loss",
-      "detail": "Root cause: rootfs ENOSPC window (disk 100% twice in-wave) corrupted canonical dex.db (sqlite 'database disk image is malformed' on data pages; COUNT survived). Forensics preserved byte-exact: repos/saos-dex/db/stale-forensics-diskfull-h1863238/ (dex.db.corrupt + wal + shm). Recovery: fresh derivative schema (prisma db push 47ms) → boot priorCount=0 + anchorlessBirth → corroboration-layer birth accepted the git-proven snapshot (byte-identical to HEAD 2aa70a5a vault-sync 15:28:30Z, h1863238, worktree clean) — the engine's own designed zero-fabrication path ('committed snapshot = strongest evidence in existence'). Headers rebuilt: 75 rows contiguous h1863239→1863313, birth-flush advanced snapshot h1863238→1863239, normal corroboration self-disabled from block one."
+      "detail": "Root cause: rootfs ENOSPC window (disk 100% tacct-h-bea79b8fe in-wave) corrupted canonical dex.db (sqlite 'database disk image is malformed' on data pages; COUNT survived). Forensics preserved byte-exact: repos/saos-dex/db/stale-forensics-diskfull-h1863238/ (dex.db.corrupt + wal + shm). Recovery: fresh derivative schema (prisma db push 47ms) → boot priorCount=0 + anchorlessBirth → corroboration-layer birth accepted the git-proven snapshot (byte-identical to HEAD 2aa70a5a vault-sync 15:28:30Z, h1863238, worktree clean) — the engine's own designed zero-fabrication path ('committed snapshot = strongest evidence in existence'). Headers rebuilt: 75 rows contiguous h1863239→1863313, birth-flush advanced snapshot h1863238→1863239, normal corroboration self-disabled from block one."
     },
     {
       "id": "G105-4",
-      "title": "Rootfs disk wound triaged in-wave (recurred twice) — systemic gap recorded",
+      "title": "Rootfs disk wound triaged in-wave (recurred tacct-h-bea79b8fe) — systemic gap recorded",
       "detail": "df / 100% blocked branch creation (git mkdir ENOSPC) and later corrupted dex.db. Freed lawfully: fleet-economy-builder quarantine forensics compressed 771M→~100M (gzip -6, gzip -t ALL OK, today's 2 quarantines kept raw, per-file names preserved as .gz) · bun install cache 2.8G · puppeteer 601M · node-gyp 67M · .next/cache 1.17G (refilled once — recurring) · /tmp watchdog dirs ~400M (refill too). Measured lesson: platform rootfs quota ~9.9G refills in hours under swarm load — needs a janitor lane or bigger quota (recorded as gap G-DISK)."
     },
     {
@@ -423,7 +424,7 @@
     {
       "id": "G-DISK",
       "title": "Platform rootfs quota (~9.9G) refills under swarm load — systemic",
-      "detail": "100% full twice within G105 (branch-mkdir ENOSPC, then dex.db page corruption during engine writes). Quarantine/log/cache lanes refill within hours (.next/cache 1.17G, /tmp/saos-watchdog ~400M). Needs durable janitor or bigger quota — owner/infra level."
+      "detail": "100% full tacct-h-bea79b8fe within G105 (branch-mkdir ENOSPC, then dex.db page corruption during engine writes). Quarantine/log/cache lanes refill within hours (.next/cache 1.17G, /tmp/saos-watchdog ~400M). Needs durable janitor or bigger quota — owner/infra level."
     },
     {
       "id": "G-KELLY-DEVDB",
@@ -497,8 +498,8 @@
       "Pulse FLEET_TOKEN 401 → tokenless fallback (orchestrator, in flight)"
     ]
   },
-  "cycle": 63,
-  "generatedAt": "2026-11-05T00:57:01.453Z",
+  "cycle": 64,
+  "generatedAt": "2026-11-05T01:03:04.914Z",
   "cycle33": {
     "at": "2026-10-26T15:40:52Z",
     "worker": "G77-b (execution-ledger lane · swarm G77)",
@@ -624,16 +625,16 @@
   "cycle38": {
     "trace": "local-engine renew (manual-continue) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T12:52:24.712Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111031072,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 82.914,
           "sbd": 5.275,
           "vests": 6748135.261105
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -698,16 +699,16 @@
   "cycle39": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T13:22:21.059Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111031669,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 81.031,
           "sbd": 13.066,
           "vests": 6748135.261105
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -771,16 +772,16 @@
   "cycle40": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T13:32:07.466Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111031862,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 79.149,
           "sbd": 10.993,
           "vests": 6748135.261105
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -850,16 +851,16 @@
   "cycle41": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T14:00:24.732Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111032423,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 79.149,
           "sbd": 10.993,
           "vests": 6748141.702305
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -929,16 +930,16 @@
   "cycle42": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T14:30:29.032Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111033023,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 79.149,
           "sbd": 10.993,
           "vests": 6748144.922901
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1005,16 +1006,16 @@
   "cycle43": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T15:28:39.754Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111034182,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 79.149,
           "sbd": 5.372,
           "vests": 6748148.143492
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1079,16 +1080,16 @@
   "cycle44": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T15:58:48.542Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111034781,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 79.149,
           "sbd": 5.372,
           "vests": 6748154.584663
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1157,16 +1158,16 @@
   "cycle45": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T16:28:55.111Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111035381,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 186.072,
           "sbd": 5.311,
           "vests": 6748161.025824
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1232,16 +1233,16 @@
   "cycle46": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T16:59:02.510Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111035983,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 201.902,
           "sbd": 3.463,
           "vests": 6748164.246399
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1311,16 +1312,16 @@
   "cycle47": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T17:29:09.309Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111036583,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 184.176,
           "sbd": 2.773,
           "vests": 6748167.466966
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1387,16 +1388,16 @@
   "cycle48": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T17:40:11.486Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111036803,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 175.294,
           "sbd": 2.083,
           "vests": 6748167.466966
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1463,16 +1464,16 @@
   "cycle49": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T18:10:19.201Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111037404,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 166.408,
           "sbd": 2.083,
           "vests": 6748167.466966
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1540,16 +1541,16 @@
   "cycle50": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T18:40:26.893Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111038002,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 166.408,
           "sbd": 2.083,
           "vests": 6748173.908081
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1614,16 +1615,16 @@
   "cycle51": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T19:10:35.230Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (40 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111038604,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 166.408,
           "sbd": 2.083,
           "vests": 6748173.908081
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1690,16 +1691,16 @@
   "cycle52": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T19:40:43.027Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111039203,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 166.408,
           "sbd": 2.083,
           "vests": 6748177.128627
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1769,16 +1770,16 @@
   "cycle53": {
     "trace": "local-engine renew (probe-only-no-renew) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T20:30:38.032Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111040198,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 166.408,
           "sbd": 2.083,
           "vests": 6748180.349171
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1846,16 +1847,16 @@
   "cycle54": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T20:46:22.767Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111040512,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 166.408,
           "sbd": 2.083,
           "vests": 6748181.959441
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -1925,16 +1926,16 @@
   "cycle55": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T21:16:30.898Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111041113,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 103.406,
           "sbd": 0.148,
           "vests": 6748181.959441
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -2000,16 +2001,16 @@
   "cycle56": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T21:46:38.865Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111041714,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 82.289,
           "sbd": 0.136,
           "vests": 6766214.665751
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -2075,16 +2076,16 @@
   "cycle57": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T22:16:45.596Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111042314,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 64.847,
           "sbd": 0.136,
           "vests": 6784237.68268
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -2149,16 +2150,16 @@
   "cycle58": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T22:46:53.470Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111042915,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 58.657,
           "sbd": 0.136,
           "vests": 6784242.513463
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -2225,16 +2226,16 @@
   "cycle59": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T23:26:35.526Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111043706,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 30.706,
           "sbd": 0.136,
           "vests": 6808582.196863
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -2307,16 +2308,16 @@
   "cycle60": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-04T23:56:43.883Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111044304,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 76.991,
           "sbd": 0.106,
           "vests": 6808582.196863
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -2389,16 +2390,16 @@
   "cycle61": {
     "trace": "local-engine renew (liquidity-doctrine-publish) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-05T00:06:19.891Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111044495,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 63.318,
           "sbd": 0.106,
           "vests": 6808582.196863
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -2470,16 +2471,16 @@
   "cycle62": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-05T00:26:52.730Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111044905,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 172.667,
           "sbd": 0.106,
           "vests": 6808633.724969
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -2553,16 +2554,16 @@
   "cycle63": {
     "trace": "local-engine renew (schedule) · session web-038a2644 · trace 1a1a6903b47f6a7d",
     "at": "2026-11-05T00:57:01.453Z",
-    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (headcorner/cashmachine/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
     "measured": {
       "chain": {
         "chainHeight": 111045505,
-        "headcorner": {
+        "acct-h-849e9df7": {
           "steem": 128.745,
           "sbd": 0.106,
           "vests": 6808636.94547
         },
-        "cashmachine": {
+        "acct-h-61d20179": {
           "steem": 1.001,
           "sbd": 0.101,
           "vests": 8772.609184
@@ -2628,6 +2629,92 @@
         "directivesOpen": 14,
         "scheduleRuns24h": 184,
         "workItemsOpen": 36
+      }
+    },
+    "open": [
+      "כלכלת-הצי ledger-cycle-32.json (fleet-economy main+branch) — 404 מדוד · דורש-דור-חדש-של-מחזור-כלכלה",
+      "מקורות-mirror.json (Zip/cloud-heart) ו-status.json — זקנים · דורשים-חיזוק-קצב",
+      "המשך-טיפול-בשאר-ה-REM-ים (רצפת-אוצר BELOW-FLOOR נמדדת)"
+    ]
+  },
+  "cycle64": {
+    "trace": "local-engine renew (cron-watchdog) · session web-038a2644 · trace 1a1a6903b47f6a7d",
+    "at": "2026-11-05T01:03:04.914Z",
+    "swarm": "המנוע-המקומי-נטל-את-תפקיד-המחדש-לאחר-47h-שתיקה: מדידת-שרשרת (acct-h-849e9df7/acct-h-61d20179/height/lastOp) + מדידת-GitHub (41 repos) + מדידת-מנוע (decisions/directives/runs) · דחיפה-כפולה saos-dex+Domain",
+    "measured": {
+      "chain": {
+        "chainHeight": 111045627,
+        "acct-h-849e9df7": {
+          "steem": 116.735,
+          "sbd": 0.106,
+          "vests": 6808636.94547
+        },
+        "acct-h-61d20179": {
+          "steem": 1.001,
+          "sbd": 0.101,
+          "vests": 8772.609184
+        },
+        "lastOpHeadcorner": {
+          "type": "custom_json_operation",
+          "at": "2026-11-05T00:54:15.000Z"
+        },
+        "treasuryFloor": {
+          "floor": 3000,
+          "measured": 116.735,
+          "verdict": "BELOW-FLOOR"
+        },
+        "measuredAt": "2026-11-05T01:03:06.320Z"
+      },
+      "github": {
+        "measuredAt": "2026-11-05T01:03:05.245Z",
+        "reposTotal": 41,
+        "reposPushedLast24h": 27,
+        "lastPush": [
+          {
+            "name": "Autonomy",
+            "pushed_at": "2026-11-05T01:03:03Z"
+          },
+          {
+            "name": "Console",
+            "pushed_at": "2026-11-05T01:02:38Z"
+          },
+          {
+            "name": "Zip",
+            "pushed_at": "2026-11-05T01:02:03Z"
+          },
+          {
+            "name": "Domain",
+            "pushed_at": "2026-11-05T01:00:56Z"
+          },
+          {
+            "name": "saos-dex",
+            "pushed_at": "2026-11-05T01:00:51Z"
+          }
+        ],
+        "domainActionsFailsRecent": [
+          "exposure-gate@2026-11-05T00:56",
+          "bridge-keeper@2026-11-05T00:56",
+          "exposure-gate@2026-11-05T00:54",
+          "identity-guard@2026-11-05T00:54",
+          "identity-guard@2026-11-05T00:53",
+          "exposure-gate@2026-11-05T00:53"
+        ],
+        "domainActionsFailCount30": 8,
+        "sealBlock": {
+          "lastGoodRun": "run#504@2026-11-05T00:56:48Z",
+          "latestRun": "run#504@2026-11-05T00:56:48Z:success",
+          "blocked": false,
+          "cause": "BEAT-ERROR: Unsupported state or unable to authenticate data — seal-passphrase בכספת-Domain (MAIN_KEY) אינו מאמת את weave-seal.enc · קבצי-seal ללא-שינוי מ-2026-09-21 (ff3260a0) · תיקון-דורש-מפעיל: עדכון-ערך-הסוד, אין-רוטציה-מפתחות",
+          "measuredAt": "2026-11-05T01:03:08.123Z"
+        },
+        "mirrorJsonAge": "3h",
+        "statusJsonAge": "2h"
+      },
+      "engine": {
+        "decisionsTotal": 16,
+        "directivesOpen": 14,
+        "scheduleRuns24h": 195,
+        "workItemsOpen": 37
       }
     },
     "open": [
