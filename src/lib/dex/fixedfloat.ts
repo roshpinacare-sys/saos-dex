@@ -1,5 +1,14 @@
 /**
  * fixedfloat.ts — FixedFloat (ff.io) external-swap provider client · READ-ONLY.
+ *
+ * ⛔ W-FRELEASE (2026-11-05, owner order trace 1a1ab989d8db0a91): RELEASED —
+ * "Fixedfloat בנתיים לא עובד בוא נשחרר את זה ונמצא דרכים שאתה יכול ליישם דרך
+ * הבלוקצ'יין שלנו לשם זה במקום". הספק-החוץ אינו-בניתוב-פעיל: ברירת-המחדל של
+ * bridge/quote עברה למסילה-הילידה (sovereign-quote.ts — ספר-השוק-הפנימי +
+ * חציון-העדים). הקליינט-הזה נשמר-קריאה-בלבד להפעלה-מחדש-עתידית
+ * (FF_RELEASED=0). חומר-המפתח נשאר חתום בכספת
+ * (vault-home custody-intake/fixedfloat.enc — חותם-המפתח-האחד של הבעלים).
+ *
  * (directive §4 foundation, task E12 — the bridge must know the outside price
  * of assets we can route through an external swap provider.)
  *
