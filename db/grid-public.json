@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-11-06T00:33:00.157Z",
+ "publishedAt": "2026-11-06T00:47:25.971Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -11,19 +11,15 @@
  "armed": true,
  "verdict": "ARMED-WAITING",
  "blocker": [
-  "POLICY-HALT (steem leg): cycle ops est 151 > cap 128 ; kelly-cap: gear cap 50→2 SBD (mode=kelly; winRate=0.518 WLR=0.970 kelly=0.021 safe=0.010 ×4 → 2/50) — atomic refresh skipped, ladder untouched"
+  "POLICY-HALT (steem leg): cycle ops est 147 > cap 128 ; kelly-cap: gear cap 50→2 SBD (mode=kelly; winRate=0.518 WLR=0.970 kelly=0.021 safe=0.010 ×4 → 2/50) — atomic refresh skipped, ladder untouched"
  ],
  "keyGate": {
   "ok": true,
   "authorityOk": true
  },
  "zombieOrders": {
-  "count": 47,
+  "count": 43,
   "ids": [
-   1793838862,
-   1793838863,
-   1793838864,
-   1793838865,
    1793842472,
    1793842473,
    1793842474,
@@ -31,7 +27,11 @@
    1793846113,
    1793846114,
    1793846115,
-   1793846116
+   1793846116,
+   1793849683,
+   1793849684,
+   1793849685,
+   1793849686
   ],
   "note": "open on-chain but not known-open in the ledger — ledger/chain drift surfaced honestly (lost concurrent push, or another actor trading this account)"
  },
@@ -41,7 +41,7 @@
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-11-06T00:33:00.156Z",
+  "publishedAt": "2026-11-06T00:47:25.971Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": true,
@@ -58,22 +58,22 @@
    "hive buy-side waiting for HBD inventory: 0.002 HBD commitable < 0.003 needed"
   ],
   "marks": {
-   "hiveUsd": 0.04339780921846419,
+   "hiveUsd": 0.043741878838519405,
    "hbdUsd": 1,
-   "hbdUsdRaw": 1.73,
-   "hbdRegime": "print-peg-1.00 (raw dev 7300bps)",
-   "parityHbdPerHive": 0.04339780921846419
+   "hbdUsdRaw": 1.72,
+   "hbdRegime": "print-peg-1.00 (raw dev 7200bps)",
+   "parityHbdPerHive": 0.043741878838519405
   },
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.64471059418861
+   "hp": 21.644727788672
   },
   "book": {
-   "bestBid": 0.04320225905791059,
+   "bestBid": 0.04322985337009069,
    "bestAsk": 0.04363636363636364,
-   "mid": 0.04341931134713711,
-   "spreadBps": 100
+   "mid": 0.043433108503227166,
+   "spreadBps": 94
   },
   "openOrdersNow": 0,
   "run": {
@@ -114,37 +114,37 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.046948426853273155,
-  "sbdUsd": 0.456793,
-  "paritySbdPerSteem": 0.10277834129085418
+  "steemUsd": 0.04721585551690034,
+  "sbdUsd": 0.457318,
+  "paritySbdPerSteem": 0.1032451281534957
  },
  "priceTruth": {
   "verdict": "TRIANGLE-ARMED",
-  "valueLineSbdPerSteem": 0.10277834,
+  "valueLineSbdPerSteem": 0.10324513,
   "marks": {
    "chainFeedSbdPerSteem": 0.10407144,
-   "usdParitySbdPerSteem": 0.10277834,
-   "globalSteemUsd": 0.046948426853273155,
-   "measuredSbdUsd": 0.456793,
-   "impliedSbdUsdFromFeed": 0.45111729,
-   "sbdDepegBps": 126,
+   "usdParitySbdPerSteem": 0.10324513,
+   "globalSteemUsd": 0.04721585551690034,
+   "measuredSbdUsd": 0.457318,
+   "impliedSbdUsdFromFeed": 0.45368696,
+   "sbdDepegBps": 80,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-11-06T00:32:58.194Z",
+  "measuredAt": "2026-11-06T00:47:25.001Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 40.011495362259524,
-  "weeklyUsd": 1.88,
-  "remainingSp": 160045981.4477956,
+  "weeklySp": 40.011522529490314,
+  "weeklyUsd": 1.89,
+  "remainingSp": 160046090.11671874,
   "remainingWeeks": 4000000,
   "nextPayout": "2026-11-08T18:25:30",
-  "rcFuelSp": 150.54808588319966
+  "rcFuelSp": 150.54818810318812
  },
  "inventory": {
-  "steem": 74.126,
+  "steem": 92.374,
   "sbd": 0.106
  },
  "book": {
@@ -153,7 +153,7 @@
   "mid": 0.10292566473764422,
   "spreadBps": 145
  },
- "openOrdersNow": 145,
+ "openOrdersNow": 141,
  "run": {
   "placed": 0,
   "cancelled": 0,
