@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-11-06T00:03:03.544Z",
+ "publishedAt": "2026-11-06T00:17:36.039Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -11,19 +11,15 @@
  "armed": true,
  "verdict": "ARMED-WAITING",
  "blocker": [
-  "POLICY-HALT (steem leg): cycle ops est 155 > cap 128 ; kelly-cap: gear cap 50→2 SBD (mode=kelly; winRate=0.518 WLR=0.970 kelly=0.021 safe=0.010 ×4 → 2/50) — atomic refresh skipped, ladder untouched"
+  "POLICY-HALT (steem leg): cycle ops est 151 > cap 128 ; kelly-cap: gear cap 50→2 SBD (mode=kelly; winRate=0.518 WLR=0.970 kelly=0.021 safe=0.010 ×4 → 2/50) — atomic refresh skipped, ladder untouched"
  ],
  "keyGate": {
   "ok": true,
   "authorityOk": true
  },
  "zombieOrders": {
-  "count": 51,
+  "count": 47,
   "ids": [
-   1793837054,
-   1793837055,
-   1793837056,
-   1793837057,
    1793838862,
    1793838863,
    1793838864,
@@ -31,7 +27,11 @@
    1793842472,
    1793842473,
    1793842474,
-   1793842475
+   1793842475,
+   1793846113,
+   1793846114,
+   1793846115,
+   1793846116
   ],
   "note": "open on-chain but not known-open in the ledger — ledger/chain drift surfaced honestly (lost concurrent push, or another actor trading this account)"
  },
@@ -41,7 +41,7 @@
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-11-06T00:03:03.543Z",
+  "publishedAt": "2026-11-06T00:17:36.016Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": true,
@@ -58,22 +58,22 @@
    "hive buy-side waiting for HBD inventory: 0.002 HBD commitable < 0.003 needed"
   ],
   "marks": {
-   "hiveUsd": 0.043051689840249735,
+   "hiveUsd": 0.04319153553012741,
    "hbdUsd": 1,
-   "hbdUsdRaw": 1.61,
-   "hbdRegime": "print-peg-1.00 (raw dev 6100bps)",
-   "parityHbdPerHive": 0.043051689840249735
+   "hbdUsdRaw": 1.7,
+   "hbdRegime": "print-peg-1.00 (raw dev 7000bps)",
+   "parityHbdPerHive": 0.04319153553012741
   },
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.64467519998413
+   "hp": 21.644692332710445
   },
   "book": {
-   "bestBid": 0.04308353906187784,
-   "bestAsk": 0.0431,
-   "mid": 0.04309176953093892,
-   "spreadBps": 3
+   "bestBid": 0.04317596566523605,
+   "bestAsk": 0.04363636363636364,
+   "mid": 0.04340616465079984,
+   "spreadBps": 106
   },
   "openOrdersNow": 0,
   "run": {
@@ -114,37 +114,37 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.04666893856287262,
-  "sbdUsd": 0.457137,
-  "paritySbdPerSteem": 0.10208961112942644
+  "steemUsd": 0.04684650216413132,
+  "sbdUsd": 0.457723,
+  "paritySbdPerSteem": 0.10234683894873388
  },
  "priceTruth": {
   "verdict": "TRIANGLE-ARMED",
-  "valueLineSbdPerSteem": 0.10208961,
+  "valueLineSbdPerSteem": 0.10234684,
   "marks": {
-   "chainFeedSbdPerSteem": 0.10407146,
-   "usdParitySbdPerSteem": 0.10208961,
-   "globalSteemUsd": 0.04666893856287262,
-   "measuredSbdUsd": 0.457137,
-   "impliedSbdUsdFromFeed": 0.44843167,
-   "sbdDepegBps": 194,
+   "chainFeedSbdPerSteem": 0.10407144,
+   "usdParitySbdPerSteem": 0.10234684,
+   "globalSteemUsd": 0.04684650216413132,
+   "measuredSbdUsd": 0.457723,
+   "impliedSbdUsdFromFeed": 0.45013792,
+   "sbdDepegBps": 169,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-11-06T00:03:02.489Z",
+  "measuredAt": "2026-11-06T00:17:33.484Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 40.0114389823059,
+  "weeklySp": 40.01146632721258,
   "weeklyUsd": 1.87,
-  "remainingSp": 160045755.92798108,
+  "remainingSp": 160045865.3076078,
   "remainingWeeks": 4000000,
   "nextPayout": "2026-11-08T18:25:30",
-  "rcFuelSp": 150.54787374681175
+  "rcFuelSp": 150.54797663532725
  },
  "inventory": {
-  "steem": 65.49,
+  "steem": 74.126,
   "sbd": 0.106
  },
  "book": {
@@ -153,7 +153,7 @@
   "mid": 0.10292164055866224,
   "spreadBps": 146
  },
- "openOrdersNow": 149,
+ "openOrdersNow": 145,
  "run": {
   "placed": 0,
   "cancelled": 0,
