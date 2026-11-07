@@ -1,28 +1,28 @@
 {
  "schema": "payout-doctrine-v1",
- "at": "2026-11-07T19:43:14Z",
+ "at": "2026-11-07T23:12:25Z",
  "ok": true,
  "inputs": {
   "convert": {
    "source": "grids/state/convert-plan.json",
-   "pendingSbd": 10,
-   "pendingCount": 2,
+   "pendingSbd": 5.621,
+   "pendingCount": 1,
    "maturityWindow": {
-    "earliest": "2026-11-07T18:43:18Z",
+    "earliest": "2026-11-08T02:54:48Z",
     "latest": "2026-11-08T02:54:48Z"
    },
    "payoutEstimate": {
-    "value": 96.088,
+    "value": 54.011,
     "labeledAs": "הערכה בלבד",
     "semantics": "payout = amount / ADJUSTED median-at-maturity (steem database.cpp process_conversions) — ESTIMATE, floats until conversion_date",
     "law": "payout floats until conversion_date (steem database.cpp process_conversions, Z-89)"
    },
-   "discountBps": 5422
+   "discountBps": 5432
   },
   "custody": {
    "source": "grids/state/custody.json (steem row, ONCHAIN_REAL)",
-   "at": "2026-11-07T19:43:10.067Z",
-   "liquidSteem": 5.546,
+   "at": "2026-11-07T23:12:22.121Z",
+   "liquidSteem": 4.117,
    "liquidSbd": 0.19,
    "pendingSbdInConvert": 5.621
   },
@@ -65,13 +65,13 @@
  },
  "projection": {
   "formula": "projectedLiquidSteem = custody.liquidSteem + payoutEstimate",
-  "projectedLiquidSteem": 101.634,
+  "projectedLiquidSteem": 58.128,
   "labeledAs": "הערכה בלבד",
   "note": "arithmetic on an estimate stays an estimate — never a fact until the chain pays"
  },
  "readiness": {
   "communityCreationReady": true,
-  "basis": "projected 101.634 STEEM ≥ need 3.1 STEEM (fee 3 + buffer 0.1, grids/community.mjs:78)",
+  "basis": "projected 58.128 STEEM ≥ need 3.1 STEEM (fee 3 + buffer 0.1, grids/community.mjs:78)",
   "communityCreationReadyBeforePayout": true,
   "counterGridFuelReady": null,
   "counterGridFuelPrecondition": "החלטת-בעלים — no written fuel-allocation doctrine constant exists in the repo (documented search); NEVER invented",
@@ -85,14 +85,14 @@
  },
  "countdown": {
   "minutesUntilEarliest": {
-   "minutes": -59.9,
-   "passed": true
-  },
-  "minutesUntilLatest": {
-   "minutes": 431.6,
+   "minutes": 222.4,
    "passed": false
   },
-  "asof": "2026-11-07T19:43:14Z"
+  "minutesUntilLatest": {
+   "minutes": 222.4,
+   "passed": false
+  },
+  "asof": "2026-11-07T23:12:25Z"
  },
  "armGates": [
   {
