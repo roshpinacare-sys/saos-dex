@@ -1,30 +1,30 @@
 {
  "schema": "payout-doctrine-v1",
- "at": "2026-11-08T02:35:45Z",
+ "at": "2026-11-08T16:27:36Z",
  "ok": true,
  "inputs": {
   "convert": {
    "source": "grids/state/convert-plan.json",
-   "pendingSbd": 5.621,
+   "pendingSbd": 1.789,
    "pendingCount": 1,
    "maturityWindow": {
-    "earliest": "2026-11-08T02:54:48Z",
-    "latest": "2026-11-08T02:54:48Z"
+    "earliest": "2026-11-11T17:25:09Z",
+    "latest": "2026-11-11T17:25:09Z"
    },
    "payoutEstimate": {
-    "value": 54.011,
+    "value": 17.19,
     "labeledAs": "הערכה בלבד",
     "semantics": "payout = amount / ADJUSTED median-at-maturity (steem database.cpp process_conversions) — ESTIMATE, floats until conversion_date",
     "law": "payout floats until conversion_date (steem database.cpp process_conversions, Z-89)"
    },
-   "discountBps": 5432
+   "discountBps": 5421
   },
   "custody": {
    "source": "grids/state/custody.json (steem row, ONCHAIN_REAL)",
-   "at": "2026-11-08T02:35:40.679Z",
-   "liquidSteem": 9.335,
-   "liquidSbd": 0.19,
-   "pendingSbdInConvert": 5.621
+   "at": "2026-11-08T16:27:32.684Z",
+   "liquidSteem": 7.047,
+   "liquidSbd": 0.151,
+   "pendingSbdInConvert": 1.789
   },
   "communityCost": {
    "source": "grids/community.mjs",
@@ -65,13 +65,13 @@
  },
  "projection": {
   "formula": "projectedLiquidSteem = custody.liquidSteem + payoutEstimate",
-  "projectedLiquidSteem": 63.346,
+  "projectedLiquidSteem": 24.237,
   "labeledAs": "הערכה בלבד",
   "note": "arithmetic on an estimate stays an estimate — never a fact until the chain pays"
  },
  "readiness": {
   "communityCreationReady": true,
-  "basis": "projected 63.346 STEEM ≥ need 3.1 STEEM (fee 3 + buffer 0.1, grids/community.mjs:78)",
+  "basis": "projected 24.237 STEEM ≥ need 3.1 STEEM (fee 3 + buffer 0.1, grids/community.mjs:78)",
   "communityCreationReadyBeforePayout": true,
   "counterGridFuelReady": null,
   "counterGridFuelPrecondition": "החלטת-בעלים — no written fuel-allocation doctrine constant exists in the repo (documented search); NEVER invented",
@@ -85,14 +85,14 @@
  },
  "countdown": {
   "minutesUntilEarliest": {
-   "minutes": 19.1,
+   "minutes": 4377.6,
    "passed": false
   },
   "minutesUntilLatest": {
-   "minutes": 19.1,
+   "minutes": 4377.6,
    "passed": false
   },
-  "asof": "2026-11-08T02:35:45Z"
+  "asof": "2026-11-08T16:27:36Z"
  },
  "armGates": [
   {
