@@ -1,6 +1,6 @@
 {
  "schema": "engine-transfers-v1",
- "at": "2026-11-12T04:42:39.184Z",
+ "at": "2026-11-12T13:25:15.213Z",
  "ok": true,
  "endpoint": {
   "alternativeTo": "POST https://api.hive-engine.com/rpc/contracts find tokens:transfers → {\"result\":null} (measured 2026-10-04, incl. Z-89; table absent from official docs)",
@@ -14,8 +14,8 @@
   "engine": {
    "opsFetched": 2000,
    "pagesFetched": 2,
-   "fromTs": "2026-06-19T09:50:06",
-   "toTs": "2026-11-12T03:21:57",
+   "fromTs": "2026-06-19T10:21:12",
+   "toTs": "2026-11-12T11:18:06",
    "note": "window = the measured fetched page, not all history (issuance history on-chain since 2020-03-30, account id 1373937)"
   },
   "blurtReserve": {
@@ -26,17 +26,17 @@
   },
   "blurtActive": {
    "opsFetched": 875,
-   "fromTs": "2026-07-07T21:59:00",
-   "toTs": "2026-11-11T23:15:45"
+   "fromTs": "2026-07-08T12:50:57",
+   "toTs": "2026-11-12T10:55:42"
   }
  },
  "in": {
   "label": "bridge-IN (deposits → engine credits to users)",
   "engineCredits": {
-   "count": 876,
-   "sum": 4623645.22365,
-   "fromTs": "2026-06-19T09:50:15",
-   "toTs": "2026-11-11T23:38:09"
+   "count": 878,
+   "sum": 4626156.912633,
+   "fromTs": "2026-06-19T10:21:12",
+   "toTs": "2026-11-12T11:18:06"
   },
   "engineIntoIssuer": {
    "count": 0,
@@ -53,9 +53,9 @@
   },
   "blurtDepositsActive": {
    "count": 749,
-   "sum": 4212419.638,
-   "fromTs": "2026-07-07T21:59:00",
-   "toTs": "2026-11-11T23:15:45"
+   "sum": 4198787.492,
+   "fromTs": "2026-07-08T12:50:57",
+   "toTs": "2026-11-12T10:55:42"
   }
  },
  "out": {
@@ -73,25 +73,25 @@
  },
  "context": {
   "otherIssuerSymbols": {
-   "SWAP.HBD": 118,
-   "SWAP.STEEM": 325
+   "SWAP.STEEM": 325,
+   "SWAP.HBD": 117
   },
   "reserveMovements": 0,
   "reserveMovementsNote": "Z-89's evidence class (blurt-swap→graphene-swap memos 'Token Conversion from SWAP.BLURT account …') is counted inside blurtDepositsReserve when to=issuer — not double-counted here"
  },
  "haircutIn": {
   "method": "paired single-flow evidence (1 deposit → 1 credit, same user+target, ≤24h) — measured only",
-  "pairCount": 44,
-  "depositsSum": 367090.853,
-  "creditsSum": 364337.671599,
+  "pairCount": 43,
+  "depositsSum": 362090.927,
+  "creditsSum": 359375.245044,
   "ratio": 0.9925,
   "feeBps": 75,
   "commonRatio": 0.9925,
   "note": "supersedes the Z-89 holder-balance surplus inference (1:1) with direct per-flow pairing; bridge terms remain unverified"
  },
  "pairingStats": {
-  "excludedMultiFlow": 90,
-  "excludedPending": 20,
+  "excludedMultiFlow": 89,
+  "excludedPending": 22,
   "excludedDelay": 0
  },
  "honesty": "bridge terms unverified — measured-only: every figure here is a live on-chain measurement, no fee is assumed and none is invented",
