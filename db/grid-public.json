@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-11-13T04:30:44.415Z",
+ "publishedAt": "2026-11-13T04:45:12.539Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -9,9 +9,9 @@
  ],
  "real": true,
  "armed": true,
- "verdict": "ARMED-LIVE",
+ "verdict": "ARMED-WAITING",
  "blocker": [
-  "broadcast failing: 5/7 chain ops rejected this run (\"broadcast answered without id\") — stale key/authority or node fault; verdict cannot be stable until signing succeeds"
+  "broadcast failing: 6/6 chain ops rejected this run (\"broadcast answered without id\") — stale key/authority or node fault; verdict cannot be stable until signing succeeds"
  ],
  "keyGate": {
   "ok": true,
@@ -33,20 +33,12 @@
   "note": "open on-chain but not known-open in the ledger — ledger/chain drift surfaced honestly (lost concurrent push, or another actor trading this account)"
  },
  "janitor": {
-  "cancelledThisBeat": 1,
-  "freedSbd": 0,
-  "freedSteem": 0,
-  "classes": {
-   "VALLEAK": 1
-  },
-  "ids": [
-   2356346852
-  ],
-  "note": "ZOMBIE-JANITOR (2026-11-01): dead capital reclaimed — DEDUP triplet locks, VALLEAK bids above the value line, OUTTOUCH quotes the strategy would never place today. Freed amounts feed the same beat's fuel (Z-81)."
+  "cancelledThisBeat": 0,
+  "note": "no dead capital this beat — the book is clean"
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-11-13T04:30:44.414Z",
+  "publishedAt": "2026-11-13T04:45:12.538Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": true,
@@ -63,16 +55,16 @@
    "hive buy-side waiting for HBD inventory: 0.002 HBD commitable < 0.003 needed"
   ],
   "marks": {
-   "hiveUsd": 0.04231825549751245,
+   "hiveUsd": 0.04206864821180041,
    "hbdUsd": 1,
    "hbdUsdRaw": 1.23,
    "hbdRegime": "print-peg-1.00 (raw dev 2300bps)",
-   "parityHbdPerHive": 0.04231825549751245
+   "parityHbdPerHive": 0.04206864821180041
   },
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.656993095875006
+   "hp": 21.657010258035616
   },
   "book": {
    "bestBid": 0.04244798356023632,
@@ -122,34 +114,34 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.044719875796118386,
-  "sbdUsd": 0.458101,
-  "paritySbdPerSteem": 0.09762012262823785
+  "steemUsd": 0.04475191608810871,
+  "sbdUsd": 0.458416,
+  "paritySbdPerSteem": 0.09762293656440593
  },
  "priceTruth": {
   "verdict": "TRIANGLE-ARMED",
-  "valueLineSbdPerSteem": 0.09762012,
+  "valueLineSbdPerSteem": 0.09762294,
   "marks": {
    "chainFeedSbdPerSteem": 0.10406854,
-   "usdParitySbdPerSteem": 0.09762012,
-   "globalSteemUsd": 0.044719875796118386,
-   "measuredSbdUsd": 0.458101,
-   "impliedSbdUsdFromFeed": 0.42971562,
-   "sbdDepegBps": 661,
+   "usdParitySbdPerSteem": 0.09762294,
+   "globalSteemUsd": 0.04475191608810871,
+   "measuredSbdUsd": 0.458416,
+   "impliedSbdUsdFromFeed": 0.4300235,
+   "sbdDepegBps": 660,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-11-13T04:30:33.183Z",
+  "measuredAt": "2026-11-13T04:45:09.148Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 40.030855691126135,
+  "weeklySp": 40.03088307373173,
   "weeklyUsd": 1.79,
-  "remainingSp": 160123422.76326144,
+  "remainingSp": 160123532.2936838,
   "remainingWeeks": 4000000,
   "nextPayout": "2026-11-15T18:25:30",
-  "rcFuelSp": 150.62093145986577
+  "rcFuelSp": 150.62103449022797
  },
  "inventory": {
   "steem": 1.836,
@@ -163,8 +155,8 @@
  },
  "openOrdersNow": 26,
  "run": {
-  "placed": 1,
-  "cancelled": 1,
+  "placed": 0,
+  "cancelled": 0,
   "placedTotal": 1181,
   "cancelledTotal": 870,
   "filledTotal": 300
@@ -635,7 +627,8 @@
    "receive": "28.139 STEEM",
    "priceSbdPerSteem": 0.09762012,
    "status": "open",
-   "lastSeenAt": "2026-11-13T04:30:42.022Z"
+   "lastSeenAt": "2026-11-13T04:30:42.022Z",
+   "chain": "steem"
   }
  ],
  "vault": {
