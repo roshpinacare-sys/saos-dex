@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-11-13T23:43:48.262Z",
+ "publishedAt": "2026-11-13T23:53:57.851Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -11,30 +11,40 @@
  "armed": true,
  "verdict": "ARMED-WAITING",
  "blocker": [
-  "sell-side waiting for fuel: 0.107 STEEM commitable < 3 needed (next powerdown: 2026-11-15T18:25:30)"
+  "sell-side waiting for fuel: 0.061 STEEM commitable < 3 needed (next powerdown: 2026-11-15T18:25:30)"
  ],
  "keyGate": {
   "ok": true,
   "authorityOk": true
  },
  "zombieOrders": {
-  "count": 5,
+  "count": 7,
   "ids": [
    1794581301,
    1794581302,
    1794581303,
    1794612592,
-   1794612593
+   1794612593,
+   1794613554,
+   2026111351
   ],
   "note": "open on-chain but not known-open in the ledger — ledger/chain drift surfaced honestly (lost concurrent push, or another actor trading this account)"
  },
  "janitor": {
-  "cancelledThisBeat": 0,
-  "note": "no dead capital this beat — the book is clean"
+  "cancelledThisBeat": 1,
+  "freedSbd": 5.314,
+  "freedSteem": 0,
+  "classes": {
+   "VALLEAK": 1
+  },
+  "ids": [
+   2026111351
+  ],
+  "note": "ZOMBIE-JANITOR (2026-11-01): dead capital reclaimed — DEDUP triplet locks, VALLEAK bids above the value line, OUTTOUCH quotes the strategy would never place today. Freed amounts feed the same beat's fuel (Z-81)."
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-11-13T23:43:48.261Z",
+  "publishedAt": "2026-11-13T23:53:57.850Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": true,
@@ -51,16 +61,16 @@
    "hive buy-side waiting for HBD inventory: 0.002 HBD commitable < 0.003 needed"
   ],
   "marks": {
-   "hiveUsd": 0.042451101330214465,
+   "hiveUsd": 0.04245856547490533,
    "hbdUsd": 1,
    "hbdUsdRaw": 1.21,
    "hbdRegime": "print-peg-1.00 (raw dev 2100bps)",
-   "parityHbdPerHive": 0.042451101330214465
+   "parityHbdPerHive": 0.04245856547490533
   },
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.658371633005
+   "hp": 21.65838382236003
   },
   "book": {
    "bestBid": 0.0427,
@@ -110,51 +120,51 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.045885489767462526,
-  "sbdUsd": 0.422519,
-  "paritySbdPerSteem": 0.10859982572964182
+  "steemUsd": 0.045926089019415355,
+  "sbdUsd": 0.422512,
+  "paritySbdPerSteem": 0.10869771514043472
  },
  "priceTruth": {
   "verdict": "TRIANGLE-ARMED",
   "valueLineSbdPerSteem": 0.10406824,
   "marks": {
    "chainFeedSbdPerSteem": 0.10406824,
-   "usdParitySbdPerSteem": 0.10859983,
-   "globalSteemUsd": 0.045885489767462526,
-   "measuredSbdUsd": 0.422519,
-   "impliedSbdUsdFromFeed": 0.44091734,
-   "sbdDepegBps": -417,
+   "usdParitySbdPerSteem": 0.10869772,
+   "globalSteemUsd": 0.045926089019415355,
+   "measuredSbdUsd": 0.422512,
+   "impliedSbdUsdFromFeed": 0.44130746,
+   "sbdDepegBps": -426,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-11-13T23:43:47.469Z",
+  "measuredAt": "2026-11-13T23:53:53.905Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 40.03301086901326,
+  "weeklySp": 40.03302975699933,
   "weeklyUsd": 1.84,
-  "remainingSp": 160132043.47480986,
+  "remainingSp": 160132119.02675414,
   "remainingWeeks": 4000000,
   "nextPayout": "2026-11-15T18:25:30",
-  "rcFuelSp": 150.6290405770759
+  "rcFuelSp": 150.62911164540571
  },
  "inventory": {
-  "steem": 1.667,
-  "sbd": 18.758
+  "steem": 1.167,
+  "sbd": 13.444
  },
  "book": {
-  "bestBid": 0.10627935293094451,
-  "bestAsk": 0.10689679834076335,
-  "mid": 0.10658807563585393,
-  "spreadBps": 58
+  "bestBid": 0.10629784272790536,
+  "bestAsk": 0.10718087855297158,
+  "mid": 0.10673936064043847,
+  "spreadBps": 83
  },
- "openOrdersNow": 13,
+ "openOrdersNow": 15,
  "run": {
   "placed": 0,
-  "cancelled": 0,
+  "cancelled": 1,
   "placedTotal": 1192,
-  "cancelledTotal": 891,
+  "cancelledTotal": 892,
   "filledTotal": 300
  },
  "externalFlowUsd": 0.09863,
