@@ -66,8 +66,8 @@ jobs:
       ROT_ROSTER: ${{ secrets.ROT_ROSTER }}
       LIVE_FLEET_KEYS: ${{ secrets.LIVE_FLEET_KEYS }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5 ACTIONS-LOCK 2026-11-14
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5 ACTIONS-LOCK 2026-11-14
         with: { node-version: 22 }
       - name: Install crypto deps (pinned)
         run: npm i --no-save --silent @noble/hashes@1.8.0 @noble/secp256k1@2.2.3
