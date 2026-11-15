@@ -574,7 +574,7 @@ async function main(): Promise<void> {
           console.log(`[grid-beat] ask #${id}: ${dp3(sellAmt)} STEEM -> ${dp3(recv)} SBD @${px.toFixed(6)} (parity+${(TIER.askStepBps * k) / 100}% · tier ${TIER.tier}${costFloor > 0 && baseAsk === costFloor ? ` · cost-floor ${invBasis.avgCostSbd?.toFixed(6)}+${MIN_ASK_EDGE_BPS}bps` : ""}) txid ${r.txid.slice(0, 12)}`);
         } catch (e) {
           bcFailed++;
-          console.warn(`[grid-beat] ask #${id} rejected: ${String(e).slice(0, 90)}`);
+          console.warn(`[grid-beat] ask #${id} rejected (selling ${dp3(sellAmt)} @${px.toFixed(6)}): ${String(e).slice(0, 300)}`);
         }
       }
     } else {
@@ -621,7 +621,7 @@ async function main(): Promise<void> {
           console.log(`[grid-beat] bid #${id}: ${dp3(perK)} SBD -> ${dp3(recv)} STEEM @${px.toFixed(6)} txid ${r.txid.slice(0, 12)}`);
         } catch (e) {
           bcFailed++;
-          console.warn(`[grid-beat] bid #${id} rejected: ${String(e).slice(0, 90)}`);
+          console.warn(`[grid-beat] bid #${id} rejected (selling ${dp3(perK)} SBD @${px.toFixed(6)}): ${String(e).slice(0, 300)}`);
         }
       }
     } else {
@@ -772,7 +772,7 @@ async function main(): Promise<void> {
             console.log(`[grid-beat] hive ask #${id}: ${dp3(sellAmt)} HIVE -> ${dp3(recv)} HBD @${px.toFixed(6)} (parity+${(HIVE_ASK_STEP_BPS_LIVE * k) / 100}%) txid ${r.txid.slice(0, 12)}`);
           } catch (e) {
             hbcFailed++;
-            console.warn(`[grid-beat] hive ask #${id} rejected: ${String(e).slice(0, 90)}`);
+            console.warn(`[grid-beat] hive ask #${id} rejected (selling ${dp3(sellAmt)} @${px.toFixed(6)}): ${String(e).slice(0, 300)}`);
           }
         }
       } else {
@@ -804,7 +804,7 @@ async function main(): Promise<void> {
             console.log(`[grid-beat] hive bid #${id}: ${dp3(perK)} HBD -> ${dp3(recv)} HIVE @${px.toFixed(6)} txid ${r.txid.slice(0, 12)}`);
           } catch (e) {
             hbcFailed++;
-            console.warn(`[grid-beat] hive bid #${id} rejected: ${String(e).slice(0, 90)}`);
+            console.warn(`[grid-beat] hive bid #${id} rejected (selling ${dp3(perK)} HBD @${px.toFixed(6)}): ${String(e).slice(0, 300)}`);
           }
         }
       } else {
