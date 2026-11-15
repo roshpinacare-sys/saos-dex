@@ -212,8 +212,8 @@ function loadKeys(keysFile) {
 /* ── selftest — וקטורים אופליין ─────────────────────────────────────────────── */
 export async function selftest() {
   const assert = (c, m) => { if (!c) { console.error("SELFTEST FAIL:", m); process.exit(1); } };
-  /* W39 (trace 1a1620a81bc92505): payer = ROT2-covered trader (cashmachine active key absent post-ROT2, run #26 fail-closed evidence) */
-  const lane = { id: "canary-1", from: "hcsoldier5", to: "hcsoldier4", agent: "hcsoldier6", amountSbd: 0.05, feeSbd: 0.01, purpose: "canary payroll cycle" };
+  /* W40 (2026-11-15T20:02Z, run 43755537870 fail-closed): hcsoldier4/5/6 active absent from the live-relay map — lsa/haran/macrame hold LIVE active keys (resolve-keys census-relay 27→16) */
+  const lane = { id: "canary-1", from: "lsa", to: "haran", agent: "macrame", amountSbd: 0.05, feeSbd: 0.01, purpose: "canary payroll cycle" };
   const plan = { protocol: "SAOS-ESCROW-PAYROLL-PLAN/1", lanes: [lane] };
   // וקטור 1: תוכנית-תקינה עוברת
   assert(validatePlan(plan).ok === true, "valid plan accepted");
@@ -223,7 +223,7 @@ export async function selftest() {
   assert(validatePlan({ protocol: "SAOS-ESCROW-PAYROLL-PLAN/1", lanes: [{ ...lane, amountSbd: 5 }] }).ok === false, "over-cap amount refused");
   assert(validatePlan({ protocol: "SAOS-ESCROW-PAYROLL-PLAN/1", lanes: [{ ...lane, feeSbd: 0.5 }] }).ok === false, "over-cap fee refused");
   // וקטור 4: שלושה-צדדים-נבדלים
-  assert(validatePlan({ protocol: "SAOS-ESCROW-PAYROLL-PLAN/1", lanes: [{ ...lane, to: "hcsoldier5" }] }).ok === false, "same-party lane refused");
+  assert(validatePlan({ protocol: "SAOS-ESCROW-PAYROLL-PLAN/1", lanes: [{ ...lane, to: lane.from }] }).ok === false, "same-party lane refused");
   // וקטור 5: escrow_id דטרמיניסטי + בגבולות-uint32
   const id1 = escrowIdFor("canary-1"), id2 = escrowIdFor("canary-1"), id3 = escrowIdFor("canary-2");
   assert(id1 === id2 && id1 !== id3 && id1 > 0 && id1 <= 0xffffffff, "escrow id deterministic uint32");
@@ -244,9 +244,9 @@ export async function selftest() {
   const unrat = { to_approved: false, agent_approved: false, sbd_balance: "0.050 SBD", steem_balance: "0.000 STEEM" };
   const pUnrat = planLegsFromState(unrat);
   assert(pUnrat.doTransfer === false && pUnrat.doRelease === false && pUnrat.complete === false, "unratified escrow → no transfer/release");
-  assert(JSON.stringify(planApproveWhos(unrat, lane)) === JSON.stringify(["hcsoldier4", "hcsoldier6"]), "unratified → both whos approve");
+  assert(JSON.stringify(planApproveWhos(unrat, lane)) === JSON.stringify([lane.to, lane.agent]), "unratified → both whos approve");
   const half = { to_approved: true, agent_approved: false, sbd_balance: "0.050 SBD", steem_balance: "0.000 STEEM" };
-  assert(JSON.stringify(planApproveWhos(half, lane)) === JSON.stringify(["hcsoldier6"]), "half-ratified → only the missing who");
+  assert(JSON.stringify(planApproveWhos(half, lane)) === JSON.stringify([lane.agent]), "half-ratified → only the missing who");
   const ready = { to_approved: true, agent_approved: true, sbd_balance: "0.050 SBD", steem_balance: "0.000 STEEM" };
   assert(planLegsFromState(ready).doRelease === true, "fully ratified + funded → release leg");
   const emptied = { to_approved: true, agent_approved: true, sbd_balance: "0.000 SBD", steem_balance: "0.000 STEEM" };
