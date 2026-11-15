@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-11-15T20:16:16.870Z",
+ "publishedAt": "2026-11-15T20:20:33.228Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -9,9 +9,10 @@
  ],
  "real": true,
  "armed": true,
- "verdict": "ARMED-LIVE",
+ "verdict": "ARMED-WAITING",
  "blocker": [
-  "sell-side waiting for fuel: 1.058 STEEM commitable < 3 needed (next powerdown: 2026-11-22T18:25:30)"
+  "sell-side waiting for fuel: 1.058 STEEM commitable < 3 needed (next powerdown: 2026-11-22T18:25:30)",
+  "broadcast failing: 3/3 chain ops rejected this run (\"broadcast answered without id\") — stale key/authority or node fault; verdict cannot be stable until signing succeeds"
  ],
  "keyGate": {
   "ok": true,
@@ -36,22 +37,12 @@
   "note": "open on-chain but not known-open in the ledger — ledger/chain drift surfaced honestly (lost concurrent push, or another actor trading this account)"
  },
  "janitor": {
-  "cancelledThisBeat": 3,
-  "freedSbd": 0,
-  "freedSteem": 0,
-  "classes": {
-   "BID-DRIFT": 3
-  },
-  "ids": [
-   2358187969,
-   2358187994,
-   2358188011
-  ],
-  "note": "ZOMBIE-JANITOR (2026-11-01): dead capital reclaimed — DEDUP triplet locks, VALLEAK bids above the value line, OUTTOUCH quotes the strategy would never place today. Freed amounts feed the same beat's fuel (Z-81)."
+  "cancelledThisBeat": 0,
+  "note": "no dead capital this beat — the book is clean"
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-11-15T20:16:16.869Z",
+  "publishedAt": "2026-11-15T20:20:33.227Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": false,
@@ -77,7 +68,7 @@
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.661568799576557
+   "hp": 21.661573934212992
   },
   "book": {
    "bestBid": 0.03937708565072302,
@@ -127,7 +118,7 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.043058907529096614,
+  "steemUsd": 0.04312390752909662,
   "sbdUsd": null,
   "paritySbdPerSteem": null
  },
@@ -137,24 +128,24 @@
   "marks": {
    "chainFeedSbdPerSteem": 0.10406563,
    "usdParitySbdPerSteem": null,
-   "globalSteemUsd": 0.043058907529096614,
+   "globalSteemUsd": 0.04312390752909662,
    "measuredSbdUsd": null,
-   "impliedSbdUsdFromFeed": 0.41376685,
+   "impliedSbdUsdFromFeed": 0.41439146,
    "sbdDepegBps": null,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-11-15T20:15:58.277Z",
+  "measuredAt": "2026-11-15T20:20:25.718Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 40.03799453228659,
-  "weeklyUsd": 1.72,
-  "remainingSp": 160151978.127903,
+  "weeklySp": 40.03800290154311,
+  "weeklyUsd": 1.73,
+  "remainingSp": 160152011.60492912,
   "remainingWeeks": 4000000,
   "nextPayout": "2026-11-22T18:25:30",
-  "rcFuelSp": 150.64779221231706
+  "rcFuelSp": 150.64782370265598
  },
  "inventory": {
   "steem": 1.745,
@@ -168,8 +159,8 @@
  },
  "openOrdersNow": 17,
  "run": {
-  "placed": 3,
-  "cancelled": 3,
+  "placed": 0,
+  "cancelled": 0,
   "placedTotal": 18,
   "cancelledTotal": 21,
   "filledTotal": 12
@@ -548,7 +539,8 @@
    "receive": "38.320 STEEM",
    "priceSbdPerSteem": 0.10260887428101889,
    "status": "open",
-   "lastSeenAt": "2026-11-15T20:16:08.837Z"
+   "lastSeenAt": "2026-11-15T20:16:08.837Z",
+   "chain": "steem"
   },
   {
    "id": 2358190146,
@@ -559,7 +551,8 @@
    "receive": "38.707 STEEM",
    "priceSbdPerSteem": 0.1015827855382087,
    "status": "open",
-   "lastSeenAt": "2026-11-15T20:16:11.823Z"
+   "lastSeenAt": "2026-11-15T20:16:11.823Z",
+   "chain": "steem"
   },
   {
    "id": 2358190171,
@@ -570,7 +563,8 @@
    "receive": "39.102 STEEM",
    "priceSbdPerSteem": 0.10055669679539851,
    "status": "open",
-   "lastSeenAt": "2026-11-15T20:16:14.828Z"
+   "lastSeenAt": "2026-11-15T20:16:14.828Z",
+   "chain": "steem"
   }
  ],
  "vault": {
