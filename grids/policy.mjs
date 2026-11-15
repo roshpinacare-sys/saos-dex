@@ -203,6 +203,25 @@ export function effectiveCycleCap(laneName) {
 }
 
 /**
+ * התקרה-האפקטיבית הפר-פעולה (אחרי gearbox+kelly) — אותו-חוק מדויק של effectiveCycleCap,
+ * ברזולוציית-ההצבה-הבודדת. נולד מהמדידה הכפולה של 2026-11-15: קלי (winRate 0.518 · WLR
+ * 0.953 · kelly 0.012 → cap 4 SBD) מתחת לנומינל-הרמה של הגריד (11.643 SBD) → כל-הצבה
+ * POLICY-SKIP → 0 placed בכל beat → אפס fills חדשים → אפס קבלות-ACTED → ההילוך לא עולה
+ * לעולם — מלכודת-המוות הכלכלית בדיוק כפי שתועדה ברמת-המחזור (2026-10-22) רק ברמת-הפר-פעולה.
+ * הגריד יקטין את כל-הצבה אל-תוך התקרה (מטה-בלבד); השער עצמו נשאר השופט האחרון.
+ * null = fail-closed (אין תקרה מדודה = אין התאמה — השער לבדו יחליט).
+ */
+export function effectivePerOpCap(laneName) {
+  const lp = loadPolicy();
+  if (lp.haltAll || !lp.policy) return null;
+  const base = lp.policy?.lanes?.[String(laneName)];
+  if (!base || typeof base !== "object") return null;
+  const cfg = applyGear(String(laneName), base);
+  const cap = cfg?.maxNotionalPerOpSbd;
+  return typeof cap === "number" && Number.isFinite(cap) && cap > 0 ? cap : null;
+}
+
+/**
  * R329: ladder-receipt driven gearbox — הקבלה-היא-ההילוך.
  * verdict containing ACTED (LADDER-ACTED / ARMY-ACTED) = green: streak++
  * verdict containing ACTS-FAILED or POLICY-HALTED = instant reset: streak=0, gear=1

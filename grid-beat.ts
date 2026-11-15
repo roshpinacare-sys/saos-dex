@@ -33,7 +33,7 @@ import path from "path";
  * כל-חותם שואל את-הבלם בטרם-חתימה — fail-closed, קריאה-טרייה בכל-ריצה. */
 import { stasisHalt } from "./grids/brake.mjs";
 import { planJanitor } from "./grids/zombie-janitor.mjs"; // ZOMBIE-JANITOR (2026-11-01): reclaim dead capital — measured crisis: 60 open orders, ~52.4 SBD locked
-import { policyCycleGate, policyGate, effectiveCycleCap } from "./grids/policy.mjs"; // DECISIONS #17 · SAOS-POLICY-ENGINE/1 (agentic-wallet pattern, owner trace 1a137c5876e963e9) · trim-to-cap (owner approve trace 1a1629f96941f20d)
+import { policyCycleGate, policyGate, effectiveCycleCap, effectivePerOpCap } from "./grids/policy.mjs"; // DECISIONS #17 · SAOS-POLICY-ENGINE/1 (agentic-wallet pattern, owner trace 1a137c5876e963e9) · trim-to-cap (owner approve trace 1a1629f96941f20d) · per-op trim (2026-11-15: kelly-cap 4 < level 11.643 = per-op death-trap, same cure as the cycle level)
 /* 9-c (2026-10-11) · שער-המפתח: אימות שה-WIF גוזר בדיוק את רשות-ה-active החיה לפני-כל-שידור.
  * המדידה-החיה (twin run 38144052862 · 2026-10-11T13:39Z): WIF-ישן בכספת (רוטציית-בעלים
  * last_owner_update 2026-10-08T17:29:09Z) → 18 שידורים-נדונים ("broadcast answered without id")
@@ -369,6 +369,11 @@ async function main(): Promise<void> {
    * HALT-מלא — הגריד מתאים-את-עצמו מטה (גורם-התאמה ≤1) אל-תוך התקרה. המשמעת-הון-נשמרת
    * במלואה (פחות-הון-על-השולחן, לעולם-לא-יותר) והמלכודת (בלי-הצבות → אין-קבלות-ACTED
    * → הילוך-לא-עולה → cap-צמוד-לנצח) נסגרת. גורם-ההתאמה-מפורסם-בכנות בלוג ובספר. */
+  /* 2026-11-15 · per-op trim-to-cap — measured death-trap: kelly cap 4 SBD < grid level 11.643 SBD
+   * → every placement POLICY-SKIP → 0 placed forever → no ACTED receipts → gear never climbs.
+   * Same law the cycle level already has (owner trace 1a1629f96941f20d): size DOWN into the cap,
+   * never above it; the gate stays the final judge. null = fail-closed (no measured cap). */
+  const perOpCapSbd = effectivePerOpCap("grid");
   const cycleCapSbd = effectiveCycleCap("grid");
   let commitScale = 1;
   if (cycleCapSbd != null && polNotionalUpper > cycleCapSbd && polNotionalUpper > 0) {
@@ -543,7 +548,12 @@ async function main(): Promise<void> {
       const baseAsk = Math.max(valueLine * (1 + TIER.askStepBps / 10_000), touchAsk, costFloor);
       for (let k = 1; k <= LIVE_ASK_LEVELS; k++) {
         const px = baseAsk * (1 + (TIER.askStepBps * (k - 1)) / 10_000);
-        const sellAmt = per;
+        /* per-op trim-to-cap (2026-11-15): the level sizes DOWN into the effective
+         * per-op cap (gearbox+kelly) instead of dying on POLICY-SKIP — down only,
+         * the gate stays the final judge. Measured: kelly cap 4 SBD vs level 11.643
+         * SBD = 0 placed forever = the economic death-trap, cured. */
+        const sellAmt = Math.floor((perOpCapSbd != null && px > 0 ? Math.min(per, perOpCapSbd / px) : per) * 1000) / 1000;
+        if (perOpCapSbd != null && per * px > perOpCapSbd) console.log(`[grid-beat] ask level ${k} POLICY-FIT (per-op trim): level notional ${(per * px).toFixed(3)} SBD > cap ${perOpCapSbd} SBD — sized down to ${(sellAmt * px).toFixed(3)} SBD (down only)`);
         const recv = Math.floor(sellAmt * px * 1000) / 1000;
         if (recv < LIVE_MIN_LEVEL_SBD) continue;
         const askKey = `${dp3(sellAmt)}|${dp3(recv)}`;
@@ -587,13 +597,17 @@ async function main(): Promise<void> {
       for (let k = 1; k <= LIVE_BID_LEVELS; k++) {
         // Z-80: ביד לא עולה על המגע — תמיד (כפול-ביטחון; bidBase כבר מתחתיו)
         const px = Math.min(bidBase * (1 - (TIER.bidStepBps * (k - 1)) / 10_000), snap.book.bestBid); // N8-b: התחבקות-מגע + N1 מדרגה-חיה
-        const recv = Math.floor(per / px * 1000) / 1000; // STEEM
+        /* per-op trim-to-cap (2026-11-15) — same law as the ask side: the level
+         * sizes DOWN into the effective per-op cap instead of POLICY-SKIP death. */
+        const perK = Math.floor((perOpCapSbd != null ? Math.min(per, perOpCapSbd) : per) * 1000) / 1000;
+        if (perOpCapSbd != null && per > perOpCapSbd) console.log(`[grid-beat] bid level ${k} POLICY-FIT (per-op trim): level notional ${per.toFixed(3)} SBD > cap ${perOpCapSbd} SBD — sized down to ${perK.toFixed(3)} SBD (down only)`);
+        const recv = Math.floor(perK / px * 1000) / 1000; // STEEM
         if (recv < LIVE_MIN_LEVEL_STEEM) continue;
-        const bidKey = `${dp3(per)}|${dp3(recv)}`;
+        const bidKey = `${dp3(perK)}|${dp3(recv)}`;
         if (beatBidPrices.has(bidKey)) continue; // collapsed-spread guard: same order twice = capital lock
         beatBidPrices.add(bidKey);
-        const perOpNotional = per; // ערך-SBD של ההצבה הבודדת (ה-BID מוכר SBD)
-        const opGate = perOpAllow("grid-beat:steem", ACCOUNT, "steem", "bid", perOpNotional, px, per);
+        const perOpNotional = perK; // ערך-SBD של ההצבה הבודדת (ה-BID מוכר SBD)
+        const opGate = perOpAllow("grid-beat:steem", ACCOUNT, "steem", "bid", perOpNotional, px, perK);
         if (!opGate.allow) {
           console.warn(`[grid-beat] bid level ${k} POLICY-SKIP (per-op): ${opGate.why}`);
           continue;
@@ -601,10 +615,10 @@ async function main(): Promise<void> {
         const id = nextId(); seq++;
         bcAttempted++;
         try {
-          const r = await realPlaceOrder({ orderid: id, amountToSell: `${dp3(per)} SBD`, minToReceive: `${dp3(recv)} STEEM`, expirationDays: LIVE_EXPIRY_DAYS });
+          const r = await realPlaceOrder({ orderid: id, amountToSell: `${dp3(perK)} SBD`, minToReceive: `${dp3(recv)} STEEM`, expirationDays: LIVE_EXPIRY_DAYS });
           placed++;
-          ledger.orders.push({ id, at: new Date().toISOString(), txid: r.txid, side: "bid", sell: `${dp3(per)} SBD`, receive: `${dp3(recv)} STEEM`, priceSbdPerSteem: px, status: "open", lastSeenAt: new Date().toISOString() });
-          console.log(`[grid-beat] bid #${id}: ${dp3(per)} SBD -> ${dp3(recv)} STEEM @${px.toFixed(6)} txid ${r.txid.slice(0, 12)}`);
+          ledger.orders.push({ id, at: new Date().toISOString(), txid: r.txid, side: "bid", sell: `${dp3(perK)} SBD`, receive: `${dp3(recv)} STEEM`, priceSbdPerSteem: px, status: "open", lastSeenAt: new Date().toISOString() });
+          console.log(`[grid-beat] bid #${id}: ${dp3(perK)} SBD -> ${dp3(recv)} STEEM @${px.toFixed(6)} txid ${r.txid.slice(0, 12)}`);
         } catch (e) {
           bcFailed++;
           console.warn(`[grid-beat] bid #${id} rejected: ${String(e).slice(0, 90)}`);
@@ -736,7 +750,10 @@ async function main(): Promise<void> {
         const per = Math.floor((hiveCommit / HIVE_ASK_LEVELS_LIVE) * 1000) / 1000;
         for (let k = 1; k <= HIVE_ASK_LEVELS_LIVE; k++) {
           const px = hiveParity * (1 + (HIVE_ASK_STEP_BPS_LIVE * k) / 10_000);
-          const sellAmt = per;
+          /* per-op trim-to-cap (2026-11-15) — same law as the steem legs: size DOWN
+           * into the effective per-op cap (gearbox+kelly) instead of POLICY-SKIP death. */
+          const sellAmt = Math.floor((perOpCapSbd != null && px > 0 ? Math.min(per, perOpCapSbd / px) : per) * 1000) / 1000;
+          if (perOpCapSbd != null && per * px > perOpCapSbd) console.log(`[grid-beat] hive ask level ${k} POLICY-FIT (per-op trim): level notional ${(per * px).toFixed(3)} > cap ${perOpCapSbd} — sized down to ${(sellAmt * px).toFixed(3)} (down only)`);
           // R99-מדוד (מילויים חיים על השרשרת): הרצפה על 0.001 HBD הפילה את מחיר האבק מתחת
           // לכוונה — מכירה מתחת לערך אסורה. עתה: ceil על התקבול (לעולם לא מתחת לכוונה)
           // + רמה שהמיל-צעד שלה מעוות את המחיר ביותר מ-0.5% נדלגת בכנות.
@@ -771,17 +788,20 @@ async function main(): Promise<void> {
           // חוק-הזהות (R99): רק קנייה מתחת לקו-הזהות החיצוני נספרת כעודף —
           // רמה מעל הקו (פרימיום-HBD חריגה) נדלגת בכנות. לעולם לא משלמים מעל-ערך.
           if (hiveParity !== null && px >= hiveParity) continue;
-          const recv = Math.floor(per / px * 1000) / 1000; // HIVE
+          /* per-op trim-to-cap (2026-11-15) — same law: size DOWN into the cap. */
+          const perK = Math.floor((perOpCapSbd != null ? Math.min(per, perOpCapSbd) : per) * 1000) / 1000;
+          if (perOpCapSbd != null && per > perOpCapSbd) console.log(`[grid-beat] hive bid level ${k} POLICY-FIT (per-op trim): level notional ${per.toFixed(3)} > cap ${perOpCapSbd} — sized down to ${perK.toFixed(3)} (down only)`);
+          const recv = Math.floor(perK / px * 1000) / 1000; // HIVE
           if (recv < HIVE_MIN_LEVEL_LIVE) continue;
-          const hiveBidGate = perOpAllow("grid-beat:hive", ACCOUNT, "hive", "bid", per, px, per);
+          const hiveBidGate = perOpAllow("grid-beat:hive", ACCOUNT, "hive", "bid", perK, px, perK);
           if (!hiveBidGate.allow) { console.warn(`[grid-beat] hive bid level ${k} POLICY-SKIP (per-op): ${hiveBidGate.why}`); continue; }
           const id = nextHiveId(); hseq++;
           hbcAttempted++;
           try {
-            const r = await hm.hivePlaceOrder({ orderid: id, amountToSell: `${dp3(per)} HBD`, minToReceive: `${dp3(recv)} HIVE`, expirationDays: HIVE_EXPIRY_DAYS });
+            const r = await hm.hivePlaceOrder({ orderid: id, amountToSell: `${dp3(perK)} HBD`, minToReceive: `${dp3(recv)} HIVE`, expirationDays: HIVE_EXPIRY_DAYS });
             hivePlaced++;
-            ledger.orders.push({ id, at: new Date().toISOString(), txid: r.txid, side: "bid", chain: "hive", sell: `${dp3(per)} HBD`, receive: `${dp3(recv)} HIVE`, priceSbdPerSteem: px, status: "open", lastSeenAt: new Date().toISOString() });
-            console.log(`[grid-beat] hive bid #${id}: ${dp3(per)} HBD -> ${dp3(recv)} HIVE @${px.toFixed(6)} txid ${r.txid.slice(0, 12)}`);
+            ledger.orders.push({ id, at: new Date().toISOString(), txid: r.txid, side: "bid", chain: "hive", sell: `${dp3(perK)} HBD`, receive: `${dp3(recv)} HIVE`, priceSbdPerSteem: px, status: "open", lastSeenAt: new Date().toISOString() });
+            console.log(`[grid-beat] hive bid #${id}: ${dp3(perK)} HBD -> ${dp3(recv)} HIVE @${px.toFixed(6)} txid ${r.txid.slice(0, 12)}`);
           } catch (e) {
             hbcFailed++;
             console.warn(`[grid-beat] hive bid #${id} rejected: ${String(e).slice(0, 90)}`);
