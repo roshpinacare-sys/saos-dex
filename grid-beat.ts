@@ -149,6 +149,12 @@ interface GridLedger {
   version: 1 | 2;
   orders: LedgerOrder[];
   fills: LedgerFill[];
+  /** R-GRID-WAR dedup key-ring (2026-11-15 root-fix): the fills ARRAY is trimmed to
+   * 300 for display, but the observation window re-reads older history every beat —
+   * trimmed keys came back and re-recorded forever (measured: the 18:02 wash burst
+   * re-recorded every beat). The key-ring persists 5000 dedup keys independent of
+   * the display array. Additive-only, never fabricated. */
+  fillKeys?: string[];
   placedTotal: number; filledTotal: number; cancelledTotal: number;
   externalFlowUsd: number; // סכום-נזילות-החוץ הנטו שנספרה (received-paid בדולר ציון)
 }
@@ -168,6 +174,8 @@ function loadLedger(): GridLedger {
 function saveLedger(l: GridLedger): void {
   l.orders = l.orders.slice(-300);
   l.fills = l.fills.slice(-300);
+  // key-ring maintenance: additive union of every fill key ever recorded (bounded)
+  l.fillKeys = Array.from(new Set([...(l.fillKeys ?? []), ...l.fills.map((f) => f.key)])).slice(-5000);
   fs.mkdirSync(path.dirname(LEDGER_FILE), { recursive: true });
   const tmp = LEDGER_FILE + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(l, null, 1));
@@ -638,7 +646,11 @@ async function main(): Promise<void> {
   if (steemUsd && sbdUsd) {
     for (const f of snap.fills) {
       const key = `${f.at}|${f.paid}|${f.received}`;
-      if (ledger.fills.some((x) => x.key === key)) continue;
+      /* R-GRID-WAR root-fix (2026-11-15): dedup against the persistent key-ring
+       * (fillKeys) FIRST — the display array is trimmed and trimmed keys returned
+       * as phantom re-records every beat. The ring never forgets (bounded 5000). */
+      const seenRing = new Set([...(ledger.fillKeys ?? []), ...ledger.fills.map((x) => x.key)]);
+      if (seenRing.has(key)) continue;
       const amtOf = (s: string): number => parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) || 0;
       const paidAmt = amtOf(f.paid), recvAmt = amtOf(f.received);
       const paidSteem = f.paid.includes("STEEM"), recvSteem = f.received.includes("STEEM");
