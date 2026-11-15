@@ -14,6 +14,22 @@
 //   VALLEAK  — a bid priced ABOVE the value line (buying STEEM above measured value =
 //              real bleed; the ladder law already forbids placing one — the janitor
 //              also retires one that exists). Any age — it is wrong the moment it exists.
+//   ASK-LEAK (2026-11-15 · measured live: 6 ledger-known asks @0.1032-0.1035 sit BELOW
+//              the value line 0.10407 — principle-1 violation on the sell shelf: the
+//              moment they fill they sell STEEM under measured external value, while the
+//              fresh ask deployment dies on "insufficient funds" because their capital
+//              is hostage. Mirror of VALLEAK by the same law: an ask priced BELOW the
+//              value line = real bleed, any age. SCOPE-SPLIT preserved (N8-f): only
+//              ledger-KNOWN asks are retired (the volume mandate's own orders are
+//              ledger-unknown to this lane and are never touched).
+//   BID-DRIFT (2026-11-15 · measured live: the market moved ~7% within one hour while
+//              the 24h OUTTOUCH age gate kept 7 ledger-known bids @0.0954-0.0958 locked
+//              ~28 SBD — 7% under the live touch, they will never fill at those prices.
+//              A ledger-known bid drifted ≥ bidDriftBps below the CURRENT strategy's
+//              desired bid is dead capital by the same definition OUTTOUCH already uses
+//              ("an old quote the strategy itself would no longer place") — the age gate
+//              just made the definition arrive a day late. Bounded by maxCancelsPerBeat
+//              and priority-ranked below the absolute-bleed classes.
 //   OUTTOUCH — older than staleMaxAgeHours AND drifted beyond staleDriftBps from the
 //              price the CURRENT strategy actually wants (desiredBid/desiredAsk when the
 //              caller derives them from the live law — value-line hug; else the raw touch).
@@ -32,6 +48,8 @@ export const JANITOR_DEFAULTS = {
   staleMaxAgeHours: 24,    // older than a day = not a live quote anymore
   staleDriftBps: 150,      // >1.5% away from the strategy's desired price = it would never place this today
                            // (measured 2026-11-01: stale bids @0.1013 sit 2.6% below the desired 0.1040)
+  bidDriftBps: 300,        // BID-DRIFT: ledger-known bid ≥3% under the CURRENT desired bid = dead capital
+                           // (measured 2026-11-15: market moved ~7% in 1h; 24h gate arrived a day late)
   maxCancelsPerBeat: 12,   // bounded per beat; the next beat continues the sweep
 };
 
@@ -102,8 +120,25 @@ export function planJanitor({ openOrders, ledgerKnownIds, nowMs, valueLine, best
     const px = orderPrice(o);
     const age = ageHours(o.created, nowMs);
     const isAsk = o.sell.includes("STEEM");
+    const isKnown = known.has(o.id);
     if (!isAsk && px != null && valueLine > 0 && px > valueLine) {
       verdict.push({ id: o.id, why: `VALLEAK: bid @${px.toFixed(6)} buys STEEM above the value line ${valueLine.toFixed(6)} — real bleed`, cls: "VALLEAK", ageH: age, price: px });
+      continue;
+    }
+    /* ASK-LEAK (2026-11-15): the VALLEAK mirror — a ledger-known ask below the value
+     * line sells STEEM under measured external value (principle-1 bleed) and holds
+     * the sell-shelf capital hostage. Ledger-known only (scope-split N8-f): the
+     * volume mandate's orders are ledger-unknown here and are never retired by us. */
+    if (isAsk && px != null && valueLine > 0 && px < valueLine && isKnown) {
+      verdict.push({ id: o.id, why: `ASK-LEAK: ask @${px.toFixed(6)} sells STEEM below the value line ${valueLine.toFixed(6)} — principle-1 bleed, shelf capital hostage`, cls: "ASK-LEAK", ageH: age, price: px });
+      continue;
+    }
+    /* BID-DRIFT (2026-11-15): a ledger-known bid that the CURRENT strategy would no
+     * longer place (≥bidDriftBps under its desired bid) is dead capital — same
+     * definition OUTTOUCH applies, minus the 24h arrival lag. Ledger-known only. */
+    if (!isAsk && isKnown && Number.isFinite(desiredBid) && desiredBid > 0 && px != null
+        && px < desiredBid * (1 - P.bidDriftBps / 10_000)) {
+      verdict.push({ id: o.id, why: `BID-DRIFT: bid @${px.toFixed(6)} is ${(100 * (desiredBid - px) / desiredBid).toFixed(2)}% under the current desired bid ${desiredBid.toFixed(6)} — the strategy would never place it now (drift ≥ ${P.bidDriftBps}bps), reclaiming`, cls: "BID-DRIFT", ageH: age, price: px });
       continue;
     }
     if (age != null && age >= P.staleMaxAgeHours) {
@@ -119,7 +154,7 @@ export function planJanitor({ openOrders, ledgerKnownIds, nowMs, valueLine, best
     }
   }
 
-  const clsRank = { DEDUP: 0, VALLEAK: 1, OUTTOUCH: 2 };
+  const clsRank = { DEDUP: 0, VALLEAK: 1, "ASK-LEAK": 1, "BID-DRIFT": 2, OUTTOUCH: 3 };
   verdict.sort((a, b) => (clsRank[a.cls] - clsRank[b.cls]) || ((b.ageH ?? 0) - (a.ageH ?? 0)));
   const cancels = verdict.slice(0, P.maxCancelsPerBeat);
   const cancelIds = new Set(cancels.map((c) => c.id));
