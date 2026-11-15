@@ -1,6 +1,6 @@
 {
  "schema": "payout-doctrine-v1",
- "at": "2026-11-15T15:57:16Z",
+ "at": "2026-11-15T21:07:58Z",
  "ok": true,
  "inputs": {
   "convert": {
@@ -17,13 +17,13 @@
     "semantics": "payout = amount / ADJUSTED median-at-maturity (steem database.cpp process_conversions) — ESTIMATE, floats until conversion_date",
     "law": "payout floats until conversion_date (steem database.cpp process_conversions, Z-89)"
    },
-   "discountBps": 5537
+   "discountBps": 5532
   },
   "custody": {
    "source": "grids/state/custody.json (steem row, ONCHAIN_REAL)",
-   "at": "2026-11-15T15:57:12.571Z",
-   "liquidSteem": 3.639,
-   "liquidSbd": 16.437,
+   "at": "2026-11-15T21:07:56.366Z",
+   "liquidSteem": 1.745,
+   "liquidSbd": 2.083,
    "pendingSbdInConvert": 10
   },
   "communityCost": {
@@ -65,14 +65,14 @@
  },
  "projection": {
   "formula": "projectedLiquidSteem = custody.liquidSteem + payoutEstimate",
-  "projectedLiquidSteem": 99.73,
+  "projectedLiquidSteem": 97.836,
   "labeledAs": "הערכה בלבד",
   "note": "arithmetic on an estimate stays an estimate — never a fact until the chain pays"
  },
  "readiness": {
   "communityCreationReady": true,
-  "basis": "projected 99.73 STEEM ≥ need 3.1 STEEM (fee 3 + buffer 0.1, grids/community.mjs:78)",
-  "communityCreationReadyBeforePayout": true,
+  "basis": "projected 97.836 STEEM ≥ need 3.1 STEEM (fee 3 + buffer 0.1, grids/community.mjs:78)",
+  "communityCreationReadyBeforePayout": false,
   "counterGridFuelReady": null,
   "counterGridFuelPrecondition": "החלטת-בעלים — no written fuel-allocation doctrine constant exists in the repo (documented search); NEVER invented",
   "fuelAllocations": {
@@ -85,14 +85,14 @@
  },
  "countdown": {
   "minutesUntilEarliest": {
-   "minutes": 2197,
+   "minutes": 1886.3,
    "passed": false
   },
   "minutesUntilLatest": {
-   "minutes": 3503.2,
+   "minutes": 3192.5,
    "passed": false
   },
-  "asof": "2026-11-15T15:57:16Z"
+  "asof": "2026-11-15T21:07:58Z"
  },
  "armGates": [
   {
