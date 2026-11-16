@@ -1,12 +1,16 @@
 {
   "bridge": "llm-bridge",
-  "generatedAt": "2026-10-05T05:42:05.080Z",
+  "generatedAt": "2026-11-16T13:05:57.600Z",
   "law": "keys from GitHub secrets only — never logged, never stored; fail-closed HOLD without keys",
-  "armedProviderEnvNames": [],
-  "armedCount": 0,
+  "armedProviderEnvNames": [
+    "NVIDIA_NIM_KEY"
+  ],
+  "armedCount": 1,
   "live": {
-    "ok": false,
-    "hold": "LLM-HOLD (no keys armed)"
+    "ok": true,
+    "provider": "nim",
+    "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "contentLength": 9
   },
   "selftest": "grids/llm/llm-selftest.mjs (24 rules) ran as gate before this receipt",
   "zeroSecrets": true
