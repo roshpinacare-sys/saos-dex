@@ -74,7 +74,7 @@ jobs:
           cd repo
           node -e '
             const fs = require("fs");
-            const armed = ["GROQ_API_KEY","GEMINI_API_KEY","MISTRAL_API_KEY","OPENROUTER_API_KEY"].filter(v => (process.env[v]||"").length > 0);
+            const armed = ["NVIDIA_NIM_KEY","GROQ_API_KEY","GEMINI_API_KEY","MISTRAL_API_KEY","OPENROUTER_API_KEY"].filter(v => (process.env[v]||"").length > 0);
             let live = null;
             try {
               const p = JSON.parse(fs.readFileSync("grids/state/llm-bridge-live.json", "utf8"));

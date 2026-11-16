@@ -40,10 +40,12 @@ const GEMINI_OK = { candidates: [{ content: { parts: [{ text: 'BRIDGE' }, { text
 async function main() {
   // 1-2: רישום-תקין וללא-חומר-מפתח
   const ids = PROVIDERS.map((p) => p.id);
-  check('registry: ids unique & ordered', JSON.stringify(ids) === JSON.stringify(['groq', 'gemini', 'mistral', 'openrouter']));
+  // §㊿: הרישום-התרחב — ספק-הסטים (nim) ראשון-בעדיפות (המחשוב-החי-של-הצי). החוק-עדיין
+  // מקובע-לרשימה-מדויקת: סדר-העדיפות-הוא-חוזה (הראשון-עם-מפתח-שמצליח-מנצח).
+  check('registry: ids unique & ordered', JSON.stringify(ids) === JSON.stringify(['nim', 'groq', 'gemini', 'mistral', 'openrouter']));
   check(
     'registry: every entry complete (envVar/endpoint/style/models/signup)',
-    PROVIDERS.every((p) => p.envVar?.endsWith('_API_KEY') && p.endpoint?.startsWith('https://') && ['openai', 'gemini'].includes(p.style) && Array.isArray(p.models) && p.models.length > 0 && p.signup?.startsWith('https://'))
+    PROVIDERS.every((p) => (/_(API_KEY|NIM_KEY)$/.test(p.envVar ?? '')) && p.endpoint?.startsWith('https://') && ['openai', 'gemini'].includes(p.style) && Array.isArray(p.models) && p.models.length > 0 && p.signup?.startsWith('https://'))
   );
   const blob = JSON.stringify(PROVIDERS);
   check('registry: no key-like material', !/sk-|ghp_|github_pat_/.test(blob));
@@ -106,12 +108,14 @@ async function main() {
   const r8 = await callLLM({ messages: MESSAGES, env: ENV, fetchImpl: slowFetch, timeoutMs: 80 });
   check('timeout: abort falls through to next provider', r8.provider === 'gemini');
 
-  // 9: צורת-openai
-  const b9 = buildRequest(PROVIDERS[0], 'llama-3.3-70b-versatile', MESSAGES, 'K9');
+  // 9: צורת-openai (§㊿: לפי-id-לא-לפי-אינדקס — הרישום-התרחב)
+  const P_GROQ = PROVIDERS.find((p) => p.id === 'groq');
+  const b9 = buildRequest(P_GROQ, 'llama-3.3-70b-versatile', MESSAGES, 'K9');
   check('openai shape: bearer + model + messages', b9.init.headers.Authorization === 'Bearer K9' && JSON.parse(b9.init.body).model === 'llama-3.3-70b-versatile' && Array.isArray(JSON.parse(b9.init.body).messages));
 
-  // 10-11: צורת-gemini + חילוץ
-  const b10 = buildRequest(PROVIDERS[1], 'gemini-2.0-flash', MESSAGES, 'K10');
+  // 10-11: צורת-gemini + חילוץ (§㊿: לפי-id)
+  const P_GEMINI = PROVIDERS.find((p) => p.id === 'gemini');
+  const b10 = buildRequest(P_GEMINI, 'gemini-2.0-flash', MESSAGES, 'K10');
   const body10 = JSON.parse(b10.init.body);
   check('gemini shape: endpoint, header, contents, systemInstruction', b10.url.endsWith('/models/gemini-2.0-flash:generateContent') && b10.init.headers['x-goog-api-key'] === 'K10' && body10.contents[0].role === 'user' && body10.systemInstruction?.parts?.[0]?.text === 'be exact');
   check('gemini extraction: parts joined', extractContent('gemini', GEMINI_OK) === 'BRIDGE-OK');
