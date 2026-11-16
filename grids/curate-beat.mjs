@@ -106,7 +106,9 @@ async function llmReRank(votes) {
       "Return STRICT JSON only: {\"order\": [array of candidate indices, best first]} — every index 0-" + (pool.length - 1) + " exactly once.",
     ].join("\n");
     const user = pool.map((v, i) => `[${i}] @${v.author} · score=${v.score} · ${v.title || "(no title)"}`).join("\n");
-    const raw = await callLLM({ messages: [{ role: "system", content: system }, { role: "user", content: user }] });
+    /* §51-לקח-ריצה-43878123982: ברירת-המחדל 30ש' קצרה-גם-לדירוג — נמ-טרון-בעומס
+     * עונה-ב-30-120ש' (נמדד: דור-תוכן הצליח-ב-120ש' באותו-יום). 90ש' + תיעוד-סיבה-מלא. */
+    const raw = await callLLM({ messages: [{ role: "system", content: system }, { role: "user", content: user }], timeoutMs: 90_000 });
     let txt = String(raw.content ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
     const j = JSON.parse(txt);
     if (!Array.isArray(j.order)) throw new Error("order-missing");
@@ -122,7 +124,7 @@ async function llmReRank(votes) {
     return { applied: true, provider: raw.provider, model: raw.model, votes: ordered };
   } catch (e) {
     const { redact } = await import("./llm/llm-providers.mjs").catch(() => ({ redact: (s) => String(s ?? "") }));
-    return { applied: false, why: redact(String(e?.message ?? e)).slice(0, 100) };
+    return { applied: false, why: redact(String(e?.message ?? e)).slice(0, 220) };
   }
 }
 
