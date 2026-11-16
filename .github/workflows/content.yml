@@ -1,0 +1,82 @@
+# CONTENT — מסילת-התוכן-המקורי · צרכן-ההכנסה הראשון של גשר-ה-LLM (§51)
+# ═════════════════════════════════════════════════════════════════════════════
+# פקודת-בעלים «בצע הכל ויותר ודחוף · אל-תסתמך-על-טענות-של-מחר» — הפריט-הפתוח
+# «תוכן-מקורי-מגולה» נסגר: המחשוב-החי-של-הצי (ספק-הסטים-NIM · 33-מודלים)
+# כותב-תוכן-מקורי מנתונים-נמדדים-מהשרשרת ← פוסט-אמת-חתום ← קבלה-נאטמת-לגיט.
+#
+# המנוע: grids/content-beat.mjs — איסוף-נתוני-חיים (חסר-מפתחות) ← גשר-ה-LLM
+# (llm-call.mjs · סדר-עדיפות · HOLD כן בלי-מפתח) ← key-gate מול-רשות-הפרסום
+# החיה ← comment-op שורשי ← הצבעת-מחבר 10% (author-lane · תיעוד-גלוי) ←
+# קבלה grids/state/content-receipts.jsonl.
+# דוקטרינה: posting-authority בלבד · דדופ 10ש' מרווח · מכסה 2/יום ·
+# עמוד-שדרה-ספרתי-מהמדידה (ה-LLM כותב-נרטיב, המספרים-מהשרשרת-בלבד).
+# תזמון: 2 פעימות ביממה (07:43Z · 19:43Z) — לוח-זמנים-לא-צפוף לשרשרת.
+name: content
+
+on:
+  schedule:
+    - cron: '43 7,19 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: content
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 ACTIONS-LOCK 2026-11-14
+      - name: Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4 ACTIONS-LOCK 2026-11-14
+        with:
+          node-version: 22
+
+      - name: Install signing dep (steem 0.7.10 — measured live on run 2, runner lacked it)
+        run: npm install --no-save steem@0.7.10
+
+      - name: Content beat (measured data → LLM original draft → key-gated post)
+        env:
+          STEEM_POSTING_WIF: ${{ secrets.STEEM_POSTING_WIF }}
+          NVIDIA_NIM_KEY: ${{ secrets.NVIDIA_NIM_KEY }}
+          NVIDIA_BASE_URL: ${{ secrets.NVIDIA_BASE_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: node grids/content-beat.mjs --once
+
+      - name: Seal receipts to git (single lane, [skip ci] against storms)
+        run: |
+          git config user.name "content-beat[bot]"
+          git config user.email "content-beat[bot]@agents.roshpinacare-sys"
+          # append-only union law (curate §-measured 2026-10-23): never lose a receipt
+          if [ -f grids/state/content-receipts.jsonl ]; then
+            cp grids/state/content-receipts.jsonl /tmp/local-rec.jsonl
+            if ! git -c rebase.autoStash=true pull --rebase origin main; then
+              git rebase --abort 2>/dev/null || true
+              git reset --hard origin/main
+              cat /tmp/local-rec.jsonl grids/state/content-receipts.jsonl 2>/dev/null | awk '!seen[$0]++' > grids/state/content-receipts.jsonl
+              echo "receipt union applied (append-only law)"
+            fi
+            grep -v '^<<<<<<<\|^=======$\|^>>>>>>>' grids/state/content-receipts.jsonl > /tmp/rec-san && mv /tmp/rec-san grids/state/content-receipts.jsonl
+          fi
+          git add grids/state/content-receipts.jsonl
+          if git diff --cached --quiet; then
+            echo "no receipts — honest skip (keyless/HOLD/gap)"
+          else
+            git commit -m "content-beat: original post receipt · $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
+            ok=0
+            for i in 1 2 3; do
+              if git -c rebase.autoStash=true pull --rebase origin main && git push origin HEAD:main; then ok=1; break; fi
+              echo "push attempt $i failed — re-pulling"
+              git rebase --abort 2>/dev/null || true
+              sleep 10
+            done
+            [ "$ok" = "1" ] && echo "content receipts pushed" || { echo "receipts push failed — honest failure"; exit 1; }
+          fi

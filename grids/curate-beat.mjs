@@ -61,8 +61,15 @@ export async function curateBeatOnce({ dailyLimit = 20, maxWeightPct = 10 } = {}
       } catch { }
     }
   } catch { }
-  const fresh = plan.votes.filter((v) => !votedToday.has(`${v.author}/${v.permlink}`)).slice(0, dailyLimit);
-  const deduped = { ...plan, votes: fresh };
+  const fresh = plan.votes.filter((v) => !votedToday.has(`${v.author}/${v.permlink}`));
+  /* §51 · דירוג-אוצרות-LLM (צרכן-ההכנסה-השני-של-הגשר): הצי-מדרג-את-המועמדים
+   * לפי-איכות-תוכן-אמיתית (מקוריות · מהות · רלוונטיות) — לא-רק-מטריקות-מעורבות.
+   * חוקים: fail-soft מלא (כישלון-LLM → הסדר-הדטרמיניסטי-נשאר-כהלכה) ·
+   * הדירוג-רק-מסדר-מחדש מועמדים-שכבר-עברו-את-כל-המסננות-הדוקטרינריות ·
+   * הקבלה-מתעדת-את-הפסק (provider/model/applied) — מדיד-לכל-אורך-הדרך. */
+  const llm = await llmReRank(fresh);
+  const ranked = llm.applied ? llm.votes : fresh;
+  const deduped = { ...plan, votes: ranked.slice(0, dailyLimit) };
   if (!k) {
     const rec = { schema: "SAOS-CURATE-BEAT/1", at: new Date().toISOString(), verdict: "KEYLESS-PLAN-ONLY", planned: plan.votes.length, why: "no posting WIF in environment (fail-closed honest)" };
     appendFileSync(RECEIPTS, JSON.stringify(rec) + "\n");
@@ -80,9 +87,43 @@ export async function curateBeatOnce({ dailyLimit = 20, maxWeightPct = 10 } = {}
     return rec;
   }
   const r = await executeVotes(deduped, { wif: k.wif });
-  const rec = { schema: "SAOS-CURATE-BEAT/1", at: new Date().toISOString(), verdict: r.executed > 0 ? "VOTED-LIVE" : "NOTHING-TO-VOTE", executed: r.executed, planned: deduped.votes.length, pub: gate.pub, votes: r.txids };
+  const rec = { schema: "SAOS-CURATE-BEAT/1", at: new Date().toISOString(), verdict: r.executed > 0 ? "VOTED-LIVE" : "NOTHING-TO-VOTE", executed: r.executed, planned: deduped.votes.length, pub: gate.pub, llmRank: { applied: llm.applied, provider: llm.provider ?? null, model: llm.model ?? null, why: llm.why ?? null }, votes: r.txids };
   appendFileSync(RECEIPTS, JSON.stringify(rec) + "\n");
   return rec;
+}
+
+/* ── דירוג-אוצרות-LLM (§51) — fail-soft מלא, הפיך-ומתועד ───────────────────── */
+async function llmReRank(votes) {
+  if (process.env.CURATE_LLM_RANK !== "1") return { applied: false, why: "off" };
+  if (!Array.isArray(votes) || votes.length < 3) return { applied: false, why: "too-few-candidates" };
+  const pool = votes.slice(0, 30); // חלון-דירוג: 30-המובילים-הדטרמיניסטיים
+  try {
+    const { callLLM } = await import("./llm/llm-call.mjs");
+    const system = [
+      "You are the curation quality ranker of a sovereign Steem curation desk.",
+      "You receive candidate posts that already passed deterministic filters (age-window, engagement, topic, dedup, no-self-vote).",
+      "Your job: order them BEST-FIRST for curation value — original substantive content over low-effort templates, spam, reposts, or clickbait. Consider: originality, depth, community value, relevance to crypto/blockchain/data topics.",
+      "Return STRICT JSON only: {\"order\": [array of candidate indices, best first]} — every index 0-" + (pool.length - 1) + " exactly once.",
+    ].join("\n");
+    const user = pool.map((v, i) => `[${i}] @${v.author} · score=${v.score} · ${v.title || "(no title)"}`).join("\n");
+    const raw = await callLLM({ messages: [{ role: "system", content: system }, { role: "user", content: user }] });
+    let txt = String(raw.content ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+    const j = JSON.parse(txt);
+    if (!Array.isArray(j.order)) throw new Error("order-missing");
+    const seen = new Set();
+    const ordered = [];
+    for (const idx of j.order) {
+      const i = Number(idx);
+      if (!Number.isInteger(i) || i < 0 || i >= pool.length || seen.has(i)) continue;
+      seen.add(i); ordered.push(pool[i]);
+    }
+    if (ordered.length < Math.min(3, pool.length)) throw new Error(`order-too-thin (${ordered.length})`);
+    for (let i = 0; i < pool.length; i++) if (!seen.has(i)) ordered.push(pool[i]); // זנב-שמור-מהסדר-הדטרמיניסטי
+    return { applied: true, provider: raw.provider, model: raw.model, votes: ordered };
+  } catch (e) {
+    const { redact } = await import("./llm/llm-providers.mjs").catch(() => ({ redact: (s) => String(s ?? "") }));
+    return { applied: false, why: redact(String(e?.message ?? e)).slice(0, 100) };
+  }
 }
 
 export function selftest() {

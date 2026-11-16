@@ -80,7 +80,9 @@ export function planVotes({ posts, account = ACCOUNT, dailyLimit = 20, maxWeight
     const s = scorePost(post, { now, topics });
     if (s.score < minScore) continue;
     seen[author] = (seen[author] ?? 0) + 1;
-    votes.push({ author, permlink, score: s.score, reason: s.reason });
+    /* §51: הכותרת-עוברת-הלאה — דירוג-ה-LLM (curate-beat) זקוק-לה כדי-לשפוט
+     * איכות-תוכן-אמיתית (מקוריות/מהות) — לא-רק מטריקות-מעורבות. */
+    votes.push({ author, permlink, title: String(post.title ?? "").slice(0, 90), score: s.score, reason: s.reason });
   }
   /* מיון-יציב דטרמיניסטי: score יורד → permlink עולה (שובר-שוויון מוכח) */
   votes.sort((a, b) => b.score - a.score || (a.permlink < b.permlink ? -1 : 1));
@@ -104,7 +106,7 @@ export async function fetchCandidates({ tags = TOPICS, limitPerTag = 25 } = {}) 
       for (const p of posts ?? []) {
         let meta = {};
         try { meta = JSON.parse(p.json_metadata ?? "{}"); } catch { /* metadata פגום — כנה */ }
-        out.push({ author: p.author, permlink: p.permlink, created: p.created, category: p.category, net_votes: p.net_votes, active_votes: p.active_votes, children: p.children, json_metadata: meta });
+        out.push({ author: p.author, permlink: p.permlink, title: p.title, created: p.created, category: p.category, net_votes: p.net_votes, active_votes: p.active_votes, children: p.children, json_metadata: meta });
       }
     }
   }
