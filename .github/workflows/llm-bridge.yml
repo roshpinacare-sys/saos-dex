@@ -103,6 +103,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "receipt unchanged — nothing to commit"
           else
-            git commit -m "llm-bridge: receipt $(date -u +%FT%TZ) · armed=${{ env.GROQ_API_KEY != '' || env.GEMINI_API_KEY != '' || env.MISTRAL_API_KEY != '' || env.OPENROUTER_API_KEY != '' }}"
+            git commit -m "llm-bridge: receipt $(date -u +%FT%TZ) · armed=${{ env.NVIDIA_NIM_KEY != '' || env.GROQ_API_KEY != '' || env.GEMINI_API_KEY != '' || env.MISTRAL_API_KEY != '' || env.OPENROUTER_API_KEY != '' }}"
             git push
           fi
