@@ -10,7 +10,31 @@
  * נגישות-נקודות-הקצה נמדדה מהסנדבוקס (2026-10-04): כולן חיות (auth-gated).
  */
 
+/* §㊿ (2026-11-16) · ספק-הסטים — פקודת-בעלים «הכל-דרך-הארכיטקטורה»:
+ * המחשוב-החי של-הצי (33-מודלים-נמדדו-חיים ב-§㊾) מתחבר-לגשר. המפתח-והבסיס
+ * הועברו-לסודות-הריפו-ע"י nim-relay (Autonomy→saos-dex · gh-CLI-מוצפן · אפס-ערכים).
+ * המודל-המוביל-נמדד-חי: nvidia/nemotron-3.5-lightning-30b-a3b → HTTP-200 · 301ms · 37-tokens.
+ * נקודת-הקצה: דינמית מ-NVIDIA_BASE_URL (סוד-מועבר) עם-נקודת-הברירה-הקנונית. */
+const NIM_ENDPOINT = (typeof process !== 'undefined' && typeof process.env?.NVIDIA_BASE_URL === 'string' && process.env.NVIDIA_BASE_URL.length > 8)
+  ? process.env.NVIDIA_BASE_URL.replace(/\/+$/, '') + '/chat/completions'
+  : 'https://integrate.api.nvidia.com/v1/chat/completions';
+
 export const PROVIDERS = Object.freeze([
+  Object.freeze({
+    id: 'nim',
+    envVar: 'NVIDIA_NIM_KEY',
+    endpoint: NIM_ENDPOINT,
+    style: 'openai',
+    models: Object.freeze([
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
+      'nvidia/nemotron-3-ultra-550b-a55b',
+      'deepseek-ai/deepseek-v4.1-flash',
+      'openai/gpt-oss-20b',
+      'z-ai/glm-5.3-flash',
+    ]),
+    signup: 'https://build.nvidia.com',
+    freeTierNote: 'ספק-הסטים-של-הצי — מפתח-חי-בסודות-הריפו (nim-relay §㊿)',
+  }),
   Object.freeze({
     id: 'groq',
     envVar: 'GROQ_API_KEY',

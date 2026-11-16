@@ -25,6 +25,8 @@ jobs:
     timeout-minutes: 9
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      NVIDIA_NIM_KEY: ${{ secrets.NVIDIA_NIM_KEY }}
+      NVIDIA_BASE_URL: ${{ secrets.NVIDIA_BASE_URL }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
@@ -48,13 +50,13 @@ jobs:
         run: |
           set -euo pipefail
           armed=""
-          for v in GROQ_API_KEY GEMINI_API_KEY MISTRAL_API_KEY OPENROUTER_API_KEY; do
+          for v in NVIDIA_NIM_KEY GROQ_API_KEY GEMINI_API_KEY MISTRAL_API_KEY OPENROUTER_API_KEY; do
             if [ -n "${!v:-}" ]; then armed="$armed $v"; fi
           done
           echo "armed providers:${armed:- NONE (HOLD — צעד-ההצטיידות הוא של-הבעלים)}"
 
       - name: live-smoke (קריאת-אמת אחת דרך הגשר — continue-on-error כן)
-        if: ${{ env.GROQ_API_KEY != '' || env.GEMINI_API_KEY != '' || env.MISTRAL_API_KEY != '' || env.OPENROUTER_API_KEY != '' }}
+        if: ${{ env.NVIDIA_NIM_KEY != '' || env.GROQ_API_KEY != '' || env.GEMINI_API_KEY != '' || env.MISTRAL_API_KEY != '' || env.OPENROUTER_API_KEY != '' }}
         continue-on-error: true
         run: |
           set -euo pipefail
