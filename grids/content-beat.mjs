@@ -155,11 +155,28 @@ export async function generateDraft(d) {
     d.conversionsInFlight.length ? `conversions in flight: ${d.conversionsInFlight.map((c) => c.amount + " lands " + c.lands).join("; ")}` : "no conversions in flight",
     "Write today's digest now (JSON).",
   ].filter(Boolean).join("\n");
-  let raw;
-  try {
-    raw = await callLLM({ messages: [{ role: "system", content: system }, { role: "user", content: user }] });
-  } catch (e) {
-    throw new Error("LLM-HOLD: " + redact(String(e?.message ?? e)).slice(0, 160));
+  let lastErr;
+  /* §51-לקח-ריצה-ראשונה (run 43876932429): דור-תוכן אינו-בדיקת-9-תווים — 30ש'
+   * ברירת-המחדל של-הגשר קצרים-מדי לנמ-טרון-מייצר (פסק-זמן-כפול-מדוד).
+   * החוק-החדש: 120ש' לדור-תוכן + מודל-גיבוי-שני באותו-ספק (gpt-oss-20b)
+   * — שרשרת-ניסיונות מתועדת, HOLD כן רק-אחרי-כולם. */
+  const tries = [
+    { timeoutMs: 120_000 },
+    { model: "nim/openai/gpt-oss-20b", timeoutMs: 120_000 },
+  ];
+  let raw = null;
+  const notes = [];
+  for (const t of tries) {
+    try {
+      const r = await callLLM({ messages: [{ role: "system", content: system }, { role: "user", content: user }], timeoutMs: t.timeoutMs, ...(t.model ? { model: t.model } : {}) });
+      if (r?.content && String(r.content).trim().length > 0) { raw = r; break; }
+    } catch (e) {
+      notes.push(redact(String(e?.message ?? e)).slice(0, 90));
+      lastErr = e;
+    }
+  }
+  if (!raw) {
+    throw new Error(`content-LLM-HOLD after ${tries.length} attempts: ${notes.join(" | ") || String(lastErr?.message ?? lastErr).slice(0, 120)}`);
   }
   let txt = String(raw.content ?? "").trim();
   txt = txt.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, ""); // הסרת-גדרות-אם-נכפו
