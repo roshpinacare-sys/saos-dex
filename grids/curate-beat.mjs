@@ -96,8 +96,17 @@ export function selftest() {
 const argv = process.argv.slice(2);
 if (argv.includes("--selftest")) selftest();
 else if (argv.includes("--once")) {
-  try { const r = await curateBeatOnce(); console.log(JSON.stringify({ verdict: r.verdict, executed: r.executed ?? 0, planned: r.planned ?? 0 })); }
-  catch (e) { console.error(`[curate-beat] fail-honest: ${String(e?.message ?? e).slice(0, 160)}`); process.exit(1); }
+  /* §㊿ (2026-11-16): ניסיון-חוזר-אחד ברמת-הפעימה — מדידת-הכישלון של-06:21Z הראתה
+   * סערת-רשת-חולפת שהפילה את-כל-הצמתים-בו-זמנית מה-runner. 45-שניות-המתנה
+   * וניסיון-שני קולטות-את-רוב-הסערות; אחרי-שני-כישלונות — כישלון-כן (fail-closed). */
+  const attempt = async () => { const r = await curateBeatOnce(); console.log(JSON.stringify({ verdict: r.verdict, executed: r.executed ?? 0, planned: r.planned ?? 0 })); return r; };
+  try { await attempt(); }
+  catch (e1) {
+    console.error(`[curate-beat] ניסיון-ראשון-נכשל (${String(e1?.message ?? e1).slice(0, 120)}) — המתנה-45שנ' וניסיון-חוזר אחד (§㊿)`);
+    await new Promise((res) => setTimeout(res, 45_000));
+    try { await attempt(); }
+    catch (e2) { console.error(`[curate-beat] fail-honest (2-ניסיונות): ${String(e2?.message ?? e2).slice(0, 160)}`); process.exit(1); }
+  }
 } else {
   const hours = Math.max(1, parseFloat(argv[argv.indexOf("--loop") + 1] ?? "24") || 24);
   const tick = async () => { try { const r = await curateBeatOnce(); console.log(new Date().toISOString(), r.verdict, r.executed ?? 0); } catch (e) { console.error(`[curate-beat] fail-honest: ${String(e?.message ?? e).slice(0, 120)}`); } };

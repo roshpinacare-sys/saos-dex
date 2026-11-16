@@ -17,7 +17,17 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const STEEM_NODES = ["https://api.steemit.com", "https://api.justyy.com", "https://steem-rpc.publicnode.com"];
+/* §㊿ (2026-11-16): מדידת-כישלון-06:21Z — כל-3-הצמתים החזירו-גוף-ריק מ-runner-של-GitHub
+ * באותו-רגע ("Unexpected end of JSON input") והפעימה-הכנה מתה-בלי-ניסיון-חוזר.
+ * הריפוי: הרחבת-מערך-הצמתים + מעבר-כפול (2-סבבים) ב-rpcAny — כישלון-חולף
+ * של-צומת-אחד (או-שניים) נבלע; רק-כישלון-עקבי-אמיתי מפיל-את-הפעימה. */
+const STEEM_NODES = [
+  "https://api.steemit.com",
+  "https://api.justyy.com",
+  "https://steem-rpc.publicnode.com", // נקודת-קצה-ציבורית-נוספת (2026-11-16)
+  "https://api.steem.buzz", // צומת-ציבורי-רביעי — ריבוי-ספקי-רשת
+  "https://rpc.steemviz.com", // צומת-ציבורי-חמישי — סבב-גיבוי
+];
 const ACCOUNT = process.env.SAOS_RELAY_AGENT_ACCOUNT || "headcorner";
 
 /* נושאים-בית: היכן שהידע-שלנו הוא-יתרון-אמת (משקל-קיורציה לתוכן-שאנחנו
@@ -105,20 +115,31 @@ export async function fetchCandidates({ tags = TOPICS, limitPerTag = 25 } = {}) 
 
 async function rpcAny(method, params) {
   let lastErr;
-  for (const node of STEEM_NODES) {
-    try {
-      const r = await fetch(node, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-        signal: AbortSignal.timeout(10000),
-      });
-      const j = await r.json();
-      if (j.error) throw new Error(String(j.error.message ?? "rpc-error").slice(0, 80));
-      return j.result;
-    } catch (e) {
-      lastErr = e;
+  /* §㊿: שני-סבבים-על-כל-הצמתים — הראשון תופס-כשל-חולף, השני מאשר-שזה-עקבי.
+   * מדידת-השורש: תשובת-200-עם-גוף-ריק (פרוקסי/CDN) זרקה-JSON-parse וכל-הפעימה מתה. */
+  for (let pass = 0; pass < 2; pass++) {
+    for (const node of STEEM_NODES) {
+      try {
+        const r = await fetch(node, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+          signal: AbortSignal.timeout(10000),
+        });
+        const text = await r.text();
+        if (!text || !text.trim()) throw new Error("empty-body (transient node)"); // כנה — לא-JSON-parse-על-ריק
+        const j = JSON.parse(text);
+        if (j.error) throw new Error(String(j.error.message ?? "rpc-error").slice(0, 80));
+        return j.result;
+      } catch (e) {
+        lastErr = e;
+        if (pass === 1 && STEEM_NODES.indexOf(node) === 0) {
+          /* סבב-שני: המתנה-קצרה בין-צמתים מפחיתה-סערת-רשת */
+          await new Promise((res) => setTimeout(res, 700));
+        }
+      }
     }
+    if (pass === 0) await new Promise((res) => setTimeout(res, 2500)); // נשימה-בין-סבבים
   }
   throw lastErr ?? new Error("all-rpc-nodes-failed");
 }
