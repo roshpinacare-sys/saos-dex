@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-11-17T00:45:00.535Z",
+ "publishedAt": "2026-11-17T00:59:46.418Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -11,7 +11,7 @@
  "armed": true,
  "verdict": "ARMED-LIVE",
  "blocker": [
-  "broadcast failing: 3/7 chain ops rejected this run (\"broadcast answered without id\") — stale key/authority or node fault; verdict cannot be stable until signing succeeds"
+  "broadcast failing: 4/7 chain ops rejected this run (\"broadcast answered without id\") — stale key/authority or node fault; verdict cannot be stable until signing succeeds"
  ],
  "keyGate": {
   "ok": true,
@@ -32,13 +32,13 @@
    "VALLEAK": 1
   },
   "ids": [
-   2359003356
+   2359010340
   ],
   "note": "ZOMBIE-JANITOR (2026-11-01): dead capital reclaimed — DEDUP triplet locks, VALLEAK bids above the value line, OUTTOUCH quotes the strategy would never place today. Freed amounts feed the same beat's fuel (Z-81)."
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-11-17T00:45:00.535Z",
+  "publishedAt": "2026-11-17T00:59:46.416Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": true,
@@ -55,16 +55,16 @@
    "hive buy-side waiting for HBD inventory: 0.002 HBD commitable < 0.003 needed"
   ],
   "marks": {
-   "hiveUsd": 0.03852483584393855,
+   "hiveUsd": 0.03852843424180838,
    "hbdUsd": 1,
-   "hbdUsdRaw": 1.09,
-   "hbdRegime": "print-peg-1.00 (raw dev 900bps)",
-   "parityHbdPerHive": 0.03852483584393855
+   "hbdUsdRaw": 1.15,
+   "hbdRegime": "print-peg-1.00 (raw dev 1500bps)",
+   "parityHbdPerHive": 0.03852843424180838
   },
   "inventory": {
    "hive": 0.034,
    "hbd": 0.003,
-   "hp": 21.66364127703176
+   "hp": 21.66365950536552
   },
   "book": {
    "bestBid": 0.03863720528329836,
@@ -114,51 +114,51 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.04242177334639121,
-  "sbdUsd": 0.44636,
-  "paritySbdPerSteem": 0.09503937034320104
+  "steemUsd": 0.04240721860490568,
+  "sbdUsd": 0.44646,
+  "paritySbdPerSteem": 0.09498548269700684
  },
  "priceTruth": {
   "verdict": "TRIANGLE-ARMED",
-  "valueLineSbdPerSteem": 0.09503937,
+  "valueLineSbdPerSteem": 0.09498548,
   "marks": {
    "chainFeedSbdPerSteem": 0.10406515,
-   "usdParitySbdPerSteem": 0.09503937,
-   "globalSteemUsd": 0.04242177334639121,
-   "measuredSbdUsd": 0.44636,
-   "impliedSbdUsdFromFeed": 0.4076463,
-   "sbdDepegBps": 950,
+   "usdParitySbdPerSteem": 0.09498548,
+   "globalSteemUsd": 0.04240721860490568,
+   "measuredSbdUsd": 0.44646,
+   "impliedSbdUsdFromFeed": 0.40750644,
+   "sbdDepegBps": 956,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-11-17T00:44:49.417Z",
+  "measuredAt": "2026-11-17T00:59:35.089Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 40.041193806171755,
+  "weeklySp": 40.04122150527094,
   "weeklyUsd": 1.7,
-  "remainingSp": 160164775.2234436,
+  "remainingSp": 160164886.01984033,
   "remainingWeeks": 4000000,
   "nextPayout": "2026-11-22T18:25:30",
-  "rcFuelSp": 150.65982986687777
+  "rcFuelSp": 150.6599340880853
  },
  "inventory": {
   "steem": 8.779,
-  "sbd": 14.12
+  "sbd": 6.12
  },
  "book": {
-  "bestBid": 0.10299641454669627,
+  "bestBid": 0.10292566479764614,
   "bestAsk": 0.10342316096139839,
-  "mid": 0.10320978775404732,
-  "spreadBps": 41
+  "mid": 0.10317441287952227,
+  "spreadBps": 48
  },
- "openOrdersNow": 11,
+ "openOrdersNow": 13,
  "run": {
-  "placed": 3,
+  "placed": 2,
   "cancelled": 1,
-  "placedTotal": 152,
-  "cancelledTotal": 146,
+  "placedTotal": 154,
+  "cancelledTotal": 147,
   "filledTotal": 37
  },
  "externalFlowUsd": 0.007321,
@@ -345,30 +345,6 @@
   }
  ],
  "orders": [
-  {
-   "id": 2358946342,
-   "at": "2026-11-16T22:31:35.733Z",
-   "txid": "1a12ecb24f1fbe248319c7f7f51ccabc189fbd80",
-   "side": "bid",
-   "sell": "4.000 SBD",
-   "receive": "42.471 STEEM",
-   "priceSbdPerSteem": 0.0941802834,
-   "status": "cancelled",
-   "lastSeenAt": "2026-11-16T23:45:11.961Z",
-   "chain": "steem"
-  },
-  {
-   "id": 2358953444,
-   "at": "2026-11-16T22:46:23.810Z",
-   "txid": "6d183c7812f0808360dcff010760995a3e7f9bb0",
-   "side": "bid",
-   "sell": "4.000 SBD",
-   "receive": "41.817 STEEM",
-   "priceSbdPerSteem": 0.09565298,
-   "status": "cancelled",
-   "lastSeenAt": "2026-11-16T23:00:56.775Z",
-   "chain": "steem"
-  },
   {
    "id": 2358953469,
    "at": "2026-11-16T22:46:27.059Z",
@@ -605,8 +581,9 @@
    "sell": "4.000 SBD",
    "receive": "42.087 STEEM",
    "priceSbdPerSteem": 0.09503937,
-   "status": "open",
-   "lastSeenAt": "2026-11-17T00:44:53.954Z"
+   "status": "cancelled",
+   "lastSeenAt": "2026-11-17T00:59:35.743Z",
+   "chain": "steem"
   },
   {
    "id": 2359010349,
@@ -617,7 +594,8 @@
    "receive": "42.512 STEEM",
    "priceSbdPerSteem": 0.0940889763,
    "status": "open",
-   "lastSeenAt": "2026-11-17T00:44:57.152Z"
+   "lastSeenAt": "2026-11-17T00:44:57.152Z",
+   "chain": "steem"
   },
   {
    "id": 2359010382,
@@ -628,7 +606,30 @@
    "receive": "42.946 STEEM",
    "priceSbdPerSteem": 0.09313858259999999,
    "status": "open",
-   "lastSeenAt": "2026-11-17T00:44:59.708Z"
+   "lastSeenAt": "2026-11-17T00:44:59.708Z",
+   "chain": "steem"
+  },
+  {
+   "id": 2359017428,
+   "at": "2026-11-17T00:59:42.024Z",
+   "txid": "a251fb5bd77c93aefe34d4a706e6697712be0823",
+   "side": "bid",
+   "sell": "4.000 SBD",
+   "receive": "42.111 STEEM",
+   "priceSbdPerSteem": 0.09498548,
+   "status": "open",
+   "lastSeenAt": "2026-11-17T00:59:42.024Z"
+  },
+  {
+   "id": 2359017461,
+   "at": "2026-11-17T00:59:44.824Z",
+   "txid": "35b2a7f4f3400dd59296a49f088b2acb5f2e88f7",
+   "side": "bid",
+   "sell": "4.000 SBD",
+   "receive": "42.537 STEEM",
+   "priceSbdPerSteem": 0.0940356252,
+   "status": "open",
+   "lastSeenAt": "2026-11-17T00:59:44.824Z"
   }
  ],
  "vault": {
