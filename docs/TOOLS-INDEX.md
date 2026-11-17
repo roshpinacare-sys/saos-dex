@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-16T06:37:19.185Z · 192 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-17T22:43:04.784Z · 193 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -67,6 +67,7 @@
 | `grids/brake.mjs` | BRAKE — בלם-ההון של רשת-הגרידים (owner directive 2026-10-04, IM trace 1a108e28015b0451) |
 | `grids/community-selftest.mjs` | COMMUNITY-SELFTEST — שער-ברזל למתכנן-הקהילה (אופליין, אפס-רשת, אפס-מפתחות) |
 | `grids/community.mjs` | COMMUNITY (D-024) — בית-הצי ב-Steem: קהילה ייעודית על-פי-הוראת-הבעלים המתועדת |
+| `grids/content-beat.mjs` | !/usr/bin/env node |
 | `grids/convert.mjs` | CONVERT (D-023 · T-8) — מסילת-ההמרה: קציר-אסקים → SBD נזיל → המרה בפאריטי-פנים → 3.5 ימים  |
 | `grids/counter-grid.mjs` | COUNTER-GRID — סולמות-נגדיים-מתמטיקה עם חלוקת-הון-פר-צד (Z-87a · plan-only · audit-Z86c פע |
 | `grids/curate-beat.mjs` | !/usr/bin/env node |
