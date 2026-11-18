@@ -148,7 +148,12 @@ else if (argv.includes("--once")) {
     console.error(`[curate-beat] ניסיון-ראשון-נכשל (${String(e1?.message ?? e1).slice(0, 120)}) — המתנה-45שנ' וניסיון-חוזר אחד (§㊿)`);
     await new Promise((res) => setTimeout(res, 45_000));
     try { await attempt(); }
-    catch (e2) { console.error(`[curate-beat] fail-honest (2-ניסיונות): ${String(e2?.message ?? e2).slice(0, 160)}`); process.exit(1); }
+    catch (e2) {
+      console.error(`[curate-beat] ניסיון-שני-נכשל (${String(e2?.message ?? e2).slice(0, 120)}) — §68: המתנה-120שנ' וניסיון-שלישי (סערות-רשת ארוכות-מנמדד)`);
+      await new Promise((res) => setTimeout(res, 120_000));
+      try { await attempt(); }
+      catch (e3) { console.error(`[curate-beat] fail-honest (3-ניסיונות): ${String(e3?.message ?? e3).slice(0, 160)}`); process.exit(1); }
+    }
   }
 } else {
   const hours = Math.max(1, parseFloat(argv[argv.indexOf("--loop") + 1] ?? "24") || 24);
