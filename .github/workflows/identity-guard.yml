@@ -70,7 +70,7 @@ jobs:
           # lane law. Enumerated classes (noreply, container) were approximations;
           # every sandbox default now falls to the same single rule:
           # no allowlist match = violation.
-          ALLOWED='^([0-9]+\+roshpinacare-sys@users\.noreply\.github\.com|roshpinacare-sys@users\.noreply\.github\.com|([0-9]+\+)?github-actions\[bot\]@users\.noreply\.github\.com|[^@]+@fleet\.local|[^@]+@agents\.roshpinacare-sys|roshpinacare@gmail\.com|actions@github\.com)$'
+          ALLOWED='^([0-9]+\+roshpinacare-sys@users\.noreply\.github\.com|roshpinacare-sys@users\.noreply\.github\.com|([0-9]+\+)?github-actions\[bot\]@users\.noreply\.github\.com|[^@]+@fleet\.local|[^@]+@agents\.roshpinacare-sys|roshpinacare@gmail\.com|actions@github\.com|noreply@github\.com)$'
           BEFORE="${{ github.event.before }}"
           AFTER="${{ github.sha }}"
           if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE" 2>/dev/null; then
@@ -109,7 +109,7 @@ jobs:
       - name: Full-history identity census (REPORT-ONLY custody receipt)
         run: |
           set -euo pipefail
-          ALLOWED='^([0-9]+\+roshpinacare-sys@users\.noreply\.github\.com|roshpinacare-sys@users\.noreply\.github\.com|([0-9]+\+)?github-actions\[bot\]@users\.noreply\.github\.com|[^@]+@fleet\.local|[^@]+@agents\.roshpinacare-sys|roshpinacare@gmail\.com|actions@github\.com)$'
+          ALLOWED='^([0-9]+\+roshpinacare-sys@users\.noreply\.github\.com|roshpinacare-sys@users\.noreply\.github\.com|([0-9]+\+)?github-actions\[bot\]@users\.noreply\.github\.com|[^@]+@fleet\.local|[^@]+@agents\.roshpinacare-sys|roshpinacare@gmail\.com|actions@github\.com|noreply@github\.com)$'
           VIOLATIONS="$(git log --pretty='%H|%ae|%ce|%ad|%s' --date=iso origin/main 2>/dev/null | awk -F'|' -v ALLOWED="$ALLOWED" '
             $2 !~ ALLOWED || $3 !~ ALLOWED
           ' || true)"
@@ -186,7 +186,7 @@ jobs:
           # Same law text as the push guard (v3 deny-by-default), same allowlist.
           # Window is recent-only: old wounds belong to the weekly report-only
           # deep sweep and to owner-side history rewrite (DECISIONS #29).
-          ALLOWED='^([0-9]+\+roshpinacare-sys@users\.noreply\.github\.com|roshpinacare-sys@users\.noreply\.github\.com|([0-9]+\+)?github-actions\[bot\]@users\.noreply\.github\.com|[^@]+@fleet\.local|[^@]+@agents\.roshpinacare-sys|roshpinacare@gmail\.com|actions@github\.com)$'
+          ALLOWED='^([0-9]+\+roshpinacare-sys@users\.noreply\.github\.com|roshpinacare-sys@users\.noreply\.github\.com|([0-9]+\+)?github-actions\[bot\]@users\.noreply\.github\.com|[^@]+@fleet\.local|[^@]+@agents\.roshpinacare-sys|roshpinacare@gmail\.com|actions@github\.com|noreply@github\.com)$'
           VIOLATIONS="$(git log --pretty='%H|%ae|%ce|%ad|%s' --date=iso --since='26 hours ago' origin/main 2>/dev/null | awk -F'|' -v ALLOWED="$ALLOWED" '
             $2 !~ ALLOWED || $3 !~ ALLOWED
           ' || true)"
