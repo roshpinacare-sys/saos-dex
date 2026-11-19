@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-19T02:37:04.851Z · 193 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-19T10:49:13.814Z · 194 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -71,6 +71,7 @@
 | `grids/convert.mjs` | CONVERT (D-023 · T-8) — מסילת-ההמרה: קציר-אסקים → SBD נזיל → המרה בפאריטי-פנים → 3.5 ימים  |
 | `grids/counter-grid.mjs` | COUNTER-GRID — סולמות-נגדיים-מתמטיקה עם חלוקת-הון-פר-צד (Z-87a · plan-only · audit-Z86c פע |
 | `grids/curate-beat.mjs` | !/usr/bin/env node |
+| `grids/curate-node-health.mjs` | !/usr/bin/env node |
 | `grids/curate-selftest.mjs` | CURATE-SELFTEST (A-12 · T-7) — וקטורים אופליין לגמרי, אפס-רשת אפס-מפתחות |
 | `grids/curate.mjs` | CURATE (A-12 · T-7) — מסילת-הקיורציה: הון-ה-SP עובד גם-בהצבעה |
 | `grids/custody.mjs` | CUSTODY (Z-89 · directive element #5) — שכבת-האמת של החזקות-רב-שרשרת |
