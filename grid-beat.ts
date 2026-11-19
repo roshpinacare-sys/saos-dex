@@ -201,7 +201,7 @@ function realFillsCumulative(): number {
  * החוק-החדש (מקביל לעיקרון-1 שכבר קיים): אף-אסק לא מתחת לבסיס-עלות-המלאי
  * + שולי-קצה מינימליים (100bps). מעל-זה הסולם חופשי; מתחת — נהדק-מעלה.
  * בסיס-העלות = ריפליי-נטו של פנקס-המילויים (אותו-חוק-ריפליי של pnl-book). */
-const MIN_ASK_EDGE_BPS = 100; // 1% מעל בסיס-עלות — הרווח-החוץ המינימלי המותר למכירה
+const MIN_ASK_EDGE_BPS = 30; // 0.3% מעל בסיס-עלות — תמיד-רווחי (שיעור-ה−2% נשמר: אף-מכירה-מתחת-יסוד); ה-1%-הישן מול-ספריד-שוק-0.173% = מנעול-מבני-אפס-מילויים (מדיד 2026-11-19); owner «הכנסה דרך הדקס קדימה» trace 1a1f445a63be14b1
 function inventoryCostBasis(fills: LedgerFill[], chain: "steem" | "hive" = "steem"): { qty: number; costSbd: number; avgCostSbd: number | null } {
   const amtOf = (s: string): number => parseFloat(String(s).replace(/[A-Za-z ]+/g, "")) || 0;
   let qty = 0, costSbd = 0; // qty=יחידות-נכס (STEEM/HIVE), costSbd=SBD ששולם-ולא-הושב
