@@ -31,7 +31,7 @@ function loadPostingWif() {
 async function postingAuthorityOk(wif) {
   const steem = (await import("steem")).default;
   const pub = steem.auth.wifToPublic(wif);
-  const nodes = ["https://api.steemit.com", "https://api.justyy.com", "https://steem-rpc.publicnode.com"];
+  const nodes = ["https://api.steemit.com", "https://steemapi.boylikegirl.club", "https://api.steem.fans", "https://api.justyy.com"]; // §71: publicnode הוסר (404-מדיד) — החלפה ב-2-חיים-מדידים
   for (const node of nodes) {
     try {
       const r = await fetch(node, { method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(9000), body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "condenser_api.get_accounts", params: [[ACCOUNT]] }) });

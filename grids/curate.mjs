@@ -21,13 +21,14 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * באותו-רגע ("Unexpected end of JSON input") והפעימה-הכנה מתה-בלי-ניסיון-חוזר.
  * הריפוי: הרחבת-מערך-הצמתים + מעבר-כפול (2-סבבים) ב-rpcAny — כישלון-חולף
  * של-צומת-אחד (או-שניים) נבלע; רק-כישלון-עקבי-אמיתי מפיל-את-הפעימה. */
-const STEEM_NODES = [
+const STEEM_NODES = [ // §71: כל-5 נמדדו-חיים 2026-11-19 (probe: block=… חי); הסדר steemit→boylikegirl→steem.fans→steemitdev→justyy — מגוון-ספקים
   "https://api.steemit.com",
-  "https://api.justyy.com",
-  "https://steem-rpc.publicnode.com", // נקודת-קצה-ציבורית-נוספת (2026-11-16)
-  "https://api.steem.buzz", // צומת-ציבורי-רביעי — ריבוי-ספקי-רשת
-  "https://rpc.steemviz.com", // צומת-ציבורי-חמישי — סבב-גיבוי
+  "https://steemapi.boylikegirl.club", // §71: חי-מדיד (block-probe 200) — הצומת-הראשי-של-הצי
+  "https://api.steem.fans", // §71: חי-מדיד
+  "https://api.steemitdev.com", // §71: חי-מדיד — מראה-dev-של-steemit (ספק-שונה-למחצה)
+  "https://api.justyy.com", // חי-מדיד ל-dgpo; קפדן-במתודות-discussions — לכן-אחרון
 ];
+export { STEEM_NODES }; // §71: ייצוא-מבני לשער-הבריאות (אפס-שינוי-התנהגות)
 const ACCOUNT = process.env.SAOS_RELAY_AGENT_ACCOUNT || "headcorner";
 
 /* נושאים-בית: היכן שהידע-שלנו הוא-יתרון-אמת (משקל-קיורציה לתוכן-שאנחנו
