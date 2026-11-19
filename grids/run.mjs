@@ -174,7 +174,7 @@ const SEED = {
     "mm-variant-2": { strategy: "mm-grid", params: { levels: 2, widthBps: 100, levelMu: 60, capMu: 4000 } },
   },
   grids: [
-    { id: "mm-core", strategy: "mm-grid", params: { levels: 3, widthBps: 60, levelMu: 100, growth: 1.5, capMu: 10000 }, active: true, inventoryMu: 0, pnlSimMu: 0 },
+    { id: "mm-core", strategy: "mm-grid", params: { levels: 3, widthBps: 20, levelMu: 100, growth: 1.5, capMu: 10000 }, active: true, inventoryMu: 0, pnlSimMu: 0 },
     { id: "anchor-q", strategy: "anchor-quote", params: { widthBps: 45, levelMu: 120, capMu: 5000 }, active: true, inventoryMu: 0, pnlSimMu: 0 },
   ],
   mission: null,
