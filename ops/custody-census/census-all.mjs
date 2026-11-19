@@ -48,9 +48,16 @@ console.log(`census: ${cands.length} WIF candidates from env (generic scan)`);
 
 // 2. chain authorities
 const ROSTER = ["headcorner","cashmachine","haran","israelnews","lsa","macrame","siq","tov","wic","wog","woq","hcsoldier1","hcsoldier2","hcsoldier3","hcsoldier4","hcsoldier5","hcsoldier6","hcsoldier7","saos-0001","saos-0002","saos-0003","saos-0004","saos-0005","saos-0006","saos-0007","saos-0008","saos-0009"];
-const steemAccs = await rpc("https://api.steemit.com", "condenser_api.get_accounts", [ROSTER]).catch(() => []);
-const hiveRoster = ["headcorner", "israelnews", "lsa", "siq", "woq"];
-const hiveAccs = await rpc("https://api.hive.blog", "condenser_api.get_accounts", [hiveRoster]).catch(() => []);
+async function rpcRetry(url, method, params, tries = 3) {
+  let last = null;
+  for (let k = 0; k < tries; k++) { try { return await rpc(url, method, params); } catch (e) { last = e; await new Promise((r) => setTimeout(r, 2000)); } }
+  throw last;
+}
+let steemAccs = [], hiveAccs = [];
+let steemAuthOk = false;
+try { steemAccs = await rpcRetry("https://api.steemit.com", "condenser_api.get_accounts", [ROSTER]); steemAuthOk = Array.isArray(steemAccs) && steemAccs.length > 0; } catch {}
+console.log(`STEEM-AUTH-LOADED: ${steemAuthOk ? "yes (" + steemAccs.length + " accounts)" : "NO — steem judgments unreliable this run"}`);
+try { hiveAccs = await rpcRetry("https://api.hive.blog", "condenser_api.get_accounts", [hiveRoster]); } catch {}
 const auth = {};
 for (const a of steemAccs) auth["steem:" + a.name] = { active: a.active?.key_auths?.[0]?.[0], posting: a.posting?.key_auths?.[0]?.[0], memo: a.memo_key, owner: a.owner?.key_auths?.[0]?.[0] };
 for (const a of hiveAccs) auth["hive:" + a.name] = { active: a.active?.key_auths?.[0]?.[0], posting: a.posting?.key_auths?.[0]?.[0], memo: a.memo_key, owner: a.owner?.key_auths?.[0]?.[0] };
@@ -71,8 +78,9 @@ for (const c of cands) {
   if (hit) {
     const [chain, account] = hit.key.split(":");
     verified[account] = verified[account] || {};
-    if (!verified[account][hit.role]) verified[account][hit.role] = c.wif;
-    matrix.push(`${c.secret.padEnd(22)} ${fp(c.wif)} LIVE ${hit.key}:${hit.role}`);
+    const roleKey = chain === "hive" ? "hive_" + hit.role : hit.role;
+    if (!verified[account][roleKey]) verified[account][roleKey] = c.wif;
+    matrix.push(`${c.secret.padEnd(22)} ${fp(c.wif)} LIVE ${hit.key}:${roleKey}`);
   } else matrix.push(`${c.secret.padEnd(22)} ${fp(c.wif)} dead-vs-chain`);
 }
 console.log("\n=== CENSUS MATRIX (sha256 fingerprints only — never WIFs) ===");
