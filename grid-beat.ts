@@ -349,6 +349,12 @@ async function main(): Promise<void> {
   let placed = 0, cancelled = 0;
   /* ZOMBIE-JANITOR outputs — function scope so the public book publishes them after the armed block */
   let janitorFreedSbd = 0, janitorFreedSteem = 0;
+  /* FUEL-TRUTH (2026-11-19 · נמדד-חי): כל-ביטול-שבוצע-בפועל-ברץ-הזה מחזיר-כסף-לנזיל-החי
+   * ונספר-כאן. החוק-הישן ספר את כל ourAsks/ourBids כ"מוחזר" גם-כשהסולם-שלם-ונשמר
+   * (שימור-תור · Z-81) — התוצאה-המדודה: run 44558809253 (15:47Z) חישב ~68 STEEM-זמין
+   * בזמן-שהנזיל-החי-על-השרשרת היה 4.792 · 6/6 שידורים-נדחו "insufficient funds" (assert
+   * אמת-מjustyy · השרשרת-עצמה-דחתה). עתה: דלק = נזיל-חי + ביטולים-שאירעו-באמת — אפס-דלק-פנטום. */
+  let freedSteemTruth = 0, freedSbdTruth = 0;
   const janitorCancelled: Array<{ id: number; why: string; cls: string; txid?: string }> = [];
   const blocker: string[] = [];
   if (!armed) blocker.push("STEEM_ACTIVE_WIF secret missing: one operator action to arm the external grid");
@@ -461,6 +467,7 @@ async function main(): Promise<void> {
           try {
             const r = await realCancelOrder(o.id);
             cancelled++;
+            freedSteemTruth += amtOfStr(o.sell); // FUEL-TRUTH: הכסף-חזר-לנזיל ברץ-הזה
             const rec = ledger.orders.find((x) => x.id === o.id);
             if (rec) { rec.status = "cancelled"; rec.lastSeenAt = new Date().toISOString(); }
             // N2-b · כנות-השתקמות: txid של recovered-cancel מסומן-בגלוי — לא נראה כישלון מה שנחת-והושג
@@ -496,11 +503,12 @@ async function main(): Promise<void> {
         const rec = ledger.orders.find((x) => x.id === jc.id);
         if (rec) { rec.status = "cancelled"; rec.lastSeenAt = new Date().toISOString(); }
         const freedO = snap.openOrders.find((o) => o.id === jc.id);
-        // no double-count: ledger-KNOWN cancels are already inside the ourAsks/ourBids
-        // snapshot sums (Z-81 fuel law); the janitor adds only the unknown echoes it reclaims
-        if (freedO && !ledgerKnownIds.has(jc.id)) {
-          if (freedO.sell.includes("STEEM")) janitorFreedSteem += amtOfStr(freedO.sell);
-          else janitorFreedSbd += amtOfStr(freedO.sell);
+        // FUEL-TRUTH (2026-11-19): כל-ביטול-שבוצע-באמת נספר-לדלק (ידוע-פנקס או-זומבי —
+        // הכסף-חוזר-לנזיל-החי-בשני-המקרים). janitorFreed* שומר-על-המשמעות-הישנה
+        // (הדי-זומבים-בלבד) לקבלה-הציבורית-בלבד.
+        if (freedO) {
+          if (freedO.sell.includes("STEEM")) { janitorFreedSteem += amtOfStr(freedO.sell); freedSteemTruth += amtOfStr(freedO.sell); }
+          else { janitorFreedSbd += amtOfStr(freedO.sell); freedSbdTruth += amtOfStr(freedO.sell); }
         }
         janitorCancelled.push({ id: jc.id, why: jc.why, cls: jc.cls, txid: r.txid });
         console.log(`[grid-beat] JANITOR ${jc.cls} cancel #${jc.id}: ${jc.why} · freed to this beat's fuel · txid ${r.txid.slice(0, 26)}`);
@@ -541,7 +549,11 @@ async function main(): Promise<void> {
     // מדף-המכירה: מעל קו-הזהות החיצוני — אף-פעם לא מתחת (עיקרון 1)
     // Z-81: הדלק = נזיל-עכשיו + מה שהביטולים-שביצענו-מעלה מחזירים (אסקים נעולים)
     // EDGE-FLOOR (2026-10-21): ומעל בסיס-עלות-המלאי + 100bps — אף-מכירה מתחת-לעלות (הדימום-המדוד: edge -2%)
-    const steemReturned = ourAsks.reduce((s, a) => s + a.steem, 0) + janitorFreedSteem;
+    /* FIX(FUEL-TRUTH · 2026-11-19 מדוד): הדלק = נזיל-חי + מה שבוטל-בפועל-ברץ-הזה בלבד.
+     * החוק-הישן ספר את סכום-ourAsks כ"מוחזר" גם-כששום-ביטול-לא-אירע (שימור-תור) —
+     * ספירה-כפולה-של-הון-נעול: run 44558809253 ניסה-למכור 20.410 STEEM על-נזיל-חי-של 4.792
+     * (6/6 נדחו "insufficient funds" · assert-חי-מjustyy). אפס-דלק-פנטום מעתה. */
+    const steemReturned = freedSteemTruth;
     const steemAvail = snap.balances.steem + steemReturned - LIVE_MIN_KEEP_STEEM;
     const steemCommit = Math.max(0, Math.floor(steemAvail * LIVE_COMMIT_PCT * commitScale * 1000) / 1000); // commitScale: trim-to-cap (owner approve 1a1629f96941f20d)
     const invBasis = inventoryCostBasis(ledger.fills, "steem");
@@ -591,7 +603,7 @@ async function main(): Promise<void> {
 
     // מדף-הקנייה: מתחת לביד הטוב — כולן מעל-ערך מדוד מול הציון (עיקרון 2)
     // Z-81: גם-כאן — ה-SBD הנעול בבידים-שבוטלו חוזר לפני-ההצבה
-    const sbdReturned = ourBids.reduce((s, b) => s + b.sbd, 0) + janitorFreedSbd;
+    const sbdReturned = freedSbdTruth; // FIX(FUEL-TRUTH · 2026-11-19): אותו-חוק-לצד-הקנייה
     const sbdCommit = Math.max(0, Math.floor((snap.balances.sbd + sbdReturned) * LIVE_COMMIT_PCT * commitScale * 1000) / 1000); // commitScale: trim-to-cap (owner approve 1a1629f96941f20d)
     if (sbdCommit >= LIVE_MIN_LEVEL_SBD * LIVE_BID_LEVELS && snap.book.bestBid) {
       const per = Math.floor((sbdCommit / LIVE_BID_LEVELS) * 1000) / 1000;
@@ -638,7 +650,7 @@ async function main(): Promise<void> {
     } /* סוף-מסלול-הרענון (Z-81: שימור-תור מדלג על ביטול+פריסה בשלמותם) */
     /* 9-c · כנות-שידור: שרשרת דחתה את-כל-השידורים = אין-מצב-יציב — מפרסמים-חסימה */
     if (bcAttempted > 0 && bcFailed > 0) {
-      blocker.push(`broadcast failing: ${bcFailed}/${bcAttempted} chain ops rejected this run ("broadcast answered without id") — stale key/authority or node fault; verdict cannot be stable until signing succeeds`);
+      blocker.push(`broadcast failing: ${bcFailed}/${bcAttempted} chain ops rejected this run ("broadcast answered without id") — stale key/authority, node fault, or fuel sized beyond live liquid (FUEL-TRUTH law 2026-11-19: sizes must fit live liquid + actually-freed cancels); verdict cannot be stable until signing succeeds`);
     }
   }
 

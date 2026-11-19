@@ -24,9 +24,20 @@ import steem from "steem";
 import { extFeeds } from "./price-proof";
 import { fencedFetch } from "./fence"; // FIX(Roast-63)+FIX(Roast-65-b · H2): גדר + redirect:error מרוכזים
 
+/* NODE-LAW (2026-11-19 · נמדד-חי): סדר-הצמתים מדוד. הראיות:
+ * · run 44558809253 (15:47Z): api.steemit.com החזיר HTML ל-runner ("JSON Parse error:
+ *   Unrecognized token '<'" — Cloudflare-מול-Azure) — steemit יורד-בסדר.
+ * · probe-חי-מה-sandbox 17:05Z: כל-6 הצמתים-מטה משיבים JSON-בריא, ראש-מסונכרן
+ *   (head=111466349 · LIB=111466326 · אין-מזלג), חוץ-מpublicnode שהחזיר-HTML.
+ * · mover exec-20: steemitdev+boylikegirl הוכחו-מ-runner; §71 (curate): 5 צמתים
+ *   נמדדו-חיים 2026-11-19. justyy בקדמת-השידור: הוא-זה-שהחזיר-את-ה-assert-האמת
+ *   ("insufficient funds") — שידור-מוערך-עד-הקונצנזוס. */
 const STEEM_NODES = [
-  "https://api.steemit.com",
+  "https://api.steemitdev.com",
+  "https://steemapi.boylikegirl.club",
+  "https://api.steem.fans",
   "https://api.justyy.com",
+  "https://api.steemit.com",
   "https://steem-rpc.publicnode.com",
 ];
 const STEEM_CHAIN_ID = "0000000000000000000000000000000000000000000000000000000000000000";
