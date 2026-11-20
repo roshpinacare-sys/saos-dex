@@ -92,13 +92,13 @@ jobs:
         env:
           HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
           HIVE_ACCOUNT: headcorner
-        run: bun scripts/unlock/hive-maker.mjs
+        run: node scripts/unlock/hive-maker.mjs
         continue-on-error: true
       - name: "hive-savings hbd interest rail"
         env:
           HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
           HIVE_ACCOUNT: headcorner
-        run: bun scripts/unlock/hive-savings.mjs
+        run: node scripts/unlock/hive-savings.mjs
         continue-on-error: true
       - name: blurt-treasury
         env:
