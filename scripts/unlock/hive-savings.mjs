@@ -9,7 +9,8 @@ function b58decode(s) { let n = 0n; for (const c of s) { const i = B58.indexOf(c
 function b58encode(bytes) { let n = 0n; for (const b of bytes) n = n * 256n + BigInt(b); let s = ""; while (n > 0n) { s = B58[Number(n % 58n)] + s; n /= 58n; } for (const b of bytes) { if (b === 0) s = "1" + s; else break; } return s; }
 function b58checkDecode(s) { const raw = b58decode(s); if (raw.length < 5) throw new Error("short"); const payload = raw.slice(0, -4), chk = raw.slice(-4); const h = sha256(sha256(payload)); for (let i = 0; i < 4; i++) if (h[i] !== chk[i]) throw new Error("bad-checksum"); return payload; }
 function b58checkEncode(payload) { const h = sha256(sha256(payload)); return b58encode(Uint8Array.from([...payload, ...h.slice(0, 4)])); }
-function toUncompressedWif(wif) { const p = b58checkDecode(wif.trim()); if (p[0] !== 0x80) throw new Error("not-mainnet-0x80"); let key; if (p.length === 34 && p[33] === 0x01) key = p.slice(1, 33); else if (p.length === 33) key = p.slice(1); else throw new Error("bad-payload-len-" + p.length); return b58checkEncode(Uint8Array.from([0x80, ...key])); }
+function toUncompressedWif(wif) { const p = b58checkDecode(wif.trim()); if (p[0] !== 0x80) throw new Error("not-mainnet-0x80"); let key; if (p.length === 34 && p[33] === 0x01) { // מפתח-דחוס: הפומבי-הרשום-בשרשרת = pub((key||0x01)-mod-n) — משחזרים-את-הסקלר-הרשום-בדיוק
+ const N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n; const D = (BigInt("0x" + Buffer.from(p.slice(1, 33)).toString("hex") + "01")) % N; key = Buffer.from(D.toString(16).padStart(64, "0"), "hex"); } else if (p.length === 33) key = p.slice(1); else throw new Error("bad-payload-len-" + p.length); return b58checkEncode(Uint8Array.from([0x80, ...key])); }
 
 import { readFileSync } from "node:fs";
 const { Client, PrivateKey } = d;
