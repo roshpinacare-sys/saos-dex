@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-20T02:22:04.899Z · 198 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-20T18:03:36.616Z · 203 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -45,7 +45,12 @@
 | `scripts/t15-truthgate-selftest.ts` | * |
 | `scripts/t37-laws-selftest.ts` | * |
 | `scripts/unlock/blurt-treasury.mjs` | blurt-treasury.mjs — מסילת-ה-blurt (מטבע-שלישי): סריקה + claim-אם-יש-פנדינג |
+| `scripts/unlock/fleet-cancel.mjs` | fleet-cancel.mjs — §83: ביטול-פקודות-ישנות-של-הצי בספר-הפנימי (נזילות-פזורה-נעולה) |
 | `scripts/unlock/fleet-claim.mjs` | fleet-claim.mjs — פתיחת-מסילת-הצי: claims-פנדינג + (אופציונלי) sweep-נזיל-מדוד ל-headcorne |
+| `scripts/unlock/fleet-post.mjs` | fleet-post.mjs — §83 «הצי-כמבצעים»: הפעלת-חשבונות-הצי-ככותבים-פוסטים-אמת |
+| `scripts/unlock/hive-maker.mjs` | hive-maker.mjs — §84 מסילת-maker-צד-שני: ביד+אסק-maker-only-על-ספר-HIVE-הפנימי (HBD/HIVE) |
+| `scripts/unlock/hive-post.mjs` | hive-post.mjs — §86: מסילת-תוכן-HIVE (הדלת-חסרת-ההון-היחידה-שנותרה: כלכלת-האוצרים של-hive) |
+| `scripts/unlock/hive-savings.mjs` | hive-savings.mjs — §84 מסילת-ריבית-HBD: הפקדת-כל-ה-HBD-הנזיל-ל-savings (hbd_interest_rate= |
 | `scripts/unlock/hive-vote.mjs` | hive-vote.mjs — פתיחת-מסילת-ה-hive: קורצרציה-אמיתית-על-hive עם המפתחות-של-ה-runner |
 | `scripts/unlock/se-scan.mjs` | se-scan.mjs — מסילת-ה-Steem-Engine: מלאי-טוקנים-לכל-האחזקות (קריאה-בלבד) |
 | `scripts/usds-sides-once.ts` | * |
