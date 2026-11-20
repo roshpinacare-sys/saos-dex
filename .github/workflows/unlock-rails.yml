@@ -33,7 +33,7 @@ jobs:
       - name: install deps (frozen + noble for census)
         run: |
           bun install --frozen-lockfile
-          npm i --no-save --silent @noble/secp256k1@2.2.3 @noble/hashes@1.8.0
+          npm i --no-save --silent @noble/secp256k1@2.2.3 @noble/hashes@1.8.0 @hiveio/dhive@1.3.6
       - name: census — generic scan, chain is the judge
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
