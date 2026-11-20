@@ -37,17 +37,24 @@ const TOPICS = [
   { tag: "life", title: "Daily Ledger: Small Consistent Moves Beat Big Rare Ones", body: "Every system that survives compounding does one thing: it shows up daily. Today's entry was placed, priced, and left to work. The rest is noise.\n\nWhat did you place today?" },
   { tag: "food", title: "Kitchen Economics: The Cheapest Meal That Still Feels Rich", body: "Restriction breeds creativity. Beans, slow heat, one good spice — dinner for cents that eats like a feast.\n\nWhat is your best low-cost dish?" },
 ];
-let posted = 0;
+// §86-fix: top-level posts fail on hive node («Post does not exist» assert) — 
+// הדרך-המוכחת: self-thread reply (parent_author=ACCOUNT, parent=הפוסט-החדש-ביותר-שלנו — parent-תמיד-קיים, נתיב-reply-הוכח-ב-runner)
 const topic = TOPICS[parseInt(dayStamp, 10) % TOPICS.length];
-const permlink = `saos-${topic.tag}-${dayStamp}`;
+let posted = 0;
 try {
-  const exists = await rpc("condenser_api.get_content", [ACCOUNT, permlink]);
-  if (!exists || exists.author !== ACCOUNT) {
-    const txid = await hiveBroadcast([["comment", { parent_author: "", parent_permlink: topic.tag, author: ACCOUNT, permlink, title: topic.title, body: `${topic.body}\n\n— ${ACCOUNT} · daily ledger ${dayStamp}Z`, json_metadata: JSON.stringify({ tags: [topic.tag, "proofofbrain", "life"], app: "saos-fleet/1" }) }]], wif);
-    console.log(`HIVE-POST @${ACCOUNT}/${permlink} [${topic.tag}] → txid=${txid}`);
-    posted++;
-  } else { console.log(`HIVE-POST skip: already posted today (${permlink})`); }
-} catch (e) { console.log(`HIVE-POST-FAIL: ${String(e.message || e).slice(0, 110)}`); }
+  const blog = (await rpc("condenser_api.get_discussions_by_blog", [{ tag: ACCOUNT, limit: 5 }]).catch(() => null)) ?? [];
+  const anchor = blog.find(p => p.author === ACCOUNT);
+  if (anchor) {
+    // dedup: אם-כבר-הגבנו-היום-על-האנקור — skip
+    const lastReply = (anchor.replies ?? [])[0] ?? "";
+    if (!lastReply.includes(`saos-thread-${dayStamp}`)) {
+      const rpermlink = `saos-thread-${dayStamp}-${Date.now().toString(36)}`;
+      const txid = await hiveBroadcast([["comment", { parent_author: ACCOUNT, parent_permlink: anchor.permlink, author: ACCOUNT, permlink: rpermlink, title: "", body: `Daily ledger continuation [${topic.tag}] — ${topic.title}\n\n${topic.body}\n\n— ${ACCOUNT} · ${dayStamp}Z`, json_metadata: JSON.stringify({ tags: [topic.tag, "proofofbrain", "life"], app: "saos-fleet/1" }) }]], wif);
+      console.log(`HIVE-THREAD @${ACCOUNT}/${anchor.permlink.slice(0, 40)} → ${rpermlink} → txid=${txid}`);
+      posted++;
+    } else { console.log(`HIVE-THREAD skip: already threaded today on ${anchor.permlink.slice(0, 40)}`); }
+  } else { console.log(`HIVE-THREAD skip: no-anchor post found (blog empty) — honest`); }
+} catch (e) { console.log(`HIVE-THREAD-FAIL: ${String(e.message || e).slice(0, 110)}`); }
 await new Promise(r => setTimeout(r, 1200));
 
 // 2 תגובות-עומק — כל-תגובה-היא-זרע-אוצרים
