@@ -8,6 +8,8 @@
 # אפס-סודות-בפלט: רק-fingerprints+txids+שמות+סכומים · fail-closed לכל-שלב.
 name: unlock-rails
 on:
+  schedule:
+    - cron: "0 5 * * *"
   workflow_dispatch:
     inputs:
       sweep:
@@ -85,6 +87,18 @@ jobs:
           HIVE_ACCOUNT: headcorner
           HIVE_VOTE_LIMIT: "4"
         run: bun scripts/unlock/hive-vote.mjs
+        continue-on-error: true
+      - name: "hive-maker dust quotes rail"
+        env:
+          HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
+          HIVE_ACCOUNT: headcorner
+        run: bun scripts/unlock/hive-maker.mjs
+        continue-on-error: true
+      - name: "hive-savings hbd interest rail"
+        env:
+          HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
+          HIVE_ACCOUNT: headcorner
+        run: bun scripts/unlock/hive-savings.mjs
         continue-on-error: true
       - name: blurt-treasury
         env:
