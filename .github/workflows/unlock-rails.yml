@@ -73,7 +73,7 @@ jobs:
           SWEEP_KEEP: ""
         run: bun scripts/unlock/fleet-claim.mjs
         continue-on-error: true
-      - name: fleet-post (performers: delegate→post→vote)
+      - name: fleet-post performers delegate-post-vote
         env:
           STEEM_ACTIVE_WIF: ${{ secrets.STEEM_ACTIVE_WIF }}
         run: bun scripts/unlock/fleet-post.mjs
