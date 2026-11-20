@@ -12,8 +12,8 @@ if (process.env.HIVE_ACTIVE_WIF) cands.push({ tag: "env-active", wif: process.en
 if (process.env.HIVE_POSTING_WIF) cands.push({ tag: "env-posting", wif: process.env.HIVE_POSTING_WIF });
 try { const map = JSON.parse(readFileSync("/tmp/live-map.json", "utf8")); const h = map["hive:" + ACCOUNT]; if (h?.active) cands.push({ tag: "map-active", wif: h.active }); if (h?.posting) cands.push({ tag: "map-posting", wif: h.posting }); if (h?.owner) cands.push({ tag: "map-owner", wif: h.owner }); } catch {}
 const keys = [];
-for (const c of cands) { try { const k = PrivateKey.fromString(c.wif.trim()); const pub = k.createPublic().toString().slice(4, 12); if (!keys.some(x => x.pub === pub)) keys.push({ ...c, key: k, pub }); } catch {} }
-if (!keys.length) { console.log("VERDICT-HIVE-SAVINGS: no-decodable-key honest-abort"); process.exit(1); }
+for (const c of cands) { try { const k = PrivateKey.fromString(c.wif.trim()); const pub = k.createPublic().toString().slice(4, 12); if (!keys.some(x => x.pub === pub)) keys.push({ ...c, key: k, pub }); } catch (e) { console.log(`key-decode-FAIL ${c.tag}: len=${(c.wif || "").trim().length} err=${String(e?.message || e).slice(0, 120)}`); } }
+if (!keys.length) { console.log(`VERDICT-HIVE-SAVINGS: no-decodable-key honest-abort (node=${process.version} candTags=${cands.map(c => c.tag).join(",")} hasPK=${typeof PrivateKey})`); process.exit(1); }
 
 const acc = (await client.database.getAccounts([ACCOUNT]))[0];
 const dgp = await client.database.getDynamicGlobalProperties();
