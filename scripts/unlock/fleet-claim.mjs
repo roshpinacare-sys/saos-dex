@@ -5,7 +5,8 @@ import steem from "steem";
 
 const NODE = "https://api.steemit.com";
 const HEAD = "headcorner";
-const KEEP = new Set((process.env.SWEEP_KEEP || "hcsoldier4,hcsoldier5,hcsoldier6,tov,israelnews,saos-0001,saos-0002,saos-0003,saos-0004").split(",").map(s => s.trim()));
+// §83: sweep-הכל (המבצעים מקבלים-RC-מהצמדת-SP של fleet-post · לא-צריכים-נזיל)
+const KEEP = new Set((process.env.SWEEP_KEEP || "").split(",").map(s => s.trim()).filter(Boolean));
 const SWEEP = process.env.SWEEP === "true";
 const KEEP_AMT = 0.05;
 
@@ -33,19 +34,25 @@ for (const a of accs ?? []) {
   const wif = roles.posting || roles.active;
   const activeWif = roles.active;
   const pend = parseFloat(a.reward_vesting_balance || "0") + parseFloat(a.reward_steem_balance || "0") + parseFloat(a.reward_sbd_balance || "0");
+  // §83: fallback-wif — try active then posting (fix-82: cashmachine/siq/woq)
   try {
-    if (pend > 0 && wif) {
-      const txid = await broadcast([["claim_reward_balance", { account: a.name, reward_steem: a.reward_steem_balance, reward_sbd: a.reward_sbd_balance, reward_vests: a.reward_vesting_balance }]], wif);
-      console.log(`CLAIM ${a.name} vests=${a.reward_vesting_balance} steem=${a.reward_steem_balance} sbd=${a.reward_sbd_balance} → txid=${txid}`);
-      claims++;
+    if (pend > 0) {
+      const wifs = [activeWif, wif].filter(Boolean).filter((w, i, arr) => arr.indexOf(w) === i);
+      let txid = null, lastErr = null;
+      for (const w of wifs) {
+        try { txid = await broadcast([["claim_reward_balance", { account: a.name, reward_steem: a.reward_steem_balance, reward_sbd: a.reward_sbd_balance, reward_vests: a.reward_vesting_balance }]], w); break; }
+        catch (e) { lastErr = e; }
+      }
+      if (txid) { console.log(`CLAIM ${a.name} vests=${a.reward_vesting_balance} steem=${a.reward_steem_balance} sbd=${a.reward_sbd_balance} → txid=${txid}`); claims++; }
+      else console.log(`CLAIM-FAIL ${a.name}: ${String(lastErr?.message || lastErr).slice(0, 100)}`);
     }
   } catch (e) { console.log(`CLAIM-FAIL ${a.name}: ${String(e.message || e).slice(0, 100)}`); }
   try {
     if (SWEEP && activeWif && !KEEP.has(a.name)) {
       const st = parseFloat(a.balance || "0") - KEEP_AMT, sb = parseFloat(a.sbd_balance || "0") - KEEP_AMT;
       const ops = [];
-      if (st >= 0.05) ops.push(["transfer", { from: a.name, to: HEAD, amount: st.toFixed(3) + " STEEM", memo: "fleet-sweep-82" }]);
-      if (sb >= 0.05) ops.push(["transfer", { from: a.name, to: HEAD, amount: sb.toFixed(3) + " SBD", memo: "fleet-sweep-82" }]);
+      if (st >= 0.05) ops.push(["transfer", { from: a.name, to: HEAD, amount: st.toFixed(3) + " STEEM", memo: "fleet-sweep-83" }]);
+      if (sb >= 0.05) ops.push(["transfer", { from: a.name, to: HEAD, amount: sb.toFixed(3) + " SBD", memo: "fleet-sweep-83" }]);
       if (ops.length) {
         const txid = await broadcast(ops, activeWif);
         console.log(`SWEEP ${a.name} ${ops.map(o => o[1].amount).join("+")} → headcorner txid=${txid}`);

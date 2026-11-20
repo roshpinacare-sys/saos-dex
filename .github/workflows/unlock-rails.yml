@@ -60,15 +60,23 @@ jobs:
           NODE_PATH="$GITHUB_WORKSPACE/node_modules" node ops/custody-census/census-all.mjs 2>&1 | tee /tmp/census.out
           grep "LIVE_MAP_B64" /tmp/census.out | sed 's/^LIVE_MAP_B64://; s/:END$//' | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{process.stdout.write(Buffer.from(d.trim(),"base64").toString())})' > /tmp/live-map.json
           node -e 'const m=JSON.parse(require("fs").readFileSync("/tmp/live-map.json","utf8"));console.log("live-map accounts:",Object.keys(m).length)'
-      - name: fleet-claim + sweep
+      - name: fleet-cancel (stale orders → free float)
+        run: bun scripts/unlock/fleet-cancel.mjs
+        continue-on-error: true
+      - name: fleet-claim + sweep-all
         env:
           LIVE_FLEET_KEYS: ${{ secrets.LIVE_FLEET_KEYS }}
           ROT2_FLEET_KEYS: ${{ secrets.ROT2_FLEET_KEYS }}
           STEEM_ACTIVE_WIF: ${{ secrets.STEEM_ACTIVE_WIF }}
           STEEM_POSTING_WIF: ${{ secrets.STEEM_POSTING_WIF }}
           SWEEP: ${{ inputs.sweep }}
-          SWEEP_KEEP: "hcsoldier4,hcsoldier5,hcsoldier6,tov,israelnews,saos-0001,saos-0002,saos-0003,saos-0004"
+          SWEEP_KEEP: ""
         run: bun scripts/unlock/fleet-claim.mjs
+        continue-on-error: true
+      - name: fleet-post (performers: delegate→post→vote)
+        env:
+          STEEM_ACTIVE_WIF: ${{ secrets.STEEM_ACTIVE_WIF }}
+        run: bun scripts/unlock/fleet-post.mjs
         continue-on-error: true
       - name: hive-vote
         env:
