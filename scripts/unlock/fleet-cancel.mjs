@@ -1,6 +1,7 @@
 // fleet-cancel.mjs — §83: ביטול-פקודות-ישנות-של-הצי בספר-הפנימי (נזילות-פזורה-נעולה)
 // מדיד-§83: 13-חשבונות-צי מחזיקים ~28.9-STEEM+0.58-SBD בפקודות-מהעידנים-קודמים.
-// אפס-סודות-בפלט: רק-shמות+orderids+txids. fail-closed לכל-חשבון.
+// FIX-83: שם-ה-op הנכון = limit_order_cancel (cancel_order אינו-op-בשרשרת!) · cancel=דומיין-active (owner-גם-עובד).
+// אפס-סודות-בפלט: רק-שמות+orderids+txids. fail-closed לכל-חשבון.
 import { readFileSync } from "node:fs";
 import steem from "steem";
 
@@ -31,12 +32,12 @@ async function broadcast(ops, wif) {
 let map = {};
 try { map = JSON.parse(readFileSync("/tmp/live-map.json", "utf8")); } catch { console.log("VERDICT-CANCEL: no-map (census failed) honest-abort"); process.exit(0); }
 const entries = Object.entries(map).filter(([acc]) => !acc.includes(":") && acc !== HEAD);
-console.log(`fleet-cancel: scanning ${entries.length} accounts for stale orders`);
+console.log(`fleet-cancel: scanning ${entries.length} accounts for stale orders (op=limit_order_cancel)`);
 
 let cancelled = 0, freed = 0;
 for (const [acc, roles] of entries) {
-  const wifs = [roles.active, roles.posting].filter(Boolean);
-  if (!wifs.length) continue;
+  const wifs = [roles.active, roles.owner].filter(Boolean).filter((w, i, a) => a.indexOf(w) === i);
+  if (!wifs.length) { console.log(`CANCEL-SKIP ${acc}: no-active-domain-wif`); continue; }
   try {
     const oo = await rpc("condenser_api.get_open_orders", [acc]);
     if (!oo?.length) continue;
@@ -44,7 +45,7 @@ for (const [acc, roles] of entries) {
       let done = false, lastErr = null;
       for (const wif of wifs) {
         try {
-          const txid = await broadcast([["cancel_order", { owner: acc, orderid: o.orderid }]], wif);
+          const txid = await broadcast([["limit_order_cancel", { owner: acc, orderid: o.orderid }]], wif);
           console.log(`CANCEL ${acc} orderid=${o.orderid} base=${o.sell_price.base} → txid=${txid}`);
           cancelled++; done = true;
           try { freed += parseFloat(o.sell_price.base.split(" ")[0]); } catch {}

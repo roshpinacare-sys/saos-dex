@@ -73,23 +73,35 @@ const FLAVOR = {
   "saos-0004": ["Lab note: receipts culture", "Every action ends in a txid, every claim ends in a ledger line. If it is not measurable it is not done. Receipts first, narrative later."],
 };
 
+
 let posted = 0;
 const postedLinks = [];
-const now = new Date();
-const stamp = now.toISOString().slice(0, 16).replace(/[-:T]/g, "");
+const dayStamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
 for (const p of performers) {
   const roles = map[p];
-  const wif = roles.posting || roles.active;
-  if (!wif) { console.log(`POST-SKIP ${p}: no-posting-wif`); continue; }
+  // §83 diagnosis: comment needs POSTING authority — log pub-fingerprint per available role (never the wif)
+  const rolePubs = {};
+  for (const r of ["posting", "owner", "active"]) {
+    if (roles[r]) { try { rolePubs[r] = steem.auth.wifToPublic(roles[r]).slice(3, 11); } catch { rolePubs[r] = "bad-wif"; } }
+  }
+  const wifs = [roles.posting, roles.owner, roles.active].filter(Boolean).filter((w, i, arr) => arr.indexOf(w) === i);
+  if (!wifs.length) { console.log(`POST-SKIP ${p}: no-wif (roles=${Object.keys(roles).join(",")})`); continue; }
   const [title, body] = FLAVOR[p] || ["Saos devlog", "Measured progress from the saos desk."];
-  const permlink = `saos83-${p}-${stamp}`;
-  try {
-    const jsonMeta = JSON.stringify({ tags: ["saos", "steem", "devlog", "life"], app: "saos-fleet/83" });
-    const txid = await broadcast([["comment", { parent_author: "", parent_permlink: "saos", author: p, permlink, title, body: `${body}\n\n— ${p}, fleet performer · run ${stamp}Z · receipts on-chain` , json_metadata: jsonMeta }]], wif);
-    console.log(`POST ${p} permlink=${permlink} → txid=${txid}`);
+  const permlink = `saos83-${p}-${dayStamp}`;
+  let txid = null, lastErr = null, usedWif = null;
+  for (const wif of wifs) {
+    try {
+      const jsonMeta = JSON.stringify({ tags: ["saos", "steem", "devlog", "life"], app: "saos-fleet/83" });
+      txid = await broadcast([["comment", { parent_author: "", parent_permlink: "saos", author: p, permlink, title, body: `${body}\n\n— ${p}, fleet performer · run ${dayStamp}Z · receipts on-chain`, json_metadata: jsonMeta }]], wif);
+      usedWif = wif === roles.posting ? "posting" : wif === roles.owner ? "owner" : "active";
+      break;
+    } catch (e) { lastErr = e; }
+  }
+  if (txid) {
+    console.log(`POST ${p} permlink=${permlink} wif=${usedWif} pubs=${JSON.stringify(rolePubs)} → txid=${txid}`);
     posted++; postedLinks.push({ author: p, permlink });
-    await new Promise(r => setTimeout(r, 1200));
-  } catch (e) { console.log(`POST-FAIL ${p}: ${String(e.message || e).slice(0, 90)}`); }
+  } else console.log(`POST-FAIL ${p} pubs=${JSON.stringify(rolePubs)}: ${String(lastErr?.message || lastErr).slice(0, 110)}`);
+  await new Promise(r => setTimeout(r, 1200));
 }
 console.log(`stage-B: ${posted}/${performers.length} posted`);
 
@@ -100,7 +112,11 @@ for (const { author, permlink } of postedLinks) {
     const txid = await broadcast([["vote", { voter: HEAD, author, permlink, weight: VOTE_WEIGHT }]], headWif);
     console.log(`HEADVOTE ${HEAD}→@${author}/${permlink.slice(0, 30)} w=${VOTE_WEIGHT} → txid=${txid}`);
     voted++;
-    await new Promise(r => setTimeout(r, 1000));
-  } catch (e) { console.log(`HEADVOTE-FAIL @${author}: ${String(e.message || e).slice(0, 90)}`); }
+  } catch (e) {
+    const msg = String(e.message || e);
+    if (/identical/i.test(msg)) { console.log(`HEADVOTE-KEEP @${author}: same-weight vote already live (kept)`); voted++; }
+    else console.log(`HEADVOTE-FAIL @${author}: ${msg.slice(0, 90)}`);
+  }
+  await new Promise(r => setTimeout(r, 1000));
 }
 console.log(`VERDICT-POST: ${delegated}-delegated · ${posted}-posted · ${voted}-voted`);
