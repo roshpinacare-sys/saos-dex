@@ -4,12 +4,21 @@
 import { readFileSync } from "node:fs";
 import steem from "steem";
 
-const NODE = "https://api.steemitdev.com";
+// §83 NODE-ROTATION (חוק-§78)
+const NODES = ["https://api.steemitdev.com", "https://api.steemit.com", "https://steem.justyy.com", "https://api.steem.fans"];
+let NODEI = 0;
 const HEAD = "headcorner"; // אסור-לגעת — סולם-המנוע-החי
 
 async function rpc(method, params) {
-  const r = await fetch(NODE, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }), signal: AbortSignal.timeout(20000) });
-  const j = await r.json(); if (j.error) throw new Error(String(j.error?.message || j.error).slice(0, 120)); return j.result;
+  let last = null;
+  for (let i = 0; i < NODES.length; i++) {
+    const u = NODES[(NODEI + i) % NODES.length];
+    try {
+      const r = await fetch(u, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }), signal: AbortSignal.timeout(20000) });
+      const j = await r.json(); if (j.error) throw new Error(String(j.error?.message || j.error).slice(0, 120)); NODEI = (NODEI + i) % NODES.length; return j.result;
+    } catch (e) { last = e; }
+  }
+  throw last;
 }
 async function broadcast(ops, wif) {
   const dgp = await rpc("condenser_api.get_dynamic_global_properties", []);

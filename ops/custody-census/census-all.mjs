@@ -48,16 +48,20 @@ console.log(`census: ${cands.length} WIF candidates from env (generic scan)`);
 
 // 2. chain authorities
 const ROSTER = ["headcorner","cashmachine","haran","israelnews","lsa","macrame","siq","tov","wic","wog","woq","hcsoldier1","hcsoldier2","hcsoldier3","hcsoldier4","hcsoldier5","hcsoldier6","hcsoldier7","saos-0001","saos-0002","saos-0003","saos-0004","saos-0005","saos-0006","saos-0007","saos-0008","saos-0009"];
-async function rpcRetry(url, method, params, tries = 3) {
+// §83 NODE-ROTATION (חוק-§78): צומת-יחיד = נקודת-כשל-יחידה — api.steemit.com-כושל-מה-runner-באופן-אפיזודי
+const STEEM_NODES = ["https://api.steemitdev.com", "https://api.steemit.com", "https://steem.justyy.com", "https://api.steem.fans"];
+const HIVE_NODES = ["https://api.hive.blog", "https://api.openhive.network", "https://hived.emrebeyler.fr"];
+const HIVE_ROSTER = ["headcorner"];
+async function rpcRotate(nodes, method, params, tries = 2) {
   let last = null;
-  for (let k = 0; k < tries; k++) { try { return await rpc(url, method, params); } catch (e) { last = e; await new Promise((r) => setTimeout(r, 2000)); } }
+  for (const u of nodes) for (let k = 0; k < tries; k++) { try { return await rpc(u, method, params); } catch (e) { last = e; await new Promise((r) => setTimeout(r, 1500)); } }
   throw last;
 }
 let steemAccs = [], hiveAccs = [];
 let steemAuthOk = false;
-try { steemAccs = await rpcRetry("https://api.steemit.com", "condenser_api.get_accounts", [ROSTER]); steemAuthOk = Array.isArray(steemAccs) && steemAccs.length > 0; } catch {}
+try { steemAccs = await rpcRotate(STEEM_NODES, "condenser_api.get_accounts", [ROSTER]); steemAuthOk = Array.isArray(steemAccs) && steemAccs.length > 0; } catch {}
 console.log(`STEEM-AUTH-LOADED: ${steemAuthOk ? "yes (" + steemAccs.length + " accounts)" : "NO — steem judgments unreliable this run"}`);
-try { hiveAccs = await rpcRetry("https://api.hive.blog", "condenser_api.get_accounts", [hiveRoster]); } catch {}
+try { hiveAccs = await rpcRotate(HIVE_NODES, "condenser_api.get_accounts", [HIVE_ROSTER]); } catch {}
 const auth = {};
 for (const a of steemAccs) auth["steem:" + a.name] = { active: a.active?.key_auths?.[0]?.[0], posting: a.posting?.key_auths?.[0]?.[0], memo: a.memo_key, owner: a.owner?.key_auths?.[0]?.[0] };
 for (const a of hiveAccs) auth["hive:" + a.name] = { active: a.active?.key_auths?.[0]?.[0], posting: a.posting?.key_auths?.[0]?.[0], memo: a.memo_key, owner: a.owner?.key_auths?.[0]?.[0] };
