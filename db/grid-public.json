@@ -1,6 +1,6 @@
 {
  "ok": true,
- "publishedAt": "2026-11-20T09:46:41.839Z",
+ "publishedAt": "2026-11-20T10:01:23.688Z",
  "engine": "saos-dex/1.1 grid-beat · R24 external flow + R99 HIVE leg",
  "chain": "STEEM-internal-market",
  "chains": [
@@ -9,7 +9,7 @@
  ],
  "real": true,
  "armed": true,
- "verdict": "ARMED-WAITING",
+ "verdict": "ARMED-LIVE",
  "blocker": [
   "sell-side waiting for fuel: 0.425 STEEM commitable < 3 needed (next powerdown: 2026-11-22T18:25:30)",
   "buy-side waiting for SBD inventory: 0.051 SBD commitable < 0.15 needed"
@@ -36,44 +36,43 @@
  },
  "hive": {
   "ok": true,
-  "publishedAt": "2026-11-20T09:46:41.838Z",
+  "publishedAt": "2026-11-20T10:01:23.687Z",
   "chain": "HIVE-internal-market",
   "real": true,
   "armed": true,
   "authorityOk": true,
   "rc": {
    "ok": true,
-   "mana": 40422426635,
+   "mana": 40438423008,
    "max": 42848564398
   },
-  "verdict": "ARMED-WAITING",
+  "verdict": "ARMED-LIVE",
   "reArm": null,
   "blocker": [
-   "hive sell-side waiting for price-grade inventory: 0.000 HIVE commitable; ask levels need ≥ 0.2 HBD recv each (HBD mill-tick price fidelity, measured R99)",
-   "hive buy-side waiting for HBD inventory: 0.000 HBD commitable < 0.003 needed"
+   "hive sell-side waiting for price-grade inventory: 0.000 HIVE commitable; ask levels need ≥ 0.2 HBD recv each (HBD mill-tick price fidelity, measured R99)"
   ],
   "marks": {
-   "hiveUsd": 0.03610981405692549,
+   "hiveUsd": 0.036210655640334946,
    "hbdUsd": 1,
    "hbdUsdRaw": 1.14,
    "hbdRegime": "print-peg-1.00 (raw dev 1400bps)",
-   "parityHbdPerHive": 0.03610981405692549
+   "parityHbdPerHive": 0.036210655640334946
   },
   "inventory": {
    "hive": 0.001,
-   "hbd": 0.001,
-   "hp": 21.669600197607945
+   "hbd": 0.004,
+   "hp": 21.669618105395738
   },
   "book": {
-   "bestBid": 0.0367,
-   "bestAsk": 0.03674157628256149,
-   "mid": 0.03672078814128075,
-   "spreadBps": 11
+   "bestBid": 0.03660091047040971,
+   "bestAsk": 0.03663656991369694,
+   "mid": 0.03661874019205333,
+   "spreadBps": 9
   },
-  "openOrdersNow": 1,
+  "openOrdersNow": 0,
   "run": {
-   "placed": 0,
-   "cancelled": 1
+   "placed": 3,
+   "cancelled": 0
   },
   "fills": [
    {
@@ -122,34 +121,34 @@
   "directiveR24": "powerdown is read-only here: never opened, never replaced, fleet RC is sacred"
  },
  "marks": {
-  "steemUsd": 0.04294923316113426,
-  "sbdUsd": 0.469694,
-  "paritySbdPerSteem": 0.09144088100153347
+  "steemUsd": 0.042744116018596456,
+  "sbdUsd": 0.469702,
+  "paritySbdPerSteem": 0.09100262723726205
  },
  "priceTruth": {
   "verdict": "USD-ONLY",
-  "valueLineSbdPerSteem": 0.09144088,
+  "valueLineSbdPerSteem": 0.09100263,
   "marks": {
    "chainFeedSbdPerSteem": null,
-   "usdParitySbdPerSteem": 0.09144088,
-   "globalSteemUsd": 0.04294923316113426,
-   "measuredSbdUsd": 0.469694,
+   "usdParitySbdPerSteem": 0.09100263,
+   "globalSteemUsd": 0.042744116018596456,
+   "measuredSbdUsd": 0.469702,
    "impliedSbdUsdFromFeed": null,
    "sbdDepegBps": null,
    "src": null
   },
   "notes": [],
-  "measuredAt": "2026-11-20T09:46:37.447Z",
+  "measuredAt": "2026-11-20T10:01:07.615Z",
   "law": "valueLine=min(chainFeed,usdParity) · ask shelf=valueLine+TIER · bid ceiling=valueLine · band=|mid−chainFeed| — depeg and all marks published, no hidden value line"
  },
  "fuel": {
   "powerdownActive": true,
-  "weeklySp": 40.05030195284281,
-  "weeklyUsd": 1.72,
-  "remainingSp": 160201207.81012753,
+  "weeklySp": 40.050329090992776,
+  "weeklyUsd": 1.71,
+  "remainingSp": 160201316.3627274,
   "remainingWeeks": 4000000,
   "nextPayout": "2026-11-22T18:25:30",
-  "rcFuelSp": 150.69410036926354
+  "rcFuelSp": 150.69420247983186
  },
  "inventory": {
   "steem": 1,
@@ -165,7 +164,7 @@
  "run": {
   "placed": 0,
   "cancelled": 0,
-  "placedTotal": 520,
+  "placedTotal": 523,
   "cancelledTotal": 517,
   "filledTotal": 50
  },
@@ -342,42 +341,6 @@
   }
  ],
  "orders": [
-  {
-   "id": 2361286913,
-   "at": "2026-11-20T07:47:48.612Z",
-   "txid": "50c9c6d76d309e6d700017291f4df3419f53a383",
-   "side": "bid",
-   "sell": "4.000 SBD",
-   "receive": "44.228 STEEM",
-   "priceSbdPerSteem": 0.09043863,
-   "status": "cancelled",
-   "lastSeenAt": "2026-11-20T08:17:10.174Z",
-   "chain": "steem"
-  },
-  {
-   "id": 2361286946,
-   "at": "2026-11-20T07:47:50.910Z",
-   "txid": "5062856f2524b1adf8a4a5ea1d1e0e03636c2f29",
-   "side": "bid",
-   "sell": "4.000 SBD",
-   "receive": "44.495 STEEM",
-   "priceSbdPerSteem": 0.08989599822000001,
-   "status": "open",
-   "lastSeenAt": "2026-11-20T07:47:50.910Z",
-   "chain": "steem"
-  },
-  {
-   "id": 2361286963,
-   "at": "2026-11-20T07:47:53.913Z",
-   "txid": "539eaaad66ce72558e3d096ea0729aaaad13ef6b",
-   "side": "bid",
-   "sell": "4.000 SBD",
-   "receive": "44.766 STEEM",
-   "priceSbdPerSteem": 0.08935336644,
-   "status": "open",
-   "lastSeenAt": "2026-11-20T07:47:53.913Z",
-   "chain": "steem"
-  },
   {
    "id": 2361292457,
    "at": "2026-11-20T07:59:20.918Z",
@@ -629,6 +592,42 @@
    "status": "open",
    "lastSeenAt": "2026-11-20T09:17:31.668Z",
    "chain": "steem"
+  },
+  {
+   "id": 2026112001,
+   "at": "2026-11-20T10:01:11.775Z",
+   "txid": "7ab1a6f79d7a72c6bb3585f9dea9debfb57387e9",
+   "side": "bid",
+   "chain": "hive",
+   "sell": "0.001 HBD",
+   "receive": "0.027 HIVE",
+   "priceSbdPerSteem": 0.03586889226100152,
+   "status": "open",
+   "lastSeenAt": "2026-11-20T10:01:11.775Z"
+  },
+  {
+   "id": 2026112002,
+   "at": "2026-11-20T10:01:17.781Z",
+   "txid": "abc018b67affb8120def3d3745d9000359460934",
+   "side": "bid",
+   "chain": "hive",
+   "sell": "0.001 HBD",
+   "receive": "0.028 HIVE",
+   "priceSbdPerSteem": 0.03513687405159332,
+   "status": "open",
+   "lastSeenAt": "2026-11-20T10:01:17.781Z"
+  },
+  {
+   "id": 2026112003,
+   "at": "2026-11-20T10:01:23.687Z",
+   "txid": "55f0404cf4babec7b4f0bb26b06efa02ee0aed54",
+   "side": "bid",
+   "chain": "hive",
+   "sell": "0.001 HBD",
+   "receive": "0.029 HIVE",
+   "priceSbdPerSteem": 0.034404855842185125,
+   "status": "open",
+   "lastSeenAt": "2026-11-20T10:01:23.687Z"
   }
  ],
  "vault": {
