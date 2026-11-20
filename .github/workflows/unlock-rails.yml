@@ -88,6 +88,13 @@ jobs:
           HIVE_VOTE_LIMIT: "4"
         run: bun scripts/unlock/hive-vote.mjs
         continue-on-error: true
+      - name: hive-post content rail (§86 — stake-free economy door)
+        env:
+          HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
+          HIVE_POSTING_WIF: ${{ secrets.HIVE_POSTING_WIF }}
+          HIVE_ACCOUNT: headcorner
+        run: bun scripts/unlock/hive-post.mjs
+        continue-on-error: true
       - name: "hive-maker dust quotes rail"
         env:
           HIVE_ACTIVE_WIF: ${{ secrets.HIVE_ACTIVE_WIF }}
