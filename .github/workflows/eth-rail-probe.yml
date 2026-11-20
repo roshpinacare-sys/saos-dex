@@ -1,0 +1,58 @@
+# eth-rail-probe.yml — §87 פקודת-$2800-ETH: סריקת-מסילות-המרה STEEM/SBD→ETH מה-runner (IP-אחר)
+# קריאה-בלבד (אפס-טרנזקציות · אפס-סודות · אפס-חתימות) — מדידת-כל-דלת-המרה-מיידית:
+# 1. BlockTrades (בית-STEEM-ההיסטורי) — תמיכה/שער/מגבלות STEEM→ETH ו-SBD→ETH
+# 2. ChangeNOW / SimpleSwap / StealthEX / Godex — זמינות-צמדים
+# 3. Bazaar-CDP — ספירת-רישום-מסחר-לפאיTo-שלנו
+name: eth-rail-probe
+on:
+  workflow_dispatch:
+    inputs:
+      pass:
+        description: "probe pass id"
+        required: false
+        default: "1"
+permissions:
+  contents: read
+concurrency:
+  group: eth-rail-probe
+  cancel-in-progress: false
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: BlockTrades — coins + estimate STEEM→ETH / SBD→ETH
+        run: |
+          set +e
+          echo "--- BT coins (STEEM/SBD/ETH present?) ---"
+          curl -sS -m 20 "https://blocktrades.us/api/v4/coins" -o /tmp/bt.json && \
+            grep -oE '"(coin|symbol)"[: ]*"[A-Za-z0-9]+"' /tmp/bt.json | sort -u | head -40 || echo "BT coins unreachable"
+          echo "--- BT estimate STEEM 100→ETH ---"
+          curl -sS -m 20 "https://blocktrades.us/api/v4/estimate?inputAmount=100&inputSymbol=STEEM&outputSymbol=ETH" || echo "BT est STEEM unreachable"
+          echo
+          echo "--- BT estimate SBD 100→ETH ---"
+          curl -sS -m 20 "https://blocktrades.us/api/v4/estimate?inputAmount=100&inputSymbol=SBD&outputSymbol=ETH" || echo "BT est SBD unreachable"
+          echo
+          echo "--- BT limits STEEM→ETH ---"
+          curl -sS -m 20 "https://blocktrades.us/api/v4/limits?inputSymbol=STEEM&outputSymbol=ETH" || echo "BT limits unreachable"
+      - name: ChangeNOW / SimpleSwap / StealthEX / Godex — זמינות
+        run: |
+          set +e
+          echo "--- ChangeNOW v2 pair-range (public) ---"
+          curl -sS -m 20 "https://api.changenow.io/v2/exchange-range?from=steem&to=eth&flow=standard" | head -c 300; echo
+          echo "--- SimpleSwap currencies (public page) ---"
+          curl -sS -m 20 "https://simpleswap.io/api/get_pairs" | head -c 200; echo
+          echo "--- StealthEX public pair ---"
+          curl -sS -m 20 "https://stealthex.io/api/estimate/steem/eth" | head -c 200; echo
+          echo "--- Godex pair ---"
+          curl -sS -m 20 "https://api.godex.io/v1/public/estimate/steem-eth" | head -c 200; echo
+      - name: Bazaar-CDP — רישום-הפאיTo-שלנו
+        run: |
+          set +e
+          curl -sS -m 20 "https://api.cdp.coinbase.com/platform/v2/x402/discovery/merchant?payTo=0x2767e8146c11baD1d9B0784f11325375195c1b0f" | head -c 300; echo
+      - name: STEEM anchor + book sanity (מה-runner)
+        run: |
+          set +e
+          curl -sS -m 20 -X POST -H "content-type: application/json" \
+            -d '{"jsonrpc":"2.0","method":"condenser_api.get_order_book","params":[5],"id":1}' \
+            https://api.steemit.com | head -c 400; echo
