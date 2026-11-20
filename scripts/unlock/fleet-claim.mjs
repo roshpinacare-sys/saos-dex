@@ -57,15 +57,20 @@ for (const a of accs ?? []) {
     }
   } catch (e) { console.log(`CLAIM-FAIL ${a.name}: ${String(e.message || e).slice(0, 100)}`); }
   try {
-    if (SWEEP && activeWif && !KEEP.has(a.name)) {
+    // §85: transfer-דומיין-active — owner-פותר-הכל (הוכח: fleet-cancel «owner-גם-עובד» + POST owner-ריצות)
+    const wifs = [roles.active, roles.owner].filter(Boolean).filter((w, i, arr) => arr.indexOf(w) === i);
+    if (SWEEP && wifs.length && !KEEP.has(a.name)) {
       const st = parseFloat(a.balance || "0") - KEEP_AMT, sb = parseFloat(a.sbd_balance || "0") - KEEP_AMT;
       const ops = [];
       if (st >= 0.05) ops.push(["transfer", { from: a.name, to: HEAD, amount: st.toFixed(3) + " STEEM", memo: "fleet-sweep-83" }]);
       if (sb >= 0.05) ops.push(["transfer", { from: a.name, to: HEAD, amount: sb.toFixed(3) + " SBD", memo: "fleet-sweep-83" }]);
       if (ops.length) {
-        const txid = await broadcast(ops, activeWif);
-        console.log(`SWEEP ${a.name} ${ops.map(o => o[1].amount).join("+")} → headcorner txid=${txid}`);
-        sweeps++; sweepSteem += Math.max(0, st); sweepSbd += Math.max(0, sb);
+        let txid = null, lastErr = null;
+        for (const w of wifs) {
+          try { txid = await broadcast(ops, w); break; } catch (e) { lastErr = e; }
+        }
+        if (txid) { console.log(`SWEEP ${a.name} ${ops.map(o => o[1].amount).join("+")} → headcorner txid=${txid}`); sweeps++; sweepSteem += Math.max(0, st); sweepSbd += Math.max(0, sb); }
+        else console.log(`SWEEP-FAIL ${a.name}: ${String(lastErr?.message || lastErr).slice(0, 100)}`);
       }
     }
   } catch (e) { console.log(`SWEEP-FAIL ${a.name}: ${String(e.message || e).slice(0, 100)}`); }
