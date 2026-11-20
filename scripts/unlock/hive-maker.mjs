@@ -55,7 +55,7 @@ let ok = null;
 for (const combo of [wifs.map(w => w.wif), wifs.filter(w => /active/.test(w.tag)).map(w => w.wif), wifs.filter(w => !/posting/.test(w.tag)).map(w => w.wif)]) {
   if (!combo.length) continue;
   const signed = signWith(tx, combo);
-  const sigPubs = (signed.signatures || []).map((s: string) => s.slice(0, 8) + "…");
+  const sigPubs = (signed.signatures || []).map(s => s.slice(0, 8) + "…");
   const v = await rpc("condenser_api.verify_authority", [{ ...signed }]).catch(e => ({ err: String(e.message).slice(0, 80) }));
   console.log(`verify_authority(combo=${combo.length}-keys sigs=${sigPubs.length}): ${JSON.stringify(v).slice(0, 80)}`);
   if (v === true) { ok = signed; break; }
