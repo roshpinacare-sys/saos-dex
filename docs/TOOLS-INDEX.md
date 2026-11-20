@@ -1,6 +1,6 @@
 # מפת-הכלים החיה (TOOLS-INDEX)
 
-> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-19T10:49:13.814Z · 194 כלים · המקור: git ls-files
+> נוצר אוטומטית ע"י sovereign-builder ב-2026-11-20T02:22:04.899Z · 198 כלים · המקור: git ls-files
 
 | כלי | ייעוד (מהכותרת בקוד) |
 |---|---|
@@ -44,6 +44,10 @@
 | `scripts/sweep-cycle.ts` | * |
 | `scripts/t15-truthgate-selftest.ts` | * |
 | `scripts/t37-laws-selftest.ts` | * |
+| `scripts/unlock/blurt-treasury.mjs` | blurt-treasury.mjs — מסילת-ה-blurt (מטבע-שלישי): סריקה + claim-אם-יש-פנדינג |
+| `scripts/unlock/fleet-claim.mjs` | fleet-claim.mjs — פתיחת-מסילת-הצי: claims-פנדינג + (אופציונלי) sweep-נזיל-מדוד ל-headcorne |
+| `scripts/unlock/hive-vote.mjs` | hive-vote.mjs — פתיחת-מסילת-ה-hive: קורצרציה-אמיתית-על-hive עם המפתחות-של-ה-runner |
+| `scripts/unlock/se-scan.mjs` | se-scan.mjs — מסילת-ה-Steem-Engine: מלאי-טוקנים-לכל-האחזקות (קריאה-בלבד) |
 | `scripts/usds-sides-once.ts` | * |
 | `scripts/verify-anchor.ts` | ═══════════════════════════════════════════════════════════════════════════ |
 | `scripts/verify-headcorner-key.ts` | * |
