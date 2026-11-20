@@ -46,7 +46,7 @@ for (const a of accs ?? []) {
   // §83: fallback-wif — try active then posting (fix-82: cashmachine/siq/woq)
   try {
     if (pend > 0) {
-      const wifs = [activeWif, wif].filter(Boolean).filter((w, i, arr) => arr.indexOf(w) === i);
+      const wifs = [activeWif, wif, roles.owner].filter(Boolean).filter((w, i, arr) => arr.indexOf(w) === i); // §83: owner-פותר-הכל (הוכח-ריצה-6)
       let txid = null, lastErr = null;
       for (const w of wifs) {
         try { txid = await broadcast([["claim_reward_balance", { account: a.name, reward_steem: a.reward_steem_balance, reward_sbd: a.reward_sbd_balance, reward_vests: a.reward_vesting_balance }]], w); break; }
